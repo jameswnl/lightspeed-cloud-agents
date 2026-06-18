@@ -13,6 +13,30 @@ Phase 1b adds: monitoring agent, async `/v1/run`, liveness detection, structured
 
 ---
 
+## Quality Checklist (lessons from Phase 1a reviews)
+
+*Two independent 3rd-party reviews of Phase 1a exposed systematic patterns. These rules apply to every Phase 1b task.*
+
+### For every task, before marking complete:
+
+- [ ] **Test the seams** — every cross-component call has a boundary test from the *caller's* perspective, not just the callee's. If Task X calls Task Y's code, there's a test proving the contract from X's side.
+- [ ] **Spec → test assertion** — every acceptance criterion has a corresponding test assertion. If you can't write the test, the criterion is too vague.
+- [ ] **Test the startup** — every module that reads env vars, assembles the app, or does work at import time has at least one test exercising the startup path.
+- [ ] **Assert behavior, not shape** — tests check what happened (state changed, action taken, error raised), not just what fields exist in the response.
+- [ ] **Strict types from day one** — if the spec says a field is constrained (URL, enum, etc.), use the strictest Pydantic type. No `str` when `AnyHttpUrl` or `Literal[...]` is appropriate.
+
+### Why each rule exists (traced to Phase 1a findings):
+
+| Rule | Phase 1a failure it prevents |
+|------|------------------------------|
+| Test the seams | `RemoteAgentClient` silently accepted `success=False` — each side worked, the bug lived at the boundary |
+| Spec → test assertion | Spec said "cross-pod HTTP communication" but E2E only tested direct HTTP to agent pod |
+| Test the startup | `entrypoint.py` had 0% coverage, `_model.py` had 46% — real deployments fail at env var / import time |
+| Assert behavior, not shape | E2E checked `cluster_healthy is present` — passed even when agent returned empty report |
+| Strict types from day one | `endpoint: str` accepted `"not-a-url"`, `type: str` accepted `"typo"` — spec said "authoritative" but code accepted garbage |
+
+---
+
 ## Evaluator Review (2026-06-18)
 
 An independent evaluator reviewed this plan. Key findings and resolutions:
