@@ -34,7 +34,8 @@ spec:
   instructions: |
     You are a cluster diagnostic and remediation agent.
     ...
-  output_type: DiagnosticReport       # class name from output type registry
+  output_type: DiagnosticReport       # class name — checked in built-in registry first
+  output_type_module: diagnostic_tools # optional — fallback: load class from this module
   retries: 3                           # default: 1
   defer_model_check: true              # default: true
 
@@ -47,16 +48,18 @@ spec:
       - get_recent_deploys
       - run_remediation
 
-  skills:
-    - openshift-troubleshooting
-    - root-cause-analysis
+  skills:                              # skill names — resolved from SKILLS_DIR
+    directories:                       # paths to scan for SKILL.md files
+      - /app/skills
+    names:                             # optional filter — only activate these skills
+      - openshift-troubleshooting
+      - root-cause-analysis
 
   lifecycle:
     type: request-response             # request-response | periodic-loop
     # periodic-loop fields:
     # interval_seconds: 300
-    # dispatch_to: diagnostic-agent
-    # dispatch_endpoint: http://diagnostic-agent:8080
+    # dispatch_to: diagnostic-agent    ← resolved via AgentRegistry, not direct URL
 
   output_validator:                    # optional
     module: diagnostic_tools
@@ -93,8 +96,10 @@ spec:
   lifecycle:
     type: periodic-loop
     interval_seconds: 300
-    dispatch_to: diagnostic-agent
-    dispatch_endpoint: http://diagnostic-agent:8080
+    dispatch_to: diagnostic-agent          # resolved via AgentRegistry
+    on_dispatch_success:                   # optional post-dispatch hook
+      module: monitoring_tools
+      function: mark_hosts_healthy         # fn(alerts) → mutates local state
 
   resources:
     timeout_seconds: 600
@@ -139,7 +144,11 @@ def load_tools(spec: ToolsSpec) -> list[tuple[str, Callable]]:
 Two resolution strategies, tried in order:
 
 1. **Built-in registry** for known types (`DiagnosticReport`, `MonitoringResult`, `str`)
-2. **`importlib` fallback** — if not in registry, load from the tools module using `output_type_module` + `output_type_class` fields in YAML
+2. **`importlib` fallback** — if not in registry and `output_type_module` is specified in the YAML, load from that module
+
+**YAML contract:**
+- `output_type: DiagnosticReport` — resolved from built-in registry (no module needed)
+- `output_type: MyCustomReport` + `output_type_module: my_tools` — resolved from `my_tools.MyCustomReport`
 
 ```python
 OUTPUT_TYPE_REGISTRY = {
@@ -148,18 +157,19 @@ OUTPUT_TYPE_REGISTRY = {
     "str": str,
 }
 
-def resolve_output_type(name: str, tools_module: str | None = None) -> type:
+def resolve_output_type(name: str, module_name: str | None = None) -> type:
+    """Resolve output type by name. Built-in registry first, then importlib fallback."""
     if name in OUTPUT_TYPE_REGISTRY:
         return OUTPUT_TYPE_REGISTRY[name]
-    if tools_module:
-        mod = importlib.import_module(tools_module)
+    if module_name:
+        mod = importlib.import_module(module_name)
         cls = getattr(mod, name, None)
         if cls is not None and isinstance(cls, type):
             return cls
-    raise ValueError(f"Unknown output_type '{name}'")
+    raise ValueError(f"Unknown output_type '{name}'. Provide output_type_module for custom types.")
 ```
 
-This avoids the hardcoded-only problem without requiring Phase 3 inline schemas. New agent types can define output models in their tools module.
+This makes the built-in path zero-config and the custom path explicit. No ambiguity about which fields are needed.
 
 ---
 
@@ -184,12 +194,59 @@ async def my_validator(ctx: RunContext[None], output: T) -> T:
 
 ---
 
+## Skills Activation
+
+The generic entrypoint activates skills from the YAML definition:
+
+1. Read `spec.skills.directories` — paths to scan for `SKILL.md` files
+2. If `spec.skills.names` is specified, filter to only those skills
+3. Create a `SkillsCapability(directories=dirs)` and pass to the `Agent()` constructor via `capabilities=[...]`
+4. If `pydantic-ai-skills` is not installed or no skills are configured, skip silently
+
+```python
+def load_skills(spec: AgentSpec) -> list:
+    if not spec.skills or not spec.skills.directories:
+        return []
+    try:
+        from pydantic_ai_skills import SkillsCapability
+        return [SkillsCapability(directories=spec.skills.directories)]
+    except ImportError:
+        logger.warning("pydantic-ai-skills not installed, skills disabled")
+        return []
+```
+
+Skills directories are either:
+- Baked into the image (production)
+- Volume-mounted at `/app/skills/` (dev/test)
+
+---
+
 ## Lifecycle Selection
 
 The generic entrypoint reads `spec.lifecycle.type`:
 
 - **`request-response`**: Standard `create_app()`, no background tasks
 - **`periodic-loop`**: `create_app()` + `AgentLoop` as lifespan background task. `AgentLoop` is generalized from Phase 1b's `MonitoringLoop`.
+
+### Post-dispatch hook
+
+Periodic-loop agents can specify an `on_dispatch_success` callback:
+
+```yaml
+lifecycle:
+  type: periodic-loop
+  interval_seconds: 300
+  dispatch_to: diagnostic-agent
+  on_dispatch_success:
+    module: monitoring_tools
+    function: mark_hosts_healthy    # fn(alerts) → mutates local state
+```
+
+The callback is loaded via `importlib` (same contract as tools and validators). It receives the list of alerts that triggered dispatch and can mutate local state to prevent redispatch. If not specified, no post-dispatch action is taken.
+
+### Dispatch routing
+
+`dispatch_to` is resolved via `AgentRegistry` — the same config-driven registry from Phase 1. No direct endpoint URLs in the agent YAML. This prevents dual-authority routing ambiguity (per 3rd-party review).
 
 ---
 
@@ -256,11 +313,14 @@ deploy/
 
 ## Migration Path
 
-1. Build generic runtime (new files only — no existing code changes)
-2. Create `agent.yaml` files from existing Python constants
-3. Build template Containerfile
-4. Verify existing E2E tests pass with generic image running as both agent types
-5. Deprecate per-agent Containerfiles
+Migration is not "constants to YAML" — it is "declarative config + Python hook modules preserving existing behavioral semantics."
+
+1. **Build generic runtime** (new files only — `definition.py`, `tool_loader.py`, `output_types.py`, `generic_entrypoint.py`, `generic_runner.py`, `agent_loop.py`, `model_factory.py`)
+2. **Extract declarative parts to YAML** — instructions, output_type, retries, lifecycle type, skill names, resource limits
+3. **Preserve behavioral parts as Python hook modules** — tool functions stay in `tools.py`, output validators stay as Python functions, post-dispatch callbacks stay as Python functions. These are loaded via `importlib` at runtime.
+4. **Build template Containerfile** — single image with mount points
+5. **Verify semantic parity** — existing E2E tests pass with generic image running as both diagnostic and monitoring agents. Not just "it starts" but "it produces the same behavior."
+6. **Deprecate per-agent Containerfiles** (keep for one release)
 
 ---
 
