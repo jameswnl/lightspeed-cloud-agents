@@ -48,12 +48,11 @@ spec:
       - get_recent_deploys
       - run_remediation
 
-  skills:                              # skill names — resolved from SKILLS_DIR
-    directories:                       # paths to scan for SKILL.md files
+  skills:                              # skill directories to scan for SKILL.md files
+    directories:
       - /app/skills
-    names:                             # optional filter — only activate these skills
-      - openshift-troubleshooting
-      - root-cause-analysis
+    # Note: all skills found in directories are activated.
+    # Per-skill name filtering deferred to Phase 3.
 
   lifecycle:
     type: request-response             # request-response | periodic-loop
@@ -199,20 +198,28 @@ async def my_validator(ctx: RunContext[None], output: T) -> T:
 The generic entrypoint activates skills from the YAML definition:
 
 1. Read `spec.skills.directories` — paths to scan for `SKILL.md` files
-2. If `spec.skills.names` is specified, filter to only those skills
+2. All discovered skills are activated (per-name filtering deferred to Phase 3)
 3. Create a `SkillsCapability(directories=dirs)` and pass to the `Agent()` constructor via `capabilities=[...]`
-4. If `pydantic-ai-skills` is not installed or no skills are configured, skip silently
+4. **Strict startup**: if skills are configured but `pydantic-ai-skills` is not installed, **fail startup** — do not silently degrade
+5. If no skills section is present in YAML, skills are simply not used (no error)
 
 ```python
 def load_skills(spec: AgentSpec) -> list:
+    """Load skills from configured directories. Strict — fails if skills are
+    requested but the library is unavailable."""
     if not spec.skills or not spec.skills.directories:
         return []
     try:
         from pydantic_ai_skills import SkillsCapability
-        return [SkillsCapability(directories=spec.skills.directories)]
-    except ImportError:
-        logger.warning("pydantic-ai-skills not installed, skills disabled")
-        return []
+    except ImportError as exc:
+        raise RuntimeError(
+            "Skills are configured in agent.yaml but pydantic-ai-skills "
+            "is not installed. Install it or remove the skills section."
+        ) from exc
+    for d in spec.skills.directories:
+        if not Path(d).is_dir():
+            raise RuntimeError(f"Skills directory not found: {d}")
+    return [SkillsCapability(directories=spec.skills.directories)]
 ```
 
 Skills directories are either:
@@ -246,7 +253,35 @@ The callback is loaded via `importlib` (same contract as tools and validators). 
 
 ### Dispatch routing
 
-`dispatch_to` is resolved via `AgentRegistry` — the same config-driven registry from Phase 1. No direct endpoint URLs in the agent YAML. This prevents dual-authority routing ambiguity (per 3rd-party review).
+`dispatch_to` is resolved via `AgentRegistry` — the same config-driven registry from Phase 1. No direct endpoint URLs in the agent YAML.
+
+**How the generic runtime obtains the registry:**
+
+The agent pod reads registry data from a mounted YAML file at `/app/registry.yaml`:
+
+```yaml
+# /app/registry.yaml — mounted alongside agent.yaml
+agents:
+  - name: diagnostic-agent
+    endpoint: http://diagnostic-agent:8080
+  - name: monitoring-agent
+    endpoint: http://monitoring-agent:8080
+```
+
+The generic entrypoint loads this at startup:
+
+```python
+REGISTRY_PATH = os.environ.get("AGENT_REGISTRY", "/app/registry.yaml")
+
+def load_registry() -> AgentRegistry:
+    if not Path(REGISTRY_PATH).exists():
+        return AgentRegistry({})  # no dispatch capability
+    with open(REGISTRY_PATH) as f:
+        data = yaml.safe_load(f)
+    return AgentRegistry({a["name"]: a["endpoint"] for a in data.get("agents", [])})
+```
+
+In Kind/Podman, `registry.yaml` is mounted from a ConfigMap or volume. The generic runtime does not call the core pod to discover agents — it reads a static file, consistent with Phase 1's config-driven discovery model.
 
 ---
 
@@ -331,14 +366,14 @@ Migration is not "constants to YAML" — it is "declarative config + Python hook
 | 1. AgentDefinition model | Pydantic model for `agent.yaml` | Schema validation, YAML round-trip, enum validation | 1d |
 | 2. Tool loader | `load_tools()` with module import + function resolution | Happy path, missing module, missing function, non-callable | 1d |
 | 3. Output type registry | `resolve_output_type()` with known types | Known resolves, unknown raises ValueError | 0.5d |
-| 4. Generic runner | `create_generic_runner()` builds agent + runner from spec | Success with FunctionModel, error path, tool registration | 1.5d |
-| 5. Generic entrypoint | Reads YAML, assembles app, lifecycle branching | Request-response starts, periodic-loop starts loop, missing YAML errors | 1d |
-| 6. Agent loop generalization | Extract `MonitoringLoop` → `AgentLoop` with configurable dispatch | Start/stop, dispatch, failure survival, callback | 1d |
-| 7. Template Containerfile + compose | Single image builds, mounts work | Manual: build, run as diagnostic, run as monitoring, E2E pass | 1d |
-| 8. Shared model config | Move identical `_model.py`/`get_model()` to `src/agents/runtime/model_factory.py` | Env var handling, caching, API key passthrough | 0.5d |
+| 4. Shared model factory | Move identical `_model.py`/`get_model()` to `src/agents/runtime/model_factory.py` | Env var handling, caching, API key passthrough | 0.5d |
+| 5. Generic runner | `create_generic_runner()` builds agent + runner from spec | Success with FunctionModel, error path, tool registration | 1.5d |
+| 6. Generic entrypoint | Reads YAML, assembles app, lifecycle branching, registry loading | Request-response starts, periodic-loop starts, missing YAML/registry errors | 1d |
+| 7. Agent loop generalization | Extract `MonitoringLoop` → `AgentLoop` with configurable dispatch + post-dispatch hook | Start/stop, dispatch, failure survival, on_dispatch_success callback | 1d |
+| 8. Template Containerfile + compose | Single image builds, mounts work | Manual: build, run as diagnostic, run as monitoring, E2E pass | 1d |
 | 9. Migration verification | Existing E2E pass on generic image | All 9 existing E2E scenarios pass unchanged | 0.5d |
 
-**Implementation order:** 1→2→3→4→5→6 (local code + tests) → 7→8 (containers + E2E).
+**Implementation order:** 1→2→3→4→5→6→7 (local code + tests) → 8→9 (containers + E2E).
 
 **Estimated effort:** ~8 engineering days, ~10 days with reviews.
 
@@ -354,3 +389,4 @@ Migration is not "constants to YAML" — it is "declarative config + Python hook
 - MCP tool integration in `agent.yaml`
 - Output validator as YAML rule (vs Python function)
 - Hot-reload (change agent.yaml without pod restart)
+- Per-skill name filtering (Phase 2 activates all skills in configured directories)
