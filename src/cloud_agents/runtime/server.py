@@ -89,6 +89,9 @@ def create_app(
         correlation_id = validate_correlation_id(
             (body.context or {}).get("correlation_id")
         )
+        if body.context is None:
+            body.context = {}
+        body.context["correlation_id"] = correlation_id
 
         prefer = request.headers.get("Prefer", "")
         if prefer == "respond-async":
@@ -160,9 +163,13 @@ def create_app(
                     timeout=app.state.run_timeout,
                 )
                 duration = time.monotonic() - start_time
-                ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
-                ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
-                await store.complete_run(run_id, result)
+                if result.success:
+                    ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
+                    ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
+                    await store.complete_run(run_id, result)
+                else:
+                    ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
+                    await store.fail_run(run_id, result)
             except asyncio.TimeoutError:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
                 error_response = AgentRunResponse(

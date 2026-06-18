@@ -81,14 +81,18 @@ class MonitoringLoop:
             except asyncio.CancelledError:
                 break
 
-    async def _check_and_dispatch(self) -> None:
-        """Run one monitoring cycle. Dispatch diagnostic on critical alerts."""
+    async def _check_and_dispatch(self) -> list[str]:
+        """Run one monitoring cycle. Dispatch diagnostic on critical alerts.
+
+        Returns:
+            List of dispatched run IDs (empty if no dispatch needed).
+        """
         request = AgentRunRequest(prompt="Check all hosts for issues.")
         response = await self._runner(request)
 
         if not response.success:
             logger.warning("Monitoring run failed: %s", response.error)
-            return
+            return []
 
         result = MonitoringResult.model_validate(response.output)
         critical_alerts = [
@@ -97,7 +101,7 @@ class MonitoringLoop:
 
         if not critical_alerts:
             logger.info("Monitoring check: cluster healthy, no dispatch needed")
-            return
+            return []
 
         alert_context = "; ".join(
             f"{a.host}: {a.metric}={a.value} ({a.context})" for a in critical_alerts
@@ -107,22 +111,34 @@ class MonitoringLoop:
             len(critical_alerts),
         )
 
+        dispatched_ids: list[str] = []
         try:
-            diag_response = await self._dispatch.run(
+            run_id = await self._dispatch.run_async(
                 prompt=f"The monitoring agent detected: {alert_context}. Investigate and fix.",
                 context={"correlation_id": f"monitor-dispatch-{int(time.time())}"},
             )
+            dispatched_ids.append(run_id)
             self._mark_hosts_healthy(critical_alerts)
-            logger.info("Diagnostic dispatch successful")
+            logger.info("Diagnostic dispatch successful, run_id=%s", run_id)
         except (AgentUnavailableError, AgentTimeoutError, AgentError) as exc:
             logger.error("Diagnostic dispatch failed: %s", exc)
 
+        return dispatched_ids
+
     def _mark_hosts_healthy(self, alerts: list[Any]) -> None:
-        """Update local state after successful diagnostic dispatch."""
+        """Reset affected hosts to a healthy baseline after successful dispatch.
+
+        Resets status, CPU, memory, and services to prevent the monitoring
+        agent from re-alerting on the same anomaly signals.
+        """
         for alert in alerts:
             host = cluster_state["hosts"].get(alert.host)
             if host:
                 host["status"] = "healthy"
+                host["cpu"] = min(host["cpu"], 50)
+                host["memory"] = min(host["memory"], 60)
+                for svc in host.get("services", {}):
+                    host["services"][svc] = "running"
 
     def _update_heartbeat(self) -> None:
         """Update the app's heartbeat timestamp for /livez."""

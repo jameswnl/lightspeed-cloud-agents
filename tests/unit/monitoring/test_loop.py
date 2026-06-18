@@ -65,18 +65,15 @@ class TestCheckAndDispatch:
             cluster_healthy=False, alerts=alerts
         ))
         dispatch = AsyncMock()
-        dispatch.run = AsyncMock(return_value=AgentRunResponse(
-            output={}, output_type="DiagnosticReport",
-            usage={"input_tokens": 0, "output_tokens": 0},
-            agent_name="diagnostic-agent", success=True,
-        ))
+        dispatch.run_async = AsyncMock(return_value="run-test-123")
         loop = MonitoringLoop(agent_runner=runner, dispatch_client=dispatch, interval=0)
 
-        await loop._check_and_dispatch()
+        dispatched_ids = await loop._check_and_dispatch()
 
-        dispatch.run.assert_called_once()
-        call_kwargs = dispatch.run.call_args
+        dispatch.run_async.assert_called_once()
+        call_kwargs = dispatch.run_async.call_args
         assert "web-02" in call_kwargs.kwargs.get("prompt", call_kwargs[1].get("prompt", ""))
+        assert dispatched_ids == ["run-test-123"]
 
     @pytest.mark.asyncio
     async def test_dispatch_failure_does_not_crash(self) -> None:
@@ -90,7 +87,7 @@ class TestCheckAndDispatch:
             cluster_healthy=False, alerts=alerts
         ))
         dispatch = AsyncMock()
-        dispatch.run = AsyncMock(side_effect=AgentUnavailableError("connection refused"))
+        dispatch.run_async = AsyncMock(side_effect=AgentUnavailableError("connection refused"))
         loop = MonitoringLoop(agent_runner=runner, dispatch_client=dispatch, interval=0)
 
         await loop._check_and_dispatch()
@@ -111,11 +108,7 @@ class TestCheckAndDispatch:
             cluster_healthy=False, alerts=alerts
         ))
         dispatch = AsyncMock()
-        dispatch.run = AsyncMock(return_value=AgentRunResponse(
-            output={}, output_type="DiagnosticReport",
-            usage={"input_tokens": 0, "output_tokens": 0},
-            agent_name="diagnostic-agent", success=True,
-        ))
+        dispatch.run_async = AsyncMock(return_value="run-test-123")
         loop = MonitoringLoop(agent_runner=runner, dispatch_client=dispatch, interval=0)
 
         await loop._check_and_dispatch()
@@ -199,15 +192,11 @@ class TestRedispatchPrevention:
             return _make_monitoring_response(cluster_healthy=True, alerts=[])
 
         dispatch = AsyncMock()
-        dispatch.run = AsyncMock(return_value=AgentRunResponse(
-            output={}, output_type="DiagnosticReport",
-            usage={"input_tokens": 0, "output_tokens": 0},
-            agent_name="diagnostic-agent", success=True,
-        ))
+        dispatch.run_async = AsyncMock(return_value="run-test-123")
         loop = MonitoringLoop(agent_runner=mock_runner, dispatch_client=dispatch, interval=0)
 
         await loop._check_and_dispatch()
-        assert dispatch.run.call_count == 1
+        assert dispatch.run_async.call_count == 1
 
         await loop._check_and_dispatch()
-        assert dispatch.run.call_count == 1
+        assert dispatch.run_async.call_count == 1
