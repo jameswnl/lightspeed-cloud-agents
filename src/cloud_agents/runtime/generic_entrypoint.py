@@ -88,14 +88,24 @@ def build_app(
     agent_name = defn.metadata["name"]
     spec = defn.spec
 
-    # Initialize cluster state if a scenario is configured
-    cluster_scenario = os.environ.get("CLUSTER_SCENARIO")
-    if cluster_scenario:
-        from agents.diagnostic.cluster_state import init_scenario
-        init_scenario(cluster_scenario)
-    else:
-        from agents.diagnostic.cluster_state import reset_cluster_healthy
-        reset_cluster_healthy()
+    # Run optional bootstrap hook from environment.
+    # This replaces the hardcoded cluster_state initialization.
+    # Agents that need domain-specific setup configure it via:
+    #   AGENT_BOOTSTRAP_MODULE=agents.diagnostic.cluster_state
+    #   AGENT_BOOTSTRAP_FUNCTION=init_scenario
+    #   AGENT_BOOTSTRAP_ARGS=bad_deploy
+    bootstrap_module = os.environ.get("AGENT_BOOTSTRAP_MODULE")
+    bootstrap_function = os.environ.get("AGENT_BOOTSTRAP_FUNCTION")
+    if bootstrap_module and bootstrap_function:
+        import importlib
+
+        mod = importlib.import_module(bootstrap_module)
+        fn = getattr(mod, bootstrap_function)
+        bootstrap_args = os.environ.get("AGENT_BOOTSTRAP_ARGS", "")
+        if bootstrap_args:
+            fn(bootstrap_args)
+        else:
+            fn()
 
     reset_model()
     model_override = spec.model or {}

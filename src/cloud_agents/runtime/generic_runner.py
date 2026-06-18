@@ -12,10 +12,33 @@ from typing import Any
 
 from pydantic_ai import Agent
 
+from pathlib import Path
+
 from agents.definition import AgentSpec
 from agents.models import AgentRunRequest, AgentRunResponse
 from agents.runtime.output_types import resolve_output_type
 from agents.runtime.tool_loader import load_tools
+
+
+def _load_skills(spec: AgentSpec) -> list:
+    """Load skills from the agent spec. Strict — fails if configured but unavailable."""
+    if not spec.skills or not spec.skills.directories:
+        return []
+    try:
+        from pydantic_ai_skills import SkillsCapability
+    except ImportError as exc:
+        raise RuntimeError(
+            "Skills are configured in agent.yaml but pydantic-ai-skills "
+            "is not installed. Install it or remove the skills section."
+        ) from exc
+    for d in spec.skills.directories:
+        if not Path(d).is_dir():
+            logger.warning("Skills directory not found: %s (skipping)", d)
+    valid_dirs = [d for d in spec.skills.directories if Path(d).is_dir()]
+    if not valid_dirs:
+        logger.warning("No valid skills directories found")
+        return []
+    return [SkillsCapability(directories=valid_dirs)]
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +64,7 @@ def create_generic_runner(
     """
     output_type = resolve_output_type(spec.output_type, spec.output_type_module)
     tools = load_tools(spec.tools)
+    capabilities = _load_skills(spec)
 
     agent: Agent[None, Any] = Agent(
         model,
@@ -48,6 +72,7 @@ def create_generic_runner(
         retries=spec.retries,
         defer_model_check=spec.defer_model_check,
         instructions=spec.instructions,
+        capabilities=capabilities or None,
     )
 
     for fn_name, fn in tools:
