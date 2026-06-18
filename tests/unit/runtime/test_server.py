@@ -130,6 +130,44 @@ class TestRunEndpoint:
         body = resp.json()
         assert "Model not found" in body["detail"]
 
+    def test_sync_run_success_false_counts_as_error(self) -> None:
+        """Regression: sync /v1/run with success=False must not count as success metric."""
+        async def failing_runner(req: AgentRunRequest) -> AgentRunResponse:
+            return AgentRunResponse(
+                output={}, output_type="error",
+                usage={"input_tokens": 0, "output_tokens": 0},
+                agent_name="test-agent", success=False,
+                error="Model not found",
+            )
+
+        from agents.runtime.metrics import ls_agent_runs_total
+        before_success = ls_agent_runs_total.labels(
+            agent_name="sync-fail-test", status="success"
+        )._value.get()
+        before_error = ls_agent_runs_total.labels(
+            agent_name="sync-fail-test", status="error"
+        )._value.get()
+
+        app = create_app(
+            agent_runner=failing_runner,
+            agent_name="sync-fail-test",
+        )
+        client = TestClient(app)
+        resp = client.post("/v1/run", json={"prompt": "Check hosts"})
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is False
+
+        after_success = ls_agent_runs_total.labels(
+            agent_name="sync-fail-test", status="success"
+        )._value.get()
+        after_error = ls_agent_runs_total.labels(
+            agent_name="sync-fail-test", status="error"
+        )._value.get()
+
+        assert after_success == before_success, "success metric should NOT increment for success=False"
+        assert after_error == before_error + 1, "error metric should increment for success=False"
+
 
 class TestAsyncRun:
     """Tests for the async /v1/run mode with Prefer: respond-async."""

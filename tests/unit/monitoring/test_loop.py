@@ -200,3 +200,30 @@ class TestRedispatchPrevention:
 
         await loop._check_and_dispatch()
         assert dispatch.run_async.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_resets_disk_state(self) -> None:
+        """Regression: _mark_hosts_healthy must reset disk alongside CPU/memory/services."""
+        init_scenario("healthy")
+        from agents.diagnostic.cluster_state import cluster_state, simulate_disk_growth
+        simulate_disk_growth("db-01", 92)
+        assert cluster_state["hosts"]["db-01"]["disk"] == 92
+
+        alerts = [{
+            "host": "db-01", "metric": "disk", "value": "92%",
+            "severity": "high", "context": "disk full",
+            "recommended_action": "cleanup",
+        }]
+        runner = AsyncMock(return_value=_make_monitoring_response(
+            cluster_healthy=False, alerts=alerts
+        ))
+        dispatch = AsyncMock()
+        dispatch.run_async = AsyncMock(return_value="run-disk-fix")
+        loop = MonitoringLoop(agent_runner=runner, dispatch_client=dispatch, interval=0)
+
+        await loop._check_and_dispatch()
+
+        assert cluster_state["hosts"]["db-01"]["disk"] <= 70, (
+            f"Disk should be reset to <= 70%, got {cluster_state['hosts']['db-01']['disk']}%"
+        )
+        assert cluster_state["hosts"]["db-01"]["status"] == "healthy"
