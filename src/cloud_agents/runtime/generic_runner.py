@@ -36,8 +36,10 @@ def _load_skills(spec: AgentSpec) -> list:
             logger.warning("Skills directory not found: %s (skipping)", d)
     valid_dirs = [d for d in spec.skills.directories if Path(d).is_dir()]
     if not valid_dirs:
-        logger.warning("No valid skills directories found")
-        return []
+        raise RuntimeError(
+            f"Skills are configured but none of the directories exist: "
+            f"{spec.skills.directories}. Fix the paths or remove the skills section."
+        )
     return [SkillsCapability(directories=valid_dirs)]
 
 logger = logging.getLogger(__name__)
