@@ -1,8 +1,10 @@
-# Podman compose for cloud agents Phase 1a
+# Podman compose for cloud agents Phase 1b
+# Dev-only — do not expose beyond the developer machine.
 #
 # Usage:
 #   podman compose -f deploy/podman/docker-compose.cloud-agents.yaml up -d
-#   curl http://localhost:8081/healthz
+#   curl http://localhost:8081/healthz   # diagnostic-agent
+#   curl http://localhost:8082/healthz   # monitoring-agent
 #   podman compose -f deploy/podman/docker-compose.cloud-agents.yaml down
 
 services:
@@ -16,10 +18,24 @@ services:
     environment:
       - OLLAMA_URL=http://host.containers.internal:11434/v1
       - AGENT_MODEL=qwen3.6:latest
-    healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8080/healthz'); exit(0 if r.status_code == 200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
+      - CLUSTER_SCENARIO=bad_deploy
+    restart: unless-stopped
+
+  monitoring-agent:
+    build:
+      context: ../..
+      dockerfile: deploy/monitoring-agent/Containerfile
+    container_name: monitoring-agent
+    ports:
+      - "8082:8080"
+    environment:
+      - OLLAMA_URL=http://host.containers.internal:11434/v1
+      - AGENT_MODEL=qwen3.6:latest
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
+      - DISPATCH_ENDPOINT=http://diagnostic-agent:8080
+      - CLUSTER_SCENARIO=bad_deploy
+      - MONITOR_INTERVAL=60
+    depends_on:
+      - diagnostic-agent
     restart: unless-stopped

@@ -7,7 +7,11 @@ from agents.models import (
     AgentRunRequest,
     AgentRunResponse,
     DiagnosticReport,
+    MonitoringAlert,
+    MonitoringResult,
     RemediationAction,
+    RunState,
+    RunStatus,
 )
 
 
@@ -223,3 +227,145 @@ class TestAgentRunResponse:
         reconstructed = DiagnosticReport.model_validate(resp.output)
         assert reconstructed.summary == "Roundtrip test"
         assert reconstructed.actions_taken[0].host == "h1"
+
+
+class TestMonitoringAlert:
+    """Tests for the MonitoringAlert model."""
+
+    def test_valid_alert(self) -> None:
+        """Test creating a valid monitoring alert."""
+        alert = MonitoringAlert(
+            host="web-02",
+            metric="cpu",
+            value="92%",
+            severity="critical",
+            context="CPU spike after deploy",
+            recommended_action="rollback deploy",
+        )
+        assert alert.host == "web-02"
+        assert alert.severity == "critical"
+
+    def test_invalid_severity_rejected(self) -> None:
+        """Test that an invalid severity is rejected."""
+        with pytest.raises(ValidationError):
+            MonitoringAlert(
+                host="web-02",
+                metric="cpu",
+                value="92%",
+                severity="extreme",
+                context="test",
+                recommended_action="test",
+            )
+
+    def test_all_severity_levels_accepted(self) -> None:
+        """Test that all valid severity levels are accepted."""
+        for sev in ("low", "medium", "high", "critical"):
+            alert = MonitoringAlert(
+                host="h", metric="m", value="v",
+                severity=sev, context="c", recommended_action="a",
+            )
+            assert alert.severity == sev
+
+
+class TestMonitoringResult:
+    """Tests for the MonitoringResult model."""
+
+    def test_healthy_cluster(self) -> None:
+        """Test monitoring result for a healthy cluster."""
+        result = MonitoringResult(alerts=[], cluster_healthy=True)
+        assert result.cluster_healthy is True
+        assert result.dispatched_run_ids == []
+
+    def test_with_alerts(self) -> None:
+        """Test monitoring result with alerts."""
+        alert = MonitoringAlert(
+            host="web-02", metric="cpu", value="92%",
+            severity="critical", context="spike",
+            recommended_action="investigate",
+        )
+        result = MonitoringResult(
+            alerts=[alert],
+            cluster_healthy=False,
+        )
+        assert len(result.alerts) == 1
+        assert result.cluster_healthy is False
+
+    def test_with_dispatched_run_ids(self) -> None:
+        """Test monitoring result tracks dispatched run IDs."""
+        result = MonitoringResult(
+            alerts=[],
+            cluster_healthy=False,
+            dispatched_run_ids=["run-abc", "run-def"],
+        )
+        assert result.dispatched_run_ids == ["run-abc", "run-def"]
+
+    def test_json_round_trip(self) -> None:
+        """Test serialization with nested alerts."""
+        alert = MonitoringAlert(
+            host="db-01", metric="disk", value="95%",
+            severity="high", context="disk full",
+            recommended_action="cleanup",
+        )
+        result = MonitoringResult(
+            alerts=[alert],
+            cluster_healthy=False,
+            dispatched_run_ids=["run-123"],
+        )
+        json_str = result.model_dump_json()
+        restored = MonitoringResult.model_validate_json(json_str)
+        assert restored.alerts[0].host == "db-01"
+        assert restored.dispatched_run_ids == ["run-123"]
+
+
+class TestRunStatus:
+    """Tests for the RunStatus enum."""
+
+    def test_status_values(self) -> None:
+        """Test that all status values exist."""
+        assert RunStatus.RUNNING == "running"
+        assert RunStatus.COMPLETED == "completed"
+        assert RunStatus.FAILED == "failed"
+
+
+class TestRunState:
+    """Tests for the RunState model."""
+
+    def test_running_state(self) -> None:
+        """Test creating a running state."""
+        state = RunState(
+            run_id="run-abc",
+            status=RunStatus.RUNNING,
+            created_at="2026-06-17T14:00:00+00:00",
+        )
+        assert state.status == RunStatus.RUNNING
+        assert state.result is None
+
+    def test_completed_state_with_result(self) -> None:
+        """Test creating a completed state with a result."""
+        resp = AgentRunResponse(
+            output={"summary": "done"},
+            output_type="DiagnosticReport",
+            usage={"input_tokens": 10, "output_tokens": 20},
+            agent_name="diag",
+            success=True,
+        )
+        state = RunState(
+            run_id="run-abc",
+            status=RunStatus.COMPLETED,
+            result=resp,
+            created_at="2026-06-17T14:00:00+00:00",
+        )
+        assert state.status == RunStatus.COMPLETED
+        assert state.result.success is True
+
+    def test_json_round_trip(self) -> None:
+        """Test RunState serialization."""
+        state = RunState(
+            run_id="run-xyz",
+            status=RunStatus.RUNNING,
+            created_at="2026-06-17T14:00:00+00:00",
+        )
+        json_str = state.model_dump_json()
+        restored = RunState.model_validate_json(json_str)
+        assert restored.run_id == "run-xyz"
+        assert restored.status == RunStatus.RUNNING

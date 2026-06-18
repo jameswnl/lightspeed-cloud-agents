@@ -5,7 +5,7 @@ import httpx
 from unittest.mock import AsyncMock, patch
 
 from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
-from agents.models import AgentRunResponse
+from agents.models import AgentRunResponse, RunState, RunStatus
 from agents.remote_agent_client import RemoteAgentClient
 
 
@@ -158,3 +158,55 @@ class TestRemoteAgentClientHealthz:
         ):
             client = RemoteAgentClient("http://agent:8080")
             assert await client.healthz() is False
+
+
+class TestRemoteAgentClientAsync:
+    """Tests for RemoteAgentClient async methods."""
+
+    @pytest.mark.asyncio
+    async def test_run_async_returns_run_id(self) -> None:
+        """Test that run_async returns a run_id from 202 response."""
+        mock_response = httpx.Response(
+            202, json={"run_id": "run-abc", "status": "running"}
+        )
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+        ):
+            client = RemoteAgentClient("http://agent:8080")
+            run_id = await client.run_async("Check hosts")
+        assert run_id == "run-abc"
+
+    @pytest.mark.asyncio
+    async def test_poll_run_returns_state(self) -> None:
+        """Test that poll_run returns a RunState."""
+        state_data = RunState(
+            run_id="run-abc",
+            status=RunStatus.COMPLETED,
+            result=AgentRunResponse(
+                output={"summary": "done"},
+                output_type="DiagnosticReport",
+                usage={"input_tokens": 10, "output_tokens": 20},
+                agent_name="diag",
+                success=True,
+            ),
+            created_at="2026-06-17T14:00:00+00:00",
+        )
+        mock_response = httpx.Response(200, json=state_data.model_dump(mode="json"))
+        with patch.object(
+            httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_response
+        ):
+            client = RemoteAgentClient("http://agent:8080")
+            state = await client.poll_run("run-abc")
+        assert state.status == RunStatus.COMPLETED
+        assert state.result.success is True
+
+    @pytest.mark.asyncio
+    async def test_poll_run_not_found_raises(self) -> None:
+        """Test that polling a nonexistent run raises AgentError."""
+        mock_response = httpx.Response(404, json={"detail": "not found"})
+        with patch.object(
+            httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_response
+        ):
+            client = RemoteAgentClient("http://agent:8080")
+            with pytest.raises(AgentError, match="not found"):
+                await client.poll_run("nonexistent")

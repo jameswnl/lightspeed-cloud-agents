@@ -39,25 +39,36 @@ fi
 echo "[build] Building diagnostic-agent image..."
 if ! podman build -f "$REPO_ROOT/deploy/diagnostic-agent/Containerfile" \
     -t diagnostic-agent:latest "$REPO_ROOT"; then
-    echo "ERROR: Image build failed"
+    echo "ERROR: Diagnostic agent image build failed"
     exit 1
 fi
 
-# Load image into Kind
-echo "[kind] Loading diagnostic-agent image into cluster..."
+# Build monitoring agent image
+echo "[build] Building monitoring-agent image..."
+if ! podman build -f "$REPO_ROOT/deploy/monitoring-agent/Containerfile" \
+    -t monitoring-agent:latest "$REPO_ROOT"; then
+    echo "ERROR: Monitoring agent image build failed"
+    exit 1
+fi
+
+# Load images into Kind
+echo "[kind] Loading images into cluster..."
 kind load docker-image diagnostic-agent:latest --name "$CLUSTER_NAME"
+kind load docker-image monitoring-agent:latest --name "$CLUSTER_NAME"
 
 # Deploy Ollama LLM backend
 echo "[kind] Deploying Ollama LLM backend..."
 kubectl apply -f "$SCRIPT_DIR/ollama.yaml"
 
 # Apply agent manifests
-echo "[kind] Applying diagnostic-agent manifests..."
+echo "[kind] Applying agent manifests..."
 kubectl apply -f "$SCRIPT_DIR/diagnostic-agent.yaml"
+kubectl apply -f "$SCRIPT_DIR/monitoring-agent.yaml"
 
 # Wait for readiness
-echo "[kind] Waiting for diagnostic-agent to be ready..."
+echo "[kind] Waiting for agents to be ready..."
 kubectl rollout status deployment/diagnostic-agent --timeout=120s
+kubectl rollout status deployment/monitoring-agent --timeout=120s
 
 echo ""
 echo "=== Setup Complete ==="

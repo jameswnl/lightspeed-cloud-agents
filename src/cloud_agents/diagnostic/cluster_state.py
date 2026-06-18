@@ -57,8 +57,14 @@ def reset_cluster_healthy() -> None:
     action_log.clear()
 
 
+FIXED_DEPLOY_TIMESTAMP = "2026-06-17T14:25:00+00:00"
+
+
 def simulate_bad_deploy() -> None:
-    """Simulate a bad deployment on web-02."""
+    """Simulate a bad deployment on web-02.
+
+    Uses a fixed timestamp for deterministic behavior across pods.
+    """
     host = cluster_state["hosts"]["web-02"]
     host["cpu"] = 92
     host["memory"] = 88
@@ -69,7 +75,7 @@ def simulate_bad_deploy() -> None:
             "host": "web-02",
             "app": "frontend",
             "version": "v2.3.1",
-            "time": datetime.now(timezone.utc).isoformat(),
+            "time": FIXED_DEPLOY_TIMESTAMP,
             "status": "deployed",
         }
     )
@@ -86,3 +92,27 @@ def simulate_disk_growth(host: str, target_pct: int) -> None:
         cluster_state["alerts"].append(
             f"{host}: disk usage {target_pct}%, approaching critical threshold"
         )
+
+
+def init_scenario(name: str) -> None:
+    """Initialize cluster state for a named scenario.
+
+    Scenarios provide deterministic starting states for testing
+    cross-pod agent collaboration.
+
+    Args:
+        name: One of ``healthy``, ``bad_deploy``, or ``disk_growth``.
+
+    Raises:
+        ValueError: If the scenario name is not recognized.
+    """
+    reset_cluster_healthy()
+    if name == "healthy":
+        return
+    if name == "bad_deploy":
+        simulate_bad_deploy()
+        return
+    if name == "disk_growth":
+        simulate_disk_growth("db-01", 82)
+        return
+    raise ValueError(f"Unknown scenario: {name!r}. Use: healthy, bad_deploy, disk_growth")

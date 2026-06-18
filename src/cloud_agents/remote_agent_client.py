@@ -10,7 +10,7 @@ from typing import Any, Optional
 import httpx
 
 from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
-from agents.models import AgentRunResponse
+from agents.models import AgentRunResponse, RunState, RunStatus
 
 
 class RemoteAgentClient:
@@ -95,6 +95,130 @@ class RemoteAgentClient:
             )
 
         return result
+
+    async def run_async(
+        self,
+        prompt: str,
+        context: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Submit a prompt asynchronously and return the run_id.
+
+        Args:
+            prompt: The task or question for the agent.
+            context: Optional metadata.
+
+        Returns:
+            The run_id for polling.
+
+        Raises:
+            AgentUnavailableError: If the agent pod cannot be reached.
+            AgentError: If the submission fails.
+        """
+        body: dict[str, Any] = {"prompt": prompt}
+        if context is not None:
+            body["context"] = context
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0)
+            ) as client:
+                response = await client.post(
+                    f"{self.endpoint}/v1/run",
+                    json=body,
+                    headers={"Prefer": "respond-async"},
+                )
+        except httpx.ConnectError as exc:
+            raise AgentUnavailableError(
+                f"Agent at {self.endpoint} unavailable: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(
+                f"HTTP error submitting to agent at {self.endpoint}: {exc}"
+            ) from exc
+
+        if response.status_code != 202:
+            raise AgentError(
+                f"Expected 202 from async submit, got {response.status_code}: "
+                f"{response.text}"
+            )
+
+        data = response.json()
+        return data["run_id"]
+
+    async def poll_run(self, run_id: str) -> RunState:
+        """Poll the status of an async run.
+
+        Args:
+            run_id: The run identifier from run_async().
+
+        Returns:
+            Current RunState.
+
+        Raises:
+            AgentError: If the run is not found or the poll fails.
+        """
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0)
+            ) as client:
+                response = await client.get(
+                    f"{self.endpoint}/v1/runs/{run_id}"
+                )
+        except httpx.HTTPError as exc:
+            raise AgentError(
+                f"Error polling run {run_id} at {self.endpoint}: {exc}"
+            ) from exc
+
+        if response.status_code == 404:
+            raise AgentError(f"Run {run_id} not found at {self.endpoint}")
+
+        return RunState.model_validate(response.json())
+
+    async def run_with_polling(
+        self,
+        prompt: str,
+        context: Optional[dict[str, Any]] = None,
+        poll_interval: float = 2.0,
+    ) -> AgentRunResponse:
+        """Submit async and poll until completion.
+
+        Args:
+            prompt: The task or question for the agent.
+            context: Optional metadata.
+            poll_interval: Seconds between polls.
+
+        Returns:
+            The completed AgentRunResponse.
+
+        Raises:
+            AgentTimeoutError: If the run doesn't complete within the timeout.
+            AgentError: If the run fails.
+        """
+        import asyncio
+        import time
+
+        run_id = await self.run_async(prompt, context=context)
+        start = time.monotonic()
+
+        while time.monotonic() - start < self.timeout:
+            state = await self.poll_run(run_id)
+            if state.status == RunStatus.COMPLETED:
+                if state.result is None:
+                    raise AgentError(f"Run {run_id} completed but no result")
+                if not state.result.success:
+                    raise AgentError(
+                        f"Agent '{state.result.agent_name}' run failed: "
+                        f"{state.result.error}"
+                    )
+                return state.result
+            if state.status == RunStatus.FAILED:
+                error = state.result.error if state.result else "Unknown error"
+                raise AgentError(f"Run {run_id} failed: {error}")
+            await asyncio.sleep(poll_interval)
+
+        raise AgentTimeoutError(
+            f"Run {run_id} did not complete within {self.timeout}s"
+        )
 
     async def healthz(self) -> bool:
         """Check if the agent pod is ready.

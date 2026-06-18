@@ -7,7 +7,8 @@ for the agent runtime's /v1/run endpoint.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from enum import Enum
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -66,6 +67,48 @@ class DiagnosticReport(BaseModel):
     cluster_healthy: bool
 
 
+class MonitoringAlert(BaseModel):
+    """A single alert from the monitoring agent.
+
+    Attributes:
+        host: The host where the issue was detected.
+        metric: The metric that triggered the alert (e.g. ``cpu``, ``disk``, ``service_status``).
+        value: The observed value (e.g. ``92%``, ``crashed``).
+        severity: Alert severity level.
+        context: Description of what was observed.
+        recommended_action: What the monitoring agent suggests.
+    """
+
+    host: str
+    metric: str
+    value: str
+    severity: Literal["low", "medium", "high", "critical"]
+    context: str
+    recommended_action: str
+
+
+class MonitoringResult(BaseModel):
+    """Structured output from the monitoring agent.
+
+    Attributes:
+        alerts: List of alerts detected during monitoring.
+        cluster_healthy: Whether all hosts are healthy.
+        dispatched_run_ids: Run IDs of diagnostic agent dispatches triggered by this check.
+    """
+
+    alerts: list[MonitoringAlert] = Field(default_factory=list)
+    cluster_healthy: bool
+    dispatched_run_ids: list[str] = Field(default_factory=list)
+
+
+class RunStatus(str, Enum):
+    """Status of an async agent run."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class AgentRunResponse(BaseModel):
     """Response body from POST /v1/run on an agent pod.
 
@@ -86,3 +129,19 @@ class AgentRunResponse(BaseModel):
     agent_name: str
     success: bool
     error: Optional[str] = None
+
+
+class RunState(BaseModel):
+    """State of an async agent run stored in the RunStore.
+
+    Attributes:
+        run_id: Unique identifier for this run.
+        status: Current status of the run.
+        result: The agent's response, available when completed or failed.
+        created_at: ISO timestamp when the run was submitted.
+    """
+
+    run_id: str
+    status: RunStatus
+    result: Optional[AgentRunResponse] = None
+    created_at: str

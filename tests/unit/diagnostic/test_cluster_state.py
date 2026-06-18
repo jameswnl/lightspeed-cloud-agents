@@ -1,8 +1,12 @@
 """Unit tests for simulated cluster state."""
 
+import pytest
+
 from agents.diagnostic.cluster_state import (
+    FIXED_DEPLOY_TIMESTAMP,
     action_log,
     cluster_state,
+    init_scenario,
     reset_cluster_healthy,
     simulate_bad_deploy,
     simulate_disk_growth,
@@ -96,6 +100,54 @@ class TestSimulateDiskGrowth:
         reset_cluster_healthy()
         simulate_disk_growth("db-01", 82)
         assert cluster_state["hosts"]["db-01"]["status"] == "healthy"
+
+
+class TestSimulateBadDeployTimestamp:
+    """Tests for fixed timestamp in simulate_bad_deploy."""
+
+    def test_deploy_uses_fixed_timestamp(self) -> None:
+        """Test that deploy timestamp is deterministic, not datetime.now()."""
+        reset_cluster_healthy()
+        simulate_bad_deploy()
+        deploy = cluster_state["recent_deploys"][0]
+        assert deploy["time"] == FIXED_DEPLOY_TIMESTAMP
+
+
+class TestInitScenario:
+    """Tests for init_scenario."""
+
+    def test_healthy_scenario(self) -> None:
+        """Test healthy scenario produces all healthy hosts."""
+        init_scenario("healthy")
+        for host in cluster_state["hosts"].values():
+            assert host["status"] == "healthy"
+        assert cluster_state["alerts"] == []
+
+    def test_bad_deploy_scenario(self) -> None:
+        """Test bad_deploy scenario produces degraded web-02."""
+        init_scenario("bad_deploy")
+        assert cluster_state["hosts"]["web-02"]["status"] == "degraded"
+        assert cluster_state["hosts"]["web-02"]["services"]["app"] == "crashed"
+        assert len(cluster_state["alerts"]) == 1
+        assert len(cluster_state["recent_deploys"]) == 1
+
+    def test_disk_growth_scenario(self) -> None:
+        """Test disk_growth scenario sets db-01 disk to 82%."""
+        init_scenario("disk_growth")
+        assert cluster_state["hosts"]["db-01"]["disk"] == 82
+        assert cluster_state["hosts"]["db-01"]["status"] == "healthy"
+
+    def test_unknown_scenario_raises(self) -> None:
+        """Test that unknown scenario raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown scenario"):
+            init_scenario("nonexistent")
+
+    def test_bad_deploy_other_hosts_unaffected(self) -> None:
+        """Test that bad_deploy only affects web-02."""
+        init_scenario("bad_deploy")
+        assert cluster_state["hosts"]["web-01"]["status"] == "healthy"
+        assert cluster_state["hosts"]["db-01"]["status"] == "healthy"
+        assert cluster_state["hosts"]["cache-01"]["status"] == "healthy"
 
     def test_alert_added_at_90(self) -> None:
         """Test that alert is added at 90%+."""
