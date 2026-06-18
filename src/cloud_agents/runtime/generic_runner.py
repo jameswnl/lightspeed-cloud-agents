@@ -1,0 +1,107 @@
+"""Generic agent runner — builds and runs a Pydantic AI Agent from an AgentSpec.
+
+Replaces the per-agent run_diagnostic() and run_monitoring() functions
+with a single generic runner that works for any agent definition.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from pydantic_ai import Agent
+
+from agents.definition import AgentSpec
+from agents.models import AgentRunRequest, AgentRunResponse
+from agents.runtime.output_types import resolve_output_type
+from agents.runtime.tool_loader import load_tools
+
+logger = logging.getLogger(__name__)
+
+
+def create_generic_runner(
+    spec: AgentSpec,
+    model: Any,
+    agent_name: str,
+) -> Callable[[AgentRunRequest], Awaitable[AgentRunResponse]]:
+    """Create an agent runner function from an AgentSpec.
+
+    Builds a Pydantic AI Agent with the specified tools, output type,
+    instructions, and retries. Returns an async callable suitable for
+    passing to create_app(agent_runner=...).
+
+    Args:
+        spec: The agent specification from agent.yaml.
+        model: The Pydantic AI model (from model_factory or FunctionModel).
+        agent_name: Agent identifier for logging and response envelope.
+
+    Returns:
+        Async callable that processes AgentRunRequest → AgentRunResponse.
+    """
+    output_type = resolve_output_type(spec.output_type, spec.output_type_module)
+    tools = load_tools(spec.tools)
+
+    agent: Agent[None, Any] = Agent(
+        model,
+        output_type=output_type,
+        retries=spec.retries,
+        defer_model_check=spec.defer_model_check,
+        instructions=spec.instructions,
+    )
+
+    for fn_name, fn in tools:
+        agent.tool_plain(fn, docstring_format="google")
+
+    if spec.output_validator:
+        import importlib
+
+        val_mod = importlib.import_module(spec.output_validator.module)
+        val_fn = getattr(val_mod, spec.output_validator.function)
+        agent.output_validator(val_fn)
+
+    async def run_agent(request: AgentRunRequest) -> AgentRunResponse:
+        """Run the agent and return a structured response."""
+        correlation_id = (request.context or {}).get("correlation_id", "none")
+        logger.info(
+            "Starting generic run",
+            extra={"agent_name": agent_name, "correlation_id": correlation_id},
+        )
+
+        try:
+            result = await agent.run(request.prompt)
+        except Exception as exc:
+            logger.error(
+                "Run failed: %s",
+                exc,
+                extra={"agent_name": agent_name, "correlation_id": correlation_id},
+            )
+            return AgentRunResponse(
+                output={},
+                output_type="error",
+                usage={"input_tokens": 0, "output_tokens": 0},
+                agent_name=agent_name,
+                success=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        output_data: dict[str, Any]
+        if hasattr(result.output, "model_dump"):
+            output_data = result.output.model_dump()
+        elif isinstance(result.output, str):
+            output_data = {"text": result.output}
+        else:
+            output_data = {"value": result.output}
+
+        return AgentRunResponse(
+            output=output_data,
+            output_type=output_type.__name__,
+            usage={
+                "input_tokens": result.usage.input_tokens,
+                "output_tokens": result.usage.output_tokens,
+            },
+            agent_name=agent_name,
+            success=True,
+        )
+
+    return run_agent
