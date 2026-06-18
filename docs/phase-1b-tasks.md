@@ -68,7 +68,36 @@ A 3rd-party reviewer identified 4 issues. Resolutions:
 
 ---
 
-## Architectural Decisions (resolved by evaluator + 3rd-party reviews)
+## Security Review (2026-06-18)
+
+A security-focused reviewer identified 5 issues. Resolutions:
+
+| # | Severity | Issue | Resolution |
+|---|----------|-------|-----------|
+| 1 | Blocker | No inter-agent auth model — new APIs are unauthenticated | Add explicit **Trust Boundary** section: all agent endpoints are trusted-internal-only, dev/test clusters only, no external ingress. Full auth deferred to Phase 2. |
+| 2 | Major | More surface area (autonomous pod, async polling, metrics) but security deferred | Add **minimum containment baseline**: Services are ClusterIP only, monitoring→diagnostic direction only, `environment: dev-test-only` label on manifests. |
+| 3 | Major | Run IDs used as implicit authorization for polling | Document: `run_id` is a lookup key, not an auth credential. Polling is trusted-internal. Phase 2 adds caller-scoped access. |
+| 4 | Major | Correlation IDs accepted from callers without sanitization — log injection risk | Validate: max 128 chars, `[a-zA-Z0-9\-]` only, generate UUID if absent or invalid. |
+| 5 | Medium | Per-tool metrics could expose operational shape | Already resolved: per-tool metrics deferred to Phase 2. `/metrics` documented as internal-only. |
+
+### Trust Boundary (Phase 1b)
+
+**All agent endpoints are internal-only, for dev/test clusters only.**
+
+| Property | Phase 1b rule |
+|----------|--------------|
+| Network exposure | `ClusterIP` Services only — no NodePort, no Ingress, no external access |
+| Traffic direction | Monitoring → diagnostic only. Diagnostic does not call monitoring. |
+| Authentication | None. Endpoints are unauthenticated. Acceptable for dev/test only. |
+| Run ID access control | Lookup key only, not an auth credential. Anyone on the cluster network can poll. |
+| `/metrics` access | Internal-only. No auth. Label cardinality bounded (per-run, not per-tool). |
+| Correlation ID handling | Server-side validation: max 128 chars, `[a-zA-Z0-9\-]`, generate UUID if absent/invalid. Never log raw nested context. |
+| Deployment label | All manifests tagged `environment: dev-test-only` |
+| Documentation | README and deployment guide state: "do not deploy outside dev/test clusters without Phase 2 security hardening" |
+
+---
+
+## Architectural Decisions (resolved by evaluator + 3rd-party + security reviews)
 
 ### Shared cluster state: Context-passing with local state mutation
 
@@ -251,7 +280,12 @@ Containerize the monitoring agent. Update manifests.
 - `deploy/kind/setup.sh` — add monitoring-agent build + load + apply
 - `deploy/podman/docker-compose.cloud-agents.yaml` — add monitoring-agent service with `depends_on: diagnostic-agent`
 
-**Acceptance:** `./deploy/kind/setup.sh` → three pods running. Monitoring agent logs show periodic checks. On `bad_deploy` scenario, monitoring agent dispatches to diagnostic agent.
+**Security containment (from security review):**
+- All Services are `ClusterIP` only (no NodePort, no Ingress)
+- All manifests tagged with `environment: dev-test-only` label
+- Monitoring-agent manifest documents: "monitoring calls diagnostic, not vice versa"
+
+**Acceptance:** `./deploy/kind/setup.sh` → three pods running. Monitoring agent logs show periodic checks. On `bad_deploy` scenario, monitoring agent dispatches to diagnostic agent. All Services are ClusterIP only.
 
 ---
 
@@ -302,7 +336,13 @@ Per-tool metrics (`ls_agent_tool_calls_total{agent_name, tool_name}`) deferred t
 2. Implement metrics module and server instrumentation
 3. Tests pass
 
-**Acceptance:** Every response includes `X-Correlation-ID` header. `/metrics` returns Prometheus text format. Logs include `correlation_id` and `agent_name`.
+**Correlation ID validation (from security review):**
+- If absent in request context, generate server-side UUID
+- If present, validate: max 128 chars, `[a-zA-Z0-9\-]` only
+- If invalid, replace with generated UUID and log a warning
+- Never log raw nested context dicts — only validated scalar fields
+
+**Acceptance:** Every response includes `X-Correlation-ID` header (validated or generated). `/metrics` returns Prometheus text format (internal-only, per-run metrics). Logs include validated `correlation_id` and `agent_name`.
 
 ---
 
