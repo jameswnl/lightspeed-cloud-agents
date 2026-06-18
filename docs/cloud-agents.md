@@ -622,26 +622,34 @@ If the conversational agent needs to delegate to the diagnostic agent, it does s
 - Kind cluster or Podman compose runs both pods successfully
 - E2E tests pass against deployed containers
 
-**Phase 1b (weeks 7-12): Monitoring agent + lifecycle + hardening**
+**Phase 1b (7 tasks, ~7.5 days): Monitoring agent + async + observability**
 
-*Notes from reviews:*
-- *(3rd-party review): Phase 1a uses in-process simulated cluster state, which is per-pod and isolated. Phase 1b must address cross-pod state sharing — either switch to real cluster APIs or introduce a shared state service. Simulated state is a Phase 1a test harness only.*
-- *(Liveness/progress): Phase 1b should add `asyncio.wait_for()` + K8s liveness probe (`/livez`) for hang detection. SSE streaming from `agent.iter()` for progress visibility.*
-- *(Async /v1/run): Phase 1a uses sync HTTP (sufficient for PoC). Phase 1b should switch to async submit+poll: `POST /v1/run → 202 + run_id`, `GET /v1/runs/{run_id} → status/result`. Sync calls are fragile over real networks (proxy timeouts, connection drops). The Phase 1a sync endpoint becomes the submission endpoint in 1b — same path, returns 202 instead of blocking.*
+*Full task breakdown: [phase-1b-tasks.md](phase-1b-tasks.md)*
 
-| Week | Deliverable |
-|------|-------------|
-| 7-8 | **Monitoring agent pod**: Second agent container with periodic trigger (asyncio loop). Dispatches to diagnostic agent via HTTP when severity >= high. **Must resolve shared state** — either real cluster APIs or shared state endpoint so both agents inspect the same world. Validate PoC Scenario 1 across pods. |
-| 9-10 | **Security + observability**: Service accounts, network policies, secret injection. OpenTelemetry trace propagation. Per-agent Prometheus metrics. Correlation IDs in structured logs. |
-| 11-12 | **Integration testing + deployment**: End-to-end tests covering all three PoC scenarios across pods. Deployment guide for OCP and Podman (compose file). |
+*Architectural decisions resolved by evaluator review (2026-06-18):*
+- **Shared state**: Context-passing via HTTP dispatch, not shared service. Both pods pre-seed same scenario via env var.
+- **Async /v1/run**: `Prefer: respond-async` header → 202 + run_id + polling. Backward-compatible with Phase 1a sync mode.
+- **Observability**: Structured logging with correlation IDs + Prometheus counters. Full OpenTelemetry deferred to Phase 2.
+- **Security hardening (RBAC, NetworkPolicy)**: Deferred to Phase 2 — scope creep for a PoC-validation phase.
+
+| Task | What | Tests |
+|------|------|-------|
+| 1. Shared models + scenario init | `MonitoringAlert`, `MonitoringResult`, `RunState`, scenario-based state | ~6 |
+| 2. Async /v1/run + polling | `Prefer` header, `/v1/runs/{run_id}`, `RunStore`, async client methods | ~10 |
+| 3. Monitoring agent | Tools, agent definition, `MonitoringLoop` with periodic dispatch | ~12 |
+| 4. Container + deploy | Monitoring agent Containerfile, updated Kind/Podman manifests | manual |
+| 5. Liveness + timeout | `/livez` endpoint, `asyncio.wait_for()` around runs | ~4 |
+| 6. Logging + metrics | Correlation IDs, Prometheus counters/histograms, `/metrics` | ~6 |
+| 7. E2E tests | 4 new scenarios (monitoring health, detect, dispatch, full flow) | 4 E2E |
 
 **Phase 1b acceptance criteria:**
 - Monitoring agent runs autonomously in its own pod, detects anomalies, dispatches diagnostic agent
-- Both agents observe the same cluster state (real APIs or shared state service — not isolated in-memory dicts)
-- Full traceability: a monitoring alert can be correlated to a diagnostic run to a remediation action across pods
-- OCP deployment with separate Deployments per agent, NetworkPolicy, ServiceAccounts
-- Podman deployment with compose file
-- All three PoC scenarios work end-to-end across containers
+- Both pods pre-seed same cluster scenario; monitoring passes alert context to diagnostic via HTTP
+- Async `/v1/run` with polling — sync mode backward-compatible
+- `/livez` detects hung agents; runs exceeding timeout return 500
+- Correlation IDs in all logs and responses; Prometheus metrics on `/metrics`
+- 8 E2E scenarios pass across containers (4 from 1a + 4 new)
+- Podman compose and Kind manifests deploy all pods
 
 ### Phase 2: User-defined agents — Configuration-driven agent creation
 
