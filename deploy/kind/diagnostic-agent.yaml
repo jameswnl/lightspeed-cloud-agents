@@ -1,0 +1,59 @@
+# Diagnostic agent pod deployment for Kind cluster
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostic-agent
+  labels:
+    app: diagnostic-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: diagnostic-agent
+  template:
+    metadata:
+      labels:
+        app: diagnostic-agent
+    spec:
+      containers:
+        - name: diagnostic-agent
+          image: localhost/diagnostic-agent:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_URL
+              value: "http://ollama:11434/v1"
+            - name: AGENT_MODEL
+              value: "qwen3.6:latest"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostic-agent
+spec:
+  selector:
+    app: diagnostic-agent
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

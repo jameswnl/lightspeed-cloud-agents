@@ -7,7 +7,7 @@
 | **Authors**        | James Wong                                |
 | **Feature**        | Cloud Agents — server-side multi-agent platform |
 | **Spike**          | N/A (PoC-driven exploration)              |
-| **Links**          | [PoC requirements](~/ws/jwong-uie/lcore-server-side-agents-poc.md), [Architecture](~/ws/jwong-uie/lcore-pydantic-ai-architecture.md), [Diagnose-and-fix feasibility](~/ws/jwong-uie/lcore-pydantic-ai-diagnose-and-fix.md), [Strategic direction](~/ws/jwong-uie/lcore-pydantic-ai-strategic-direction.md) |
+| **Links**          | [PoC requirements](server-side-agents-poc.md), [Architecture](pydantic-ai-architecture.md), [Diagnose-and-fix feasibility](diagnose-and-fix-feasibility.md), [Strategic direction](strategic-direction.md), [Phase 1a tasks](phase-1a-tasks.md) |
 
 ## What
 
@@ -368,21 +368,33 @@ PLAYGROUND_PROVIDER=openai OPENAI_API_KEY=sk-... uv run python playground/try_se
 
 No unit tests are created for playground scripts. The acceptance test surface above defines what to observe in the output.
 
+## Resolved Questions
+
+*Questions from earlier drafts that are now answered in Phase 1 detail.*
+
+- **~~Inter-agent communication protocol~~**: **HTTP with `/run` + `/healthz` endpoints.** Works in both OCP and Podman, no additional infrastructure, compatible with Pydantic AI patterns. — Resolved by evaluator recommendation, 2026-06-17.
+
+- **~~Agent configuration schema (Phase 1)~~**: **Minimal YAML in `lightspeed-stack.yaml`** with name, endpoint, type, skills, resources, trigger. Full `AgentDefinition` CRD deferred to Phase 2. — Resolved in Phase 1 spec, 2026-06-17.
+
+- **~~Agent lifecycle management~~**: **K8s-native on OCP** (Deployments, readiness probes, restart policies), **compose-native on Podman**. Core pod maintains in-memory agent registry. — Resolved in Phase 1 spec, 2026-06-17.
+
+- **~~Skills integration with multi-agent~~**: **Per-agent skill sets.** Each agent pod gets its own `SkillsCapability` with only its prescribed skills mounted as a read-only volume. No shared registry in Phase 1. — Resolved in Phase 1 spec, 2026-06-17.
+
 ## Open Questions for Future Work
 
 - **Durable execution**: Which persistence backend (pydantic-graph `FileStatePersistence`, DBOS, Temporal) fits lightspeed-stack's production deployment? — Origin: diagnose-and-fix feasibility assessment, updated 2026-06-17.
 
 - **Real human approval flow**: How does an agent pause mid-workflow, persist state, wait for Slack/web approval, and resume? pydantic-graph node-level persistence supports this, but the UX flow is undesigned. — Origin: JR/James conversation 2026-06-17.
 
-- **Agent configuration schema**: What does the YAML look like for defining multiple agents in `lightspeed-stack.yaml`? JR and James discussed a vision but no schema exists. — Origin: JR/James conversation 2026-06-17.
-
 - **Sandboxing**: If agents generate scripts or commands, where do they execute safely? JR proposed server-side sandboxes that verify before real execution. Needs a spike. — Origin: JR/James conversation 2026-06-17.
 
-- **Skills integration with multi-agent**: How do skills (LCORE-2076) compose with the multi-agent pattern? Does each agent get its own skill set, or is there a shared skill registry? — Origin: PoC requirements doc.
+- **Centralized quota management**: When N agent pods each connect to the LLM independently, how is token quota enforced globally? Phase 1 uses per-pod quota (acceptable for 2-3 agents). Phase 2 may need a centralized quota service. — Origin: evaluator assessment, 2026-06-17.
 
 - **`/responses` API deprecation**: If LCS shifts to cloud agents, the `/responses` proxy becomes less relevant. Needs team alignment. — Origin: JR/James conversation 2026-06-17.
 
 - **Predictive analytics**: The PoC simulates trend detection with application code. Real predictive agents need time-series analysis, possibly ML models. — Origin: PoC requirements doc.
+
+- **OCP vs Podman config divergence**: OCP has CRDs, ServiceAccounts, NetworkPolicy, readiness probes; Podman has none. Supporting both may require a lowest-common-denominator approach or separate config surfaces. — Origin: evaluator assessment, 2026-06-17.
 
 ## Roadmap: From PoC to Production
 
@@ -400,58 +412,236 @@ This PoC (Phase 0) validates the core patterns. The following phases outline the
 
 ### Phase 1: Sandboxed agent pods — Prescribed agents in production
 
-**Goal:** Each agent runs in its own isolated sandbox with only the skills/tools prescribed to it.
+**Goal:** Each agent runs in its own isolated container with prescribed skills/tools, communicating with the core pod over HTTP.
 
-#### Agent isolation
+**Effort estimate:** Full quarter (10-12 weeks, 2-3 engineers).
 
-Each agent runs in its own container/pod with:
-- A **prescribed set of skills** (mounted as files or config)
-- A **prescribed set of tools** (MCP servers, CLI tools, API access)
+**Non-goals for Phase 1:** User-defined agents (Phase 2), AI-generated workflows (Phase 3), CRDs, dynamic agent creation at runtime, real human approval flows (Slack/web UI).
+
+#### Dependencies
+
+These must land before Phase 1 implementation starts:
+
+| Dependency | Ticket | Why |
+|-----------|--------|-----|
+| Endpoint swap to Pydantic AI | LCORE-2310, LCORE-2311 | Agents must use `Agent.run()`, not `client.responses.create()` |
+| Skills wiring into request flow | LCORE-2076 | Agent pods need skills support via `SkillsCapability` |
+| Bridge merged | LCORE-2309 | `build_agent()` is the foundation for agent construction — **done** |
+
+#### Critical design decision: Inter-agent communication
+
+**Decision: HTTP with a thin internal API.**
+
+The Phase 0 PoC uses in-process function calls (`diag_agent.run()` inside `@conv_agent.tool`). This **breaks across pod boundaries** — Pydantic AI `Agent` objects are process-local. Phase 1 replaces direct calls with HTTP:
+
+```
+Phase 0 (in-process):                    Phase 1 (cross-pod):
+
+conv_agent                                conv_agent (core pod)
+  @tool                                     @tool
+  async def investigate(ctx, q):            async def investigate(ctx, q):
+    result = diag_agent.run(q)                resp = await http.post(
+    return result.output                        "http://diag-agent:8080/run",
+                                                json={"prompt": q, "context": {...}}
+                                              )
+                                              return resp.json()["output"]
+```
+
+Each agent pod exposes two HTTP endpoints:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/run` | POST | Accept a prompt + context, run the agent, return structured result |
+| `/healthz` | GET | Readiness check — returns 200 when agent is initialized |
+
+**Why HTTP over alternatives:**
+- Works in both OCP (K8s Service) and Podman (shared network) with no additional infrastructure
+- Compatible with Pydantic AI's patterns — the core pod's delegation tool becomes an HTTP client
+- No message broker dependency (Redis, NATS) to deploy and maintain
+- Simple to debug (curl, logs)
+- Async patterns (monitoring fire-and-forget) can be added later via a message queue without changing the synchronous path
+
+#### Agent isolation model
+
+Each agent runs in its own container with:
+- **Prescribed skills** — mounted as read-only volume or ConfigMap
+- **Prescribed tools** — MCP servers, CLI tools, API access defined in config
 - **No access** to tools/skills not assigned to it
-- **Resource limits** (CPU, memory, token budget) per agent
+- **Resource limits** — CPU, memory per container
+- **Token budget** — `max_tokens_per_run` enforced by the agent process
 
 ```
 lightspeed-stack deployment
-├── core pod (API gateway, conversation, auth, RAG)
-├── agent: health-monitor
-│   ├── skills: [cluster-diagnostics]
-│   ├── tools: [oc read-only, prometheus-query]
-│   ├── sandbox: restricted shell, no write access
-│   └── trigger: periodic (every 5 min)
-├── agent: rca-investigator
-│   ├── skills: [root-cause-analysis, openshift-troubleshooting]
-│   ├── tools: [oc read-write, log-query, run-remediation]
-│   ├── sandbox: restricted shell, write with approval
-│   └── trigger: on-demand (from monitor or user)
-└── agent: upgrade-assistant
-    ├── skills: [openstack-upgrade-v19]
-    ├── tools: [openstack-cli, upgrade-check]
-    ├── sandbox: restricted shell, read-only
-    └── trigger: on-demand (user request)
+├── core pod (API gateway, /query, /streaming_query, auth, RAG, conversation mgmt)
+│   ├── agent registry (in-memory map: agent-name → endpoint URL)
+│   ├── RemoteAgentTool (HTTP client for calling agent pods)
+│   └── conversational agent (runs in-process in core pod)
+│
+├── agent pod: diagnostic-agent
+│   ├── HTTP server (/run, /healthz)
+│   ├── Pydantic AI Agent with tools: check_host, get_alerts, run_remediation
+│   ├── skills: [openshift-troubleshooting] (volume mount)
+│   ├── output_validator quality gate
+│   └── service account: edit role (can modify resources)
+│
+└── agent pod: monitoring-agent
+    ├── HTTP server (/run, /healthz)
+    ├── Pydantic AI Agent with tools: get_cluster_summary
+    ├── periodic trigger (internal asyncio loop)
+    ├── dispatches to diagnostic-agent via HTTP when alert severity >= high
+    └── service account: view role (read-only)
 ```
 
-#### Deployment models
+#### Agent lifecycle management (Phase 1: static deployment)
 
-**OpenShift (OCP):**
-- Each agent = a separate `Deployment` or `Job` within the same namespace
-- Agent definition = a `ConfigMap` or `CustomResource` (CRD) specifying skills, tools, triggers, resource limits
-- Core LCS pod orchestrates agent lifecycle (create, monitor, restart, stop)
-- Service accounts per agent for RBAC isolation — the monitoring agent gets `view` role, the RCA agent gets `edit` role
-- Sidecar pattern possible: agent container + MCP server container in same pod
+*Revised after 3rd-party review (2026-06-17). Phase 1 uses a static deployment model — agents are predeployed via manifests/compose, not dynamically created by the core pod. Dynamic lifecycle management (core creates/destroys agent Deployments) is Phase 2 scope.*
 
-**Podman (standalone / dev):**
-- Each agent = a separate `podman run` container from the same LCS image, different entrypoint/config
-- Agent definitions in a `docker-compose.yml` or `podman-compose.yml`
-- Shared network for inter-agent communication
-- Volume mounts for skills directories
-- Simpler RBAC: container-level isolation only
+| Lifecycle event | OCP | Podman |
+|----------------|-----|--------|
+| **Startup** | Agent Deployments pre-created via `kubectl apply` or Helm | `podman-compose up` starts all containers |
+| **Readiness** | K8s readiness probe on `/healthz` | Core pod polls `/healthz` on startup |
+| **Discovery** | **Config-driven** — `endpoint` URLs in `lightspeed-stack.yaml` | Same — `endpoint` URLs in config |
+| **Crash recovery** | K8s `restartPolicy: Always` | Compose restart policy |
+| **Shutdown** | SIGTERM with grace period | Same |
+| **Scaling** | Manual `kubectl scale` | Manual |
 
-#### Key questions for Phase 1
+**Agent registry:** The core pod reads agent endpoints from `lightspeed-stack.yaml` at startup and builds an in-memory map of `{agent_name: endpoint_url}`. No K8s Service discovery, no Pod event watching. The `endpoint` field in config is **required** and authoritative — this is the single source of truth for Phase 1.
 
-- How does the core pod communicate with agent pods? (HTTP, gRPC, message queue, shared DB)
-- How are agent results collected and stored? (Push to core pod, shared database, event stream)
-- How does the core pod know which agents are healthy? (K8s readiness probes, heartbeat)
-- How is the agent's tool access restricted in the container? (seccomp profiles, network policies, read-only filesystem)
+#### Phase 1 configuration schema
+
+Minimal — enough for the core pod to know what agents exist and how to reach them. Not the full Phase 2 `AgentDefinition` CRD.
+
+```yaml
+# lightspeed-stack.yaml (Phase 1 additions)
+agents:
+  - name: diagnostic-agent
+    endpoint: http://diagnostic-agent:8080  # required — single source of truth
+    type: diagnostic
+    skills: [openshift-troubleshooting, root-cause-analysis]
+    resources:
+      max_tokens_per_run: 50000
+      timeout_seconds: 600
+
+  - name: monitoring-agent
+    endpoint: http://monitoring-agent:8080
+    type: autonomous
+    trigger:
+      type: periodic
+      interval_seconds: 300
+    dispatch_to: diagnostic-agent           # who to call on high/critical alerts
+```
+
+```python
+# src/models/config.py (Phase 1 addition)
+class AgentEndpointConfig(ConfigurationBase):
+    """Configuration for a single agent pod."""
+
+    name: str
+    endpoint: AnyHttpUrl
+    type: Literal["conversational", "diagnostic", "autonomous"]
+    skills: list[str] = Field(default_factory=list)
+    resources: Optional[AgentResourceConfig] = None
+    trigger: Optional[AgentTriggerConfig] = None
+    dispatch_to: Optional[str] = None
+```
+
+#### LLM backend access
+
+Each agent pod needs its own connection to the LLM (via Llama Stack or direct provider). Two options:
+
+**Option A: Each agent pod connects to Llama Stack independently.**
+- Simpler — each pod has its own `LlamaStackProvider`
+- Risk: N pods = N connections, quota management is per-pod not centralized
+- Fits Phase 1 if agent count is small (2-3)
+
+**Option B: Agent pods route LLM calls through the core pod.**
+- Core pod acts as LLM proxy, manages quota centrally
+- More complex, adds latency
+- Better for Phase 2 when agent count may grow
+
+**Recommendation for Phase 1:** Option A — each agent connects to Llama Stack directly. Centralized quota can be added in Phase 2 when the agent count justifies it.
+
+#### Observability
+
+Minimum requirements for Phase 1:
+
+| Concern | Implementation |
+|---------|---------------|
+| **Distributed tracing** | OpenTelemetry trace context propagated in HTTP headers from core pod to agent pods. Each agent creates child spans. |
+| **Correlation IDs** | A `correlation_id` header chains monitoring-alert → diagnostic-run → remediation-action across pods |
+| **Structured logging** | Each agent logs with `agent_name`, `correlation_id`, and `run_id` fields |
+| **Per-agent metrics** | Prometheus metrics per agent: tool calls, LLM tokens consumed, latency, errors |
+| **Existing LCS metrics** | Extended with `agent_name` label dimension |
+
+#### Security
+
+| Concern | Phase 1 approach |
+|---------|-----------------|
+| **Pod RBAC** | OCP: dedicated ServiceAccount per agent pod. Monitoring = `view` role, diagnostic = `edit` role |
+| **Secret injection** | Agent credentials (LLM API keys, cluster access tokens) via K8s Secrets mounted as env vars |
+| **Network isolation** | OCP NetworkPolicy: agent pods can reach Llama Stack and cluster APIs, not each other (except monitoring → diagnostic) |
+| **Tool restriction** | Each agent only has tools registered in its `Agent()` definition — enforced at code level, not container level |
+| **Filesystem** | Agent containers run with read-only root filesystem; `/tmp` writable for transient state |
+
+#### Migration path for existing consumers
+
+**Existing `/query` and `/streaming_query` consumers see zero change.** The conversational agent continues to run in-process in the core pod (same as today, but using Pydantic AI via LCORE-2310/2311). Agent pods are purely additive — they add diagnostic and monitoring capabilities behind the scenes.
+
+If the conversational agent needs to delegate to the diagnostic agent, it does so internally via `RemoteAgentTool`. The external API contract is unchanged.
+
+#### Phase 1a task breakdown (TDD, reviewed)
+
+*Reviewed by independent evaluator 2026-06-17. Key changes: removed premature `/query` wiring (blocked on LCORE-2310), baked diagnostic tools into image (generic loader deferred to Phase 2), renamed RemoteAgentTool → RemoteAgentClient, versioned endpoints (`/v1/run`). Full task details in plan file.*
+
+**Container strategy:** Diagnostic agent image bakes in tools and skills. Generic runtime image with dynamic tool loading is Phase 2.
+
+**LLM mocking:** Unit tests use Pydantic AI `FunctionModel` — no real LLM needed.
+
+| Task | What | Tests | Files |
+|------|------|-------|-------|
+| 1. Shared models | `AgentRunRequest`, `AgentRunResponse`, `DiagnosticReport` | Serialization round-trips, validation | `src/agents/models.py` |
+| 2. Agent runtime server | FastAPI app with `/v1/run` + `/healthz` | TestClient: healthz, run success, 422, 500 | `src/agents/runtime/server.py` |
+| 3. Diagnostic agent | Tools + agent definition + simulated cluster state | Tool unit tests, `FunctionModel` integration test | `src/agents/diagnostic/` |
+| 4. RemoteAgentClient | HTTP client for calling agent pods | Mocked httpx: success, timeout, 500, connection refused | `src/agents/remote_agent_client.py` |
+| 5. Registry + config | Agent discovery + YAML config | Registry lookup, config validation | `src/agents/registry.py`, `src/models/config.py` |
+| 6. Container image | Diagnostic agent Containerfile | Manual: podman build + curl | `deploy/diagnostic-agent/Containerfile` |
+| 7. Kind/Podman deploy | Manifests + setup script | Manual: setup.sh + kubectl | `deploy/kind/`, `deploy/podman/` |
+| 8. E2E tests | Cross-pod Gherkin scenarios | `make e2e-cloud-agents` (manual, not CI) | `tests/e2e/features/cloud_agents.feature` |
+
+**Implementation order:** Tasks 1→2→3→4→5 (local code + unit tests) → 6→7 (containers) → 8 (E2E).
+
+**Not in Phase 1a scope (deferred):**
+- Wiring into `/query` endpoint (blocked on LCORE-2310)
+- Generic agent runtime with dynamic tool loading (Phase 2)
+- CI pipeline for E2E tests (Phase 1b)
+
+**Phase 1a acceptance criteria:**
+- Diagnostic agent runs in a separate container and accepts prompts via `POST /v1/run`
+- `RemoteAgentClient` in the core pod can call it and deserialize the response
+- Agent endpoint is configured in YAML, not hardcoded
+- Kind cluster or Podman compose runs both pods successfully
+- E2E tests pass against deployed containers
+
+**Phase 1b (weeks 7-12): Monitoring agent + lifecycle + hardening**
+
+*Notes from reviews:*
+- *(3rd-party review): Phase 1a uses in-process simulated cluster state, which is per-pod and isolated. Phase 1b must address cross-pod state sharing — either switch to real cluster APIs or introduce a shared state service. Simulated state is a Phase 1a test harness only.*
+- *(Liveness/progress): Phase 1b should add `asyncio.wait_for()` + K8s liveness probe (`/livez`) for hang detection. SSE streaming from `agent.iter()` for progress visibility.*
+- *(Async /v1/run): Phase 1a uses sync HTTP (sufficient for PoC). Phase 1b should switch to async submit+poll: `POST /v1/run → 202 + run_id`, `GET /v1/runs/{run_id} → status/result`. Sync calls are fragile over real networks (proxy timeouts, connection drops). The Phase 1a sync endpoint becomes the submission endpoint in 1b — same path, returns 202 instead of blocking.*
+
+| Week | Deliverable |
+|------|-------------|
+| 7-8 | **Monitoring agent pod**: Second agent container with periodic trigger (asyncio loop). Dispatches to diagnostic agent via HTTP when severity >= high. **Must resolve shared state** — either real cluster APIs or shared state endpoint so both agents inspect the same world. Validate PoC Scenario 1 across pods. |
+| 9-10 | **Security + observability**: Service accounts, network policies, secret injection. OpenTelemetry trace propagation. Per-agent Prometheus metrics. Correlation IDs in structured logs. |
+| 11-12 | **Integration testing + deployment**: End-to-end tests covering all three PoC scenarios across pods. Deployment guide for OCP and Podman (compose file). |
+
+**Phase 1b acceptance criteria:**
+- Monitoring agent runs autonomously in its own pod, detects anomalies, dispatches diagnostic agent
+- Both agents observe the same cluster state (real APIs or shared state service — not isolated in-memory dicts)
+- Full traceability: a monitoring alert can be correlated to a diagnostic run to a remediation action across pods
+- OCP deployment with separate Deployments per agent, NetworkPolicy, ServiceAccounts
+- Podman deployment with compose file
+- All three PoC scenarios work end-to-end across containers
 
 ### Phase 2: User-defined agents — Configuration-driven agent creation
 
@@ -629,8 +819,9 @@ User: "I need a workflow that monitors our etcd cluster,
 
 | Phase | What | Agent creation | Workflow | Deployment | Sandboxing |
 |-------|------|---------------|----------|------------|------------|
-| **0 (current)** | PoC | Hardcoded in Python | Implicit (LLM decides) | Single process | None |
-| **1** | Production prescribed | YAML config by platform devs | Implicit + skills-driven | OCP pods / Podman containers | Container isolation |
+| **0 (done)** | PoC | Hardcoded in Python | Implicit (LLM decides) | Single process | None |
+| **1a** | Diagnostic agent pod + HTTP comms | YAML config (minimal) | Implicit + skills-driven | Core pod + 1 agent pod | Container isolation |
+| **1b** | Monitoring agent + lifecycle + hardening | YAML config (minimal) | Implicit + periodic triggers | Core pod + N agent pods | Container + RBAC + network policy + observability |
 | **2** | User-defined | YAML config by product teams + admins | Explicit YAML workflows | Dynamic pod creation | Container + RBAC + network policy |
 | **3** | AI-generated | LLM designs, human approves | LLM generates YAML, human approves | Auto-deployment after approval | Full sandbox + dry-run + audit |
 
@@ -656,6 +847,9 @@ The Phase 0 PoC doesn't implement any of this, but its code structure should not
 |------|--------|--------|
 | 2026-06-17 | Initial version | PoC spec based on prior exploration (architecture doc, diagnose-and-fix feasibility, JR/James strategic conversation) |
 | 2026-06-17 | Added roadmap (Phases 0-3) | Capture forward-looking architecture: sandboxed pods, user-defined agents, AI-generated workflows |
+| 2026-06-17 | Phase 1 rewritten with evaluator findings | Split into 1a/1b, resolved inter-agent comm (HTTP), added lifecycle, config schema, security, observability, migration path, effort estimate, dependencies |
+| 2026-06-17 | Phase 1a task breakdown reviewed and revised | Independent evaluator review: removed premature /query wiring, baked tools into image, fixed package structure, renamed RemoteAgentClient, added FunctionModel mocking strategy |
+| 2026-06-17 | 3rd-party review incorporated | Fixed: lifecycle is static deployment (not dynamic orchestrator), discovery is config-driven (no auto-discovery), simulated state is 1a-only (1b needs shared state), AgentRunResponse envelope strengthened with output_type + schema_version |
 
 ## Appendix A: Prior PoC Evidence
 

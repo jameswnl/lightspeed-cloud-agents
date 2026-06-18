@@ -1,0 +1,6 @@
+# Kind cluster configuration for cloud agents Phase 1a
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cloud-agents
+nodes:
+  - role: control-plane
