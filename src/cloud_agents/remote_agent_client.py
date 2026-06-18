@@ -83,11 +83,18 @@ class RemoteAgentClient:
 
         try:
             data = response.json()
-            return AgentRunResponse.model_validate(data)
+            result = AgentRunResponse.model_validate(data)
         except Exception as exc:
             raise AgentError(
                 f"Invalid response from agent at {self.endpoint}: {exc}"
             ) from exc
+
+        if not result.success:
+            raise AgentError(
+                f"Agent '{result.agent_name}' run failed: {result.error}"
+            )
+
+        return result
 
     async def healthz(self) -> bool:
         """Check if the agent pod is ready.

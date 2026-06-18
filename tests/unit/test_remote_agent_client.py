@@ -103,6 +103,26 @@ class TestRemoteAgentClientRun:
             with pytest.raises(AgentError, match="response"):
                 await client.run("Check hosts")
 
+    @pytest.mark.asyncio
+    async def test_success_false_raises_agent_error(self) -> None:
+        """Test that a 200 response with success=False raises AgentError."""
+        error_response = {
+            "output": {},
+            "output_type": "error",
+            "schema_version": "v1",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "agent_name": "diagnostic-agent",
+            "success": False,
+            "error": "Model not found",
+        }
+        mock_response = httpx.Response(200, json=error_response)
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+        ):
+            client = RemoteAgentClient("http://agent:8080")
+            with pytest.raises(AgentError, match="Model not found"):
+                await client.run("Check hosts")
+
 
 class TestRemoteAgentClientHealthz:
     """Tests for RemoteAgentClient.healthz()."""

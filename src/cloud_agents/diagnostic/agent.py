@@ -95,12 +95,26 @@ async def run_diagnostic(request: AgentRunRequest) -> AgentRunResponse:
         AgentRunResponse with DiagnosticReport output on success,
         or an error response on failure.
     """
+    import logging
+
     from agents.diagnostic._model import get_model
+
+    logger = logging.getLogger(__name__)
+    correlation_id = (request.context or {}).get("correlation_id", "none")
+    logger.info(
+        "Starting diagnostic run",
+        extra={"agent_name": AGENT_NAME, "correlation_id": correlation_id},
+    )
 
     try:
         agent = create_diagnostic_agent(get_model())
         result = await agent.run(request.prompt)
     except Exception as exc:
+        logger.error(
+            "Diagnostic run failed: %s",
+            exc,
+            extra={"agent_name": AGENT_NAME, "correlation_id": correlation_id},
+        )
         return AgentRunResponse(
             output={},
             output_type="error",
