@@ -55,13 +55,26 @@ An independent evaluator reviewed this plan. Key findings and resolutions:
 
 ---
 
-## Architectural Decisions (resolved by evaluator review)
+## 3rd-Party Review (2026-06-18)
 
-### Shared cluster state: Context-passing, not shared service
+A 3rd-party reviewer identified 4 issues. Resolutions:
 
-**Decision:** No shared state service. Monitoring agent passes its findings as context via the HTTP dispatch to the diagnostic agent. Both pods pre-seed the same scenario via env var.
+| # | Severity | Issue | Resolution |
+|---|----------|-------|-----------|
+| 1 | Blocker | Monitoring re-dispatches endlessly because its local state never reflects diagnostic's remediation | **Option B:** monitoring mutates its own local state after receiving a successful `DiagnosticReport` with `cluster_healthy=True`. Simple, no shared state service needed. |
+| 2 | Major | `/livez` measures `/v1/run` activity, not loop health — idle monitoring agent looks dead | Monitoring loop updates heartbeat on every iteration (including idle). `/livez` checks loop heartbeat, not endpoint activity. |
+| 3 | Major | Per-tool metrics (`agent_tool_calls_total`) have no instrumentation point defined | **Deferred to Phase 2.** Phase 1b keeps per-run metrics only (`ls_agent_runs_total`, `ls_agent_run_duration_seconds`). Per-tool needs a Pydantic AI callback mechanism. |
+| 4 | Major | E2E dispatch verification is vague — no concrete observation path | Defined: monitoring `/v1/run` returns `dispatched_run_ids` → E2E polls diagnostic `/v1/runs/{id}` → both agents have separate configurable E2E base URLs. |
 
-**Rationale:** Matches real-world pattern — a monitoring agent in production passes alert context, not shared memory. No 3rd pod, Redis, or database needed. Both pods use the same `cluster_state.py` with a `CLUSTER_SCENARIO` env var that controls which state is loaded at startup.
+---
+
+## Architectural Decisions (resolved by evaluator + 3rd-party reviews)
+
+### Shared cluster state: Context-passing with local state mutation
+
+**Decision:** No shared state service. Monitoring passes alert context to diagnostic via HTTP dispatch. Both pods pre-seed the same scenario via env var. After a successful diagnostic dispatch, monitoring mutates its own local state to reflect the fix (prevents repeated redispatch).
+
+**Rationale:** Matches real-world pattern — monitoring detects, dispatches, and trusts the diagnostic result. The local state mutation prevents infinite dispatch loops without needing a shared database or TTL-based suppression.
 
 **What changes:**
 - `cluster_state.py` gets `init_scenario(name)` — selects pre-built state (healthy, bad_deploy, disk_growth)
@@ -218,6 +231,8 @@ class MonitoringLoop:
 
 **Loop error handling:** `_check_and_dispatch()` catches `AgentUnavailableError` and `AgentTimeoutError` and logs them without killing the loop. The loop continues to the next interval.
 
+**State mutation after dispatch:** When diagnostic returns `cluster_healthy=True`, the monitoring loop marks the affected hosts as healthy in its own local state. This prevents repeated redispatch of the same issue. (Resolved from 3rd-party review finding #1.)
+
 **Entrypoint lifespan:** `entrypoint.py` uses an `asynccontextmanager` lifespan that starts the loop on startup and calls `stop()` + awaits completion on shutdown (SIGTERM).
 
 **Test strategy for loop:** Mock `asyncio.sleep` to return immediately. Test `_check_and_dispatch()` as a standalone coroutine. Test `start()`/`stop()` lifecycle separately with zero interval to avoid flaky timing.
@@ -249,7 +264,9 @@ Detect hung agents and enforce run timeouts.
 - `tests/unit/agents/runtime/test_server.py` — 4 new tests: `/livez` returns 200 when healthy, 503 when stale, run timeout returns 500, run within timeout succeeds
 
 **Liveness design:**
-- Server tracks `last_heartbeat` timestamp, updated on each run start and completion
+- Server tracks `last_heartbeat` timestamp
+- For request-driven agents (diagnostic): updated on each run start and completion
+- For loop-driven agents (monitoring): updated on every loop iteration, including idle ones (prevents false 503 during sleep intervals)
 - `/livez` returns 503 if `now - last_heartbeat > 2 * configured_timeout`
 - K8s liveness probe hits `/livez`
 
@@ -266,12 +283,18 @@ Detect hung agents and enforce run timeouts.
 
 Add correlation IDs and Prometheus counters.
 
-**Prometheus naming:** Follow existing `ls_*` prefix convention (e.g. `ls_agent_runs_total`, `ls_agent_run_duration_seconds`). Reuse error-tolerant wrapper pattern from `src/metrics/recording.py`.
+**Prometheus naming:** Follow existing `ls_*` prefix convention. Reuse error-tolerant wrapper pattern from `src/metrics/recording.py`.
+
+**Metrics scope (Phase 1b — per-run only):**
+- `ls_agent_runs_total{agent_name, status}` — counter
+- `ls_agent_run_duration_seconds{agent_name}` — histogram
+
+Per-tool metrics (`ls_agent_tool_calls_total{agent_name, tool_name}`) deferred to Phase 2 — needs a Pydantic AI callback/hook mechanism for tool-level instrumentation.
 
 **Files to create/modify:**
 - `src/agents/runtime/metrics.py` — Prometheus metric definitions using `ls_agent_*` prefix
 - `src/agents/runtime/server.py` — inject `correlation_id`, add `/metrics` endpoint, instrument runs
-- `tests/unit/agents/runtime/test_metrics.py` — 3 tests: counter increments, histogram records, tool counter increments
+- `tests/unit/agents/runtime/test_metrics.py` — 2 tests: counter increments, histogram records duration
 - `tests/unit/agents/runtime/test_server.py` — 3 new tests: `X-Correlation-ID` in response, `/metrics` returns Prometheus format, counter increments after run
 
 **TDD sequence:**
@@ -291,15 +314,38 @@ Extend E2E coverage to all three PoC scenarios across pods.
 - `tests/e2e/features/cloud_agents.feature` — add 4 new scenarios
 - `tests/e2e/features/steps/cloud_agents.py` — add step implementations
 
+**E2E observation path (from 3rd-party review):**
+1. E2E step definitions use two configurable base URLs: `E2E_MONITOR_HOST`/`E2E_MONITOR_PORT` and `E2E_DIAG_HOST`/`E2E_DIAG_PORT`
+2. Monitoring's `/v1/run` returns `MonitoringResult` including `dispatched_run_ids`
+3. E2E polls diagnostic's `/v1/runs/{id}` using those IDs to verify dispatch reached the diagnostic agent
+4. Assertions check behavior (actions taken, state changes), not just field presence
+
 **New scenarios:**
 ```gherkin
 Scenario: Monitoring agent health check
-Scenario: Monitoring agent detects anomaly
-Scenario: Monitoring agent dispatches to diagnostic agent (verify via correlation ID)
-Scenario: Full cross-pod flow — monitoring detects, diagnostic remediates, verify via poll
+  When I GET monitoring agent "/healthz"
+  Then status is 200 and agent_name is "monitoring-agent"
+
+Scenario: Monitoring agent detects anomaly on degraded cluster
+  When I POST to monitoring agent "/v1/run" with prompt "Check cluster health"
+  Then the response has alerts with severity "high" or "critical"
+  And cluster_healthy is false
+
+Scenario: Monitoring dispatches to diagnostic and dispatch is verifiable
+  When I POST to monitoring agent "/v1/run" with prompt "Check and dispatch"
+  Then dispatched_run_ids is not empty
+  When I poll diagnostic agent "/v1/runs/{dispatched_run_id}"
+  Then the diagnostic run status is "completed"
+
+Scenario: Full cross-pod flow — detect, dispatch, remediate
+  When I POST to monitoring agent "/v1/run" with prompt "Full diagnostic cycle"
+  Then dispatched_run_ids is not empty
+  When I poll diagnostic agent "/v1/runs/{dispatched_run_id}"
+  Then the diagnostic output has actions_taken not empty
+  And the diagnostic output has cluster_healthy true
 ```
 
-**Acceptance:** `make e2e-cloud-agents-full` runs 8 scenarios (4 existing + 4 new). All pass.
+**Acceptance:** `make e2e-cloud-agents-full` runs 8 scenarios (4 existing + 4 new). All pass. Dispatch is verified via concrete run IDs, not log scraping.
 
 ---
 
