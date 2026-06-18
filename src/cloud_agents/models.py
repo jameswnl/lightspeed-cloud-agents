@@ -93,7 +93,9 @@ class MonitoringResult(BaseModel):
     Attributes:
         alerts: List of alerts detected during monitoring.
         cluster_healthy: Whether all hosts are healthy.
-        dispatched_run_ids: Run IDs of diagnostic agent dispatches triggered by this check.
+        dispatched_run_ids: Run IDs of diagnostic agent dispatches triggered by
+            the monitoring loop. Only populated by MonitoringLoop background
+            dispatch, not by direct /v1/run calls.
     """
 
     alerts: list[MonitoringAlert] = Field(default_factory=list)

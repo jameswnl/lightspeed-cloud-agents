@@ -124,7 +124,10 @@ def create_app(
                 timeout=app.state.run_timeout,
             )
             duration = time.monotonic() - start_time
-            ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
+            if result.success:
+                ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
+            else:
+                ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
             ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
             return result
         except asyncio.TimeoutError as exc:

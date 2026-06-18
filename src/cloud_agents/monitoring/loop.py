@@ -128,8 +128,8 @@ class MonitoringLoop:
     def _mark_hosts_healthy(self, alerts: list[Any]) -> None:
         """Reset affected hosts to a healthy baseline after successful dispatch.
 
-        Resets status, CPU, memory, and services to prevent the monitoring
-        agent from re-alerting on the same anomaly signals.
+        Resets all anomaly signals (status, CPU, memory, disk, services)
+        to prevent the monitoring agent from re-alerting on the same issue.
         """
         for alert in alerts:
             host = cluster_state["hosts"].get(alert.host)
@@ -137,6 +137,7 @@ class MonitoringLoop:
                 host["status"] = "healthy"
                 host["cpu"] = min(host["cpu"], 50)
                 host["memory"] = min(host["memory"], 60)
+                host["disk"] = min(host["disk"], 70)
                 for svc in host.get("services", {}):
                     host["services"][svc] = "running"
 
