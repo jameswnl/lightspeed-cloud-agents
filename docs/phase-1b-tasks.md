@@ -94,6 +94,7 @@ A security-focused reviewer identified 5 issues. Resolutions:
 | Correlation ID handling | Server-side validation: max 128 chars, `[a-zA-Z0-9\-]`, generate UUID if absent/invalid. Never log raw nested context. |
 | Deployment label | All manifests tagged `environment: dev-test-only` |
 | Documentation | README and deployment guide state: "do not deploy outside dev/test clusters without Phase 2 security hardening" |
+| **Podman-specific** | Compose stack is dev-only. Host port bindings (`-p 8081:8080`) are for local testing only. Do not expose the compose stack beyond the developer machine. No network-level containment in Podman — security relies on the dev-only constraint. |
 
 ---
 
@@ -132,8 +133,8 @@ A security-focused reviewer identified 5 issues. Resolutions:
 - `correlation_id` in `AgentRunRequest.context` — auto-generated if absent
 - Every log line includes `agent_name`, `correlation_id`, `run_id`
 - `X-Correlation-ID` response header
-- Prometheus metrics: `agent_runs_total{agent_name, status}`, `agent_run_duration_seconds{agent_name}`, `agent_tool_calls_total{agent_name, tool_name}`
-- `/metrics` endpoint on agent pods
+- Prometheus metrics (per-run only): `ls_agent_runs_total{agent_name, status}`, `ls_agent_run_duration_seconds{agent_name}`. Per-tool metrics deferred to Phase 2.
+- `/metrics` endpoint on agent pods (internal-only)
 
 ---
 
