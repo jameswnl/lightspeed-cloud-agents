@@ -228,15 +228,17 @@ def interpolate(template: str, state: WorkflowState) -> str:
             raise ValueError(f"Template references missing step '{step_name}'")
         value = result.output.get(key)
         if value is None:
-            return "null"
+            return "<data>null</data>"
         if isinstance(value, (dict, list)):
-            return json.dumps(value)
-        return str(value)
+            return f"<data>{json.dumps(value)}</data>"
+        return f"<data>{value}</data>"
 
     return TEMPLATE_PATTERN.sub(replacer, template)
 ```
 
 **`input_from` is removed** — it was redundant with `{{ }}` templates. If a step needs prior output, it uses `{{ steps.X.output.Y }}` in its prompt. No implicit input passing.
+
+**Grammar scope**: Only one-level output keys are supported — `{{ steps.X.output.Y }}` where Y is a top-level key in the step's output dict. Nested paths (e.g., `steps.X.output.actions[0].host`) are **not supported** in Phase 3. If you need nested data, the LLM receives the full JSON-serialized value and extracts what it needs. Deeper path support is a Phase 4 enhancement.
 
 ### Condition evaluation
 
@@ -383,26 +385,64 @@ Workflow completes
 
 If the human rejects (`approved: false`), the workflow marks the step as failed and stops.
 
-If timeout expires, the workflow marks the approval step as `failed` with error "approval timed out".
+### Timeout enforcement
+
+Approval timeouts are enforced **lazily on read**, not via a background sweeper:
+
+- `GET /v1/workflows/{id}` and `POST /v1/workflows/{id}/approve` both check: if current step is `awaiting_approval` and `now - step.started_at > timeout_seconds`, mark the step as `failed` with error `"approval timed out"` and set workflow status to `failed`.
+- `resume()` checks the same condition before processing the approval.
+- No background thread or timer needed — the timeout is enforced whenever anyone queries or acts on the workflow.
+
+```python
+def _check_approval_timeout(self, state: WorkflowState) -> WorkflowState:
+    """Enforce approval timeout on the current step."""
+    if state.status != "paused":
+        return state
+    step = state.steps.get(state.current_step)
+    if step and step.status == "awaiting_approval" and step.started_at:
+        elapsed = (datetime.now(UTC) - datetime.fromisoformat(step.started_at)).total_seconds()
+        timeout = self._get_step_timeout(state.current_step)
+        if elapsed > timeout:
+            step.status = "failed"
+            step.error = f"Approval timed out after {timeout}s"
+            state.status = "failed"
+    return state
+```
+
+This is called in `get_state()` and `resume()` before returning or processing.
 
 ---
 
 ## State Persistence
 
-Two options, chosen at deploy time:
+**Decision: Custom sequential persistence, not pydantic-graph.**
+
+The executor is a hand-rolled sequential loop over YAML steps, not a pydantic-graph node graph. Using pydantic-graph's `FileStatePersistence` would require forcing the workflow into a graph execution model that doesn't match the architecture. Instead, the executor uses a simple custom persistence interface.
+
+### Persistence interface
+
+```python
+class WorkflowPersistence(ABC):
+    """Abstract interface for workflow state storage."""
+    async def save(self, state: WorkflowState) -> None: ...
+    async def load(self, workflow_id: str) -> Optional[WorkflowState]: ...
+    async def list_active(self) -> list[WorkflowState]: ...
+    async def delete(self, workflow_id: str) -> None: ...
+```
 
 ### In-memory (default)
-- Simple `dict[str, WorkflowState]`
+- `dict[str, WorkflowState]`
 - Workflows lost on pod restart
 - Good for dev/demo
 
-### File-based (pydantic-graph)
-- `FileStatePersistence` from pydantic-graph
+### File-based
+- Serializes `WorkflowState` to JSON files in `/app/state/{workflow_id}.json`
 - Workflows survive pod restart
-- State written to `/app/state/` (volume mount)
+- State directory mounted as a volume
+- File permissions: `0600`
 
 ### Database-backed (Phase 4)
-- DBOS or PostgreSQL
+- PostgreSQL or DBOS
 - Production-grade durability
 - Not in Phase 3 scope
 
@@ -441,18 +481,30 @@ The workflow runner is itself an agent pod running on `agent-runtime:latest`. It
 
 ## Deployment
 
+**Decision: Same image, dedicated workflow entrypoint.**
+
+The workflow runner uses `agent-runtime:latest` with a different CMD pointing at `agents.runtime.workflow_entrypoint` instead of `agents.runtime.generic_entrypoint`. It reads `workflow.yaml` (not `agent.yaml`).
+
+No `WORKFLOW_MODE` env var, no branching in the generic entrypoint. Clean separation: `generic_entrypoint` = single-agent, `workflow_entrypoint` = multi-step workflow.
+
 ```bash
-# Same image — workflow runner is just another agent type
 podman run -d --name workflow-runner \
   --network cloud-agents \
   -p 8084:8080 \
   -v $PWD/workflows/cluster-rca.yaml:/app/workflow.yaml:ro \
   -v $PWD/agents/registry.yaml:/app/registry.yaml:ro \
-  -e WORKFLOW_MODE=true \
-  agent-runtime:latest
+  -e OLLAMA_URL=https://api.openai.com/v1 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -e WORKFLOW_APPROVAL_TOKEN=my-secret-token \
+  agent-runtime:latest \
+  python -m uvicorn agents.runtime.workflow_entrypoint:app --host 0.0.0.0 --port 8080
 ```
 
-Or a dedicated workflow entrypoint that loads `workflow.yaml` instead of `agent.yaml`.
+The startup contract:
+1. Reads `/app/workflow.yaml` (required — fails if missing)
+2. Reads `/app/registry.yaml` (required — needs agent endpoints for dispatch)
+3. Creates `WorkflowExecutor` with the workflow definition + registry
+4. Serves HTTP API (`/v1/workflows/run`, `/v1/workflows/{id}`, `/v1/workflows/{id}/approve`)
 
 ---
 
@@ -495,7 +547,10 @@ Or a dedicated workflow entrypoint that loads `workflow.yaml` instead of `agent.
 ## Security
 
 - **Condition expressions** use a restricted parser, not `eval()` — only `steps.X.Y == value` grammar
-- **Prompt templates** interpolate values as strings via regex — no code injection possible
+- **Prompt templates** are syntactically safe (regex-based, no code injection), but carry **prompt-injection risk**: one step's output becomes text in a later step's prompt. Mitigations:
+  - Interpolated values are rendered inside `<data>...</data>` delimiter blocks so the LLM can distinguish injected data from instructions
+  - Only `output.<key>` fields are interpolable — not arbitrary nested paths
+  - Workflow authors should interpolate structured fields (IDs, booleans, lists) rather than free-form narrative summaries where possible
 - **Approval endpoint** requires a shared secret token via `Authorization: Bearer <token>` header. The token is set via `WORKFLOW_APPROVAL_TOKEN` env var. This is minimum auth — not full RBAC, but prevents accidental or unauthorized approvals from any pod on the cluster network. Phase 4 adds proper auth integration.
 - **Workflow state** may contain sensitive agent outputs — file persistence uses `0600` permissions on the state directory
 - **Template interpolation** raises `ValueError` on missing keys — never sends broken prompts to agents
