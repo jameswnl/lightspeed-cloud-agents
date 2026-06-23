@@ -156,17 +156,31 @@ deployment:
 Or via environment variable: `DEPLOYMENT_TARGET=kubernetes|podman`
 
 This switch controls:
-- **Agent spawning**: `KubernetesSpawner` vs `PodmanSpawner`
+- **Agent spawning**: `KubernetesSpawner` (production) vs `PodmanSpawner` (dev/test only)
 - **Deployment manifests**: K8s Deployments/Services vs Podman compose
 - **Networking**: K8s Services/ClusterIP vs Podman shared network
 - **RBAC**: K8s ServiceAccounts/RoleBindings vs no-op (Podman has no RBAC)
 - **Persistence**: K8s PVCs for state directory vs local volume mounts
 - **Health probes**: K8s readiness/liveness probes vs manual polling
 
-Every new feature in P0-P2 must work on both targets. The test matrix:
+### Parity contract
+
+The two targets provide **behavioral parity** (same features available), not **security parity** (same guarantees). Kubernetes provides hardening that Podman cannot match:
+
+| Capability | Kubernetes | Podman |
+|-----------|-----------|--------|
+| On-demand spawning | Scoped ServiceAccount, K8s Jobs | Host-level socket access (**dev-only**) |
+| NetworkPolicy | Enforced by CNI | No equivalent |
+| RBAC | ServiceAccount + RoleBinding | No equivalent |
+| Auth | TokenReview API | Shared secret only |
+| Persistence | PVC-backed | Local volume |
+
+**Kubernetes is the production target. Podman is the dev/test target.** Features work on both, but security hardening is Kubernetes-only. Podman deployments must never be exposed outside the developer machine.
+
+### Test matrix
 - Unit tests: target-agnostic (no containers)
 - E2E tests: run against both Kind (K8s) and Podman compose
-- CI: two E2E pipelines (or parameterized with `DEPLOYMENT_TARGET`)
+- Security-specific tests (RBAC, NetworkPolicy): Kubernetes-only
 
 ---
 
@@ -204,10 +218,15 @@ class KubernetesSpawner(AgentSpawner):
     # Max concurrent pods: configurable via MAX_SPAWNED_PODS env var (default: 10)
 
 class PodmanSpawner(AgentSpawner):
-    """Spawns Podman containers for on-demand agents."""
-    # Uses podman-py SDK
+    """Spawns Podman containers for on-demand agents. DEV/TEST ONLY."""
+    # Uses podman-py SDK via Podman socket
     # Resource limits via --cpus and --memory flags
     # Max concurrent containers: same MAX_SPAWNED_PODS limit
+    #
+    # SECURITY NOTE: Podman spawning requires Podman socket access,
+    # which grants host-level container control. This is NOT equivalent
+    # to Kubernetes Jobs with scoped ServiceAccounts. Podman on-demand
+    # spawning is for dev/test only — production uses KubernetesSpawner.
 ```
 
 ### Safety controls
@@ -299,6 +318,18 @@ When the workflow executor spawns an on-demand agent pod:
 
 - **Kind/dev**: shared-secret bearer token (`AGENT_API_TOKEN` env var) — same as Phase 3 approval auth, extended to all endpoints
 - **OCP/production**: K8s ServiceAccount token validated via TokenReview API, integrated with LCS's existing `k8s` auth module
+
+### Authorization model by sub-phase
+
+Phase 4 introduces authentication progressively. Authorization (what an authenticated caller may do) starts coarse and narrows over time:
+
+| Sub-phase | Authentication | Authorization | Notes |
+|-----------|---------------|---------------|-------|
+| **4a** | Bearer token on all endpoints | **Coarse** — any valid token grants full access to all agent/workflow APIs | Temporary. Acceptable because 4a targets staging, not production. |
+| **4b** | Same + token propagation to spawned pods | **Inherited** — spawned agents inherit the workflow runner's identity. No per-agent audience scoping. | The workflow runner is trusted to call any agent it spawns. |
+| **4c** | Same | **Fine-grained** — per-task permission scoping (item 18). Spawned pods get only the permissions approved for their specific task. | Full authorization model. |
+
+This progression is intentional: 4a/4b get authentication right (who are you?), 4c adds authorization (what may you do?). The coarse model in 4a/4b is explicitly temporary — documented here so it's a conscious decision, not an oversight.
 
 ---
 
