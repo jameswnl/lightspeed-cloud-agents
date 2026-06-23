@@ -99,14 +99,21 @@ Not all workstreams need to ship together. Suggested priority:
 8. Approval via Slack/webhook (Workstream D)
 9. Condition precedence fix (Workstream D) — known bug in shipped code
 
+**P1 (high value) — from KubeKlaw learnings:**
+10. Context-aware retry with escalation (Workstream D) — Lesson 6: pass failure history to retries, hard cap (2-3 attempts), escalate with handoff document on exhaustion
+11. Policy-driven auto-approve (Workstream D) — Lesson 3: low-risk steps auto-approve, high-risk require human. Risk classification on workflow steps.
+12. Enriched output models (Workstream D) — Lesson 2: add confidence level, risk assessment, rollback plan, required permissions to diagnostic output models
+
 **P2 (can wait):**
-10. Parallel step execution (Workstream D)
-11. Retry policies (Workstream D)
-12. Per-tool metrics (Workstream B)
-13. MCP tools in agent.yaml (Workstream C)
-14. AI-generated workflows (Workstream D)
-15. Nested path interpolation (Workstream D)
-16. SSE streaming for agent progress (Workstream B)
+13. Parallel step execution (Workstream D)
+14. Per-tool metrics (Workstream B)
+15. MCP tools in agent.yaml (Workstream C)
+16. AI-generated workflows (Workstream D)
+17. Nested path interpolation (Workstream D)
+18. SSE streaming for agent progress (Workstream B)
+19. Advisory/read-only mode (Workstream D) — KubeKlaw UX 3: run workflows without execution, diagnosis and recommendation only
+20. Escalation packaging (Workstream D) — KubeKlaw UX 4: auto-package audit trail + diagnosis into a support handoff on failure
+21. Per-task permission scoping (Workstream A) — KubeKlaw Lesson 5: spawned sandbox pods get only the permissions approved for that specific task, not blanket ServiceAccount access
 
 ### Deployment target switch
 
