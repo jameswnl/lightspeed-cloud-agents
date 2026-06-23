@@ -108,6 +108,38 @@ Not all workstreams need to ship together. Suggested priority:
 15. Nested path interpolation (Workstream D)
 16. SSE streaming for agent progress (Workstream B)
 
+### Deployment target switch
+
+All phases must support **both OCP/K8s and Podman** as deployment targets. A single configuration switch selects the target:
+
+```yaml
+# In lightspeed-stack.yaml or workflow runner config
+deployment:
+  target: kubernetes           # "kubernetes" or "podman"
+  kubernetes:
+    namespace: cloud-agents
+    service_account: workflow-runner
+    image_pull_policy: IfNotPresent
+  podman:
+    network: cloud-agents
+    socket: /run/podman/podman.sock
+```
+
+Or via environment variable: `DEPLOYMENT_TARGET=kubernetes|podman`
+
+This switch controls:
+- **Agent spawning**: `KubernetesSpawner` vs `PodmanSpawner`
+- **Deployment manifests**: K8s Deployments/Services vs Podman compose
+- **Networking**: K8s Services/ClusterIP vs Podman shared network
+- **RBAC**: K8s ServiceAccounts/RoleBindings vs no-op (Podman has no RBAC)
+- **Persistence**: K8s PVCs for state directory vs local volume mounts
+- **Health probes**: K8s readiness/liveness probes vs manual polling
+
+Every new feature in P0-P2 must work on both targets. The test matrix:
+- Unit tests: target-agnostic (no containers)
+- E2E tests: run against both Kind (K8s) and Podman compose
+- CI: two E2E pipelines (or parameterized with `DEPLOYMENT_TARGET`)
+
 ---
 
 ## On-Demand Agent Spawning (Detail)
