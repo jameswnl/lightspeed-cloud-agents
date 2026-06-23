@@ -197,6 +197,26 @@ class TestWorkflowExecutorApproval:
         assert state.steps["execution"].status == "completed"
 
     @pytest.mark.asyncio
+    async def test_approval_timeout_fails_workflow(self) -> None:
+        """Test that an expired approval timeout fails the workflow."""
+        defn = _make_definition([
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "timeout_seconds": 0},
+        ])
+
+        executor = WorkflowExecutor(defn, _mock_registry(), client_factory=lambda _: AsyncMock())
+        state = await executor.run()
+        assert state.status == "paused"
+
+        import asyncio
+        await asyncio.sleep(0.01)
+
+        state = await executor.get_state(state.workflow_id)
+        assert state.status == "failed"
+        assert "timed out" in state.steps["approval"].error
+
+    @pytest.mark.asyncio
     async def test_rejection_stops_workflow(self) -> None:
         """Test that rejecting stops the workflow."""
         defn = _make_definition([

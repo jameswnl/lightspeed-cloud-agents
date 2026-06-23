@@ -96,6 +96,10 @@ class WorkflowExecutor:
         if state.status != "paused":
             raise ValueError(f"Workflow {workflow_id} is not paused")
 
+        self._check_approval_timeout(state)
+        if state.status == "failed":
+            return state
+
         paused_index = self._paused_at.get(workflow_id, 0)
         paused_step = self._definition.spec.steps[paused_index]
         step_result = state.steps.get(paused_step.output_key)
@@ -110,8 +114,33 @@ class WorkflowExecutor:
         return await self._execute_from(state, start_index=paused_index + 1)
 
     async def get_state(self, workflow_id: str) -> WorkflowState | None:
-        """Get current workflow state."""
-        return self._states.get(workflow_id)
+        """Get current workflow state. Checks approval timeouts."""
+        state = self._states.get(workflow_id)
+        if state:
+            self._check_approval_timeout(state)
+        return state
+
+    def _check_approval_timeout(self, state: WorkflowState) -> None:
+        """Enforce approval timeout on the current step."""
+        if state.status != "paused" or not state.current_step:
+            return
+        paused_index = self._paused_at.get(state.workflow_id)
+        if paused_index is None:
+            return
+        step_spec = self._definition.spec.steps[paused_index]
+        step_result = state.steps.get(step_spec.output_key)
+        if not step_result or step_result.status != "awaiting_approval":
+            return
+        if not step_result.started_at:
+            return
+        started = datetime.fromisoformat(step_result.started_at)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        if elapsed > step_spec.timeout_seconds:
+            step_result.status = "failed"
+            step_result.error = f"Approval timed out after {step_spec.timeout_seconds}s"
+            step_result.completed_at = datetime.now(timezone.utc).isoformat()
+            state.status = "failed"
+            state.updated_at = datetime.now(timezone.utc).isoformat()
 
     async def list_workflows(self) -> list[WorkflowState]:
         """List all tracked workflows."""
@@ -181,6 +210,7 @@ class WorkflowExecutor:
         state.status = "completed"
         state.current_step = None
         state.updated_at = datetime.now(timezone.utc).isoformat()
+        await self._persist(state)
         return state
 
     async def _execute_agent_step(
