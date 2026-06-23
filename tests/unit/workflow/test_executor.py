@@ -233,5 +233,7 @@ class TestWorkflowExecutorApproval:
 
         state = await executor.resume(state.workflow_id, approved=False)
         assert state.steps["approval"].output["approved"] is False
-        assert state.steps["execution"].status == "skipped"
-        assert state.status == "completed"
+        assert state.steps["approval"].status == "failed"
+        assert state.steps["approval"].error == "Approval rejected by human"
+        assert state.status == "failed"
+        assert "execution" not in state.steps

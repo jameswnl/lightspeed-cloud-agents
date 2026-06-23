@@ -103,13 +103,26 @@ class WorkflowExecutor:
         paused_index = self._paused_at.get(workflow_id, 0)
         paused_step = self._definition.spec.steps[paused_index]
         step_result = state.steps.get(paused_step.output_key)
+
+        now = datetime.now(timezone.utc).isoformat()
+        if not approved:
+            if step_result:
+                step_result.status = "failed"
+                step_result.output = {"approved": False}
+                step_result.error = "Approval rejected by human"
+                step_result.completed_at = now
+            state.status = "failed"
+            state.updated_at = now
+            await self._persist(state)
+            return state
+
         if step_result:
             step_result.status = "completed"
-            step_result.output = {"approved": approved}
-            step_result.completed_at = datetime.now(timezone.utc).isoformat()
+            step_result.output = {"approved": True}
+            step_result.completed_at = now
 
         state.status = "running"
-        state.updated_at = datetime.now(timezone.utc).isoformat()
+        state.updated_at = now
 
         return await self._execute_from(state, start_index=paused_index + 1)
 
