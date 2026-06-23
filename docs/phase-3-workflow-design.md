@@ -488,6 +488,7 @@ Or a dedicated workflow entrypoint that loads `workflow.yaml` instead of `agent.
 - Workflow visualization (graph rendering)
 - CRD-based workflow deployment (K8s operator)
 - Retry policies per step (Phase 3 fails the workflow on step failure)
+- On-demand agent pod spawning — create K8s Jobs or Podman containers per workflow step instead of pre-deployed agents. Via `spawn: on-demand` in step spec, using Kubernetes Python client (`BatchV1Api`) or Podman Python SDK (`podman-py`). Phase 3 uses pre-deployed agents only.
 
 ---
 
