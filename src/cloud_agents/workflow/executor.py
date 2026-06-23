@@ -7,6 +7,7 @@ RemoteAgentClient, handling conditions, and pausing on approval steps.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowDefinition, WorkflowStepSpec
 from agents.workflow.interpolation import interpolate
 from agents.workflow.persistence import InMemoryPersistence, WorkflowPersistence
+from agents.spawner.base import AgentSpawner
 from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
 from agents.workflow.retry import RetryContext, build_escalation
 from agents.workflow.state import StepResult, WorkflowState
@@ -41,6 +43,8 @@ class WorkflowExecutor:
         client_factory: Optional[Callable[[str], RemoteAgentClient]] = None,
         persistence: Optional[WorkflowPersistence] = None,
         approval_policy: Optional[ApprovalPolicy] = None,
+        spawner: Optional[AgentSpawner] = None,
+        agent_image: str = "agent-runtime:latest",
     ) -> None:
         """Initialize the executor.
 
@@ -57,6 +61,8 @@ class WorkflowExecutor:
         )
         self._persistence = persistence or InMemoryPersistence()
         self._approval_policy = approval_policy or ApprovalPolicy()
+        self._spawner = spawner
+        self._agent_image = agent_image
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
 
@@ -318,10 +324,19 @@ class WorkflowExecutor:
         if retry_ctx and retry_ctx.attempt > 1:
             prompt = retry_ctx.build_retry_prompt(prompt)
 
-        logger.info("Executing step '%s' with agent '%s'", step.name, step.agent)
+        logger.info("Executing step '%s' with agent '%s' (spawn=%s)", step.name, step.agent, step.spawn)
 
+        spawned_endpoint = None
         try:
-            client = self._client_factory(step.agent)
+            if step.spawn == "on-demand" and self._spawner:
+                spawned_endpoint = await self._spawner.spawn(
+                    step.agent, self._agent_image,
+                    env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+                )
+                await self._spawner.wait_ready(spawned_endpoint)
+                client = RemoteAgentClient(spawned_endpoint)
+            else:
+                client = self._client_factory(step.agent)
             response = await client.run(prompt)
         except Exception as exc:
             return StepResult(
@@ -330,6 +345,9 @@ class WorkflowExecutor:
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
+        finally:
+            if spawned_endpoint and self._spawner:
+                await self._spawner.destroy(step.agent)
 
         return StepResult(
             step_name=step.name,

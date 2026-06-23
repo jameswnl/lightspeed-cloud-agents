@@ -33,6 +33,7 @@ class WorkflowStepSpec(BaseModel):
     message: Optional[str] = None
     timeout_seconds: int = 3600
     max_retries: int = Field(default=1, ge=1)
+    spawn: Literal["pre-deployed", "on-demand"] = "pre-deployed"
 
 
 class WorkflowSpec(BaseModel):

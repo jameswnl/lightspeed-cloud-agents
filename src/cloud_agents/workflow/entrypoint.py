@@ -16,8 +16,10 @@ import yaml
 
 from agents.registry import AgentRegistry
 from agents.workflow.api import create_workflow_app
+from agents.workflow.auto_approve import ApprovalPolicy
 from agents.workflow.definition import WorkflowDefinition
 from agents.workflow.executor import WorkflowExecutor
+from agents.workflow.persistence import FilePersistence, InMemoryPersistence, WorkflowPersistence
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,21 @@ def _load_registry(path: str) -> AgentRegistry:
     return AgentRegistry(agents)
 
 
+PERSISTENCE_TYPE = os.environ.get("WORKFLOW_PERSISTENCE", "memory")
+PERSISTENCE_PATH = os.environ.get("WORKFLOW_STATE_DIR", "/app/state")
+POSTGRES_URL = os.environ.get("WORKFLOW_POSTGRES_URL", "")
+
+
+def _create_persistence() -> WorkflowPersistence:
+    """Create persistence backend based on environment config."""
+    if PERSISTENCE_TYPE == "postgres" and POSTGRES_URL:
+        from agents.workflow.postgres_persistence import PostgresPersistence
+        return PostgresPersistence(POSTGRES_URL)
+    if PERSISTENCE_TYPE == "file":
+        return FilePersistence(PERSISTENCE_PATH)
+    return InMemoryPersistence()
+
+
 def build_workflow_app(
     workflow_path: str = WORKFLOW_PATH,
     registry_path: str = REGISTRY_PATH,
@@ -57,8 +74,13 @@ def build_workflow_app(
     defn = _load_workflow(workflow_path)
     registry = _load_registry(registry_path)
     workflow_name = defn.metadata.get("name", "unknown")
+    persistence = _create_persistence()
 
-    executor = WorkflowExecutor(defn, registry)
+    executor = WorkflowExecutor(
+        defn, registry,
+        persistence=persistence,
+        approval_policy=ApprovalPolicy(),
+    )
     return create_workflow_app(executor, workflow_name)
 
 
