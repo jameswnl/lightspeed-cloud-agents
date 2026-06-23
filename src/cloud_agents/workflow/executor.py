@@ -19,6 +19,7 @@ from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowDefinition, WorkflowStepSpec
 from agents.workflow.interpolation import interpolate
 from agents.workflow.persistence import InMemoryPersistence, WorkflowPersistence
+from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
 from agents.workflow.retry import RetryContext, build_escalation
 from agents.workflow.state import StepResult, WorkflowState
 
@@ -39,6 +40,7 @@ class WorkflowExecutor:
         registry: AgentRegistry,
         client_factory: Optional[Callable[[str], RemoteAgentClient]] = None,
         persistence: Optional[WorkflowPersistence] = None,
+        approval_policy: Optional[ApprovalPolicy] = None,
     ) -> None:
         """Initialize the executor.
 
@@ -54,6 +56,7 @@ class WorkflowExecutor:
             lambda agent_name: RemoteAgentClient(registry.get_endpoint(agent_name))
         )
         self._persistence = persistence or InMemoryPersistence()
+        self._approval_policy = approval_policy or ApprovalPolicy()
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
 
@@ -201,6 +204,19 @@ class WorkflowExecutor:
                     return state
 
             if step.type == "human-approval":
+                classification = classify_step_risk(step, self._approval_policy)
+                if classification.auto_approved:
+                    state.steps[step.output_key] = StepResult(
+                        step_name=step.name,
+                        status="completed",
+                        output={"approved": True, "auto_approved": True, "risk_level": classification.risk_level},
+                        started_at=datetime.now(timezone.utc).isoformat(),
+                        completed_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    await self._persist(state)
+                    logger.info("Step '%s' auto-approved (risk: %s)", step.name, classification.risk_level)
+                    continue
+
                 state.steps[step.output_key] = StepResult(
                     step_name=step.name,
                     status="awaiting_approval",
@@ -209,7 +225,7 @@ class WorkflowExecutor:
                 state.status = "paused"
                 self._paused_at[state.workflow_id] = i
                 await self._persist(state)
-                logger.info("Workflow paused at step '%s' for approval", step.name)
+                logger.info("Workflow paused at step '%s' for approval (risk: %s)", step.name, classification.risk_level)
                 return state
 
             if step.type == "agent":

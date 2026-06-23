@@ -90,6 +90,10 @@ def _classify_agent_risk(
     name_lower = step.name.lower()
     prompt_lower = (step.prompt or "").lower()
 
+    # Production gap: keyword-based classification is naive.
+    # "check-and-delete" would match "check" first (low risk) due to name-first ordering.
+    # Production should use explicit risk annotations per step in the workflow YAML,
+    # or inspect the agent's actual tool manifest for destructive operations.
     high_risk_keywords = ["execute", "remediat", "delete", "restart", "rollback", "scale"]
     low_risk_keywords = ["check", "diagnos", "analyze", "inspect", "list", "verify", "read"]
 
