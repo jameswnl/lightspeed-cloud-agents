@@ -11,10 +11,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from agents.runtime.auth import BearerAuthMiddleware, get_api_token
 from agents.workflow.executor import WorkflowExecutor
 from agents.workflow.state import WorkflowState
-
-APPROVAL_TOKEN = os.environ.get("WORKFLOW_APPROVAL_TOKEN", "")
 
 
 def create_workflow_app(
@@ -31,6 +30,9 @@ def create_workflow_app(
         Configured FastAPI application.
     """
     app = FastAPI(title=f"Workflow: {workflow_name}")
+    api_token = get_api_token()
+    if api_token:
+        app.add_middleware(BearerAuthMiddleware, token=api_token)
     app.state.executor = executor
 
     @app.get("/healthz")
@@ -68,12 +70,10 @@ def create_workflow_app(
 
     @app.post("/v1/workflows/{workflow_id}/approve")
     async def approve_workflow(workflow_id: str, request: Request) -> Any:
-        """Approve or reject a paused workflow step."""
-        if APPROVAL_TOKEN:
-            auth = request.headers.get("Authorization", "")
-            if auth != f"Bearer {APPROVAL_TOKEN}":
-                raise HTTPException(status_code=401, detail="Invalid approval token")
+        """Approve or reject a paused workflow step.
 
+        Auth is handled by the BearerAuthMiddleware — no per-endpoint check needed.
+        """
         body = await request.json()
         approved = body.get("approved", False)
 

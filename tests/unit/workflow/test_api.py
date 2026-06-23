@@ -107,30 +107,47 @@ class TestWorkflowAPIApprove:
         assert body["steps"]["approval"]["output"]["approved"] is True
 
 
-class TestWorkflowAPIApprovalAuth:
-    """Tests for approval endpoint authentication."""
+class TestWorkflowAPIAuth:
+    """Tests for workflow API authentication via BearerAuthMiddleware."""
 
-    def test_invalid_token_rejected(self) -> None:
-        """Test that an invalid token is rejected."""
-        import agents.workflow.api as api_module
-        original = api_module.APPROVAL_TOKEN
-        api_module.APPROVAL_TOKEN = "secret-token"
-        try:
-            tc, executor = _make_app_with_approval()
-            import time
-            tc.post("/v1/workflows/run", json={})
-            time.sleep(0.1)
-            workflows = tc.get("/v1/workflows").json()
-            if workflows:
-                wid = workflows[0]["workflow_id"]
-                resp = tc.post(
-                    f"/v1/workflows/{wid}/approve",
-                    json={"approved": True},
-                    headers={"Authorization": "Bearer wrong-token"},
-                )
-                assert resp.status_code == 401
-        finally:
-            api_module.APPROVAL_TOKEN = original
+    def test_workflow_endpoints_require_token_when_set(self) -> None:
+        """Test that all workflow endpoints are protected when AGENT_API_TOKEN is set."""
+        import os
+        from unittest.mock import patch
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "agent": "diag",
+             "prompt": "test", "output_key": "r1"},
+        ])
+        registry = AgentRegistry({"diag": "http://diag:8080"})
+        executor = WorkflowExecutor(defn, registry)
+
+        with patch.dict(os.environ, {"AGENT_API_TOKEN": "secret-123"}):
+            app = create_workflow_app(executor, "test")
+        tc = TestClient(app)
+
+        assert tc.post("/v1/workflows/run", json={}).status_code == 401
+        assert tc.get("/v1/workflows").status_code == 401
+        assert tc.get("/v1/workflows/abc").status_code == 401
+        assert tc.post("/v1/workflows/abc/approve", json={}).status_code == 401
+
+    def test_healthz_exempt_from_auth(self) -> None:
+        """Test that /healthz is accessible without a token."""
+        import os
+        from unittest.mock import patch
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "agent": "diag",
+             "prompt": "test", "output_key": "r1"},
+        ])
+        registry = AgentRegistry({"diag": "http://diag:8080"})
+        executor = WorkflowExecutor(defn, registry)
+
+        with patch.dict(os.environ, {"AGENT_API_TOKEN": "secret-123"}):
+            app = create_workflow_app(executor, "test")
+        tc = TestClient(app)
+
+        assert tc.get("/healthz").status_code == 200
 
 
 class TestWorkflowAPIList:
