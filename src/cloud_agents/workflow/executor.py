@@ -19,6 +19,7 @@ from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowDefinition, WorkflowStepSpec
 from agents.workflow.interpolation import interpolate
 from agents.workflow.persistence import InMemoryPersistence, WorkflowPersistence
+from agents.workflow.retry import RetryContext, build_escalation
 from agents.workflow.state import StepResult, WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -212,7 +213,7 @@ class WorkflowExecutor:
                 return state
 
             if step.type == "agent":
-                result = await self._execute_agent_step(step, state)
+                result = await self._execute_agent_step_with_retry(step, state)
                 state.steps[step.output_key] = result
                 await self._persist(state)
                 if result.status == "failed":
@@ -226,14 +227,62 @@ class WorkflowExecutor:
         await self._persist(state)
         return state
 
-    async def _execute_agent_step(
+    async def _execute_agent_step_with_retry(
         self, step: WorkflowStepSpec, state: WorkflowState
+    ) -> StepResult:
+        """Execute an agent step with retry and escalation.
+
+        Retries up to step.max_retries times, passing failure context
+        to each subsequent attempt. On exhaustion, generates an
+        escalation handoff document.
+        """
+        retry_ctx = RetryContext(max_attempts=step.max_retries)
+
+        while not retry_ctx.exhausted:
+            result = await self._execute_agent_step(step, state, retry_ctx)
+            if result.status == "completed":
+                return result
+            retry_ctx.add_failure(
+                result.error or "Unknown error",
+                result.output,
+            )
+            logger.warning(
+                "Step '%s' failed (attempt %d/%d): %s",
+                step.name, retry_ctx.attempt - 1, retry_ctx.max_attempts,
+                result.error,
+            )
+
+        escalation = build_escalation(
+            workflow_name=self._definition.metadata["name"],
+            step_name=step.name,
+            retry_ctx=retry_ctx,
+            collected_evidence={
+                k: v.output for k, v in state.steps.items() if v.output
+            },
+        )
+        logger.error(
+            "Step '%s' exhausted %d retries — escalating",
+            step.name, retry_ctx.max_attempts,
+        )
+        return StepResult(
+            step_name=step.name,
+            status="failed",
+            error=f"Retries exhausted ({retry_ctx.max_attempts} attempts). Escalation generated.",
+            output=escalation.model_dump(),
+            started_at=datetime.now(timezone.utc).isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    async def _execute_agent_step(
+        self, step: WorkflowStepSpec, state: WorkflowState,
+        retry_ctx: RetryContext | None = None,
     ) -> StepResult:
         """Execute a single agent step.
 
         Args:
             step: The step specification.
             state: Current workflow state (for template interpolation).
+            retry_ctx: Optional retry context for enriching the prompt.
 
         Returns:
             StepResult with the agent's output.
@@ -249,6 +298,9 @@ class WorkflowExecutor:
                 error=f"Template error: {exc}",
                 started_at=started_at,
             )
+
+        if retry_ctx and retry_ctx.attempt > 1:
+            prompt = retry_ctx.build_retry_prompt(prompt)
 
         logger.info("Executing step '%s' with agent '%s'", step.name, step.agent)
 

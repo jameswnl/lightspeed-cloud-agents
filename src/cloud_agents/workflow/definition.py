@@ -32,6 +32,7 @@ class WorkflowStepSpec(BaseModel):
     condition: Optional[str] = None
     message: Optional[str] = None
     timeout_seconds: int = 3600
+    max_retries: int = 1
 
 
 class WorkflowSpec(BaseModel):

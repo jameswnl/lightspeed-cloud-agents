@@ -49,21 +49,41 @@ class RemediationAction(BaseModel):
     success: bool
 
 
+class RollbackPlan(BaseModel):
+    """Rollback plan for a remediation action.
+
+    Attributes:
+        description: What to do if the remediation fails.
+        steps: Ordered rollback steps.
+    """
+
+    description: str
+    steps: list[str] = Field(default_factory=list)
+
+
 class DiagnosticReport(BaseModel):
     """Structured output from the diagnostic agent.
 
     Attributes:
         summary: Brief description of what was found and done.
+        confidence: Confidence level in the diagnosis.
+        risk_level: Risk level of the proposed/taken actions.
         issues_found: List of issues discovered during diagnosis.
         actions_taken: Remediation actions attempted.
         remaining_issues: Issues that could not be resolved.
+        required_permissions: Permissions needed for the remediation.
+        rollback_plan: What to do if remediation fails.
         cluster_healthy: Whether all hosts are healthy after remediation.
     """
 
     summary: str
+    confidence: Literal["low", "medium", "high"] = "medium"
+    risk_level: Literal["low", "medium", "high", "critical"] = "medium"
     issues_found: list[str]
     actions_taken: list[RemediationAction]
     remaining_issues: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    rollback_plan: Optional[RollbackPlan] = None
     cluster_healthy: bool
 
 

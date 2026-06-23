@@ -85,7 +85,7 @@ class TestWorkflowExecutorBasic:
 
     @pytest.mark.asyncio
     async def test_agent_failure_fails_workflow(self) -> None:
-        """Test that an agent failure fails the workflow."""
+        """Test that an agent failure (with max_retries=1) fails the workflow."""
         defn = _make_definition([
             {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
              "prompt": "Do something", "output_key": "result"},
@@ -98,7 +98,7 @@ class TestWorkflowExecutorBasic:
 
         assert state.status == "failed"
         assert state.steps["result"].status == "failed"
-        assert "Agent down" in state.steps["result"].error
+        assert "Retries exhausted" in state.steps["result"].error
 
 
 class TestWorkflowExecutorConditions:
@@ -145,6 +145,80 @@ class TestWorkflowExecutorConditions:
 
         assert state.steps["fix"].status == "skipped"
         assert client.run.call_count == 1
+
+
+class TestWorkflowExecutorRetry:
+    """Tests for retry with context and escalation."""
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_on_second_attempt(self) -> None:
+        """Test that a step retries and succeeds on the second attempt."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Fix it", "output_key": "result", "max_retries": 3},
+        ])
+        client = AsyncMock()
+        client.run = AsyncMock(side_effect=[
+            Exception("Agent down"),
+            _make_agent_response({"summary": "Fixed on retry"}),
+        ])
+
+        executor = WorkflowExecutor(defn, _mock_registry(), client_factory=lambda _: client)
+        state = await executor.run()
+
+        assert state.status == "completed"
+        assert state.steps["result"].status == "completed"
+        assert client.run.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted_generates_escalation(self) -> None:
+        """Test that exhausted retries generate an escalation handoff."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Fix it", "output_key": "result", "max_retries": 2},
+        ])
+        client = AsyncMock()
+        client.run = AsyncMock(side_effect=Exception("Always fails"))
+
+        executor = WorkflowExecutor(defn, _mock_registry(), client_factory=lambda _: client)
+        state = await executor.run()
+
+        assert state.status == "failed"
+        assert state.steps["result"].status == "failed"
+        assert "Retries exhausted" in state.steps["result"].error
+        assert state.steps["result"].output is not None
+        assert state.steps["result"].output["failure_history"] is not None
+        assert len(state.steps["result"].output["failure_history"]) == 2
+        assert client.run.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_prompt_includes_failure_history(self) -> None:
+        """Test that retry prompts include previous failure context."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Original prompt", "output_key": "result", "max_retries": 2},
+        ])
+        prompts_received = []
+        call_count = 0
+
+        async def capturing_run(prompt, **kwargs):
+            nonlocal call_count
+            prompts_received.append(prompt)
+            call_count += 1
+            if call_count == 1:
+                raise Exception("First failure")
+            return _make_agent_response({"summary": "Fixed"})
+
+        client = AsyncMock()
+        client.run = capturing_run
+
+        executor = WorkflowExecutor(defn, _mock_registry(), client_factory=lambda _: client)
+        await executor.run()
+
+        assert len(prompts_received) == 2
+        assert "Original prompt" in prompts_received[0]
+        assert "PREVIOUS ATTEMPTS" in prompts_received[1]
+        assert "First failure" in prompts_received[1]
 
 
 class TestWorkflowExecutorApproval:

@@ -10,6 +10,7 @@ from agents.models import (
     MonitoringAlert,
     MonitoringResult,
     RemediationAction,
+    RollbackPlan,
     RunState,
     RunStatus,
 )
@@ -101,6 +102,61 @@ class TestDiagnosticReport:
         assert report.cluster_healthy is True
         assert len(report.actions_taken) == 1
         assert report.remaining_issues == []
+
+    def test_enriched_report_with_confidence_and_risk(self) -> None:
+        """Test creating a report with confidence, risk, permissions, rollback."""
+        report = DiagnosticReport(
+            summary="Fixed web-02",
+            confidence="high",
+            risk_level="low",
+            issues_found=["web-02: app crashed"],
+            actions_taken=[
+                RemediationAction(
+                    host="web-02", action="restart_service:app",
+                    result="Restarted", success=True,
+                )
+            ],
+            required_permissions=["pods/exec", "deployments/update"],
+            rollback_plan=RollbackPlan(
+                description="Rollback deploy to v2.3.0",
+                steps=["oc rollback frontend", "verify pods running"],
+            ),
+            cluster_healthy=True,
+        )
+        assert report.confidence == "high"
+        assert report.risk_level == "low"
+        assert len(report.required_permissions) == 2
+        assert report.rollback_plan.description == "Rollback deploy to v2.3.0"
+        assert len(report.rollback_plan.steps) == 2
+
+    def test_enriched_defaults(self) -> None:
+        """Test that enriched fields have sensible defaults."""
+        report = DiagnosticReport(
+            summary="ok",
+            issues_found=[],
+            actions_taken=[],
+            cluster_healthy=True,
+        )
+        assert report.confidence == "medium"
+        assert report.risk_level == "medium"
+        assert report.required_permissions == []
+        assert report.rollback_plan is None
+
+    def test_invalid_confidence_rejected(self) -> None:
+        """Test that invalid confidence level is rejected."""
+        with pytest.raises(ValidationError):
+            DiagnosticReport(
+                summary="ok", confidence="very_high",
+                issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
+
+    def test_invalid_risk_level_rejected(self) -> None:
+        """Test that invalid risk level is rejected."""
+        with pytest.raises(ValidationError):
+            DiagnosticReport(
+                summary="ok", risk_level="extreme",
+                issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
 
     def test_report_with_remaining_issues(self) -> None:
         """Test creating a report with unresolved issues."""
