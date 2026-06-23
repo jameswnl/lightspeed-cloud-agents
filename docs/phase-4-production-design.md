@@ -82,38 +82,59 @@ Phase 4 is organized into **four workstreams** that can be developed in parallel
 
 ---
 
-## Recommended Priority
+## Phased Delivery
 
-Not all workstreams need to ship together. Suggested priority:
+Phase 4 is too large for a single delivery. Split into three sub-phases based on natural milestones:
 
-**P0 (must-have for production):**
-1. Full API authentication (Workstream A)
-2. Database-backed workflow persistence (Workstream B)
-3. Wire into `/query` endpoint (Workstream C) — blocked on LCORE-2310
-4. NetworkPolicy + ServiceAccount RBAC (Workstream A)
+### Phase 4a: Hardened PoC (~10 days)
 
-**P1 (high value):**
-5. On-demand agent pod spawning (Workstream B)
-6. Real cluster APIs (Workstream C)
-7. OpenTelemetry tracing (Workstream B)
-8. Approval via Slack/webhook (Workstream D)
-9. Condition precedence fix (Workstream D) — known bug in shipped code
+**Goal:** Make it safe to demo outside dev/test. No external dependencies.
 
-**P1 (high value) — from KubeKlaw learnings:**
-10. Context-aware retry with escalation (Workstream D) — Lesson 6: pass failure history to retries, hard cap (2-3 attempts), escalate with handoff document on exhaustion
-11. Policy-driven auto-approve (Workstream D) — Lesson 3: low-risk steps auto-approve, high-risk require human. Risk classification on workflow steps.
-12. Enriched output models (Workstream D) — Lesson 2: add confidence level, risk assessment, rollback plan, required permissions to diagnostic output models
+| # | Item | Workstream | Est. |
+|---|------|-----------|------|
+| 1 | Full API authentication (all endpoints) | A | 2d |
+| 2 | NetworkPolicy + ServiceAccount RBAC | A | 2d |
+| 3 | Condition precedence fix (shipped bug) | D | 1d |
+| 4 | Enriched output models (confidence, risk, rollback plan, permissions) | D | 2d |
+| 5 | Context-aware retry with escalation (failure history, hard cap, handoff doc) | D | 3d |
 
-**P2 (can wait):**
-13. Parallel step execution (Workstream D)
-14. Per-tool metrics (Workstream B)
-15. MCP tools in agent.yaml (Workstream C)
-16. AI-generated workflows (Workstream D)
-17. Nested path interpolation (Workstream D)
-18. SSE streaming for agent progress (Workstream B)
-19. Advisory/read-only mode (Workstream D) — KubeKlaw UX 3: run workflows without execution, diagnosis and recommendation only
-20. Escalation packaging (Workstream D) — KubeKlaw UX 4: auto-package audit trail + diagnosis into a support handoff on failure
-21. Per-task permission scoping (Workstream A) — KubeKlaw Lesson 5: spawned sandbox pods get only the permissions approved for that specific task, not blanket ServiceAccount access
+**Acceptance:** All APIs authenticated. RBAC enforced. Condition evaluator handles mixed `and`/`or`. Diagnostic output includes risk assessment and rollback plan. Failed workflows produce an escalation handoff. No external dependencies needed.
+
+### Phase 4b: Production Infrastructure (~15 days)
+
+**Goal:** Deployable in real customer clusters. Has external dependencies.
+
+| # | Item | Workstream | Est. | Dependency |
+|---|------|-----------|------|-----------|
+| 6 | Database-backed persistence (PostgreSQL) | B | 3d | PostgreSQL in cluster |
+| 7 | On-demand agent pod spawning (K8s Jobs + Podman) | B | 5d | K8s API access from pods |
+| 8 | Wire into `/query` endpoint | C | 2d | LCORE-2310 |
+| 9 | Real cluster APIs (replace simulated state) | C | 3d | OCP/K8s cluster access |
+| 10 | Policy-driven auto-approve (risk classification) | D | 2d | — |
+
+**Acceptance:** Workflows survive pod restart (PostgreSQL). Agent pods spawn on demand and are destroyed after use. `/query` delegates to cloud agents. Agents query real K8s APIs, not simulated dicts. Low-risk steps auto-approve.
+
+### Phase 4c: Observability & Advanced Features (~24 days)
+
+**Goal:** Polish, power-user features, advanced workflow capabilities. Items can be cherry-picked independently.
+
+| # | Item | Workstream | Est. |
+|---|------|-----------|------|
+| 11 | OpenTelemetry distributed tracing | B | 3d |
+| 12 | Approval via Slack/webhook | D | 2d |
+| 13 | Per-tool Prometheus metrics | B | 1d |
+| 14 | MCP tools in agent.yaml | C | 2d |
+| 15 | SSE streaming for agent progress | B | 2d |
+| 16 | Advisory/read-only mode (diagnosis-only workflows) | D | 1d |
+| 17 | Escalation packaging (auto-package audit trail into support ticket) | D | 2d |
+| 18 | Per-task permission scoping (sandbox-level RBAC) | A | 2d |
+| 19 | Parallel step execution | D | 3d |
+| 20 | Nested path interpolation (`{{ steps.X.output.actions[0].host }}`) | D | 1d |
+| 21 | AI-generated workflows (Workflow Designer Agent) | D | 5d+ |
+
+**Note:** Item 21 (AI-generated workflows) is large enough to be its own Phase 5 if the scope expands.
+
+**Acceptance:** Full observability (traces, metrics, streaming). Slack approval notifications. MCP tools configurable in YAML. Advisory mode for read-only diagnosis. Parallel workflow steps. AI agent that designs workflows.
 
 ### Deployment target switch
 
@@ -283,35 +304,54 @@ When the workflow executor spawns an on-demand agent pod:
 
 ## Effort Estimate
 
-| Workstream | Items | Effort |
-|-----------|-------|--------|
-| A: Security & Auth | 4 items | 5-7 days |
-| B: Production Infrastructure | 4 items | 8-10 days |
-| C: LCS Integration | 3 items | 5-7 days |
-| D: Workflow Enhancements | 6 items (P1+P2) | 7-10 days |
-| **Total** | **17 items** | **25-34 days** |
+| Sub-phase | Items | Effort | Dependencies |
+|-----------|-------|--------|-------------|
+| **4a: Hardened PoC** | 5 | ~10 days | None |
+| **4b: Production Infrastructure** | 5 | ~15 days | LCORE-2310, PostgreSQL, K8s API access |
+| **4c: Observability & Advanced** | 11 | ~24 days | None (cherry-pickable) |
+| **Total** | **21** | **~49 days** | |
 
-Phase 4 is a full quarter of work (2-3 engineers, 10-12 weeks). The workstreams can be parallelized across engineers.
+Phase 4a is a single sprint. Phase 4b is 2-3 sprints (blocked by dependencies). Phase 4c spans a quarter and items can be picked independently.
 
 ---
 
-## TDD Task Breakdown (P0 items only)
+## TDD Task Breakdown
 
-| Task | What | Workstream | Est. |
-|------|------|-----------|------|
-| 1 | API auth middleware for agent endpoints | A | 2d |
-| 2 | API auth middleware for workflow endpoints | A | 1d |
-| 3 | NetworkPolicy manifests for Kind/OCP | A | 1d |
-| 4 | ServiceAccount + RoleBinding manifests | A | 1d |
-| 5 | PostgresPersistence implementation | B | 2d |
-| 6 | PostgresPersistence integration tests | B | 1d |
-| 7 | AgentSpawner interface + KubernetesSpawner | B | 3d |
-| 8 | AgentSpawner integration with WorkflowExecutor | B | 2d |
-| 9 | PodmanSpawner implementation | B | 1d |
-| 10 | Wire RemoteAgentClient into build_agent() | C | 2d |
-| 11 | E2E: authenticated agent calls across pods | A+B | 2d |
+### Phase 4a tasks
 
-**P0 total: ~18 days, ~22 with reviews**
+| Task | What | Est. |
+|------|------|------|
+| 4a-1 | Auth middleware for agent runtime endpoints | 1d |
+| 4a-2 | Auth middleware for workflow API endpoints | 1d |
+| 4a-3 | NetworkPolicy manifests (Kind + OCP) | 1d |
+| 4a-4 | ServiceAccount + RoleBinding manifests | 1d |
+| 4a-5 | Fix condition evaluator and/or precedence | 1d |
+| 4a-6 | Enriched DiagnosticReport (confidence, risk, rollback, permissions) | 2d |
+| 4a-7 | Retry-with-context in WorkflowExecutor (failure history, hard cap) | 2d |
+| 4a-8 | Escalation handoff document on retry exhaustion | 1d |
+| 4a-9 | E2E: authenticated calls + retry + enriched output | 2d |
+
+**Phase 4a total: ~12 days with reviews**
+
+### Phase 4b tasks
+
+| Task | What | Est. | Dep. |
+|------|------|------|------|
+| 4b-1 | PostgresPersistence implementation | 2d | PostgreSQL |
+| 4b-2 | PostgresPersistence integration tests | 1d | PostgreSQL |
+| 4b-3 | AgentSpawner ABC + KubernetesSpawner | 3d | K8s API |
+| 4b-4 | PodmanSpawner | 1d | — |
+| 4b-5 | Spawner integration with WorkflowExecutor | 2d | — |
+| 4b-6 | Wire RemoteAgentClient into build_agent() | 2d | LCORE-2310 |
+| 4b-7 | Replace simulated state with real K8s API tools | 3d | OCP cluster |
+| 4b-8 | Policy-driven auto-approve (risk classification) | 2d | — |
+| 4b-9 | E2E: on-demand spawning + real APIs + persistence | 2d | All above |
+
+**Phase 4b total: ~20 days with reviews**
+
+### Phase 4c tasks (cherry-pickable)
+
+Individual items estimated in the phase table above. No fixed ordering — pick based on user demand.
 
 ---
 
