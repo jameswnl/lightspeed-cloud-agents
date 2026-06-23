@@ -33,12 +33,13 @@ def evaluate_condition(condition: str, state: WorkflowState) -> bool:
     """
     condition = condition.strip()
 
-    if " and " in condition:
-        parts = condition.split(" and ")
-        return all(evaluate_condition(p.strip(), state) for p in parts)
+    # "or" has lower precedence than "and" — split on "or" first
     if " or " in condition:
         parts = condition.split(" or ")
         return any(evaluate_condition(p.strip(), state) for p in parts)
+    if " and " in condition:
+        parts = condition.split(" and ")
+        return all(evaluate_condition(p.strip(), state) for p in parts)
 
     match = CONDITION_PATTERN.match(condition)
     if not match:

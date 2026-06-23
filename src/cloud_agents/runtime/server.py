@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import generate_latest
 
 from agents.models import AgentRunRequest, AgentRunResponse, RunState
+from agents.runtime.auth import BearerAuthMiddleware, get_api_token
 from agents.runtime.correlation import validate_correlation_id
 from agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
 from agents.runtime.run_store import RunStore
@@ -48,6 +49,9 @@ def create_app(
         Configured FastAPI application.
     """
     app = FastAPI(title=f"Agent: {agent_name}")
+    api_token = get_api_token()
+    if api_token:
+        app.add_middleware(BearerAuthMiddleware, token=api_token)
     app.state.agent_runner = agent_runner
     app.state.agent_name = agent_name
     app.state.run_store = RunStore()

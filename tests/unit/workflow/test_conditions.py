@@ -81,6 +81,19 @@ class TestEvaluateCondition:
         state = _make_state()
         assert evaluate_condition("steps.missing.status == completed", state) is False
 
+    def test_mixed_and_or_precedence(self) -> None:
+        """Test that 'or' has lower precedence than 'and' — A or B and C = A or (B and C)."""
+        state = _make_state(
+            a={"status": "failed"},
+            b={"status": "completed"},
+            c={"status": "completed"},
+        )
+        # A is false, B and C are both true → A or (B and C) = true
+        assert evaluate_condition(
+            "steps.a.status == completed or steps.b.status == completed and steps.c.status == completed",
+            state,
+        ) is True
+
     def test_unparseable_raises(self) -> None:
         """Test that an unparseable condition raises ValueError."""
         state = _make_state()
