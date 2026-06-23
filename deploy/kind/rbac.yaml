@@ -1,0 +1,55 @@
+# ServiceAccounts and RBAC for cloud agents
+# Each agent type gets a scoped ServiceAccount.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: diagnostic-agent
+  labels:
+    app: diagnostic-agent
+    environment: dev-test-only
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitoring-agent
+  labels:
+    app: monitoring-agent
+    environment: dev-test-only
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workflow-runner
+  labels:
+    app: workflow-runner
+    environment: dev-test-only
+---
+# Workflow runner needs permission to create Jobs (for on-demand spawning in Phase 4b)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workflow-runner-role
+  labels:
+    environment: dev-test-only
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workflow-runner-binding
+  labels:
+    environment: dev-test-only
+subjects:
+  - kind: ServiceAccount
+    name: workflow-runner
+roleRef:
+  kind: Role
+  name: workflow-runner-role
+  apiGroup: rbac.authorization.k8s.io

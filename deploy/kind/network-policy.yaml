@@ -1,0 +1,47 @@
+# NetworkPolicy for cloud agents — restricts inter-agent traffic
+# Monitoring agent can reach diagnostic agent, not vice versa.
+# All agents can reach Ollama/LLM backend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: diagnostic-agent-ingress
+  labels:
+    environment: dev-test-only
+spec:
+  podSelector:
+    matchLabels:
+      app: diagnostic-agent
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: monitoring-agent
+        - podSelector:
+            matchLabels:
+              app: workflow-runner
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-agent-ingress
+  labels:
+    environment: dev-test-only
+spec:
+  podSelector:
+    matchLabels:
+      app: monitoring-agent
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: workflow-runner
+      ports:
+        - port: 8080
+          protocol: TCP

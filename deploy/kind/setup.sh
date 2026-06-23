@@ -56,6 +56,11 @@ echo "[kind] Loading images into cluster..."
 kind load docker-image diagnostic-agent:latest --name "$CLUSTER_NAME"
 kind load docker-image monitoring-agent:latest --name "$CLUSTER_NAME"
 
+# Apply RBAC and NetworkPolicy
+echo "[kind] Applying RBAC and NetworkPolicy..."
+kubectl apply -f "$SCRIPT_DIR/rbac.yaml"
+kubectl apply -f "$SCRIPT_DIR/network-policy.yaml"
+
 # Deploy Ollama LLM backend
 echo "[kind] Deploying Ollama LLM backend..."
 kubectl apply -f "$SCRIPT_DIR/ollama.yaml"
