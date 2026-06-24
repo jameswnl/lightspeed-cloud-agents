@@ -26,14 +26,21 @@ class PodmanSpawner(AgentSpawner):
         network: Podman network for spawned containers.
     """
 
-    def __init__(self, network: str = "cloud-agents", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        network: str = "cloud-agents",
+        volume_mounts: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Initialize the Podman spawner.
 
         Args:
             network: Podman network name for container connectivity.
+            volume_mounts: Host path → container path mappings for agent config/tools.
         """
         super().__init__(**kwargs)
         self._network = network
+        self._volume_mounts = volume_mounts or {}
 
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
@@ -47,6 +54,8 @@ class PodmanSpawner(AgentSpawner):
 
         container_name = f"agent-{agent_name}"
 
+        volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
+
         with PodmanClient() as client:
             container = client.containers.run(
                 image=image,
@@ -54,11 +63,26 @@ class PodmanSpawner(AgentSpawner):
                 detach=True,
                 environment=env,
                 network=self._network,
+                volumes=volumes or None,
+                ports={"8080/tcp": None},
                 remove=False,
             )
 
-        logger.info("Spawned Podman container '%s'", container_name)
-        return f"http://{container_name}:8080"
+            container.reload()
+            port_bindings = container.ports or {}
+            host_port = None
+            for binding in port_bindings.get("8080/tcp", []):
+                host_port = binding.get("HostPort")
+                if host_port:
+                    break
+
+        if host_port:
+            endpoint = f"http://localhost:{host_port}"
+        else:
+            endpoint = f"http://{container_name}:8080"
+
+        logger.info("Spawned Podman container '%s' at %s", container_name, endpoint)
+        return endpoint
 
     async def _do_destroy(self, agent_name: str) -> None:
         """Stop and remove the Podman container."""
