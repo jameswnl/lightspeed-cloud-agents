@@ -119,6 +119,41 @@ class TestSharedDefinitionStore:
         assert "wf-2" in names
 
     @pytest.mark.asyncio
+    async def test_version_allocation_across_instances(self) -> None:
+        """Test that versions increment correctly across store instances."""
+        from agents.workflow.persistence import InMemoryPersistence
+        shared = InMemoryPersistence()
+
+        store_a = DefinitionStore(persistence=shared)
+        store_b = DefinitionStore(persistence=shared)
+
+        v1 = await store_a.save(_make_defn("ver-wf"))
+        assert v1.version == 1
+
+        v2 = await store_b.save(_make_defn("ver-wf"))
+        assert v2.version == 2
+
+    @pytest.mark.asyncio
+    async def test_get_version_across_instances(self) -> None:
+        """Test that get_version reads from shared persistence."""
+        from agents.workflow.persistence import InMemoryPersistence
+        shared = InMemoryPersistence()
+
+        store_a = DefinitionStore(persistence=shared)
+        store_b = DefinitionStore(persistence=shared)
+
+        await store_a.save(_make_defn("vget-wf"))
+        await store_a.save(_make_defn("vget-wf"))
+
+        v1 = await store_b.get_version("vget-wf", 1)
+        assert v1 is not None
+        assert v1.version == 1
+
+        v2 = await store_b.get_version("vget-wf", 2)
+        assert v2 is not None
+        assert v2.version == 2
+
+    @pytest.mark.asyncio
     async def test_delete_across_instances(self) -> None:
         """Test that deleting on one store is visible on another."""
         from agents.workflow.persistence import InMemoryPersistence

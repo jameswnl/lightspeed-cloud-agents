@@ -69,7 +69,16 @@ class DefinitionStore:
         """
         name = definition.metadata["name"]
         versions = self._versions.setdefault(name, [])
-        version = len(versions) + 1
+
+        if self._persistence:
+            states = await self._persistence.list_active()
+            existing_versions = [
+                s for s in states
+                if s.workflow_name == f"definition:{name}" and s.definition_snapshot
+            ]
+            version = len(existing_versions) + 1
+        else:
+            version = len(versions) + 1
 
         stored = StoredDefinition(
             name=name,
@@ -131,6 +140,12 @@ class DefinitionStore:
         Returns:
             StoredDefinition at that version, or None.
         """
+        if self._persistence:
+            state = await self._persistence.load(f"def:{name}:v{version}")
+            if state and state.definition_snapshot:
+                return StoredDefinition.model_validate(state.definition_snapshot)
+            return None
+
         versions = self._versions.get(name, [])
         if version < 1 or version > len(versions):
             return None
