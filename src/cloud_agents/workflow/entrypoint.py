@@ -8,6 +8,7 @@ Usage: uvicorn agents.workflow.entrypoint:app --host 0.0.0.0 --port 8080
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -107,11 +108,17 @@ def build_workflow_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        """Initialize persistence on startup."""
+        """Initialize persistence and start recovery poller on startup."""
         if hasattr(persistence, "initialize"):
             logger.info("Initializing persistence backend: %s", type(persistence).__name__)
             await persistence.initialize()
+
+        from agents.workflow.advancement import RecoveryPoller
+        poller = RecoveryPoller(persistence)
+        poller_task = asyncio.create_task(poller.start())
         yield
+        await poller.stop()
+        poller_task.cancel()
 
     spawner = _create_spawner()
     agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")

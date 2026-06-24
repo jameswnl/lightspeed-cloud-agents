@@ -21,7 +21,8 @@ class StepResult(BaseModel):
 
     step_name: str
     status: Literal[
-        "pending", "running", "completed", "failed", "skipped", "awaiting_approval"
+        "pending", "running", "completed", "failed", "skipped",
+        "awaiting_approval", "dispatched",
     ] = "pending"
     output: Optional[dict[str, Any]] = None
     error: Optional[str] = None
