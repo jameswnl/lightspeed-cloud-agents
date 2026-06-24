@@ -3,313 +3,305 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cloud Agents Framework — Architecture & Workflow Animation</title>
+<title>Cloud Agents — Diagnostic Workflow Animation</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; overflow-x: hidden; }
-h1 { text-align: center; padding: 24px 0 8px; font-size: 1.6em; color: #58a6ff; }
-h2 { text-align: center; padding: 8px 0 16px; font-size: 1em; color: #8b949e; font-weight: normal; }
-.scene { max-width: 1100px; margin: 0 auto; padding: 20px; }
-svg { width: 100%; height: auto; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; }
+h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #58a6ff; }
+h2 { text-align: center; padding: 4px 0 12px; font-size: 0.95em; color: #8b949e; font-weight: normal; }
+.scene { max-width: 1200px; margin: 0 auto; padding: 10px 20px; }
+svg { width: 100%; height: auto; display: block; }
 
-.comp { cursor: default; }
-.comp rect { rx: 8; ry: 8; stroke-width: 2; transition: filter 0.3s; }
-.comp:hover rect { filter: brightness(1.3); }
-.comp-label { font-size: 13px; font-weight: 600; fill: #f0f6fc; }
-.comp-desc { font-size: 10px; fill: #8b949e; }
+.comp rect { rx: 8; ry: 8; stroke-width: 2; transition: filter 0.3s, opacity 0.5s; }
+.comp:hover rect { filter: brightness(1.2); }
+.lbl { font-size: 12px; font-weight: 600; fill: #f0f6fc; }
+.desc { font-size: 9.5px; fill: #8b949e; }
+.mount { font-size: 9px; fill: #d2a8ff; font-family: 'SFMono-Regular', monospace; }
+.mount-hdr { font-size: 9.5px; fill: #a371f7; font-weight: 600; }
 
-.boundary { fill: none; stroke-dasharray: 8 4; stroke-width: 1.5; rx: 12; ry: 12; }
-.boundary-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
+.boundary { fill: none; stroke-dasharray: 7 4; stroke-width: 1.4; rx: 10; ry: 10; }
+.blbl { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
 
-.flow-line { stroke-dasharray: 6 4; stroke-width: 2; opacity: 0; }
-.flow-line.active { opacity: 1; animation: dash 0.6s linear infinite; }
+.flow { stroke-dasharray: 6 4; stroke-width: 2; opacity: 0; transition: opacity 0.3s; }
+.flow.on { opacity: 1; animation: dash 0.5s linear infinite; }
 @keyframes dash { to { stroke-dashoffset: -10; } }
 
-.step-box { fill: #161b22; stroke: #30363d; stroke-width: 1; rx: 6; ry: 6; }
-.step-text { font-size: 11px; fill: #c9d1d9; }
-.step-num { font-size: 12px; fill: #58a6ff; font-weight: 700; }
+@keyframes glow { 0%,100% { filter: drop-shadow(0 0 3px #238636); } 50% { filter: drop-shadow(0 0 10px #3fb950); } }
+.eph rect { animation: glow 1.4s ease-in-out infinite; }
 
-@keyframes glow { 0%,100% { filter: drop-shadow(0 0 4px #238636); } 50% { filter: drop-shadow(0 0 12px #3fb950); } }
-.ephemeral rect { animation: glow 1.5s ease-in-out infinite; }
+.step-bar { fill: #161b22; stroke: #30363d; stroke-width: 1; rx: 6; }
+.step-n { font-size: 12px; fill: #58a6ff; font-weight: 700; }
+.step-t { font-size: 11px; fill: #c9d1d9; }
 
-.controls { text-align: center; padding: 16px; }
-.controls button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 0 4px; transition: background 0.2s; }
+.controls { text-align: center; padding: 12px; }
+.controls button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 7px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; margin: 0 3px; }
 .controls button:hover { background: #30363d; }
-.controls button.primary { background: #238636; border-color: #238636; color: #fff; }
-.controls button.primary:hover { background: #2ea043; }
-.controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+.controls button.go { background: #238636; border-color: #238636; color: #fff; }
+.controls button.go:hover { background: #2ea043; }
+.controls button:disabled { opacity: 0.35; cursor: default; }
+#info { color: #8b949e; font-size: 12px; margin-left: 10px; }
 
-#log { max-width: 1100px; margin: 0 auto; padding: 0 20px 40px; }
-#log-content { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; font-family: 'SFMono-Regular', monospace; font-size: 12px; line-height: 1.8; max-height: 300px; overflow-y: auto; }
-.log-step { color: #58a6ff; }
-.log-data { color: #3fb950; }
-.log-warn { color: #d29922; }
+#log { max-width: 1200px; margin: 0 auto; padding: 0 20px 30px; }
+#lc { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; font-family: 'SFMono-Regular', monospace; font-size: 11.5px; line-height: 1.7; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+.ls { color: #58a6ff; } .ld { color: #3fb950; } .lw { color: #d29922; }
 </style>
 </head>
 <body>
-
-<h1>Cloud Agents Framework</h1>
-<h2>Architecture &amp; Workflow Animation</h2>
+<h1>Diagnostic Workflow — Step-by-Step</h1>
+<h2>diagnose → approve → fix → verify</h2>
 
 <div class="scene">
-<svg viewBox="0 0 1060 640" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke="#21262d" stroke-width="0.5"/></pattern>
-    <marker id="arrow" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/></marker>
-    <marker id="arrow-green" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/></marker>
-    <marker id="arrow-orange" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/></marker>
-  </defs>
-  <rect width="1060" height="640" fill="url(#grid)"/>
+<svg viewBox="0 0 1140 580" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0L0 0 0 20" fill="none" stroke="#21262d" stroke-width="0.5"/></pattern>
+  <marker id="a1" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#58a6ff"/></marker>
+  <marker id="a2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#3fb950"/></marker>
+  <marker id="a3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#d29922"/></marker>
+  <marker id="a4" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a371f7"/></marker>
+</defs>
+<rect width="1140" height="580" fill="url(#g)"/>
 
-  <!-- ====== DEPLOYMENT BOUNDARIES ====== -->
+<!-- ===== BOUNDARIES ===== -->
+<rect class="boundary" x="130" y="75" width="640" height="470" stroke="#30363d"/>
+<text x="148" y="93" class="blbl" fill="#484f58">K8s Cluster / Podman Host</text>
 
-  <!-- Server / Cluster boundary -->
-  <rect class="boundary" x="155" y="95" width="560" height="480" stroke="#30363d"/>
-  <text x="175" y="115" class="boundary-label" fill="#484f58">Server Deployment (K8s / Podman)</text>
+<rect class="boundary" x="145" y="108" width="200" height="420" stroke="#58a6ff" opacity="0.35"/>
+<text x="155" y="125" class="blbl" fill="#58a6ff" opacity="0.55">Platform Framework</text>
 
-  <!-- Platform framework boundary -->
-  <rect class="boundary" x="168" y="130" width="185" height="430" stroke="#58a6ff" opacity="0.4"/>
-  <text x="178" y="148" class="boundary-label" fill="#58a6ff" opacity="0.6">Platform Framework</text>
+<rect class="boundary" x="390" y="108" width="365" height="330" stroke="#238636" opacity="0.35"/>
+<text x="405" y="125" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pods (spawned per step)</text>
 
-  <!-- Ephemeral pods boundary -->
-  <rect class="boundary" x="420" y="155" width="280" height="310" stroke="#238636" opacity="0.4"/>
-  <text x="435" y="173" class="boundary-label" fill="#3fb950" opacity="0.6">Ephemeral Pods (per step)</text>
+<rect class="boundary" x="800" y="75" width="200" height="470" stroke="#a371f7" opacity="0.25"/>
+<text x="815" y="93" class="blbl" fill="#a371f7" opacity="0.45">External</text>
 
-  <!-- External boundary -->
-  <rect class="boundary" x="680" y="95" width="200" height="480" stroke="#a371f7" opacity="0.3"/>
-  <text x="695" y="115" class="boundary-label" fill="#a371f7" opacity="0.5">External Services</text>
+<!-- ===== STATIC COMPONENTS ===== -->
 
-  <!-- ====== COMPONENTS ====== -->
+<!-- User -->
+<g class="comp" id="c-user">
+  <rect x="15" y="220" width="90" height="50" fill="#1f2937" stroke="#6366f1"/>
+  <text x="60" y="243" text-anchor="middle" class="lbl">User</text>
+  <text x="60" y="258" text-anchor="middle" class="desc">API caller</text>
+</g>
 
-  <!-- User -->
-  <g class="comp" id="c-user">
-    <rect x="20" y="270" width="100" height="60" fill="#1f2937" stroke="#6366f1"/>
-    <text x="70" y="295" text-anchor="middle" class="comp-label">User / API</text>
-    <text x="70" y="310" text-anchor="middle" class="comp-desc">POST /v1/workflows/run</text>
-  </g>
+<!-- Workflow Runner -->
+<g class="comp" id="c-wf">
+  <rect x="155" y="195" width="180" height="100" fill="#1c2333" stroke="#58a6ff"/>
+  <text x="245" y="220" text-anchor="middle" class="lbl">Workflow Runner</text>
+  <text x="245" y="236" text-anchor="middle" class="desc">WorkflowExecutor</text>
+  <text x="245" y="250" text-anchor="middle" class="desc">workflow.yaml → steps</text>
+  <text x="245" y="264" text-anchor="middle" class="desc">conditions, retry, events</text>
+  <text x="245" y="278" text-anchor="middle" class="desc">RemoteAgentClient</text>
+</g>
 
-  <!-- Workflow Runner -->
-  <g class="comp" id="c-workflow">
-    <rect x="180" y="230" width="160" height="100" fill="#1c2333" stroke="#58a6ff"/>
-    <text x="260" y="260" text-anchor="middle" class="comp-label">Workflow Runner</text>
-    <text x="260" y="278" text-anchor="middle" class="comp-desc">WorkflowExecutor</text>
-    <text x="260" y="292" text-anchor="middle" class="comp-desc">Reads workflow.yaml</text>
-    <text x="260" y="306" text-anchor="middle" class="comp-desc">Orchestrates steps</text>
-    <text x="260" y="320" text-anchor="middle" class="comp-desc">Emits WorkflowEvents</text>
-  </g>
+<!-- Spawner -->
+<g class="comp" id="c-sp">
+  <rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/>
+  <text x="245" y="365" text-anchor="middle" class="lbl">Spawner</text>
+  <text x="245" y="381" text-anchor="middle" class="desc">K8s Jobs / Podman containers</text>
+</g>
 
-  <!-- Spawner -->
-  <g class="comp" id="c-spawner">
-    <rect x="180" y="390" width="160" height="70" fill="#1c2333" stroke="#d29922"/>
-    <text x="260" y="418" text-anchor="middle" class="comp-label">Spawner</text>
-    <text x="260" y="435" text-anchor="middle" class="comp-desc">KubernetesSpawner</text>
-    <text x="260" y="448" text-anchor="middle" class="comp-desc">PodmanSpawner</text>
-  </g>
+<!-- Registry -->
+<g class="comp" id="c-reg">
+  <rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/>
+  <text x="245" y="155" text-anchor="middle" class="lbl">Agent Registry</text>
+  <text x="245" y="168" text-anchor="middle" class="desc">registry.yaml</text>
+</g>
 
-  <!-- Agent Registry -->
-  <g class="comp" id="c-registry">
-    <rect x="180" y="160" width="160" height="45" fill="#1c2333" stroke="#8b949e"/>
-    <text x="260" y="180" text-anchor="middle" class="comp-label">Agent Registry</text>
-    <text x="260" y="196" text-anchor="middle" class="comp-desc">name → endpoint mapping</text>
-  </g>
+<!-- Persistence -->
+<g class="comp" id="c-db">
+  <rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/>
+  <text x="245" y="470" text-anchor="middle" class="lbl">Persistence</text>
+  <text x="245" y="484" text-anchor="middle" class="desc">PostgreSQL / InMemory</text>
+</g>
 
-  <!-- Persistence -->
-  <g class="comp" id="c-persist">
-    <rect x="180" y="510" width="160" height="45" fill="#1c2333" stroke="#79c0ff"/>
-    <text x="260" y="530" text-anchor="middle" class="comp-label">Persistence</text>
-    <text x="260" y="546" text-anchor="middle" class="comp-desc">PostgreSQL / InMemory</text>
-  </g>
+<!-- Approval -->
+<g class="comp" id="c-appr">
+  <rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/>
+  <text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text>
+  <text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text>
+</g>
 
-  <!-- Ephemeral Pod 1 (diagnostic) -->
-  <g class="comp ephemeral" id="c-diag-pod" style="opacity:0">
-    <rect x="440" y="190" width="180" height="120" fill="#0d2818" stroke="#238636"/>
-    <text x="530" y="215" text-anchor="middle" class="comp-label" fill="#3fb950">Ephemeral Pod</text>
-    <text x="530" y="232" text-anchor="middle" class="comp-desc">diagnostic-agent</text>
-    <text x="530" y="250" text-anchor="middle" class="comp-desc" fill="#8b949e">── Agent Runtime ──</text>
-    <text x="530" y="266" text-anchor="middle" class="comp-desc">Pydantic AI Agent</text>
-    <text x="530" y="280" text-anchor="middle" class="comp-desc">Tools: list_hosts, check_host</text>
-    <text x="530" y="294" text-anchor="middle" class="comp-desc">run_remediation</text>
-  </g>
+<!-- LLM -->
+<g class="comp" id="c-llm">
+  <rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/>
+  <text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text>
+  <text x="900" y="236" text-anchor="middle" class="desc">OpenAI gpt-4</text>
+  <text x="900" y="250" text-anchor="middle" class="desc">pydantic-ai tool calling</text>
+</g>
 
-  <!-- Ephemeral Pod 2 (monitoring) -->
-  <g class="comp ephemeral" id="c-mon-pod" style="opacity:0">
-    <rect x="440" y="340" width="180" height="100" fill="#0d2818" stroke="#238636"/>
-    <text x="530" y="365" text-anchor="middle" class="comp-label" fill="#3fb950">Ephemeral Pod</text>
-    <text x="530" y="382" text-anchor="middle" class="comp-desc">monitoring-agent</text>
-    <text x="530" y="400" text-anchor="middle" class="comp-desc" fill="#8b949e">── Agent Runtime ──</text>
-    <text x="530" y="416" text-anchor="middle" class="comp-desc">Tools: get_cluster_summary</text>
-    <text x="530" y="430" text-anchor="middle" class="comp-desc">Output: MonitoringResult</text>
-  </g>
+<!-- Observability -->
+<g class="comp" id="c-obs">
+  <rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/>
+  <text x="900" y="333" text-anchor="middle" class="lbl">Observability</text>
+  <text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text>
+</g>
 
-  <!-- Approval Channel -->
-  <g class="comp" id="c-approval">
-    <rect x="440" y="500" width="180" height="50" fill="#2d2000" stroke="#d29922"/>
-    <text x="530" y="522" text-anchor="middle" class="comp-label" fill="#e3b341">Approval Channel</text>
-    <text x="530" y="540" text-anchor="middle" class="comp-desc">Slack / Webhook / Conversational</text>
-  </g>
+<!-- Human -->
+<g class="comp" id="c-human">
+  <rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/>
+  <text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text>
+  <text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text>
+</g>
 
-  <!-- LLM -->
-  <g class="comp" id="c-llm">
-    <rect x="720" y="230" width="130" height="70" fill="#2d1b4e" stroke="#a371f7"/>
-    <text x="785" y="260" text-anchor="middle" class="comp-label" fill="#d2a8ff">LLM (OpenAI)</text>
-    <text x="785" y="278" text-anchor="middle" class="comp-desc">gpt-4 / pydantic-ai</text>
-    <text x="785" y="292" text-anchor="middle" class="comp-desc">Tool calling + structured output</text>
-  </g>
+<!-- ===== EPHEMERAL PODS (hidden initially) ===== -->
 
-  <!-- Metrics -->
-  <g class="comp" id="c-metrics">
-    <rect x="720" y="350" width="130" height="55" fill="#1c2333" stroke="#8b949e"/>
-    <text x="785" y="373" text-anchor="middle" class="comp-label">Observability</text>
-    <text x="785" y="391" text-anchor="middle" class="comp-desc">Prometheus + OTel</text>
-  </g>
+<!-- Diagnostic pod (diagnose step) -->
+<g class="comp eph" id="pod-diag" style="opacity:0">
+  <rect x="410" y="135" width="230" height="160" fill="#0d2818" stroke="#238636"/>
+  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-a1b2</text>
+  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (generic image) ──</text>
+  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent + output validator</text>
+  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="210" class="mount-hdr">Mounts:</text>
+  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="238" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
+  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <text x="435" y="266" class="mount">/app/skills/ ← Volume (optional)</text>
+  <line x1="420" y1="275" x2="630" y2="275" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="288" class="desc">Tools: list_hosts, check_host, run_remediation</text>
+</g>
 
-  <!-- Human -->
-  <g class="comp" id="c-human">
-    <rect x="720" y="460" width="130" height="55" fill="#1f2937" stroke="#6366f1"/>
-    <text x="785" y="483" text-anchor="middle" class="comp-label">Human Approver</text>
-    <text x="785" y="501" text-anchor="middle" class="comp-desc">SRE / Operator</text>
-  </g>
+<!-- Diagnostic pod (fix step — same agent, new pod) -->
+<g class="comp eph" id="pod-fix" style="opacity:0">
+  <rect x="410" y="135" width="230" height="160" fill="#0d2818" stroke="#238636"/>
+  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-d4e5</text>
+  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (same image) ──</text>
+  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent + output validator</text>
+  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="210" class="mount-hdr">Mounts:</text>
+  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="238" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
+  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <text x="435" y="266" class="mount">/app/skills/ ← Volume (optional)</text>
+  <line x1="420" y1="275" x2="630" y2="275" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="288" class="desc">Tools: run_remediation (fix step)</text>
+</g>
 
-  <!-- ====== FLOW LINES ====== -->
-  <line id="f-user-wf" class="flow-line" x1="120" y1="300" x2="175" y2="280" stroke="#58a6ff" marker-end="url(#arrow)"/>
-  <line id="f-wf-spawner" class="flow-line" x1="260" y1="335" x2="260" y2="385" stroke="#d29922" marker-end="url(#arrow-orange)"/>
-  <line id="f-spawner-diag" class="flow-line" x1="340" y1="410" x2="435" y2="270" stroke="#3fb950" marker-end="url(#arrow-green)"/>
-  <line id="f-spawner-mon" class="flow-line" x1="340" y1="425" x2="435" y2="390" stroke="#3fb950" marker-end="url(#arrow-green)"/>
-  <line id="f-diag-llm" class="flow-line" x1="620" y1="250" x2="715" y2="260" stroke="#a371f7" marker-end="url(#arrow)"/>
-  <line id="f-mon-llm" class="flow-line" x1="620" y1="380" x2="715" y2="280" stroke="#a371f7" marker-end="url(#arrow)"/>
-  <line id="f-diag-wf" class="flow-line" x1="440" y1="260" x2="345" y2="270" stroke="#3fb950" marker-end="url(#arrow-green)"/>
-  <line id="f-mon-wf" class="flow-line" x1="440" y1="390" x2="345" y2="300" stroke="#3fb950" marker-end="url(#arrow-green)"/>
-  <line id="f-wf-persist" class="flow-line" x1="260" y1="335" x2="260" y2="505" stroke="#79c0ff" marker-end="url(#arrow)"/>
-  <line id="f-wf-approval" class="flow-line" x1="340" y1="310" x2="435" y2="520" stroke="#d29922" marker-end="url(#arrow-orange)"/>
-  <line id="f-approval-human" class="flow-line" x1="620" y1="525" x2="715" y2="487" stroke="#d29922" marker-end="url(#arrow-orange)"/>
-  <line id="f-human-wf" class="flow-line" x1="720" y1="490" x2="345" y2="310" stroke="#3fb950" marker-end="url(#arrow-green)"/>
-  <line id="f-wf-registry" class="flow-line" x1="260" y1="230" x2="260" y2="210" stroke="#8b949e" marker-end="url(#arrow)"/>
+<!-- Monitoring pod (verify step) -->
+<g class="comp eph" id="pod-mon" style="opacity:0">
+  <rect x="410" y="135" width="230" height="145" fill="#0d2818" stroke="#238636"/>
+  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">monitoring-agent-g7h8</text>
+  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (same image) ──</text>
+  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent</text>
+  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="210" class="mount-hdr">Mounts:</text>
+  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="238" class="mount">/app/tools/monitoring_tools.py ← ConfigMap</text>
+  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <line x1="420" y1="261" x2="630" y2="261" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="274" class="desc">Tools: get_cluster_summary (read-only)</text>
+</g>
 
-  <!-- ====== STEP INDICATOR ====== -->
-  <g id="step-indicator" style="opacity:0">
-    <rect class="step-box" x="20" y="30" width="1020" height="50"/>
-    <text id="step-num" class="step-num" x="40" y="60"></text>
-    <text id="step-text" class="step-text" x="80" y="60"></text>
-  </g>
+<!-- ===== FLOW LINES ===== -->
+<line id="f1" class="flow" x1="105" y1="245" x2="150" y2="245" stroke="#58a6ff" marker-end="url(#a1)"/>
+<line id="f2" class="flow" x1="245" y1="195" x2="245" y2="178" stroke="#8b949e" marker-end="url(#a1)"/>
+<line id="f3" class="flow" x1="245" y1="300" x2="245" y2="335" stroke="#d29922" marker-end="url(#a3)"/>
+<line id="f4" class="flow" x1="335" y1="360" x2="405" y2="240" stroke="#3fb950" marker-end="url(#a2)"/>
+<line id="f5" class="flow" x1="640" y1="220" x2="825" y2="220" stroke="#a371f7" marker-end="url(#a4)"/>
+<line id="f6" class="flow" x1="410" y1="240" x2="340" y2="250" stroke="#3fb950" marker-end="url(#a2)"/>
+<line id="f7" class="flow" x1="245" y1="300" x2="245" y2="445" stroke="#79c0ff" marker-end="url(#a1)"/>
+<line id="f8" class="flow" x1="335" y1="270" x2="415" y2="490" stroke="#d29922" marker-end="url(#a3)"/>
+<line id="f9" class="flow" x1="600" y1="492" x2="825" y2="445" stroke="#d29922" marker-end="url(#a3)"/>
+<line id="f10" class="flow" x1="830" y1="450" x2="340" y2="270" stroke="#3fb950" marker-end="url(#a2)"/>
+
+<!-- Step bar -->
+<g id="sbar" style="opacity:0">
+  <rect class="step-bar" x="15" y="20" width="1110" height="42"/>
+  <text id="sn" class="step-n" x="30" y="47"></text>
+  <text id="st" class="step-t" x="75" y="47"></text>
+</g>
 </svg>
 </div>
 
 <div class="controls">
-  <button class="primary" id="btn-play" onclick="startAutoPlay()">Auto Play</button>
-  <button class="primary" id="btn-next" onclick="nextStep()">Next Step &rarr;</button>
-  <button id="btn-reset" onclick="resetAnimation()">Reset</button>
-  <span id="mode-label" style="color:#8b949e; font-size:13px; margin-left:12px;"></span>
+  <button class="go" id="bp" onclick="autoPlay()">Auto Play</button>
+  <button class="go" id="bn" onclick="next()">Next Step &rarr;</button>
+  <button onclick="reset()">Reset</button>
+  <span id="info"></span>
 </div>
 
-<div id="log">
-  <div id="log-content"></div>
-</div>
+<div id="log"><div id="lc"></div></div>
 
 <script>
-const steps = [
-  { num: '1/9', text: 'User triggers workflow: POST /v1/workflows/run → Workflow Runner', flows: ['f-user-wf'], duration: 2000, log: '<span class="log-step">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}' },
-  { num: '2/9', text: 'Executor reads workflow.yaml, resolves agents from registry', flows: ['f-wf-registry'], duration: 1500, log: '<span class="log-step">→ Load workflow</span> steps: [diagnose, approve, fix, verify]' },
-  { num: '3/9', text: 'Step 1 (diagnose): Spawner creates ephemeral diagnostic-agent pod', flows: ['f-wf-spawner', 'f-spawner-diag'], show: ['c-diag-pod'], duration: 2500, log: '<span class="log-data">↑ Spawned</span> ephemeral pod: agent-diagnostic-agent-a1b2c3' },
-  { num: '4/9', text: 'Diagnostic agent calls LLM → tools (list_hosts, check_host, run_remediation) → DiagnosticReport', flows: ['f-diag-llm'], duration: 3000, log: '<span class="log-data">⚙ Tools called:</span> list_hosts → check_host(web-02) → run_remediation(web-02, rollback_deploy:frontend)\n<span class="log-data">← DiagnosticReport</span> {cluster_healthy: true, actions_taken: 1, confidence: "high"}' },
-  { num: '5/9', text: 'DiagnosticReport returned → ephemeral pod DESTROYED', flows: ['f-diag-wf'], hide: ['c-diag-pod'], duration: 2000, log: '<span class="log-data">↓ Destroyed</span> ephemeral pod: agent-diagnostic-agent-a1b2c3\n<span class="log-step">✓ Step "diagnose" completed</span>' },
-  { num: '6/9', text: 'Step 2 (approve): Workflow PAUSES → notification sent to Slack → human reviews + approves', flows: ['f-wf-approval', 'f-approval-human', 'f-human-wf'], duration: 3500, log: '<span class="log-warn">⏸ Workflow paused</span> at step "approve-fix"\n<span class="log-warn">→ Slack notification</span> sent to #sre-approvals\n<span class="log-data">← Human approved</span> by sre-lead@redhat.com (took 45s)' },
-  { num: '7/9', text: 'Step 3 (fix): Spawner creates ephemeral pod → agent remediates', flows: ['f-wf-spawner', 'f-spawner-diag'], show: ['c-diag-pod'], duration: 2500, log: '<span class="log-data">↑ Spawned</span> ephemeral pod: agent-diagnostic-agent-d4e5f6\n<span class="log-data">⚙ Tools:</span> run_remediation(web-02, restart_service:app)' },
-  { num: '7b', text: 'Fix result returned → ephemeral pod DESTROYED', flows: ['f-diag-wf'], hide: ['c-diag-pod'], duration: 1500, log: '<span class="log-data">↓ Destroyed</span> ephemeral pod\n<span class="log-step">✓ Step "fix" completed</span>' },
-  { num: '8/9', text: 'Step 4 (verify): Monitoring agent checks cluster health independently', flows: ['f-wf-spawner', 'f-spawner-mon'], show: ['c-mon-pod'], duration: 2500, log: '<span class="log-data">↑ Spawned</span> ephemeral pod: agent-monitoring-agent-g7h8i9\n<span class="log-data">⚙ Tools:</span> get_cluster_summary → all hosts healthy' },
-  { num: '8b', text: 'MonitoringResult returned → ephemeral pod DESTROYED', flows: ['f-mon-wf', 'f-mon-llm'], hide: ['c-mon-pod'], duration: 1500, log: '<span class="log-data">← MonitoringResult</span> {cluster_healthy: true, alerts: []}\n<span class="log-data">↓ Destroyed</span> ephemeral pod\n<span class="log-step">✓ Step "verify" completed</span>' },
-  { num: '9/9', text: 'Workflow COMPLETE → state persisted to PostgreSQL', flows: ['f-wf-persist'], duration: 2000, log: '<span class="log-step">✓ Workflow "diagnose-and-fix" completed</span>\n<span class="log-data">→ State persisted</span> to PostgreSQL (workflow_id: 57173706...)' },
+const S = [
+  {n:'1/7', t:'User triggers workflow: POST /v1/workflows/run',
+   on:['f1'], log:'<span class="ls">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}'},
+
+  {n:'2/7', t:'Executor loads workflow.yaml, resolves agents from registry',
+   on:['f2'], log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n<span class="ls">→ Registry lookup</span> diagnostic-agent, monitoring-agent'},
+
+  {n:'3/7', t:'Step "diagnose": Spawner creates ephemeral pod with mounted config + tools → agent calls LLM + tools',
+   on:['f3','f4','f5'], show:['pod-diag'],
+   log:'<span class="ld">↑ spawn</span> K8s Job: agent-diagnostic-agent-a1b2\n  image: agent-runtime:latest (generic)\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → run_remediation("web-02","rollback_deploy:frontend","bad deploy")\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 fixed", cluster_healthy:true, confidence:"high"}'},
+
+  {n:'4/7', t:'DiagnosticReport returned to executor → ephemeral pod DESTROYED',
+   on:['f6'], hide:['pod-diag'],
+   log:'<span class="ld">↓ destroy</span> agent-diagnostic-agent-a1b2 — Job + Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
+
+  {n:'5/7', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
+   on:['f8','f9','f10'],
+   log:'<span class="lw">⏸ Workflow paused</span> at step "approve-fix"\n<span class="lw">→ Slack #sre-approvals:</span> "Review remediation: rolled back frontend on web-02"\n  Approver sees: DiagnosticReport, risk_level, rollback_plan\n<span class="ld">← Approved</span> by sre-lead@redhat.com (response time: 45s)'},
+
+  {n:'6/7', t:'Step "fix": NEW ephemeral pod spawned (same image, fresh state) → agent remediates → pod DESTROYED',
+   on:['f3','f4','f5'], show:['pod-fix'],
+   log:'<span class="ld">↑ spawn</span> K8s Job: agent-diagnostic-agent-d4e5 (new pod, clean state)\n  mounts: same agent.yaml + diagnostic_tools.py\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","restart_service:app","post-rollback cleanup")\n<span class="ld">← DiagnosticReport</span> {actions_taken:1, cluster_healthy:true}'},
+
+  {n:'6b', t:'Fix result returned → ephemeral pod DESTROYED',
+   on:['f6'], hide:['pod-fix'],
+   log:'<span class="ld">↓ destroy</span> agent-diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
+
+  {n:'7/7', t:'Step "verify": Monitoring agent (different tools) checks cluster independently → workflow COMPLETE',
+   on:['f3','f4','f5'], show:['pod-mon'],
+   log:'<span class="ld">↑ spawn</span> K8s Job: agent-monitoring-agent-g7h8\n  mounts: monitoring-agent.yaml + monitoring_tools.py (different tools!)\n<span class="ld">⚙ LLM → tools:</span> get_cluster_summary() → all 4 hosts healthy\n<span class="ld">← MonitoringResult</span> {cluster_healthy:true, alerts:[]}'},
+
+  {n:'7b', t:'Verification passed → ephemeral pod DESTROYED → state persisted',
+   on:['f6','f7'], hide:['pod-mon'],
+   log:'<span class="ld">↓ destroy</span> agent-monitoring-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>\n<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL'},
 ];
 
-let animTimer = null;
-let currentIdx = 0;
-let mode = 'idle'; // idle | auto | manual
+let ci=0, tm=null, mode='idle';
 
-function clearFlows() {
-  document.querySelectorAll('.flow-line').forEach(l => l.classList.remove('active'));
+function off(){document.querySelectorAll('.flow').forEach(l=>l.classList.remove('on'));}
+
+function step(i){
+  if(i>=S.length){off();$('info').textContent='Done';$('bn').disabled=true;return;}
+  const s=S[i];
+  $('sbar').style.opacity=1;
+  $('sn').textContent='Step '+s.n;
+  $('st').textContent=s.t;
+  off();
+  (s.on||[]).forEach(id=>{const e=$(id);if(e)e.classList.add('on');});
+  (s.show||[]).forEach(id=>{const e=$(id);if(e){e.style.opacity=1;e.style.transition='opacity 0.4s';}});
+  (s.hide||[]).forEach(id=>{const e=$(id);if(e){e.style.opacity=0;e.style.transition='opacity 0.6s';}});
+  const lc=$('lc'); lc.innerHTML+=s.log+'\n'; lc.scrollTop=lc.scrollHeight;
 }
 
-function showStep(idx) {
-  if (idx >= steps.length) {
-    clearFlows();
-    document.getElementById('mode-label').textContent = 'Done';
-    document.getElementById('btn-next').disabled = true;
-    return;
-  }
-  const s = steps[idx];
-  const ind = document.getElementById('step-indicator');
-  ind.style.opacity = 1;
-  document.getElementById('step-num').textContent = `Step ${s.num}`;
-  document.getElementById('step-text').textContent = s.text;
+function $(id){return document.getElementById(id);}
 
-  clearFlows();
-  (s.flows || []).forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.classList.add('active');
-  });
-  (s.show || []).forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.style.opacity = 1; el.style.transition = 'opacity 0.5s'; }
-  });
-  (s.hide || []).forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.style.opacity = 0; el.style.transition = 'opacity 0.8s'; }
-  });
-
-  const logEl = document.getElementById('log-content');
-  logEl.innerHTML += s.log + '\n';
-  logEl.scrollTop = logEl.scrollHeight;
+function autoPlay(){
+  reset(); mode='auto'; ci=0;
+  $('info').textContent='Auto playing...'; $('bn').disabled=true;
+  (function go(){
+    if(ci>=S.length||mode!=='auto'){if(ci>=S.length){off();$('info').textContent='Done';}return;}
+    step(ci); ci++;
+    tm=setTimeout(go, ci<=2?2000:ci===5?3500:2500);
+  })();
 }
 
-function startAutoPlay() {
-  resetAnimation();
-  mode = 'auto';
-  currentIdx = 0;
-  document.getElementById('mode-label').textContent = 'Auto playing...';
-  document.getElementById('btn-next').disabled = true;
-  function next() {
-    if (currentIdx >= steps.length || mode !== 'auto') {
-      if (currentIdx >= steps.length) {
-        clearFlows();
-        document.getElementById('mode-label').textContent = 'Done';
-      }
-      return;
-    }
-    showStep(currentIdx);
-    currentIdx++;
-    animTimer = setTimeout(next, steps[currentIdx - 1].duration);
-  }
-  next();
+function next(){
+  if(mode==='auto')return;
+  if(mode==='idle'){reset();mode='manual';}
+  if(ci>=S.length)return;
+  step(ci); ci++;
+  $('info').textContent=ci>=S.length?'Done':`${ci}/${S.length} — click Next Step`;
+  if(ci>=S.length)$('bn').disabled=true;
 }
 
-function nextStep() {
-  if (mode === 'auto') return;
-  if (mode === 'idle') {
-    resetAnimation();
-    mode = 'manual';
-    document.getElementById('mode-label').textContent = 'Click "Next Step" to advance';
-  }
-  if (currentIdx >= steps.length) return;
-  showStep(currentIdx);
-  currentIdx++;
-  if (currentIdx >= steps.length) {
-    document.getElementById('mode-label').textContent = 'Done';
-    document.getElementById('btn-next').disabled = true;
-  } else {
-    document.getElementById('mode-label').textContent = `Step ${currentIdx + 1} of ${steps.length} — click "Next Step" to continue`;
-  }
-}
-
-function resetAnimation() {
-  if (animTimer) clearTimeout(animTimer);
-  mode = 'idle';
-  currentIdx = 0;
-  clearFlows();
-  document.getElementById('step-indicator').style.opacity = 0;
-  document.getElementById('c-diag-pod').style.opacity = 0;
-  document.getElementById('c-mon-pod').style.opacity = 0;
-  document.getElementById('log-content').innerHTML = '';
-  document.getElementById('mode-label').textContent = '';
-  document.getElementById('btn-next').disabled = false;
+function reset(){
+  if(tm)clearTimeout(tm); mode='idle'; ci=0; off();
+  $('sbar').style.opacity=0;
+  ['pod-diag','pod-fix','pod-mon'].forEach(id=>{$(id).style.opacity=0;});
+  $('lc').innerHTML=''; $('info').textContent=''; $('bn').disabled=false;
 }
 </script>
 </body>
