@@ -2,9 +2,9 @@
 
 ## Context
 
-The Agentic Operator vs Cloud Agents comparison review (`kubeclaw-vs-cloudagents.md`) identified **3 critical + 2 high security issues** and **6 robustness patterns** from the operator that should be adopted. This phase addresses all of them, grouped by priority.
+The Agentic Operator vs Cloud Agents comparison review (`kubeclaw-vs-cloudagents.md`) identified **3 critical + 2 high security issues** and **6 robustness patterns** from the operator that should be adopted. This phase addresses the 3 critical issues and 1 high issue (agent auth). One high-severity item (tool origin validation) is **intentionally deferred** — agent YAML is authored by platform teams, not end users, and tool loading is equivalent to Python's `import`. An optional allowlist is captured in the backlog.
 
-The reviewer validated Cloud Agents as the right foundation but these issues must be fixed before production deployment.
+The reviewer validated Cloud Agents as the right foundation but the critical security issues must be fixed before production deployment.
 
 ---
 
@@ -35,8 +35,9 @@ The reviewer validated Cloud Agents as the right foundation but these issues mus
 **Fix:**
 - Add `risk_level: Optional[Literal["low", "medium", "high", "critical"]]` to `WorkflowStepSpec`
 - When `risk_level` is set explicitly, use it directly — skip keyword classification
-- When not set, fall back to keyword classification with a logged warning: "No explicit risk_level — using keyword inference"
-- Document: production workflows should always set explicit risk_level
+- When not set, **fail closed**: treat the step as `"high"` risk (requires manual approval). Log a warning: "No explicit risk_level — defaulting to high (manual approval required)"
+- Keyword-based classification removed from the production approval path. Kept only as a debug utility function, never used for actual approval decisions
+- Document: production workflows must set explicit risk_level on all agent steps
 
 **Files:**
 - Modify: `src/agents/workflow/definition.py` — add `risk_level` field
@@ -62,7 +63,10 @@ The reviewer validated Cloud Agents as the right foundation but these issues mus
 - Modify: spawner — include `AGENT_API_TOKEN` in env (Secret ref for K8s)
 - Update: tests
 
-**Token type:** Shared bearer token read from `AGENT_API_TOKEN` env var on the workflow runner. The same token is passed to spawned pods and used by `RemoteAgentClient`. This is simpler than per-workflow or SA tokens. SA token injection (the operator pattern) is a future enhancement for K8s deployments. Shared secret is acceptable because the trust boundary is runner ↔ agent pods within the same cluster/network.
+**Token model (deployment-specific):**
+- **Podman:** Shared bearer token from `AGENT_API_TOKEN` env var. Acceptable because Podman deployments have a single trust domain (host-level network).
+- **Kubernetes (production):** Projected ServiceAccount tokens. Each spawned Job gets a short-lived, audience-scoped SA token via `projected` volume. The agent runtime validates the token against the K8s TokenReview API. This provides per-pod identity, not a shared secret.
+- The spawner interface accepts an `auth_mode: Literal["shared_secret", "sa_token"]` config to select the model per deployment target.
 
 ---
 
@@ -98,17 +102,21 @@ The reviewer validated Cloud Agents as the right foundation but these issues mus
 
 ---
 
-### Task 5: Owner references on spawned Jobs
+### Task 5: Explicit cleanup via TTL + recovery poller (no owner references)
 
 **Problem:** Spawned K8s Jobs are not tied to the workflow runner. If the runner crashes, orphaned Jobs persist.
 
+**Design decision:** Do NOT use `ownerReferences`. Owner refs to the runner Pod would GC in-flight Jobs during normal rollouts. Owner refs to the Deployment don't provide crash-cleanup semantics. The stateless multi-replica model (Phase 6) means no single Pod owns a step.
+
 **Fix:**
-- Set `ownerReferences` on spawned Jobs pointing to the workflow runner Deployment/Pod
-- K8s garbage collection automatically cleans up Jobs when the owner is deleted
-- Pass runner pod name via `HOSTNAME` env var (standard in K8s)
+- K8s Jobs already have `ttlSecondsAfterFinished: 300` — completed Jobs self-clean after 5 minutes
+- The recovery poller (Phase 6) detects orphaned steps (dispatched past timeout) and marks them failed
+- Add `spawner_labels` to spawned Jobs: `workflow-id`, `step-name`, `created-at` for visibility
+- Add a cleanup command: `kubectl delete jobs -l spawned-by=workflow-runner --field-selector status.successful=0` for manual orphan cleanup
 
 **Files:**
-- Modify: `src/agents/spawner/kubernetes_spawner.py` — set ownerReferences on Jobs
+- Modify: `src/agents/spawner/kubernetes_spawner.py` — add workflow labels to Jobs
+- Document: cleanup procedures in ARCHITECTURE.md
 
 ---
 
