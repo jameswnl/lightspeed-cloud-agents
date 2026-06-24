@@ -42,15 +42,23 @@ async def save_with_version(
     Raises:
         StaleStateError: If another replica already advanced this workflow.
     """
-    current = await persistence.load(state.workflow_id)
-    if current and current.version != expected_version:
-        raise StaleStateError(
-            f"Workflow {state.workflow_id} version mismatch: "
-            f"expected {expected_version}, got {current.version}"
-        )
-    state.version = expected_version + 1
     state.updated_at = datetime.now(timezone.utc).isoformat()
-    await persistence.save(state)
+    if hasattr(persistence, "save_cas"):
+        success = await persistence.save_cas(state, expected_version)
+        if not success:
+            raise StaleStateError(
+                f"Workflow {state.workflow_id} version mismatch: "
+                f"expected {expected_version}"
+            )
+    else:
+        current = await persistence.load(state.workflow_id)
+        if current and current.version != expected_version:
+            raise StaleStateError(
+                f"Workflow {state.workflow_id} version mismatch: "
+                f"expected {expected_version}, got {current.version}"
+            )
+        state.version = expected_version + 1
+        await persistence.save(state)
 
 
 class RecoveryPoller:

@@ -133,10 +133,60 @@ def build_workflow_app(
     return create_workflow_app(executor, workflow_name, lifespan=_lifespan)
 
 
+def build_stateless_app() -> "fastapi.FastAPI":
+    """Build a stateless workflow runner that starts with an empty catalog.
+
+    Definitions are submitted via the API. No workflow.yaml required.
+    """
+    registry = _load_registry(REGISTRY_PATH) if Path(REGISTRY_PATH).exists() else AgentRegistry({})
+    init_tracing("workflow-runner")
+    persistence = _create_persistence()
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        if hasattr(persistence, "initialize"):
+            await persistence.initialize()
+        from agents.workflow.advancement import RecoveryPoller
+        poller = RecoveryPoller(persistence)
+        poller_task = asyncio.create_task(poller.start())
+        yield
+        await poller.stop()
+        poller_task.cancel()
+
+    from agents.workflow.definition import WorkflowDefinition, WorkflowSpec, WorkflowStepSpec
+    placeholder_defn = WorkflowDefinition(
+        apiVersion="v1", kind="AgentWorkflow",
+        metadata={"name": "placeholder"},
+        spec=WorkflowSpec(steps=[
+            WorkflowStepSpec(name="noop", type="agent", agent="none",
+                             prompt="", output_key="noop", spawn="pre-deployed"),
+        ]),
+    )
+
+    spawner = _create_spawner()
+    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
+
+    executor = WorkflowExecutor(
+        placeholder_defn, registry,
+        persistence=persistence,
+        approval_policy=ApprovalPolicy(),
+        spawner=spawner,
+        agent_image=agent_image,
+    )
+    return create_workflow_app(executor, "workflow-runner", lifespan=_lifespan)
+
+
 app = None
 if Path(WORKFLOW_PATH).exists():
     try:
         app = build_workflow_app()
     except Exception as exc:
         logger.error("Failed to build workflow app: %s", exc)
+        raise
+else:
+    try:
+        app = build_stateless_app()
+        logger.info("Started stateless workflow runner (no workflow.yaml)")
+    except Exception as exc:
+        logger.error("Failed to build stateless workflow app: %s", exc)
         raise

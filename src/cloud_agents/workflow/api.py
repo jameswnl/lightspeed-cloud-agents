@@ -58,14 +58,30 @@ def create_workflow_app(
     async def run_workflow(request: Request) -> JSONResponse:
         """Start a new workflow execution.
 
-        Runs the workflow inline. For workflows with approval steps,
-        returns when the workflow pauses. For fully automatic workflows,
-        returns when the workflow completes.
+        Accepts optional workflow_name to run a submitted definition,
+        or runs the default loaded workflow if no name is given.
         """
         body = await request.json() if await request.body() else {}
         input_prompt = body.get("input_prompt")
+        workflow_name = body.get("workflow_name")
 
-        state = await app.state.executor.run(input_prompt=input_prompt)
+        if workflow_name:
+            stored = await definition_store.get(workflow_name)
+            if stored is None:
+                raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+            from agents.workflow.executor import WorkflowExecutor
+            run_executor = WorkflowExecutor(
+                stored.definition,
+                app.state.executor._registry,
+                persistence=app.state.executor._persistence,
+                approval_policy=app.state.executor._approval_policy,
+                spawner=app.state.executor._spawner,
+                agent_image=app.state.executor._agent_image,
+                advisory=app.state.executor._advisory,
+            )
+            state = await run_executor.run(input_prompt=input_prompt)
+        else:
+            state = await app.state.executor.run(input_prompt=input_prompt)
         return JSONResponse(
             status_code=202,
             content={

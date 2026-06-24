@@ -45,6 +45,15 @@ class InMemoryPersistence(WorkflowPersistence):
         """Save state in memory."""
         self._store[state.workflow_id] = state
 
+    async def save_cas(self, state: WorkflowState, expected_version: int) -> bool:
+        """Compare-and-swap save. Returns False if version mismatch."""
+        existing = self._store.get(state.workflow_id)
+        if existing and existing.version != expected_version:
+            return False
+        state.version = expected_version + 1
+        self._store[state.workflow_id] = state
+        return True
+
     async def load(self, workflow_id: str) -> Optional[WorkflowState]:
         """Load state from memory."""
         return self._store.get(workflow_id)
