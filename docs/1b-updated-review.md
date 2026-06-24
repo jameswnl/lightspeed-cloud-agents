@@ -46,9 +46,9 @@ But it still does not clearly answer:
 
 Add a small Podman-specific note under the trust-boundary or deployment section, for example:
 
-- Podman compose is dev-only
-- host port exposure is allowed for local testing only
-- do not expose the compose stack beyond the developer machine/network
+- Podman compose is a supported production deployment target
+- host port bindings should be restricted to localhost in production
+- deployers should use host firewall rules for network-level containment
 
 That makes the security posture symmetrical across both declared deployment targets.
 

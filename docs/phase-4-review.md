@@ -24,8 +24,7 @@ The current plan treats Podman as a peer target without explicitly acknowledging
 
 The plan should explicitly state one of:
 
-- Podman on-demand spawning is **dev-only**
-- Podman spawning requires a separate trust model and is not equivalent to the Kubernetes production path
+- Podman spawning requires a separate trust model and is not equivalent to the Kubernetes production path (deployers should secure the Podman socket appropriately)
 - or Podman support for on-demand spawning is deferred behind Kubernetes
 
 ### 2. Major: “both targets for every new feature” overstates parity for Kubernetes-specific security controls

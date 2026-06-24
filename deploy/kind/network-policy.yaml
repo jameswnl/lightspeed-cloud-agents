@@ -6,7 +6,7 @@ kind: NetworkPolicy
 metadata:
   name: diagnostic-agent-ingress
   labels:
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   podSelector:
     matchLabels:
@@ -30,7 +30,7 @@ kind: NetworkPolicy
 metadata:
   name: monitoring-agent-ingress
   labels:
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   podSelector:
     matchLabels:

@@ -218,15 +218,15 @@ class KubernetesSpawner(AgentSpawner):
     # Max concurrent pods: configurable via MAX_SPAWNED_PODS env var (default: 10)
 
 class PodmanSpawner(AgentSpawner):
-    """Spawns Podman containers for on-demand agents. DEV/TEST ONLY."""
+    """Spawns Podman containers for on-demand agents."""
     # Uses podman-py SDK via Podman socket
     # Resource limits via --cpus and --memory flags
     # Max concurrent containers: same MAX_SPAWNED_PODS limit
     #
     # SECURITY NOTE: Podman spawning requires Podman socket access,
     # which grants host-level container control. This is NOT equivalent
-    # to Kubernetes Jobs with scoped ServiceAccounts. Podman on-demand
-    # spawning is for dev/test only — production uses KubernetesSpawner.
+    # to Kubernetes Jobs with scoped ServiceAccounts. Deployers should
+    # secure the Podman socket and restrict access to authorized services.
 ```
 
 ### Safety controls

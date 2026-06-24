@@ -5,7 +5,7 @@ metadata:
   name: diagnostic-agent
   labels:
     app: diagnostic-agent
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   replicas: 1
   selector:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app: diagnostic-agent
-        environment: dev-test-only
+        environment: cloud-agents
     spec:
       containers:
         - name: diagnostic-agent
@@ -54,7 +54,7 @@ metadata:
   name: diagnostic-agent
   labels:
     app: diagnostic-agent
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   selector:
     app: diagnostic-agent

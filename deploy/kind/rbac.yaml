@@ -7,7 +7,7 @@ metadata:
   name: diagnostic-agent
   labels:
     app: diagnostic-agent
-    environment: dev-test-only
+    environment: cloud-agents
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -15,7 +15,7 @@ metadata:
   name: monitoring-agent
   labels:
     app: monitoring-agent
-    environment: dev-test-only
+    environment: cloud-agents
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -23,7 +23,7 @@ metadata:
   name: workflow-runner
   labels:
     app: workflow-runner
-    environment: dev-test-only
+    environment: cloud-agents
 ---
 # Workflow runner needs permission to create Jobs (for on-demand spawning in Phase 4b)
 apiVersion: rbac.authorization.k8s.io/v1
@@ -31,7 +31,7 @@ kind: Role
 metadata:
   name: workflow-runner-role
   labels:
-    environment: dev-test-only
+    environment: cloud-agents
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
@@ -45,7 +45,7 @@ kind: RoleBinding
 metadata:
   name: workflow-runner-binding
   labels:
-    environment: dev-test-only
+    environment: cloud-agents
 subjects:
   - kind: ServiceAccount
     name: workflow-runner

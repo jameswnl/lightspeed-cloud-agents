@@ -6,7 +6,7 @@ metadata:
   name: monitoring-agent
   labels:
     app: monitoring-agent
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   replicas: 1
   selector:
@@ -16,7 +16,7 @@ spec:
     metadata:
       labels:
         app: monitoring-agent
-        environment: dev-test-only
+        environment: cloud-agents
     spec:
       containers:
         - name: monitoring-agent
@@ -61,7 +61,7 @@ metadata:
   name: monitoring-agent
   labels:
     app: monitoring-agent
-    environment: dev-test-only
+    environment: cloud-agents
 spec:
   selector:
     app: monitoring-agent
