@@ -23,6 +23,7 @@ from agents.runtime.auth import BearerAuthMiddleware, get_api_token
 from agents.runtime.correlation import validate_correlation_id
 from agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
 from agents.runtime.run_store import RunStore
+from agents.runtime.tracing import extract_traceparent, get_tracer, set_span_error
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +98,14 @@ def create_app(
             body.context = {}
         body.context["correlation_id"] = correlation_id
 
+        incoming_headers = dict(request.headers)
+        trace_ctx = extract_traceparent(incoming_headers)
+
         prefer = request.headers.get("Prefer", "")
         if prefer == "respond-async":
-            response = await _handle_async_run(body, correlation_id)
+            response = await _handle_async_run(body, correlation_id, trace_ctx)
         else:
-            response = await _handle_sync_run(body, correlation_id)
+            response = await _handle_sync_run(body, correlation_id, trace_ctx)
 
         if isinstance(response, JSONResponse):
             response.headers["X-Correlation-ID"] = correlation_id
@@ -112,8 +116,10 @@ def create_app(
             )
         return response
 
+    _tracer = get_tracer("agents.runtime.server")
+
     async def _handle_sync_run(
-        body: AgentRunRequest, correlation_id: str
+        body: AgentRunRequest, correlation_id: str, trace_ctx: Any = None
     ) -> AgentRunResponse:
         """Synchronous run — blocks until completion, with timeout."""
         app.state.last_heartbeat = time.monotonic()
@@ -122,35 +128,44 @@ def create_app(
             "Starting sync run",
             extra={"agent_name": agent_name, "correlation_id": correlation_id},
         )
-        try:
-            result = await asyncio.wait_for(
-                app.state.agent_runner(body),
-                timeout=app.state.run_timeout,
-            )
-            duration = time.monotonic() - start_time
-            if result.success:
-                ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
-            else:
+        with _tracer.start_as_current_span(
+            f"agent.run.{agent_name}", context=trace_ctx
+        ) as span:
+            span.set_attribute("agent.name", agent_name)
+            span.set_attribute("correlation.id", correlation_id)
+            try:
+                result = await asyncio.wait_for(
+                    app.state.agent_runner(body),
+                    timeout=app.state.run_timeout,
+                )
+                duration = time.monotonic() - start_time
+                if result.success:
+                    ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
+                    span.set_attribute("agent.run.status", "success")
+                else:
+                    ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
+                    span.set_attribute("agent.run.status", "error")
+                ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
+                return result
+            except asyncio.TimeoutError as exc:
+                ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
+                set_span_error(span, exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Agent run timed out after {app.state.run_timeout}s",
+                ) from exc
+            except Exception as exc:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
-            ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
-            return result
-        except asyncio.TimeoutError as exc:
-            ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Agent run timed out after {app.state.run_timeout}s",
-            ) from exc
-        except Exception as exc:
-            ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Agent run failed: {type(exc).__name__}: {exc}",
-            ) from exc
-        finally:
-            app.state.last_heartbeat = time.monotonic()
+                set_span_error(span, exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Agent run failed: {type(exc).__name__}: {exc}",
+                ) from exc
+            finally:
+                app.state.last_heartbeat = time.monotonic()
 
     async def _handle_async_run(
-        body: AgentRunRequest, correlation_id: str
+        body: AgentRunRequest, correlation_id: str, trace_ctx: Any = None
     ) -> JSONResponse:
         """Asynchronous run — returns 202 immediately, runs in background."""
         store: RunStore = app.state.run_store
@@ -164,6 +179,12 @@ def create_app(
                 run_id,
                 extra={"agent_name": agent_name, "correlation_id": correlation_id},
             )
+            span = _tracer.start_span(
+                f"agent.run.async.{agent_name}", context=trace_ctx,
+            )
+            span.set_attribute("agent.name", agent_name)
+            span.set_attribute("correlation.id", correlation_id)
+            span.set_attribute("run.id", run_id)
             try:
                 result = await asyncio.wait_for(
                     app.state.agent_runner(body),
@@ -177,8 +198,9 @@ def create_app(
                 else:
                     ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
                     await store.fail_run(run_id, result)
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
+                set_span_error(span, exc)
                 error_response = AgentRunResponse(
                     output={},
                     output_type="error",
@@ -190,6 +212,7 @@ def create_app(
                 await store.fail_run(run_id, error_response)
             except Exception as exc:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
+                set_span_error(span, exc)
                 error_response = AgentRunResponse(
                     output={},
                     output_type="error",
@@ -200,6 +223,7 @@ def create_app(
                 )
                 await store.fail_run(run_id, error_response)
             finally:
+                span.end()
                 app.state.last_heartbeat = time.monotonic()
 
         asyncio.create_task(_run_in_background(state.run_id))

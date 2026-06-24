@@ -25,6 +25,7 @@ from agents.spawner.base import AgentSpawner
 from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
 from agents.workflow.retry import RetryContext, build_escalation
 from agents.workflow.state import StepResult, WorkflowState
+from agents.runtime.tracing import get_tracer, set_span_error
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class WorkflowExecutor:
         self._advisory = advisory or AdvisoryEnforcer(
             enabled=definition.metadata.get("mode") == "advisory"
         )
+        self._tracer = get_tracer("agents.workflow.executor")
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
 
@@ -344,38 +346,44 @@ class WorkflowExecutor:
         logger.info("Executing step '%s' with agent '%s' (spawn=%s)", step.name, step.agent, step.spawn)
 
         spawned_name = None
-        try:
-            if step.spawn == "on-demand" and self._spawner:
-                spawn_id = uuid.uuid4().hex[:8]
-                spawned_name = f"{step.agent}-{spawn_id}"
-                endpoint = await self._spawner.spawn(
-                    spawned_name, self._agent_image,
-                    env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+        with self._tracer.start_as_current_span(f"workflow.step.{step.name}") as span:
+            span.set_attribute("step.name", step.name)
+            span.set_attribute("step.agent", step.agent or "")
+            span.set_attribute("step.spawn", step.spawn)
+            try:
+                if step.spawn == "on-demand" and self._spawner:
+                    spawn_id = uuid.uuid4().hex[:8]
+                    spawned_name = f"{step.agent}-{spawn_id}"
+                    endpoint = await self._spawner.spawn(
+                        spawned_name, self._agent_image,
+                        env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+                    )
+                    await self._spawner.wait_ready(endpoint)
+                    client = RemoteAgentClient(endpoint)
+                else:
+                    client = self._client_factory(step.agent)
+                context: dict[str, Any] = {}
+                if self._advisory.enabled:
+                    context["advisory_mode"] = True
+                response = await client.run(prompt, context=context or None)
+            except Exception as exc:
+                set_span_error(span, exc)
+                return StepResult(
+                    step_name=step.name, status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc).isoformat(),
                 )
-                await self._spawner.wait_ready(endpoint)
-                client = RemoteAgentClient(endpoint)
-            else:
-                client = self._client_factory(step.agent)
-            context: dict[str, Any] = {}
-            if self._advisory.enabled:
-                context["advisory_mode"] = True
-            response = await client.run(prompt, context=context or None)
-        except Exception as exc:
+            finally:
+                if spawned_name and self._spawner:
+                    await self._spawner.destroy(spawned_name)
+
+            span.set_attribute("step.status", "completed")
+            output = self._advisory.annotate_output(response.output)
             return StepResult(
-                step_name=step.name, status="failed",
-                error=f"{type(exc).__name__}: {exc}",
+                step_name=step.name,
+                status="completed",
+                output=output,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
-        finally:
-            if spawned_name and self._spawner:
-                await self._spawner.destroy(spawned_name)
-
-        output = self._advisory.annotate_output(response.output)
-        return StepResult(
-            step_name=step.name,
-            status="completed",
-            output=output,
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc).isoformat(),
-        )

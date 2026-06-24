@@ -18,6 +18,7 @@ import yaml
 from fastapi import FastAPI
 
 from agents.registry import AgentRegistry
+from agents.runtime.tracing import init_tracing
 from agents.workflow.api import create_workflow_app
 from agents.workflow.auto_approve import ApprovalPolicy
 from agents.workflow.definition import WorkflowDefinition
@@ -77,6 +78,7 @@ def build_workflow_app(
     defn = _load_workflow(workflow_path)
     registry = _load_registry(registry_path)
     workflow_name = defn.metadata.get("name", "unknown")
+    init_tracing(f"workflow-{workflow_name}")
     persistence = _create_persistence()
 
     @asynccontextmanager

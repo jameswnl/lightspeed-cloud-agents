@@ -11,6 +11,7 @@ import httpx
 
 from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
 from agents.models import AgentRunResponse, RunState, RunStatus
+from agents.runtime.tracing import inject_traceparent
 
 
 class RemoteAgentClient:
@@ -54,6 +55,9 @@ class RemoteAgentClient:
         if context is not None:
             body["context"] = context
 
+        headers: dict[str, str] = {}
+        inject_traceparent(headers)
+
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout)
@@ -61,6 +65,7 @@ class RemoteAgentClient:
                 response = await client.post(
                     f"{self.endpoint}/v1/run",
                     json=body,
+                    headers=headers,
                 )
         except httpx.ReadTimeout as exc:
             raise AgentTimeoutError(
@@ -118,6 +123,9 @@ class RemoteAgentClient:
         if context is not None:
             body["context"] = context
 
+        async_headers: dict[str, str] = {}
+        inject_traceparent(async_headers)
+
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0)
@@ -125,7 +133,7 @@ class RemoteAgentClient:
                 response = await client.post(
                     f"{self.endpoint}/v1/run",
                     json=body,
-                    headers={"Prefer": "respond-async"},
+                    headers={**async_headers, "Prefer": "respond-async"},
                 )
         except httpx.ConnectError as exc:
             raise AgentUnavailableError(

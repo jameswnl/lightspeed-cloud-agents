@@ -25,6 +25,7 @@ from agents.remote_agent_client import RemoteAgentClient
 from agents.runtime.generic_runner import create_generic_runner
 from agents.runtime.model_factory import get_model, reset_model
 from agents.runtime.server import create_app
+from agents.runtime.tracing import init_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def build_app(
     """
     defn = load_definition(definition_path)
     agent_name = defn.metadata["name"]
+    init_tracing(f"agent-{agent_name}")
     spec = defn.spec
 
     # Run optional bootstrap hook from environment.
