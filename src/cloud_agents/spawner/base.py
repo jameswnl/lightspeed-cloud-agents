@@ -1,7 +1,7 @@
 """Abstract base class for agent pod spawning.
 
 Defines the interface for creating and destroying agent pods on demand.
-Implementations for Kubernetes (production) and Podman (dev/test).
+Implementations for Kubernetes and Podman deployment targets.
 """
 
 from __future__ import annotations

@@ -1,7 +1,8 @@
-"""Podman agent spawner — creates Podman containers for dev/test.
+"""Podman agent spawner — creates Podman containers on demand.
 
-DEV/TEST ONLY. Podman socket access grants host-level container control.
-Production uses KubernetesSpawner.
+Podman is a supported production deployment target (used by Ansible
+and RH Developer Hub teams). Podman socket access grants host-level
+container control — deployers should secure the socket appropriately.
 """
 
 from __future__ import annotations
@@ -15,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class PodmanSpawner(AgentSpawner):
-    """Spawns Podman containers for on-demand agents. DEV/TEST ONLY.
+    """Spawns Podman containers for on-demand agents.
 
     Security note: requires Podman socket access, which grants
-    host-level container control. Not equivalent to K8s Jobs.
+    host-level container control. Deployers should restrict socket
+    access to authorized users/services.
 
     Attributes:
         network: Podman network for spawned containers.
@@ -52,7 +54,7 @@ class PodmanSpawner(AgentSpawner):
                 remove=False,
             )
 
-        logger.info("Spawned Podman container '%s' (dev/test only)", container_name)
+        logger.info("Spawned Podman container '%s'", container_name)
         return f"http://{container_name}:8080"
 
     async def _do_destroy(self, agent_name: str) -> None:

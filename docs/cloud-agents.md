@@ -11,9 +11,9 @@
 
 ## What
 
-A proof-of-concept demonstrating that Pydantic AI can support **multiple collaborating agents** running inside a single lightspeed-stack deployment. The PoC validates the "cloud agents" vision: long-running, autonomous agents deployed in customer clusters that monitor, diagnose, and remediate infrastructure issues — capabilities that local agents (Goose, Claude Code) cannot provide.
+An **agent/workflow framework** built on Pydantic AI and pydantic-graph within lightspeed-stack. The framework enables product teams to **create, deploy, and manage** their own cloud agents and multi-step workflows — running as server-side services in customer clusters (OCP/K8s or Podman).
 
-The PoC is a standalone playground script (`playground/try_server_agents.py`) that simulates a cluster environment and exercises three agent types working together.
+The diagnostic, monitoring, and deploy-readiness agents are **reference implementations** demonstrating the framework's capabilities. Product teams (Ansible, RH Developer Hub, OpenStack) use the framework to build domain-specific agents for their own use cases.
 
 ## Why
 

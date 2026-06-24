@@ -156,7 +156,7 @@ deployment:
 Or via environment variable: `DEPLOYMENT_TARGET=kubernetes|podman`
 
 This switch controls:
-- **Agent spawning**: `KubernetesSpawner` (production) vs `PodmanSpawner` (dev/test only)
+- **Agent spawning**: `KubernetesSpawner` (OCP/K8s) vs `PodmanSpawner` (Podman deployments)
 - **Deployment manifests**: K8s Deployments/Services vs Podman compose
 - **Networking**: K8s Services/ClusterIP vs Podman shared network
 - **RBAC**: K8s ServiceAccounts/RoleBindings vs no-op (Podman has no RBAC)
@@ -169,13 +169,13 @@ The two targets provide **behavioral parity** (same features available), not **s
 
 | Capability | Kubernetes | Podman |
 |-----------|-----------|--------|
-| On-demand spawning | Scoped ServiceAccount, K8s Jobs | Host-level socket access (**dev-only**) |
-| NetworkPolicy | Enforced by CNI | No equivalent |
-| RBAC | ServiceAccount + RoleBinding | No equivalent |
-| Auth | TokenReview API | Shared secret only |
+| On-demand spawning | Scoped ServiceAccount, K8s Jobs | Host-level socket access (secure socket appropriately) |
+| NetworkPolicy | Enforced by CNI | No equivalent (use host firewall) |
+| RBAC | ServiceAccount + RoleBinding | No equivalent (use OS-level access control) |
+| Auth | TokenReview API | Shared secret / bearer token |
 | Persistence | PVC-backed | Local volume |
 
-**Kubernetes is the production target. Podman is the dev/test target.** Features work on both, but security hardening is Kubernetes-only. Podman deployments must never be exposed outside the developer machine.
+**Both Kubernetes and Podman are supported production deployment targets.** Product teams (Ansible, RH Developer Hub) ship GA features on Podman. Kubernetes provides additional security hardening (NetworkPolicy, RBAC, ServiceAccount scoping) that Podman deployers should compensate for with host-level controls.
 
 ### Test matrix
 - Unit tests: target-agnostic (no containers)

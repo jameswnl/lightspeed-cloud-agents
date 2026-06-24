@@ -94,7 +94,7 @@ A security-focused reviewer identified 5 issues. Resolutions:
 | Correlation ID handling | Server-side validation: max 128 chars, `[a-zA-Z0-9\-]`, generate UUID if absent/invalid. Never log raw nested context. |
 | Deployment label | All manifests tagged `environment: dev-test-only` |
 | Documentation | README and deployment guide state: "do not deploy outside dev/test clusters without Phase 2 security hardening" |
-| **Podman-specific** | Compose stack is dev-only. Host port bindings (`-p 8081:8080`) are for local testing only. Do not expose the compose stack beyond the developer machine. No network-level containment in Podman — security relies on the dev-only constraint. |
+| **Podman-specific** | Compose stack supports both development and production Podman deployments. Host port bindings (`-p 8081:8080`) should be restricted to localhost in production. Podman lacks K8s-style NetworkPolicy — deployers should use host firewall rules for network-level containment. |
 
 ---
 
