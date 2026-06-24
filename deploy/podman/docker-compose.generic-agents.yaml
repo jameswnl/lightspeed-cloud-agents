@@ -35,7 +35,7 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://host.containers.internal:11434/v1}
       - AGENT_MODEL=${AGENT_MODEL:-gpt-4o-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
-      - AGENT_BOOTSTRAP_MODULE=examples.agents.diagnostic.cluster_state
+      - AGENT_BOOTSTRAP_MODULE=diagnostic_tools
       - AGENT_BOOTSTRAP_FUNCTION=init_scenario
       - AGENT_BOOTSTRAP_ARGS=bad_deploy
     depends_on:
