@@ -101,8 +101,9 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 **Problem:** Spawned Jobs use `{agent}-{uuid}` names. Retries create duplicates. No idempotency.
 
 **Fix:**
-- Hash the step config (agent name, prompt hash, attempt number) into the Job/container name
+- Hash the step config (`workflow_id` + `step_name` + `attempt_number`) into the Job/container name — must include workflow_id to avoid cross-workflow collisions
 - Same input = same name = safe retry (create-only idempotency)
+- **Design requirement:** Content-hash naming makes Job names reconstructible from persisted workflow state. The recovery poller (Task 5) depends on this — it can reconstruct the expected Job name from the step config without having seen the original spawn call.
 - `KubernetesSpawner`: handle `AlreadyExists` on Job creation
 - `PodmanSpawner`: check if container exists before creating
 
@@ -157,7 +158,8 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 **Problem:** `PermissionScope.effective_tools()` exists but is never called. Tool filtering from permissions doesn't actually happen.
 
 **Fix:**
-- When `request.context` contains `permissions` (allowed_tools/denied_tools), apply them in `create_generic_runner()`
+- Define a typed `StepPermissions` model (not an unstructured dict) that the executor constructs and the runner validates at load time — follows the `AdvisoryEnforcer` pattern
+- When `request.context` contains typed `permissions`, apply `PermissionScope.effective_tools()` in `create_generic_runner()`
 - Reuse the advisory mode pattern: build a filtered agent variant
 
 **Files:**
@@ -199,6 +201,7 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 
 **Fix:**
 - Add integration tests with mocked spawner verifying the full dispatch → execute → cleanup lifecycle
+- Add retry → escalation test: fail step twice (max_retries=2), verify failure context passed to second attempt, trigger escalation, verify escalation output includes both failure records
 - Add K8s/Podman spawner unit tests with mocked API clients
 
 **Files:**
