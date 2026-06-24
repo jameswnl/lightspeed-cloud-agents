@@ -39,15 +39,24 @@ class StoredDefinition(BaseModel):
 
 
 class DefinitionStore:
-    """In-memory workflow definition store with versioning.
+    """Workflow definition store with versioning.
 
-    Production implementation would use PostgreSQL.
+    When initialized with a shared persistence backend, definitions
+    are stored as JSON in the workflow state table with a special
+    'definition:' prefix. This makes definitions visible across
+    all runner replicas.
     """
 
-    def __init__(self) -> None:
-        """Initialize empty store."""
+    def __init__(self, persistence: Any = None) -> None:
+        """Initialize the store.
+
+        Args:
+            persistence: Optional shared persistence backend. If None,
+                uses process-local in-memory storage.
+        """
         self._definitions: dict[str, StoredDefinition] = {}
         self._versions: dict[str, list[StoredDefinition]] = {}
+        self._persistence = persistence
 
     async def save(self, definition: WorkflowDefinition) -> StoredDefinition:
         """Save a workflow definition, creating a new version.
@@ -69,6 +78,20 @@ class DefinitionStore:
         )
         versions.append(stored)
         self._definitions[name] = stored
+
+        if self._persistence:
+            from agents.workflow.state import WorkflowState
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+            state = WorkflowState(
+                workflow_id=f"def:{name}:v{version}",
+                workflow_name=f"definition:{name}",
+                status="completed",
+                definition_snapshot=stored.model_dump(mode="json"),
+                created_at=now, updated_at=now,
+            )
+            await self._persistence.save(state)
+
         logger.info("Stored workflow definition '%s' v%d", name, version)
         return stored
 

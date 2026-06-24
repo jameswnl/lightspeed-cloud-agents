@@ -95,7 +95,19 @@ def create_workflow_app(
     @app.get("/v1/workflows/{workflow_id}")
     async def get_workflow(workflow_id: str) -> Any:
         """Get workflow state by ID."""
-        state = await app.state.executor.get_state(workflow_id)
+        state = await app.state.executor._persistence.load(workflow_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if state.definition_snapshot:
+            defn = WorkflowDefinition.model_validate(state.definition_snapshot)
+            from agents.workflow.executor import WorkflowExecutor as WE
+            snap_executor = WE(
+                defn, app.state.executor._registry,
+                persistence=app.state.executor._persistence,
+            )
+            state = await snap_executor.get_state(workflow_id)
+        else:
+            state = await app.state.executor.get_state(workflow_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Workflow not found")
         return state
@@ -145,7 +157,7 @@ def create_workflow_app(
 
     # --- Definition CRUD ---
 
-    definition_store = DefinitionStore()
+    definition_store = DefinitionStore(persistence=executor._persistence if hasattr(executor, '_persistence') else None)
     app.state.definition_store = definition_store
 
     @app.post("/v1/workflows/definitions")
