@@ -35,7 +35,10 @@ class PodmanSpawner(AgentSpawner):
         super().__init__(**kwargs)
         self._network = network
 
-    async def _do_spawn(self, agent_name: str, image: str, env: dict[str, str]) -> str:
+    async def _do_spawn(
+        self, agent_name: str, image: str, env: dict[str, str],
+        config: "SpawnConfig | None" = None,
+    ) -> str:
         """Create a Podman container for the agent."""
         try:
             from podman import PodmanClient

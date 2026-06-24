@@ -2,7 +2,7 @@
 
 ## Summary
 
-pydantic-graph's `GraphBuilder` API was evaluated as an alternative workflow executor alongside the existing `WorkflowExecutor`. The assessment found that pydantic-graph is a **partial fit** — strong for graph topology and parallel execution, but fundamentally mismatched for durable pause/resume and state persistence.
+pydantic-graph's `GraphBuilder` API was evaluated as an alternative workflow executor alongside the existing `WorkflowExecutor`. **Only linear graph topology was implemented and tested** — Fork/Join and Decision nodes were not built. The assessment found that pydantic-graph is a **partial fit** for linear execution but has fundamental mismatches for durable pause/resume and state persistence. Fork/Join parallel execution remains a theoretical fit that was not validated in code.
 
 ## Fit Matrix
 

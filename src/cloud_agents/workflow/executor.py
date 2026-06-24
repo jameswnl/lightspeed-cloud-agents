@@ -404,6 +404,7 @@ class WorkflowExecutor:
                     endpoint = await self._spawner.spawn(
                         spawned_name, self._agent_image,
                         env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+                        config=step.spawn_config,
                     )
                     await self._spawner.wait_ready(endpoint)
                     client = RemoteAgentClient(endpoint)

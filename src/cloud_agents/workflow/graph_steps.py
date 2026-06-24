@@ -19,6 +19,7 @@ from agents.remote_agent_client import RemoteAgentClient
 from agents.workflow.auto_approve import classify_step_risk
 from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowStepSpec
+from agents.workflow.events import WorkflowEvent
 from agents.workflow.graph_state import GraphWorkflowDeps, GraphWorkflowState
 from agents.workflow.interpolation import interpolate
 from agents.workflow.retry import RetryContext, build_escalation
@@ -27,6 +28,18 @@ from agents.workflow.state import StepResult
 logger = logging.getLogger(__name__)
 
 APPROVAL_NEEDED_SENTINEL = "__APPROVAL_NEEDED__"
+
+
+async def _emit_event(deps: GraphWorkflowDeps, event: WorkflowEvent) -> None:
+    """Emit a workflow event via deps callback if configured."""
+    if deps.event_callback:
+        import asyncio
+        try:
+            result = deps.event_callback(event)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.warning("Event callback failed for %s", event.event_type)
 
 
 def make_agent_step_fn(step_spec: WorkflowStepSpec) -> Any:
@@ -47,12 +60,21 @@ def make_agent_step_fn(step_spec: WorkflowStepSpec) -> Any:
         deps = ctx.deps
         started_at = datetime.now(timezone.utc).isoformat()
 
+        await _emit_event(deps, WorkflowEvent(
+            event_type="step.started", workflow_id=state.workflow_id,
+            step_name=step_spec.name,
+        ))
+
         if step_spec.condition:
             try:
                 if not evaluate_condition(step_spec.condition, state):
                     state.steps[step_spec.output_key] = StepResult(
                         step_name=step_spec.name, status="skipped",
                     )
+                    await _emit_event(deps, WorkflowEvent(
+                        event_type="step.skipped", workflow_id=state.workflow_id,
+                        step_name=step_spec.name,
+                    ))
                     return {"status": "skipped", "step": step_spec.name}
             except ValueError as exc:
                 state.steps[step_spec.output_key] = StepResult(
@@ -80,6 +102,10 @@ def make_agent_step_fn(step_spec: WorkflowStepSpec) -> Any:
             result = await _execute_once(step_spec, prompt, deps, retry_ctx, started_at)
             if result.status == "completed":
                 state.steps[step_spec.output_key] = result
+                await _emit_event(deps, WorkflowEvent(
+                    event_type="step.completed", workflow_id=state.workflow_id,
+                    step_name=step_spec.name,
+                ))
                 return {"status": "completed", "step": step_spec.name}
             retry_ctx.add_failure(result.error or "Unknown error", result.output)
             if retry_ctx.attempt > 1:
@@ -99,6 +125,10 @@ def make_agent_step_fn(step_spec: WorkflowStepSpec) -> Any:
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
         state.status = "failed"
+        await _emit_event(deps, WorkflowEvent(
+            event_type="step.failed", workflow_id=state.workflow_id,
+            step_name=step_spec.name,
+        ))
         return {"status": "failed", "step": step_spec.name}
 
     agent_step.__name__ = step_spec.name
@@ -123,6 +153,7 @@ async def _execute_once(
             endpoint = await deps.spawner.spawn(
                 spawned_name, deps.agent_image,
                 env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+                config=step_spec.spawn_config,
             )
             await deps.spawner.wait_ready(endpoint)
             client = RemoteAgentClient(endpoint)

@@ -61,13 +61,20 @@ class AgentSpawner(ABC):
         self._max_pods = max_pods
         self._lock = asyncio.Lock()
 
-    async def spawn(self, agent_name: str, image: str, env: dict[str, str] | None = None) -> str:
+    async def spawn(
+        self,
+        agent_name: str,
+        image: str,
+        env: dict[str, str] | None = None,
+        config: SpawnConfig | None = None,
+    ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
         Args:
             agent_name: Name for the spawned pod.
             image: Container image to use.
             env: Environment variables for the pod.
+            config: Optional per-step resource configuration.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -83,7 +90,7 @@ class AgentSpawner(ABC):
             self._active_count += 1
 
         try:
-            endpoint = await self._do_spawn(agent_name, image, env or {})
+            endpoint = await self._do_spawn(agent_name, image, env or {}, config)
             return endpoint
         except Exception:
             async with self._lock:
@@ -91,7 +98,10 @@ class AgentSpawner(ABC):
             raise
 
     @abstractmethod
-    async def _do_spawn(self, agent_name: str, image: str, env: dict[str, str]) -> str:
+    async def _do_spawn(
+        self, agent_name: str, image: str, env: dict[str, str],
+        config: SpawnConfig | None = None,
+    ) -> str:
         """Implementation-specific pod creation."""
 
     async def destroy(self, agent_name: str) -> None:

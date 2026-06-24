@@ -38,11 +38,18 @@ class KubernetesSpawner(AgentSpawner):
         self._namespace = namespace
         self._service_account = service_account
 
-    async def _do_spawn(self, agent_name: str, image: str, env: dict[str, str]) -> str:
+    async def _do_spawn(
+        self, agent_name: str, image: str, env: dict[str, str],
+        config_override: "SpawnConfig | None" = None,
+    ) -> str:
         """Create a K8s Job for the agent.
 
         Returns the Service endpoint URL.
         """
+        from agents.spawner.base import SpawnConfig
+
+        cfg = config_override or SpawnConfig()
+
         try:
             from kubernetes import client, config
 
@@ -77,8 +84,8 @@ class KubernetesSpawner(AgentSpawner):
                                 env=env_list,
                                 ports=[client.V1ContainerPort(container_port=8080)],
                                 resources=client.V1ResourceRequirements(
-                                    requests={"cpu": "100m", "memory": "256Mi"},
-                                    limits={"cpu": "500m", "memory": "512Mi"},
+                                    requests={"cpu": cfg.cpu_request, "memory": cfg.memory_request},
+                                    limits={"cpu": cfg.cpu_limit, "memory": cfg.memory_limit},
                                 ),
                             ),
                         ],
