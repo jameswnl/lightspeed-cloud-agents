@@ -50,17 +50,28 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 
 **Problem:** `RemoteAgentClient.run()` sends HTTP requests to agent pods with no authentication. Any pod in the cluster can call any agent endpoint.
 
-**Fix:**
+**Fix (common):**
 - Add optional `auth_token` parameter to `RemoteAgentClient`
 - When set, include `Authorization: Bearer {token}` header on all requests
 - `BearerAuthMiddleware` already exists on the agent runtime — just need to wire the token through
-- Spawner passes `AGENT_API_TOKEN` env var to ephemeral pods (via Secret, not literal)
-- Workflow runner reads token from env and passes to `RemoteAgentClient`
+
+**Fix (Podman / shared-secret mode):**
+- Runner reads `AGENT_API_TOKEN` from host env
+- `PodmanSpawner` passes `AGENT_API_TOKEN` as env var to spawned containers (host env propagation)
+- `RemoteAgentClient` sends this token as Bearer header
+
+**Fix (Kubernetes / SA token mode):**
+- Spawned Jobs get a projected ServiceAccount token volume (`/var/run/secrets/tokens/agent-token`) with audience scoping
+- Runner reads its own SA token from the projected volume path
+- `RemoteAgentClient` sends the SA token as Bearer header
+- Agent runtime validates incoming tokens via K8s TokenReview API (or trusts the SA token audience)
+- `AGENT_API_TOKEN` env var is NOT used in K8s mode
 
 **Files:**
 - Modify: `src/agents/remote_agent_client.py` — add `auth_token` parameter, send Bearer header
-- Modify: `src/agents/workflow/executor.py` — pass token to client factory
-- Modify: spawner — include `AGENT_API_TOKEN` in env (Secret ref for K8s)
+- Modify: `src/agents/workflow/executor.py` — read token from env (Podman) or projected volume (K8s)
+- Modify: `src/agents/spawner/kubernetes_spawner.py` — add projected token volume to Job spec
+- Modify: `src/agents/spawner/podman_spawner.py` — pass `AGENT_API_TOKEN` env var
 - Update: tests
 
 **Token model (deployment-specific):**
