@@ -17,6 +17,7 @@ from pathlib import Path
 from agents.definition import AgentSpec
 from agents.models import AgentRunRequest, AgentRunResponse
 from agents.runtime.output_types import resolve_output_type
+from agents.runtime.tool_instrumentation import instrument_tool
 from agents.runtime.tool_loader import load_tools
 
 
@@ -78,7 +79,8 @@ def create_generic_runner(
     )
 
     for fn_name, fn in tools:
-        agent.tool_plain(fn, docstring_format="google")
+        instrumented = instrument_tool(fn, agent_name, fn_name)
+        agent.tool_plain(instrumented, docstring_format="google")
 
     if spec.output_validator:
         import importlib
