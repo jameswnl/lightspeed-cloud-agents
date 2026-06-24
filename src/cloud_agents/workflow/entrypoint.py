@@ -116,19 +116,7 @@ def build_workflow_app(
     spawner = _create_spawner()
     agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
 
-    executor_type = os.environ.get("WORKFLOW_EXECUTOR", "default")
-    if executor_type == "graph":
-        from agents.workflow.graph_executor import GraphExecutor
-        executor = GraphExecutor(
-            defn, registry,
-            persistence=persistence,
-            approval_policy=ApprovalPolicy(),
-            spawner=spawner,
-            agent_image=agent_image,
-        )
-        logger.info("Using GraphExecutor (pydantic-graph, exploratory)")
-    else:
-        executor = WorkflowExecutor(
+    executor = WorkflowExecutor(
             defn, registry,
             persistence=persistence,
             approval_policy=ApprovalPolicy(),

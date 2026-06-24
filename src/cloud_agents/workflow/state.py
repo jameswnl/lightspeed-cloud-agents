@@ -46,6 +46,8 @@ class WorkflowState(BaseModel):
     workflow_name: str
     status: Literal["running", "completed", "failed", "paused"] = "running"
     current_step: Optional[str] = None
+    paused_step_index: Optional[int] = None
     steps: dict[str, StepResult] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+    version: int = 1

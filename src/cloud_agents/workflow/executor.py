@@ -75,14 +75,14 @@ class WorkflowExecutor:
         )
         self._event_callback = event_callback
         self._tracer = get_tracer("agents.workflow.executor")
-        self._states: dict[str, WorkflowState] = {}
-        self._paused_at: dict[str, int] = {}
 
         self._validate_spawn_config()
 
     def _validate_spawn_config(self) -> None:
-        """Validate that ephemeral steps have a spawner configured."""
+        """Validate that ephemeral agent steps have a spawner configured."""
         for step in self._definition.spec.steps:
+            if step.type != "agent":
+                continue
             if step.spawn in ("ephemeral", "on-demand") and not self._spawner:
                 raise ValueError(
                     f"Step '{step.name}' uses spawn='{step.spawn}' but no spawner "
@@ -106,7 +106,6 @@ class WorkflowExecutor:
             created_at=now,
             updated_at=now,
         )
-        self._states[workflow_id] = state
         await self._persist(state)
         await self._emit(WorkflowEvent(
             event_type="workflow.started", workflow_id=workflow_id,
@@ -126,7 +125,7 @@ class WorkflowExecutor:
         Returns:
             Updated WorkflowState.
         """
-        state = self._states.get(workflow_id)
+        state = await self._persistence.load(workflow_id)
         if state is None:
             raise ValueError(f"Workflow {workflow_id} not found")
         if state.status != "paused":
@@ -136,7 +135,7 @@ class WorkflowExecutor:
         if state.status == "failed":
             return state
 
-        paused_index = self._paused_at.get(workflow_id, 0)
+        paused_index = state.paused_step_index or 0
         paused_step = self._definition.spec.steps[paused_index]
         step_result = state.steps.get(paused_step.output_key)
 
@@ -164,7 +163,7 @@ class WorkflowExecutor:
 
     async def get_state(self, workflow_id: str) -> WorkflowState | None:
         """Get current workflow state. Checks approval timeouts."""
-        state = self._states.get(workflow_id)
+        state = await self._persistence.load(workflow_id)
         if state:
             self._check_approval_timeout(state)
         return state
@@ -173,7 +172,7 @@ class WorkflowExecutor:
         """Enforce approval timeout on the current step."""
         if state.status != "paused" or not state.current_step:
             return
-        paused_index = self._paused_at.get(state.workflow_id)
+        paused_index = state.paused_step_index
         if paused_index is None:
             return
         step_spec = self._definition.spec.steps[paused_index]
@@ -193,7 +192,7 @@ class WorkflowExecutor:
 
     async def list_workflows(self) -> list[WorkflowState]:
         """List all tracked workflows."""
-        return list(self._states.values())
+        return await self._persistence.list_active()
 
     async def _emit(self, event: WorkflowEvent) -> None:
         """Emit a workflow event via the callback if configured."""
@@ -274,7 +273,7 @@ class WorkflowExecutor:
                     started_at=datetime.now(timezone.utc).isoformat(),
                 )
                 state.status = "paused"
-                self._paused_at[state.workflow_id] = i
+                state.paused_step_index = i
                 await self._persist(state)
                 await self._emit(WorkflowEvent(
                     event_type="workflow.paused", workflow_id=state.workflow_id,

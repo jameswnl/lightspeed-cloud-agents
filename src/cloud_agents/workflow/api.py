@@ -16,6 +16,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from agents.runtime.auth import BearerAuthMiddleware, get_api_token
+from agents.workflow.definition import WorkflowDefinition
+from agents.workflow.definition_store import DefinitionStore
 from agents.workflow.events import WorkflowEvent
 from agents.workflow.executor import WorkflowExecutor
 from agents.workflow.state import WorkflowState
@@ -109,6 +111,52 @@ def create_workflow_app(
             }
             for s in states
         ]
+
+    # --- Definition CRUD ---
+
+    definition_store = DefinitionStore()
+    app.state.definition_store = definition_store
+
+    @app.post("/v1/workflows/definitions")
+    async def submit_definition(request: Request) -> JSONResponse:
+        """Submit a workflow definition YAML. Creates a new version."""
+        import yaml as yaml_mod
+        body = await request.body()
+        try:
+            data = yaml_mod.safe_load(body)
+            defn = WorkflowDefinition.model_validate(data)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid workflow definition: {exc}") from exc
+
+        stored = await definition_store.save(defn)
+        return JSONResponse(
+            status_code=201,
+            content={"name": stored.name, "version": stored.version},
+        )
+
+    @app.get("/v1/workflows/definitions")
+    async def list_definitions() -> list[dict[str, Any]]:
+        """List all active workflow definitions."""
+        defs = await definition_store.list_all()
+        return [{"name": d.name, "version": d.version, "created_at": d.created_at} for d in defs]
+
+    @app.get("/v1/workflows/definitions/{name}")
+    async def get_definition(name: str) -> Any:
+        """Get the latest version of a workflow definition."""
+        stored = await definition_store.get(name)
+        if stored is None:
+            raise HTTPException(status_code=404, detail=f"Definition '{name}' not found")
+        return stored.model_dump(mode="json")
+
+    @app.delete("/v1/workflows/definitions/{name}")
+    async def delete_definition(name: str) -> dict[str, str]:
+        """Soft-delete a workflow definition."""
+        deleted = await definition_store.delete(name)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Definition '{name}' not found")
+        return {"status": "deleted", "name": name}
+
+    # --- Streaming ---
 
     @app.post("/v1/workflows/run/stream")
     async def run_workflow_stream(request: Request) -> StreamingResponse:
