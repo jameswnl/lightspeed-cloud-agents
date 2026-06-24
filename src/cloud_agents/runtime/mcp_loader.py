@@ -65,12 +65,12 @@ def load_mcp_servers(specs: list[MCPServerSpec]) -> list[Any]:
     Returns:
         List of MCPServerHTTP instances for pydantic-ai Agent.
     """
-    from pydantic_ai.mcp import MCPServerSSE
+    from pydantic_ai.mcp import MCPToolset
 
     servers = []
     for spec in specs:
         headers = resolve_mcp_headers(spec)
-        server = MCPServerSSE(url=spec.url, headers=headers if headers else None)
+        server = MCPToolset(spec.url, headers=headers if headers else None)
         servers.append(server)
         logger.info("Loaded MCP server: %s (%s)", spec.name, spec.url)
     return servers

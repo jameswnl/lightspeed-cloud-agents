@@ -6,6 +6,7 @@ RemoteAgentClient, handling conditions, and pausing on approval steps.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -19,6 +20,7 @@ from agents.remote_agent_client import RemoteAgentClient
 from agents.workflow.advisory import AdvisoryEnforcer
 from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowDefinition, WorkflowStepSpec
+from agents.workflow.events import WorkflowEvent
 from agents.workflow.interpolation import interpolate
 from agents.workflow.persistence import InMemoryPersistence, WorkflowPersistence
 from agents.spawner.base import AgentSpawner
@@ -48,6 +50,7 @@ class WorkflowExecutor:
         spawner: Optional[AgentSpawner] = None,
         agent_image: str = "agent-runtime:latest",
         advisory: Optional[AdvisoryEnforcer] = None,
+        event_callback: Optional[Callable[[WorkflowEvent], Any]] = None,
     ) -> None:
         """Initialize the executor.
 
@@ -70,6 +73,7 @@ class WorkflowExecutor:
         self._advisory = advisory or AdvisoryEnforcer(
             enabled=definition.metadata.get("mode") == "advisory"
         )
+        self._event_callback = event_callback
         self._tracer = get_tracer("agents.workflow.executor")
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
@@ -93,6 +97,9 @@ class WorkflowExecutor:
         )
         self._states[workflow_id] = state
         await self._persist(state)
+        await self._emit(WorkflowEvent(
+            event_type="workflow.started", workflow_id=workflow_id,
+        ))
 
         return await self._execute_from(state, start_index=0)
 
@@ -177,6 +184,16 @@ class WorkflowExecutor:
         """List all tracked workflows."""
         return list(self._states.values())
 
+    async def _emit(self, event: WorkflowEvent) -> None:
+        """Emit a workflow event via the callback if configured."""
+        if self._event_callback:
+            try:
+                result = self._event_callback(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning("Event callback failed for %s", event.event_type)
+
     async def _persist(self, state: WorkflowState) -> None:
         """Save workflow state to persistence backend."""
         await self._persistence.save(state)
@@ -248,22 +265,41 @@ class WorkflowExecutor:
                 state.status = "paused"
                 self._paused_at[state.workflow_id] = i
                 await self._persist(state)
+                await self._emit(WorkflowEvent(
+                    event_type="workflow.paused", workflow_id=state.workflow_id,
+                    step_name=step.name,
+                ))
                 logger.info("Workflow paused at step '%s' for approval (risk: %s)", step.name, classification.risk_level)
                 return state
 
             if step.type == "agent":
+                await self._emit(WorkflowEvent(
+                    event_type="step.started", workflow_id=state.workflow_id,
+                    step_name=step.name,
+                ))
                 result = await self._execute_agent_step_with_retry(step, state)
                 state.steps[step.output_key] = result
                 await self._persist(state)
+                event_type = "step.completed" if result.status == "completed" else "step.failed"
+                await self._emit(WorkflowEvent(
+                    event_type=event_type, workflow_id=state.workflow_id,
+                    step_name=step.name,
+                ))
                 if result.status == "failed":
                     state.status = "failed"
                     await self._persist(state)
+                    await self._emit(WorkflowEvent(
+                        event_type="workflow.failed", workflow_id=state.workflow_id,
+                    ))
                     return state
 
         state.status = "completed"
         state.current_step = None
         state.updated_at = datetime.now(timezone.utc).isoformat()
         await self._persist(state)
+        await self._emit(WorkflowEvent(
+            event_type="workflow.completed", workflow_id=state.workflow_id,
+        ))
         return state
 
     async def _execute_agent_step_with_retry(
