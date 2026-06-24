@@ -16,6 +16,7 @@ from pathlib import Path
 
 from agents.definition import AgentSpec
 from agents.models import AgentRunRequest, AgentRunResponse
+from agents.runtime.mcp_loader import load_mcp_servers
 from agents.runtime.output_types import resolve_output_type
 from agents.runtime.tool_instrumentation import instrument_tool
 from agents.runtime.tool_loader import load_tools
@@ -71,10 +72,12 @@ def create_generic_runner(
     output_type = resolve_output_type(spec.output_type, spec.output_type_module)
     all_tools = load_tools(spec.tools)
     read_only_tools = set(spec.tools.read_only) if spec.tools.read_only else set()
+    mcp_servers = load_mcp_servers(spec.mcp_servers) if spec.mcp_servers else []
     capabilities = _load_skills(spec)
 
     def _build_agent(advisory_mode: bool = False) -> Agent[None, Any]:
         """Build the agent, optionally filtering tools for advisory mode."""
+        mcp_tools = mcp_servers if mcp_servers else None
         agent: Agent[None, Any] = Agent(
             model,
             output_type=output_type,
@@ -82,6 +85,7 @@ def create_generic_runner(
             defer_model_check=spec.defer_model_check,
             instructions=spec.instructions,
             capabilities=capabilities or None,
+            mcp_servers=mcp_tools,
         )
 
         tools_to_register = all_tools

@@ -88,6 +88,38 @@ class SkillsSpec(BaseModel):
     directories: list[str] = Field(default_factory=list)
 
 
+class MCPAuthSpec(BaseModel):
+    """Authentication specification for MCP servers.
+
+    Attributes:
+        type: Auth type — env_var (production) or header_value (dev/test only).
+        env_var: Environment variable name containing the auth token.
+        header_value: Inline header value (dev/test only, logged with warning).
+        header_name: HTTP header name for the token.
+        header_prefix: Prefix before the token value (e.g. "Bearer ").
+    """
+
+    type: Literal["env_var", "header_value"]
+    env_var: Optional[str] = None
+    header_value: Optional[str] = None
+    header_name: str = "Authorization"
+    header_prefix: str = "Bearer "
+
+
+class MCPServerSpec(BaseModel):
+    """Specification for an MCP server connection.
+
+    Attributes:
+        name: Human-readable name for the MCP server.
+        url: HTTP endpoint URL of the MCP server.
+        auth: Optional authentication configuration.
+    """
+
+    name: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=1)
+    auth: Optional[MCPAuthSpec] = None
+
+
 class AgentResourceSpec(BaseModel):
     """Resource limits for an agent.
 
@@ -123,6 +155,7 @@ class AgentSpec(BaseModel):
     retries: int = 1
     defer_model_check: bool = True
     tools: ToolsSpec
+    mcp_servers: Optional[list[MCPServerSpec]] = None
     skills: Optional[SkillsSpec] = None
     lifecycle: LifecycleSpec
     output_validator: Optional[OutputValidatorSpec] = None
