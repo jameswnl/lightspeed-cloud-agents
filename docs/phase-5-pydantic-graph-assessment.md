@@ -37,14 +37,28 @@ pydantic-graph's `GraphBuilder` API was evaluated as an alternative workflow exe
 
 pydantic-graph v1.105.0 (shipped with pydantic-ai). The `BaseNode`/`Graph` API is deprecated. `GraphBuilder` is the replacement but is relatively new. API churn risk is moderate.
 
+## Scope of This Evaluation
+
+**Phase 5 explored linear graph topology only.** Decision nodes (conditional routing) and Fork/Join (parallel execution) were not implemented. The fit conclusions below apply to linear step chains; topology-native features remain unevaluated and are deferred to future work.
+
+## SpawnConfig Status
+
+`SpawnConfig` is wired from `WorkflowStepSpec` through the spawner interface and into `KubernetesSpawner` (which uses per-step CPU/memory limits). The following are **not yet enforced** and are deferred:
+- `PodmanSpawner` does not apply CPU/memory limits from config
+- `wait_ready()` does not use `health_path` or `timeout_seconds` from config
+- Agent-level resource envelope precedence rule is not enforced at runtime
+
 ## Recommendation
 
 **Keep `WorkflowExecutor` as the production executor.** It supports durable persistence, approval pause/resume across restarts, and has been battle-tested through Phases 3-4.
 
 **Use pydantic-graph selectively for:**
 - Visualization — `Graph.mermaid_code()` is free and useful
-- Future parallel execution — Fork/Join is genuinely superior
 - Agent-internal graphs — individual agents (not workflows) could use pydantic-graph for multi-step reasoning within a single agent run
+
+**Deferred to future evaluation:**
+- Fork/Join parallel execution (theoretical fit, not validated in code)
+- Decision-node conditional routing
 
 **Do not use pydantic-graph for:**
 - Workflow orchestration with durable state
