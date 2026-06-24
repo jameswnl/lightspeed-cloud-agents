@@ -17,7 +17,7 @@ MINIMAL_AGENT_YAML = {
         "instructions": "You are a test agent.",
         "output_type": "str",
         "tools": {
-            "module": "agents.diagnostic.tools",
+            "module": "examples.agents.diagnostic.tools",
             "functions": ["list_hosts"],
         },
         "lifecycle": {"type": "request-response"},
@@ -75,7 +75,7 @@ class TestBuildApp:
 
     def test_builds_request_response_app(self) -> None:
         """Test building a request-response app from YAML."""
-        from agents.diagnostic.cluster_state import init_scenario
+        from examples.agents.diagnostic.cluster_state import init_scenario
         init_scenario("healthy")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:

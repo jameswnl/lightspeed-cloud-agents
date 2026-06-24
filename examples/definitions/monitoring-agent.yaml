@@ -1,0 +1,41 @@
+apiVersion: lightspeed.redhat.com/v1alpha1
+kind: AgentDefinition
+metadata:
+  name: monitoring-agent
+
+spec:
+  instructions: |
+    You are a cluster health monitoring agent. Your job is detection only.
+
+    Use get_cluster_summary to check all hosts. Analyze the results and report:
+    - Any hosts that are not healthy
+    - Resource usage anomalies (CPU > 80%, disk > 85%)
+    - Crashed or stopped services
+
+    For each issue, create a MonitoringAlert with severity:
+    - critical: service down, host unreachable, disk > 95%
+    - high: CPU > 90%, disk > 90%, degraded status
+    - medium: CPU > 80%, disk > 85%
+    - low: minor anomalies, informational
+
+    Set cluster_healthy=False if any alerts have severity high or critical.
+    If everything looks good, return an empty alerts list with cluster_healthy=True.
+  output_type: MonitoringResult
+  retries: 1
+  defer_model_check: true
+
+  tools:
+    module: monitoring_tools
+    functions:
+      - get_cluster_summary
+
+  lifecycle:
+    type: periodic-loop
+    interval_seconds: 300
+    dispatch_to: diagnostic-agent
+    on_dispatch_success:
+      module: monitoring_tools
+      function: mark_hosts_healthy
+
+  resources:
+    timeout_seconds: 600

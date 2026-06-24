@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.diagnostic.cluster_state import action_log, cluster_state
+from examples.agents.diagnostic.cluster_state import action_log, cluster_state
 
 
 def list_hosts() -> list[dict[str, Any]]:

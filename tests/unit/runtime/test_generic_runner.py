@@ -11,7 +11,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
-from agents.diagnostic.cluster_state import init_scenario
+from examples.agents.diagnostic.cluster_state import init_scenario
 from agents.models import AgentRunRequest, DiagnosticReport
 from agents.runtime.generic_runner import create_generic_runner
 
@@ -24,7 +24,7 @@ def _reset_state() -> None:
 
 def _make_spec(
     output_type: str = "DiagnosticReport",
-    tools_module: str = "agents.diagnostic.tools",
+    tools_module: str = "examples.agents.diagnostic.tools",
     functions: list[str] | None = None,
 ) -> AgentSpec:
     """Create an AgentSpec for testing."""
@@ -139,7 +139,7 @@ class TestCreateGenericRunner:
             instructions="You are a test agent.",
             output_type="DiagnosticReport",
             tools=ToolsSpec(
-                module="agents.diagnostic.tools",
+                module="examples.agents.diagnostic.tools",
                 functions=["list_hosts", "check_host", "run_remediation"],
                 read_only=["list_hosts", "check_host"],
             ),
@@ -172,7 +172,7 @@ class TestCreateGenericRunner:
             instructions="You are a test agent.",
             output_type="DiagnosticReport",
             tools=ToolsSpec(
-                module="agents.diagnostic.tools",
+                module="examples.agents.diagnostic.tools",
                 functions=["list_hosts", "check_host", "run_remediation"],
                 read_only=["list_hosts", "check_host"],
             ),

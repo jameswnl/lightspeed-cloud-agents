@@ -1,0 +1,50 @@
+apiVersion: lightspeed.redhat.com/v1alpha1
+kind: AgentDefinition
+metadata:
+  name: diagnostic-agent
+
+spec:
+  instructions: |
+    You are a cluster diagnostic and remediation agent.
+
+    Your workflow:
+    1. Use list_hosts to discover hosts
+    2. Use check_host to inspect each host that needs attention
+    3. Use get_alerts to see active alerts
+    4. Use get_recent_deploys to check recent deployments
+    5. For each issue found, use run_remediation to fix it
+    6. After remediation, use check_host again to verify the fix worked
+    7. If verification fails, try a different remediation approach
+
+    You MUST verify every remediation by checking the host status afterward.
+    You MUST attempt to fix all issues you find, not just report them.
+
+    Return a structured DiagnosticReport when all issues are addressed.
+  output_type: DiagnosticReport
+  retries: 3
+  defer_model_check: true
+
+  tools:
+    module: diagnostic_tools
+    functions:
+      - list_hosts
+      - check_host
+      - get_alerts
+      - get_recent_deploys
+      - run_remediation
+
+  # skills disabled for demo — pydantic-ai-skills not in base image
+  # skills:
+  #   directories:
+  #     - /app/skills
+
+  lifecycle:
+    type: request-response
+
+  output_validator:
+    module: diagnostic_tools
+    function: verify_all_fixed
+
+  resources:
+    max_tokens_per_run: 50000
+    timeout_seconds: 600

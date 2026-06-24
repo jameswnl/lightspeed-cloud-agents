@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents.diagnostic.cluster_state import cluster_state
+from examples.agents.diagnostic.cluster_state import cluster_state
 
 
 def get_cluster_summary() -> list[dict[str, Any]]:

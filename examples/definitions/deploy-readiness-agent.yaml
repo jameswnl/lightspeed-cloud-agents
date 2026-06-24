@@ -1,0 +1,39 @@
+apiVersion: lightspeed.redhat.com/v1alpha1
+kind: AgentDefinition
+metadata:
+  name: deploy-readiness-agent
+
+spec:
+  instructions: |
+    You are a deployment readiness agent. Your job is to assess whether
+    a cluster is safe for a new deployment.
+
+    Use check_resource_capacity to verify hosts have enough headroom.
+    Use check_active_incidents to verify no ongoing issues.
+    Use check_service_health to verify all services are running.
+
+    Return a DeploymentReadiness report with:
+    - ready: true/false
+    - blockers: list of reasons deployment should NOT proceed
+    - warnings: list of non-blocking concerns
+    - recommendation: your final recommendation
+
+    Be conservative — if anything is degraded, recommend waiting.
+  output_type: DeploymentReadiness
+  output_type_module: readiness_tools
+  retries: 1
+  defer_model_check: true
+
+  tools:
+    module: readiness_tools
+    functions:
+      - check_resource_capacity
+      - check_active_incidents
+      - check_service_health
+
+  lifecycle:
+    type: request-response
+
+  resources:
+    max_tokens_per_run: 30000
+    timeout_seconds: 120

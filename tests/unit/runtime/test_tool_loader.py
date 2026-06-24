@@ -11,7 +11,7 @@ class TestLoadTools:
 
     def test_loads_from_known_module(self) -> None:
         """Test loading tools from an existing module."""
-        spec = ToolsSpec(module="agents.diagnostic.tools", functions=["list_hosts", "check_host"])
+        spec = ToolsSpec(module="examples.agents.diagnostic.tools", functions=["list_hosts", "check_host"])
         tools = load_tools(spec)
         assert len(tools) == 2
         assert tools[0][0] == "list_hosts"
@@ -25,20 +25,20 @@ class TestLoadTools:
 
     def test_missing_function_raises(self) -> None:
         """Test that a missing function raises ToolLoadError."""
-        spec = ToolsSpec(module="agents.diagnostic.tools", functions=["nonexistent_fn"])
+        spec = ToolsSpec(module="examples.agents.diagnostic.tools", functions=["nonexistent_fn"])
         with pytest.raises(ToolLoadError, match="not found"):
             load_tools(spec)
 
     def test_non_callable_raises(self) -> None:
         """Test that a non-callable attribute raises ToolLoadError."""
-        spec = ToolsSpec(module="agents.diagnostic.cluster_state", functions=["cluster_state"])
+        spec = ToolsSpec(module="examples.agents.diagnostic.cluster_state", functions=["cluster_state"])
         with pytest.raises(ToolLoadError, match="not callable"):
             load_tools(spec)
 
     def test_all_diagnostic_tools_load(self) -> None:
         """Test that all diagnostic tools load successfully."""
         spec = ToolsSpec(
-            module="agents.diagnostic.tools",
+            module="examples.agents.diagnostic.tools",
             functions=["list_hosts", "check_host", "get_alerts", "get_recent_deploys", "run_remediation"],
         )
         tools = load_tools(spec)

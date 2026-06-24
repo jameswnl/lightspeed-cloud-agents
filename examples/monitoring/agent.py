@@ -11,7 +11,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from agents.models import AgentRunRequest, AgentRunResponse, MonitoringResult
-from agents.monitoring import tools
+from examples.agents.monitoring import tools
 
 AGENT_NAME = "monitoring-agent"
 
@@ -64,7 +64,7 @@ async def run_monitoring(request: AgentRunRequest) -> AgentRunResponse:
     """
     import logging
 
-    from agents.monitoring._model import get_model
+    from examples.agents.monitoring._model import get_model
 
     logger = logging.getLogger(__name__)
     correlation_id = (request.context or {}).get("correlation_id", "none")

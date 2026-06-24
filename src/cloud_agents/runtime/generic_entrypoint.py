@@ -93,7 +93,7 @@ def build_app(
     # Run optional bootstrap hook from environment.
     # This replaces the hardcoded cluster_state initialization.
     # Agents that need domain-specific setup configure it via:
-    #   AGENT_BOOTSTRAP_MODULE=agents.diagnostic.cluster_state
+    #   AGENT_BOOTSTRAP_MODULE=examples.agents.diagnostic.cluster_state
     #   AGENT_BOOTSTRAP_FUNCTION=init_scenario
     #   AGENT_BOOTSTRAP_ARGS=bad_deploy
     bootstrap_module = os.environ.get("AGENT_BOOTSTRAP_MODULE")

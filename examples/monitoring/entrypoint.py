@@ -12,9 +12,9 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from agents.diagnostic.cluster_state import init_scenario
-from agents.monitoring.agent import run_monitoring, AGENT_NAME
-from agents.monitoring.loop import MonitoringLoop
+from examples.agents.diagnostic.cluster_state import init_scenario
+from examples.agents.monitoring.agent import run_monitoring, AGENT_NAME
+from examples.agents.monitoring.loop import MonitoringLoop
 from agents.remote_agent_client import RemoteAgentClient
 from agents.runtime.server import create_app
 

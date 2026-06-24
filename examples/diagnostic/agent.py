@@ -10,8 +10,8 @@ from typing import Any
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models.openai import OpenAIResponsesModel
 
-from agents.diagnostic import tools
-from agents.diagnostic.cluster_state import cluster_state
+from examples.agents.diagnostic import tools
+from examples.agents.diagnostic.cluster_state import cluster_state
 from agents.models import AgentRunRequest, AgentRunResponse, DiagnosticReport
 
 AGENT_NAME = "diagnostic-agent"
@@ -97,7 +97,7 @@ async def run_diagnostic(request: AgentRunRequest) -> AgentRunResponse:
     """
     import logging
 
-    from agents.diagnostic._model import get_model
+    from examples.agents.diagnostic._model import get_model
 
     logger = logging.getLogger(__name__)
     correlation_id = (request.context or {}).get("correlation_id", "none")

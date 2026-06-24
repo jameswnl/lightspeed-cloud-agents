@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from agents.diagnostic.cluster_state import cluster_state
+from examples.agents.diagnostic.cluster_state import cluster_state
 from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
 from agents.models import AgentRunRequest, MonitoringResult
 from agents.remote_agent_client import RemoteAgentClient

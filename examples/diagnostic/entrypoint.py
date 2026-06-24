@@ -4,8 +4,8 @@ Creates the FastAPI app with the diagnostic agent runner.
 Used by uvicorn: uvicorn agents.diagnostic.entrypoint:app
 """
 
-from agents.diagnostic.agent import run_diagnostic, AGENT_NAME
-from agents.diagnostic.cluster_state import reset_cluster_healthy
+from examples.agents.diagnostic.agent import run_diagnostic, AGENT_NAME
+from examples.agents.diagnostic.cluster_state import reset_cluster_healthy
 from agents.runtime.server import create_app
 
 reset_cluster_healthy()
