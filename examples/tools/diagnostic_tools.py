@@ -72,8 +72,15 @@ def init_scenario(name: str) -> None:
     raise ValueError(f"Unknown scenario: {name!r}")
 
 
+def _ensure_initialized() -> None:
+    """Lazily initialize cluster state if empty."""
+    if not cluster_state:
+        init_scenario("healthy")
+
+
 def list_hosts() -> list[dict[str, Any]]:
     """List all hosts with their role and current status."""
+    _ensure_initialized()
     return [
         {"hostname": k, "role": v["role"], "status": v["status"]}
         for k, v in cluster_state["hosts"].items()
@@ -82,6 +89,7 @@ def list_hosts() -> list[dict[str, Any]]:
 
 def check_host(hostname: str) -> dict[str, Any]:
     """Get detailed status for a host including resource usage and services."""
+    _ensure_initialized()
     host = cluster_state["hosts"].get(hostname)
     if not host:
         return {"error": f"Unknown host: {hostname}"}
@@ -90,11 +98,13 @@ def check_host(hostname: str) -> dict[str, Any]:
 
 def get_alerts() -> list[str]:
     """Get active cluster alerts."""
+    _ensure_initialized()
     return cluster_state["alerts"]
 
 
 def get_recent_deploys() -> list[dict[str, Any]]:
     """Get recent deployments across the cluster."""
+    _ensure_initialized()
     return cluster_state["recent_deploys"]
 
 
@@ -112,6 +122,7 @@ def run_remediation(hostname: str, action: str, reason: str) -> dict[str, Any]:
         action: One of the available actions.
         reason: Why this remediation is needed.
     """
+    _ensure_initialized()
     host = cluster_state["hosts"].get(hostname)
     if not host:
         return {"success": False, "error": f"Unknown host: {hostname}"}
