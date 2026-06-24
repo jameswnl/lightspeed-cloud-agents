@@ -326,15 +326,17 @@ class WorkflowExecutor:
 
         logger.info("Executing step '%s' with agent '%s' (spawn=%s)", step.name, step.agent, step.spawn)
 
-        spawned_endpoint = None
+        spawned_name = None
         try:
             if step.spawn == "on-demand" and self._spawner:
-                spawned_endpoint = await self._spawner.spawn(
-                    step.agent, self._agent_image,
+                spawn_id = uuid.uuid4().hex[:8]
+                spawned_name = f"{step.agent}-{spawn_id}"
+                endpoint = await self._spawner.spawn(
+                    spawned_name, self._agent_image,
                     env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
                 )
-                await self._spawner.wait_ready(spawned_endpoint)
-                client = RemoteAgentClient(spawned_endpoint)
+                await self._spawner.wait_ready(endpoint)
+                client = RemoteAgentClient(endpoint)
             else:
                 client = self._client_factory(step.agent)
             response = await client.run(prompt)
@@ -346,8 +348,8 @@ class WorkflowExecutor:
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
         finally:
-            if spawned_endpoint and self._spawner:
-                await self._spawner.destroy(step.agent)
+            if spawned_name and self._spawner:
+                await self._spawner.destroy(spawned_name)
 
         return StepResult(
             step_name=step.name,

@@ -1,7 +1,7 @@
 """Unit tests for WorkflowExecutor."""
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from agents.models import AgentRunResponse
 from agents.registry import AgentRegistry
@@ -311,3 +311,64 @@ class TestWorkflowExecutorApproval:
         assert state.steps["approval"].error == "Approval rejected by human"
         assert state.status == "failed"
         assert "execution" not in state.steps
+
+
+class TestWorkflowExecutorSpawner:
+    """Tests for on-demand spawning integration."""
+
+    @pytest.mark.asyncio
+    async def test_on_demand_spawn_uses_unique_name(self) -> None:
+        """Test that on-demand spawn generates a unique name and cleans up with it."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Do something", "output_key": "result",
+             "spawn": "on-demand"},
+        ])
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://spawned:8080")
+        spawner.wait_ready = AsyncMock(return_value=True)
+        spawner.destroy = AsyncMock()
+
+        mock_client = AsyncMock()
+        mock_client.run = AsyncMock(return_value=_make_agent_response({"summary": "Done"}))
+
+        executor = WorkflowExecutor(
+            defn, _mock_registry(),
+            spawner=spawner,
+        )
+        with patch("agents.workflow.executor.RemoteAgentClient", return_value=mock_client):
+            state = await executor.run()
+
+        assert state.status == "completed"
+        spawner.spawn.assert_called_once()
+        spawn_name = spawner.spawn.call_args[0][0]
+        assert spawn_name.startswith("diagnostic-agent-")
+        assert len(spawn_name) > len("diagnostic-agent-")
+        spawner.destroy.assert_called_once_with(spawn_name)
+
+    @pytest.mark.asyncio
+    async def test_on_demand_spawn_cleanup_on_failure(self) -> None:
+        """Test that spawned agent is cleaned up even when the step fails."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Do something", "output_key": "result",
+             "spawn": "on-demand"},
+        ])
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://spawned:8080")
+        spawner.wait_ready = AsyncMock(return_value=True)
+        spawner.destroy = AsyncMock()
+
+        mock_client = AsyncMock()
+        mock_client.run = AsyncMock(side_effect=Exception("Agent crashed"))
+
+        executor = WorkflowExecutor(
+            defn, _mock_registry(),
+            spawner=spawner,
+        )
+        with patch("agents.workflow.executor.RemoteAgentClient", return_value=mock_client):
+            state = await executor.run()
+
+        spawner.destroy.assert_called_once()
+        destroy_name = spawner.destroy.call_args[0][0]
+        assert destroy_name.startswith("diagnostic-agent-")

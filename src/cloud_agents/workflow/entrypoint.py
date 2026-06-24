@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import yaml
+from fastapi import FastAPI
 
 from agents.registry import AgentRegistry
 from agents.workflow.api import create_workflow_app
@@ -76,12 +79,20 @@ def build_workflow_app(
     workflow_name = defn.metadata.get("name", "unknown")
     persistence = _create_persistence()
 
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        """Initialize persistence on startup."""
+        if hasattr(persistence, "initialize"):
+            logger.info("Initializing persistence backend: %s", type(persistence).__name__)
+            await persistence.initialize()
+        yield
+
     executor = WorkflowExecutor(
         defn, registry,
         persistence=persistence,
         approval_policy=ApprovalPolicy(),
     )
-    return create_workflow_app(executor, workflow_name)
+    return create_workflow_app(executor, workflow_name, lifespan=_lifespan)
 
 
 app = None

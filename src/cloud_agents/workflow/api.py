@@ -6,7 +6,9 @@ Provides run, poll, approve, and list endpoints for multi-step workflows.
 from __future__ import annotations
 
 import os
-from typing import Any
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,21 +17,28 @@ from agents.runtime.auth import BearerAuthMiddleware, get_api_token
 from agents.workflow.executor import WorkflowExecutor
 from agents.workflow.state import WorkflowState
 
+LifespanType = Any
+
 
 def create_workflow_app(
     executor: WorkflowExecutor,
     workflow_name: str,
+    lifespan: Optional[LifespanType] = None,
 ) -> FastAPI:
     """Create a FastAPI app for the workflow runner.
 
     Args:
         executor: The workflow executor instance.
         workflow_name: Name for healthz/display.
+        lifespan: Optional async context manager for startup/shutdown.
 
     Returns:
         Configured FastAPI application.
     """
-    app = FastAPI(title=f"Workflow: {workflow_name}")
+    kwargs: dict[str, Any] = {"title": f"Workflow: {workflow_name}"}
+    if lifespan is not None:
+        kwargs["lifespan"] = lifespan
+    app = FastAPI(**kwargs)
     api_token = get_api_token()
     if api_token:
         app.add_middleware(BearerAuthMiddleware, token=api_token)

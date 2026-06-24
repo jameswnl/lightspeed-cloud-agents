@@ -2,9 +2,11 @@
 
 import os
 import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from httpx import ASGITransport, AsyncClient
 
 from agents.workflow.entrypoint import _load_workflow, _load_registry, build_workflow_app
 
@@ -83,6 +85,33 @@ class TestBuildWorkflowApp:
             app = build_workflow_app(workflow_path=wf_path, registry_path=rf_path)
             assert app is not None
             assert "test" in app.title
+        finally:
+            os.unlink(wf_path)
+            os.unlink(rf_path)
+
+    @pytest.mark.asyncio
+    async def test_postgres_persistence_initialized_on_startup(self) -> None:
+        """Test that PostgresPersistence.initialize() is called during lifespan."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as wf:
+            yaml.dump(MINIMAL_WORKFLOW, wf)
+            wf_path = wf.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as rf:
+            yaml.dump(REGISTRY, rf)
+            rf_path = rf.name
+        try:
+            mock_persistence = MagicMock()
+            mock_persistence.initialize = AsyncMock()
+            mock_persistence.save = AsyncMock()
+            mock_persistence.load = AsyncMock(return_value=None)
+
+            with patch("agents.workflow.entrypoint._create_persistence", return_value=mock_persistence):
+                app = build_workflow_app(workflow_path=wf_path, registry_path=rf_path)
+
+            assert app.router.lifespan_context is not None
+            async with app.router.lifespan_context(app):
+                pass
+
+            mock_persistence.initialize.assert_awaited_once()
         finally:
             os.unlink(wf_path)
             os.unlink(rf_path)
