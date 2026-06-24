@@ -80,6 +80,8 @@ def create_workflow_app(
                 advisory=app.state.executor._advisory,
             )
             state = await run_executor.run(input_prompt=input_prompt)
+            state.definition_snapshot = stored.definition.model_dump(mode="json")
+            await app.state.executor._persistence.save(state)
         else:
             state = await app.state.executor.run(input_prompt=input_prompt)
         return JSONResponse(
@@ -108,7 +110,20 @@ def create_workflow_app(
         approved = body.get("approved", False)
 
         try:
-            state = await app.state.executor.resume(workflow_id, approved=approved)
+            existing = await app.state.executor._persistence.load(workflow_id)
+            if existing and existing.definition_snapshot:
+                defn = WorkflowDefinition.model_validate(existing.definition_snapshot)
+                from agents.workflow.executor import WorkflowExecutor as WE
+                resume_executor = WE(
+                    defn, app.state.executor._registry,
+                    persistence=app.state.executor._persistence,
+                    approval_policy=app.state.executor._approval_policy,
+                    spawner=app.state.executor._spawner,
+                    agent_image=app.state.executor._agent_image,
+                )
+                state = await resume_executor.resume(workflow_id, approved=approved)
+            else:
+                state = await app.state.executor.resume(workflow_id, approved=approved)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
