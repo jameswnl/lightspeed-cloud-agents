@@ -57,6 +57,9 @@ def create_generic_runner(
     instructions, and retries. Returns an async callable suitable for
     passing to create_app(agent_runner=...).
 
+    When the request context contains advisory_mode=true and the agent
+    has read_only tools classified, only read-only tools are registered.
+
     Args:
         spec: The agent specification from agent.yaml.
         model: The Pydantic AI model (from model_factory or FunctionModel).
@@ -66,39 +69,63 @@ def create_generic_runner(
         Async callable that processes AgentRunRequest → AgentRunResponse.
     """
     output_type = resolve_output_type(spec.output_type, spec.output_type_module)
-    tools = load_tools(spec.tools)
+    all_tools = load_tools(spec.tools)
+    read_only_tools = set(spec.tools.read_only) if spec.tools.read_only else set()
     capabilities = _load_skills(spec)
 
-    agent: Agent[None, Any] = Agent(
-        model,
-        output_type=output_type,
-        retries=spec.retries,
-        defer_model_check=spec.defer_model_check,
-        instructions=spec.instructions,
-        capabilities=capabilities or None,
-    )
+    def _build_agent(advisory_mode: bool = False) -> Agent[None, Any]:
+        """Build the agent, optionally filtering tools for advisory mode."""
+        agent: Agent[None, Any] = Agent(
+            model,
+            output_type=output_type,
+            retries=spec.retries,
+            defer_model_check=spec.defer_model_check,
+            instructions=spec.instructions,
+            capabilities=capabilities or None,
+        )
 
-    for fn_name, fn in tools:
-        instrumented = instrument_tool(fn, agent_name, fn_name)
-        agent.tool_plain(instrumented, docstring_format="google")
+        tools_to_register = all_tools
+        if advisory_mode and read_only_tools:
+            tools_to_register = [(n, f) for n, f in all_tools if n in read_only_tools]
+            removed = [n for n, _ in all_tools if n not in read_only_tools]
+            if removed:
+                logger.info("Advisory mode: filtered out tools: %s", removed)
+        elif advisory_mode and not read_only_tools:
+            logger.warning(
+                "Advisory mode requested but no read_only tools classified for %s. "
+                "All tools remain available.", agent_name,
+            )
 
-    if spec.output_validator:
-        import importlib
+        for fn_name, fn in tools_to_register:
+            instrumented = instrument_tool(fn, agent_name, fn_name)
+            agent.tool_plain(instrumented, docstring_format="google")
 
-        val_mod = importlib.import_module(spec.output_validator.module)
-        val_fn = getattr(val_mod, spec.output_validator.function)
-        agent.output_validator(val_fn)
+        if spec.output_validator:
+            import importlib
+            val_mod = importlib.import_module(spec.output_validator.module)
+            val_fn = getattr(val_mod, spec.output_validator.function)
+            agent.output_validator(val_fn)
+
+        return agent
+
+    default_agent = _build_agent(advisory_mode=False)
+    advisory_agent: Agent[None, Any] | None = None
+    if read_only_tools:
+        advisory_agent = _build_agent(advisory_mode=True)
 
     async def run_agent(request: AgentRunRequest) -> AgentRunResponse:
         """Run the agent and return a structured response."""
         correlation_id = (request.context or {}).get("correlation_id", "none")
+        is_advisory = (request.context or {}).get("advisory_mode", False)
         logger.info(
             "Starting generic run",
             extra={"agent_name": agent_name, "correlation_id": correlation_id},
         )
 
+        active_agent = (advisory_agent if is_advisory and advisory_agent else default_agent)
+
         try:
-            result = await agent.run(request.prompt)
+            result = await active_agent.run(request.prompt)
         except Exception as exc:
             logger.error(
                 "Run failed: %s",

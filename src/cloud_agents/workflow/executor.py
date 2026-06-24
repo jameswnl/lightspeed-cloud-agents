@@ -16,6 +16,7 @@ from typing import Any, Optional
 from agents.models import AgentRunResponse
 from agents.registry import AgentRegistry
 from agents.remote_agent_client import RemoteAgentClient
+from agents.workflow.advisory import AdvisoryEnforcer
 from agents.workflow.conditions import evaluate_condition
 from agents.workflow.definition import WorkflowDefinition, WorkflowStepSpec
 from agents.workflow.interpolation import interpolate
@@ -45,6 +46,7 @@ class WorkflowExecutor:
         approval_policy: Optional[ApprovalPolicy] = None,
         spawner: Optional[AgentSpawner] = None,
         agent_image: str = "agent-runtime:latest",
+        advisory: Optional[AdvisoryEnforcer] = None,
     ) -> None:
         """Initialize the executor.
 
@@ -53,6 +55,7 @@ class WorkflowExecutor:
             registry: Agent endpoint registry.
             client_factory: Optional factory for creating RemoteAgentClient.
             persistence: Optional state persistence backend. Defaults to in-memory.
+            advisory: Optional advisory mode enforcer.
         """
         self._definition = definition
         self._registry = registry
@@ -63,6 +66,9 @@ class WorkflowExecutor:
         self._approval_policy = approval_policy or ApprovalPolicy()
         self._spawner = spawner
         self._agent_image = agent_image
+        self._advisory = advisory or AdvisoryEnforcer(
+            enabled=definition.metadata.get("mode") == "advisory"
+        )
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
 
@@ -210,6 +216,15 @@ class WorkflowExecutor:
                     return state
 
             if step.type == "human-approval":
+                if self._advisory.should_skip_approval():
+                    state.steps[step.output_key] = StepResult(
+                        step_name=step.name,
+                        status="skipped",
+                        output={"advisory": True, "skipped_reason": "advisory mode"},
+                    )
+                    logger.info("Step '%s' skipped (advisory mode)", step.name)
+                    continue
+
                 classification = classify_step_risk(step, self._approval_policy)
                 if classification.auto_approved:
                     state.steps[step.output_key] = StepResult(
@@ -324,6 +339,8 @@ class WorkflowExecutor:
         if retry_ctx and retry_ctx.attempt > 1:
             prompt = retry_ctx.build_retry_prompt(prompt)
 
+        prompt = self._advisory.annotate_prompt(prompt)
+
         logger.info("Executing step '%s' with agent '%s' (spawn=%s)", step.name, step.agent, step.spawn)
 
         spawned_name = None
@@ -339,7 +356,10 @@ class WorkflowExecutor:
                 client = RemoteAgentClient(endpoint)
             else:
                 client = self._client_factory(step.agent)
-            response = await client.run(prompt)
+            context: dict[str, Any] = {}
+            if self._advisory.enabled:
+                context["advisory_mode"] = True
+            response = await client.run(prompt, context=context or None)
         except Exception as exc:
             return StepResult(
                 step_name=step.name, status="failed",
@@ -351,10 +371,11 @@ class WorkflowExecutor:
             if spawned_name and self._spawner:
                 await self._spawner.destroy(spawned_name)
 
+        output = self._advisory.annotate_output(response.output)
         return StepResult(
             step_name=step.name,
             status="completed",
-            output=response.output,
+            output=output,
             started_at=started_at,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )

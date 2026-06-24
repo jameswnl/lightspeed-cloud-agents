@@ -18,10 +18,24 @@ class ToolsSpec(BaseModel):
     Attributes:
         module: Python module name importable from /app/tools/.
         functions: Function names to register as agent.tool_plain().
+        read_only: Functions that are safe in advisory mode (no side effects).
     """
 
     module: str = Field(..., min_length=1)
     functions: list[str] = Field(..., min_length=1)
+    read_only: list[str] = Field(default_factory=list)
+
+    @field_validator("read_only")
+    @classmethod
+    def validate_read_only_subset(cls, v: list[str], info: Any) -> list[str]:
+        """Validate that read_only tools are a subset of functions."""
+        functions = info.data.get("functions", [])
+        invalid = set(v) - set(functions)
+        if invalid:
+            raise ValueError(
+                f"read_only tools not in functions list: {sorted(invalid)}"
+            )
+        return v
 
 
 class OutputValidatorSpec(BaseModel):

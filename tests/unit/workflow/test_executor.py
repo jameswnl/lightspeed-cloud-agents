@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from agents.models import AgentRunResponse
 from agents.registry import AgentRegistry
+from agents.workflow.advisory import AdvisoryEnforcer
 from agents.workflow.definition import WorkflowDefinition, WorkflowSpec, WorkflowStepSpec
 from agents.workflow.executor import WorkflowExecutor
 
@@ -372,3 +373,106 @@ class TestWorkflowExecutorSpawner:
         spawner.destroy.assert_called_once()
         destroy_name = spawner.destroy.call_args[0][0]
         assert destroy_name.startswith("diagnostic-agent-")
+
+
+class TestWorkflowExecutorAdvisory:
+    """Tests for advisory mode in workflow execution."""
+
+    @pytest.mark.asyncio
+    async def test_advisory_skips_approval_steps(self) -> None:
+        """Test that advisory mode skips human-approval steps."""
+        defn = _make_definition([
+            {"name": "diagnose", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Check", "output_key": "diagnosis"},
+            {"name": "approve", "type": "human-approval",
+             "message": "Approve?", "output_key": "approval"},
+            {"name": "fix", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Fix", "output_key": "fix"},
+        ])
+        client = AsyncMock()
+        client.run = AsyncMock(side_effect=[
+            _make_agent_response({"summary": "issues found"}),
+            _make_agent_response({"summary": "fixed"}),
+        ])
+
+        advisory = AdvisoryEnforcer(enabled=True)
+        executor = WorkflowExecutor(
+            defn, _mock_registry(),
+            client_factory=lambda _: client,
+            advisory=advisory,
+        )
+        state = await executor.run()
+
+        assert state.status == "completed"
+        assert state.steps["approval"].status == "skipped"
+        assert state.steps["approval"].output["advisory"] is True
+        assert state.steps["fix"].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_advisory_annotates_prompt(self) -> None:
+        """Test that advisory mode appends advisory suffix to prompts."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Check hosts", "output_key": "result"},
+        ])
+        prompts_received = []
+
+        async def capturing_run(prompt, **kwargs):
+            prompts_received.append(prompt)
+            return _make_agent_response({"summary": "ok"})
+
+        client = AsyncMock()
+        client.run = capturing_run
+
+        advisory = AdvisoryEnforcer(enabled=True)
+        executor = WorkflowExecutor(
+            defn, _mock_registry(),
+            client_factory=lambda _: client,
+            advisory=advisory,
+        )
+        await executor.run()
+
+        assert len(prompts_received) == 1
+        assert "ADVISORY MODE" in prompts_received[0]
+        assert "Check hosts" in prompts_received[0]
+
+    @pytest.mark.asyncio
+    async def test_advisory_annotates_output(self) -> None:
+        """Test that advisory mode adds advisory marker to output."""
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diagnostic-agent",
+             "prompt": "Check", "output_key": "result"},
+        ])
+        client = AsyncMock()
+        client.run = AsyncMock(return_value=_make_agent_response({"summary": "ok"}))
+
+        advisory = AdvisoryEnforcer(enabled=True)
+        executor = WorkflowExecutor(
+            defn, _mock_registry(),
+            client_factory=lambda _: client,
+            advisory=advisory,
+        )
+        state = await executor.run()
+
+        assert state.steps["result"].output["advisory"] is True
+        assert state.steps["result"].output["summary"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_advisory_from_metadata(self) -> None:
+        """Test that advisory mode is auto-detected from workflow metadata."""
+        step_specs = [WorkflowStepSpec(
+            name="s1", type="agent", agent="diagnostic-agent",
+            prompt="Check", output_key="r1",
+        )]
+        defn = WorkflowDefinition(
+            apiVersion="v1", kind="AgentWorkflow",
+            metadata={"name": "test", "mode": "advisory"},
+            spec=WorkflowSpec(steps=step_specs),
+        )
+        client = AsyncMock()
+        client.run = AsyncMock(return_value=_make_agent_response({"summary": "ok"}))
+
+        executor = WorkflowExecutor(defn, _mock_registry(), client_factory=lambda _: client)
+        state = await executor.run()
+
+        assert state.steps["r1"].output["advisory"] is True

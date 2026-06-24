@@ -122,3 +122,66 @@ class TestCreateGenericRunner:
 
         assert response.success is True
         assert response.output_type == "str"
+
+    @pytest.mark.asyncio
+    async def test_advisory_mode_filters_tools(self) -> None:
+        """Test that advisory mode only registers read-only tools."""
+        tool_names_seen = []
+
+        def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            tool_names_seen.extend(t.name for t in info.function_tools)
+            report = DiagnosticReport(
+                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
+            return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
+
+        spec = AgentSpec(
+            instructions="You are a test agent.",
+            output_type="DiagnosticReport",
+            tools=ToolsSpec(
+                module="agents.diagnostic.tools",
+                functions=["list_hosts", "check_host", "run_remediation"],
+                read_only=["list_hosts", "check_host"],
+            ),
+            lifecycle=LifecycleSpec(type="request-response"),
+        )
+        runner = create_generic_runner(spec, FunctionModel(mock_llm), "test-agent")
+        request = AgentRunRequest(
+            prompt="Check hosts",
+            context={"advisory_mode": True},
+        )
+        await runner(request)
+
+        assert "list_hosts" in tool_names_seen
+        assert "check_host" in tool_names_seen
+        assert "run_remediation" not in tool_names_seen
+
+    @pytest.mark.asyncio
+    async def test_non_advisory_has_all_tools(self) -> None:
+        """Test that non-advisory mode has all tools including write tools."""
+        tool_names_seen = []
+
+        def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            tool_names_seen.extend(t.name for t in info.function_tools)
+            report = DiagnosticReport(
+                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
+            return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
+
+        spec = AgentSpec(
+            instructions="You are a test agent.",
+            output_type="DiagnosticReport",
+            tools=ToolsSpec(
+                module="agents.diagnostic.tools",
+                functions=["list_hosts", "check_host", "run_remediation"],
+                read_only=["list_hosts", "check_host"],
+            ),
+            lifecycle=LifecycleSpec(type="request-response"),
+        )
+        runner = create_generic_runner(spec, FunctionModel(mock_llm), "test-agent")
+        request = AgentRunRequest(prompt="Check hosts")
+        await runner(request)
+
+        assert "list_hosts" in tool_names_seen
+        assert "check_host" in tool_names_seen
+        assert "run_remediation" in tool_names_seen
