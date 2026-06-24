@@ -20,7 +20,7 @@ This example creates an agent that checks whether a cluster is safe for a new de
 
 Your tools module can define a custom Pydantic output model. The generic runtime loads it via `importlib` from the `output_type_module` field in your YAML.
 
-**`agents/tools/readiness_tools.py`:**
+**`my_tools/readiness_tools.py`:**
 
 ```python
 from pydantic import BaseModel, Field
@@ -37,10 +37,10 @@ class DeploymentReadiness(BaseModel):
 
 Tools are plain Python functions. The agent calls them via the LLM's tool-calling mechanism. Each function needs a docstring (the LLM reads it to decide when to call the tool).
 
-**`agents/tools/readiness_tools.py`** (continued):
+**`my_tools/readiness_tools.py`** (continued):
 
 ```python
-from agents.diagnostic.cluster_state import cluster_state
+# Tools are plain Python functions — import what you need
 
 def check_resource_capacity() -> list[dict]:
     """Check resource headroom across all hosts.
@@ -88,7 +88,7 @@ def check_service_health() -> list[dict]:
 
 This tells the generic runtime what agent to build — instructions for the LLM, which tools to load, what output type to expect, and the lifecycle (request-response vs periodic loop).
 
-**`agents/definitions/deploy-readiness-agent.yaml`:**
+**`my_agents/deploy-readiness-agent.yaml`:**
 
 ```yaml
 apiVersion: lightspeed.redhat.com/v1alpha1
@@ -146,14 +146,11 @@ spec:
 ```bash
 podman run -d --name readiness-agent \
   -p 8083:8080 \
-  -v $PWD/agents/definitions/deploy-readiness-agent.yaml:/app/agent.yaml:ro \
-  -v $PWD/agents/tools/readiness_tools.py:/app/tools/readiness_tools.py:ro \
+  -v $PWD/my_agents/deploy-readiness-agent.yaml:/app/agent.yaml:ro \
+  -v $PWD/my_tools/readiness_tools.py:/app/tools/readiness_tools.py:ro \
   -e OLLAMA_URL=https://api.openai.com/v1 \
   -e AGENT_MODEL=gpt-4o-mini \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  -e AGENT_BOOTSTRAP_MODULE=agents.diagnostic.cluster_state \
-  -e AGENT_BOOTSTRAP_FUNCTION=init_scenario \
-  -e AGENT_BOOTSTRAP_ARGS=bad_deploy \
   agent-runtime:latest
 ```
 
@@ -339,6 +336,6 @@ agents:
 
 | Agent | YAML | Tools | Type |
 |-------|------|-------|------|
-| Diagnostic | `agents/definitions/diagnostic-agent.yaml` | `agents/tools/diagnostic_tools.py` | request-response, with output validator |
-| Monitoring | `agents/definitions/monitoring-agent.yaml` | `agents/tools/monitoring_tools.py` | periodic-loop, dispatches to diagnostic |
-| Deploy Readiness | `agents/definitions/deploy-readiness-agent.yaml` | `agents/tools/readiness_tools.py` | request-response, custom output type |
+| Diagnostic | `examples/agents/definitions/diagnostic-agent.yaml` | `examples/agents/tools/diagnostic_tools.py` | request-response, with output validator |
+| Monitoring | `examples/agents/definitions/monitoring-agent.yaml` | `examples/agents/tools/monitoring_tools.py` | periodic-loop, dispatches to diagnostic |
+| Deploy Readiness | `examples/agents/definitions/deploy-readiness-agent.yaml` | `examples/agents/tools/readiness_tools.py` | request-response, custom output type |
