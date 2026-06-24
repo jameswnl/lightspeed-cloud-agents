@@ -12,7 +12,7 @@ from agents.workflow.executor import WorkflowExecutor
 
 def _make_definition(steps: list[dict]) -> WorkflowDefinition:
     """Create a WorkflowDefinition from step dicts."""
-    step_specs = [WorkflowStepSpec(**s) for s in steps]
+    step_specs = [WorkflowStepSpec(**{**s, "spawn": s.get("spawn", "pre-deployed")}) for s in steps]
     return WorkflowDefinition(
         apiVersion="v1",
         kind="AgentWorkflow",

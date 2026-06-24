@@ -13,10 +13,34 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import httpx
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 MAX_SPAWNED_PODS = int(os.environ.get("MAX_SPAWNED_PODS", "10"))
+
+
+class SpawnConfig(BaseModel):
+    """Per-step resource configuration for ephemeral pods.
+
+    Validation bounds prevent resource abuse. AgentDefinition.spec.resources
+    sets the maximum envelope; SpawnConfig may only narrow within it.
+
+    Attributes:
+        cpu_request: CPU request (e.g. "100m").
+        cpu_limit: CPU limit (max 4 cores).
+        memory_request: Memory request (e.g. "256Mi").
+        memory_limit: Memory limit (max 4Gi).
+        timeout_seconds: Max wait for pod readiness.
+        health_path: Health probe endpoint path.
+    """
+
+    cpu_request: str = "100m"
+    cpu_limit: str = Field(default="500m")
+    memory_request: str = "256Mi"
+    memory_limit: str = Field(default="512Mi")
+    timeout_seconds: int = Field(default=60, ge=5, le=300)
+    health_path: str = "/healthz"
 
 
 class AgentSpawner(ABC):

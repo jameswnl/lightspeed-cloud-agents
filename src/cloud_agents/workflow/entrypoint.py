@@ -89,11 +89,21 @@ def build_workflow_app(
             await persistence.initialize()
         yield
 
-    executor = WorkflowExecutor(
-        defn, registry,
-        persistence=persistence,
-        approval_policy=ApprovalPolicy(),
-    )
+    executor_type = os.environ.get("WORKFLOW_EXECUTOR", "default")
+    if executor_type == "graph":
+        from agents.workflow.graph_executor import GraphExecutor
+        executor = GraphExecutor(
+            defn, registry,
+            persistence=persistence,
+            approval_policy=ApprovalPolicy(),
+        )
+        logger.info("Using GraphExecutor (pydantic-graph, exploratory)")
+    else:
+        executor = WorkflowExecutor(
+            defn, registry,
+            persistence=persistence,
+            approval_policy=ApprovalPolicy(),
+        )
     return create_workflow_app(executor, workflow_name, lifespan=_lifespan)
 
 

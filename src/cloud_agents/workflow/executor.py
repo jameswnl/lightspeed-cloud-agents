@@ -387,7 +387,7 @@ class WorkflowExecutor:
             span.set_attribute("step.agent", step.agent or "")
             span.set_attribute("step.spawn", step.spawn)
             try:
-                if step.spawn == "on-demand" and self._spawner:
+                if step.spawn in ("on-demand", "ephemeral") and self._spawner:
                     spawn_id = uuid.uuid4().hex[:8]
                     spawned_name = f"{step.agent}-{spawn_id}"
                     endpoint = await self._spawner.spawn(
