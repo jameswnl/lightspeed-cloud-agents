@@ -31,8 +31,9 @@ AFTER (stateless):
   Runner pods are workers behind a Service/LB
   All state in PostgreSQL
   Workflow definitions submitted via API, stored in DB
-  Steps dispatched async — runner writes "running" to DB,
-  spawns pod, pod writes result to DB on completion
+  Steps dispatched async — runner writes "dispatched" to DB,
+  spawns pod, pod POSTs result to trusted runner ingest API,
+  runner persists result to DB and advances workflow
   Any runner replica can advance the workflow
 ```
 
