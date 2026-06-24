@@ -1,6 +1,5 @@
 # Podman compose using the generic agent-runtime image
 # Both agents run on the same image with different mounted configs.
-# Dev-only — do not expose beyond the developer machine.
 #
 # Usage:
 #   podman compose -f deploy/podman/docker-compose.generic-agents.yaml up -d
@@ -14,10 +13,9 @@ services:
     ports:
       - "8081:8080"
     volumes:
-      - ../../agents/definitions/diagnostic-agent.yaml:/app/agent.yaml:ro
-      - ../../agents/tools/diagnostic_tools.py:/app/tools/diagnostic_tools.py:ro
-      - ../../agents/registry.yaml:/app/registry.yaml:ro
-      - ../../examples/skills:/app/skills:ro
+      - ../../examples/agents/definitions/diagnostic-agent.yaml:/app/agent.yaml:ro
+      - ../../examples/agents/tools/diagnostic_tools.py:/app/tools/diagnostic_tools.py:ro
+      - ../../examples/agents/registry.yaml:/app/registry.yaml:ro
     environment:
       - OLLAMA_URL=${OLLAMA_URL:-http://host.containers.internal:11434/v1}
       - AGENT_MODEL=${AGENT_MODEL:-gpt-4o-mini}
@@ -30,14 +28,14 @@ services:
     ports:
       - "8082:8080"
     volumes:
-      - ../../agents/definitions/monitoring-agent.yaml:/app/agent.yaml:ro
-      - ../../agents/tools/monitoring_tools.py:/app/tools/monitoring_tools.py:ro
-      - ../../agents/registry.yaml:/app/registry.yaml:ro
+      - ../../examples/agents/definitions/monitoring-agent.yaml:/app/agent.yaml:ro
+      - ../../examples/agents/tools/monitoring_tools.py:/app/tools/monitoring_tools.py:ro
+      - ../../examples/agents/registry.yaml:/app/registry.yaml:ro
     environment:
       - OLLAMA_URL=${OLLAMA_URL:-http://host.containers.internal:11434/v1}
       - AGENT_MODEL=${AGENT_MODEL:-gpt-4o-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
-      - AGENT_BOOTSTRAP_MODULE=agents.diagnostic.cluster_state
+      - AGENT_BOOTSTRAP_MODULE=examples.agents.diagnostic.cluster_state
       - AGENT_BOOTSTRAP_FUNCTION=init_scenario
       - AGENT_BOOTSTRAP_ARGS=bad_deploy
     depends_on:
