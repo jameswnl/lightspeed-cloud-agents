@@ -25,7 +25,7 @@ class TestInterpolate:
         """Test interpolating a string value."""
         state = _make_state(diagnose={"summary": "All good"})
         result = interpolate("Result: {{ steps.diagnose.output.summary }}", state)
-        assert result == "Result: <data>All good</data>"
+        assert result == 'Result: <data>"All good"</data>'
 
     def test_list_value_json_serialized(self) -> None:
         """Test that list values are JSON-serialized."""
@@ -74,8 +74,8 @@ class TestInterpolate:
         result = interpolate(
             "{{ steps.s1.output.a }} {{ steps.s2.output.b }}", state
         )
-        assert "<data>hello</data>" in result
-        assert "<data>world</data>" in result
+        assert '<data>"hello"</data>' in result
+        assert '<data>"world"</data>' in result
 
     def test_boolean_value(self) -> None:
         """Test boolean value interpolation."""
@@ -147,13 +147,13 @@ class TestNestedInterpolation:
         """Test interpolating nested dict values."""
         state = _make_state(diagnose={"details": {"host": "web-02", "cpu": 92}})
         result = interpolate("Host: {{ steps.diagnose.output.details.host }}", state)
-        assert result == "Host: <data>web-02</data>"
+        assert result == 'Host: <data>"web-02"</data>'
 
     def test_array_index_access(self) -> None:
         """Test interpolating array element."""
         state = _make_state(diagnose={"issues": ["disk full", "high cpu"]})
         result = interpolate("First: {{ steps.diagnose.output.issues[0] }}", state)
-        assert result == "First: <data>disk full</data>"
+        assert result == 'First: <data>"disk full"</data>'
 
     def test_array_object_access(self) -> None:
         """Test interpolating field from array element."""
@@ -164,13 +164,13 @@ class TestNestedInterpolation:
             ]
         })
         result = interpolate("{{ steps.diagnose.output.actions[1].host }}", state)
-        assert result == "<data>web-02</data>"
+        assert result == '<data>"web-02"</data>'
 
     def test_backward_compat_simple_key(self) -> None:
         """Test that simple single-key access still works."""
         state = _make_state(diagnose={"summary": "All good"})
         result = interpolate("{{ steps.diagnose.output.summary }}", state)
-        assert result == "<data>All good</data>"
+        assert result == '<data>"All good"</data>'
 
     def test_nested_returns_dict_as_json(self) -> None:
         """Test that nested path returning a dict is JSON-serialized."""
@@ -179,8 +179,8 @@ class TestNestedInterpolation:
         assert "<data>" in result
         assert '"host"' in result
 
-    def test_nested_missing_intermediate_returns_null(self) -> None:
-        """Test that missing intermediate key returns null."""
+    def test_nested_missing_intermediate_raises(self) -> None:
+        """Test that missing intermediate key in nested path raises ValueError."""
         state = _make_state(diagnose={"summary": "ok"})
-        result = interpolate("{{ steps.diagnose.output.details.host }}", state)
-        assert result == "<data>null</data>"
+        with pytest.raises(ValueError, match="not found"):
+            interpolate("{{ steps.diagnose.output.details.host }}", state)

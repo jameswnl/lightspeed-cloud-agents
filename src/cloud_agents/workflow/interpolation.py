@@ -75,14 +75,14 @@ def resolve_path(data: Any, path: str) -> Any:
 
 
 def _format_value(value: Any) -> str:
-    """Format a resolved value for template insertion."""
+    """Format a resolved value for template insertion.
+
+    All values are JSON-serialized to prevent delimiter injection
+    in the <data>...</data> boundary.
+    """
     if value is None:
         return "<data>null</data>"
-    if isinstance(value, bool):
-        return f"<data>{json.dumps(value)}</data>"
-    if isinstance(value, (dict, list)):
-        return f"<data>{json.dumps(value)}</data>"
-    return f"<data>{value}</data>"
+    return f"<data>{json.dumps(value)}</data>"
 
 
 def interpolate(template: str, state: WorkflowState) -> str:
@@ -110,10 +110,10 @@ def interpolate(template: str, state: WorkflowState) -> str:
                 f"Template references missing step or output: "
                 f"steps.{step_name}.output.{path}"
             )
-        try:
+        if "." not in path and "[" not in path:
+            value = result.output.get(path)
+        else:
             value = resolve_path(result.output, path)
-        except ValueError:
-            value = None
         return _format_value(value)
 
     return TEMPLATE_PATTERN.sub(replacer, template)
