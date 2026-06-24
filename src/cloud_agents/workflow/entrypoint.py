@@ -60,6 +60,25 @@ PERSISTENCE_PATH = os.environ.get("WORKFLOW_STATE_DIR", "/app/state")
 POSTGRES_URL = os.environ.get("WORKFLOW_POSTGRES_URL", "")
 
 
+SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
+
+
+def _create_spawner():
+    """Create spawner based on environment config."""
+    if SPAWNER_TYPE == "kubernetes":
+        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
+        service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
+        logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
+        return KubernetesSpawner(namespace=namespace, service_account=service_account)
+    if SPAWNER_TYPE == "podman":
+        from agents.spawner.podman_spawner import PodmanSpawner
+        network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
+        logger.info("Using PodmanSpawner (network=%s)", network)
+        return PodmanSpawner(network=network)
+    return None
+
+
 def _create_persistence() -> WorkflowPersistence:
     """Create persistence backend based on environment config."""
     if PERSISTENCE_TYPE == "postgres" and POSTGRES_URL:
@@ -89,6 +108,9 @@ def build_workflow_app(
             await persistence.initialize()
         yield
 
+    spawner = _create_spawner()
+    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
+
     executor_type = os.environ.get("WORKFLOW_EXECUTOR", "default")
     if executor_type == "graph":
         from agents.workflow.graph_executor import GraphExecutor
@@ -96,6 +118,8 @@ def build_workflow_app(
             defn, registry,
             persistence=persistence,
             approval_policy=ApprovalPolicy(),
+            spawner=spawner,
+            agent_image=agent_image,
         )
         logger.info("Using GraphExecutor (pydantic-graph, exploratory)")
     else:
@@ -103,6 +127,8 @@ def build_workflow_app(
             defn, registry,
             persistence=persistence,
             approval_policy=ApprovalPolicy(),
+            spawner=spawner,
+            agent_image=agent_image,
         )
     return create_workflow_app(executor, workflow_name, lifespan=_lifespan)
 

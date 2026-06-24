@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-runner
+  labels:
+    app: workflow-runner
+    environment: cloud-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-runner
+  template:
+    metadata:
+      labels:
+        app: workflow-runner
+        environment: cloud-agents
+    spec:
+      serviceAccountName: workflow-runner
+      containers:
+        - name: workflow-runner
+          image: docker.io/library/agent-runtime:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "uvicorn", "agents.workflow.entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: WORKFLOW_DEFINITION
+              value: "/app/workflow.yaml"
+            - name: AGENT_REGISTRY
+              value: "/app/registry.yaml"
+            - name: WORKFLOW_SPAWNER
+              value: "kubernetes"
+            - name: SPAWNER_NAMESPACE
+              value: "default"
+            - name: SPAWNER_SERVICE_ACCOUNT
+              value: "workflow-runner"
+            - name: AGENT_IMAGE
+              value: "docker.io/library/agent-runtime:latest"
+            - name: AGENT_MODEL
+              value: "gpt-4"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-key
+                  key: OPENAI_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: workflow-config
+              mountPath: /app/workflow.yaml
+              subPath: workflow.yaml
+              readOnly: true
+            - name: workflow-config
+              mountPath: /app/registry.yaml
+              subPath: registry.yaml
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: workflow-config
+          configMap:
+            name: workflow-runner-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-runner
+  labels:
+    app: workflow-runner
+    environment: cloud-agents
+spec:
+  selector:
+    app: workflow-runner
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
