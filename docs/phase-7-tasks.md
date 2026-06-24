@@ -109,13 +109,19 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 **Design decision:** Do NOT use `ownerReferences`. Owner refs to the runner Pod would GC in-flight Jobs during normal rollouts. Owner refs to the Deployment don't provide crash-cleanup semantics. The stateless multi-replica model (Phase 6) means no single Pod owns a step.
 
 **Fix:**
-- K8s Jobs already have `ttlSecondsAfterFinished: 300` — completed Jobs self-clean after 5 minutes
-- The recovery poller (Phase 6) detects orphaned steps (dispatched past timeout) and marks them failed
+- **Completed Jobs:** `ttlSecondsAfterFinished: 300` — K8s auto-cleans after 5 minutes
+- **Orphaned running Jobs:** The recovery poller detects dispatched steps past timeout, marks them failed in workflow state, then calls `spawner.destroy(spawned_name)` to delete the backing K8s Job + Service. This is the same `destroy()` path used in normal step cleanup.
 - Add `spawner_labels` to spawned Jobs: `workflow-id`, `step-name`, `created-at` for visibility
-- Add a cleanup command: `kubectl delete jobs -l spawned-by=workflow-runner --field-selector status.successful=0` for manual orphan cleanup
+- Manual fallback: `kubectl delete jobs -l spawned-by=workflow-runner` for emergency cleanup
+
+**Cleanup responsibility chain:**
+1. Normal path: executor `finally` block calls `spawner.destroy()` after step completes
+2. Runner crash: recovery poller on another replica detects orphaned step → calls `spawner.destroy()` to kill the Job
+3. TTL: completed Jobs self-clean after 300s regardless
 
 **Files:**
 - Modify: `src/agents/spawner/kubernetes_spawner.py` — add workflow labels to Jobs
+- Modify: `src/agents/workflow/advancement.py` — recovery poller calls `spawner.destroy()` for orphaned steps
 - Document: cleanup procedures in ARCHITECTURE.md
 
 ---
@@ -195,7 +201,7 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 
 ```
 Task 1 (K8s Secrets)  ──┐
-Task 2 (risk_level)   ──┤──→ Task 4 (content-hash) → Task 5 (owner refs)
+Task 2 (risk_level)   ──┤──→ Task 4 (content-hash) → Task 5 (TTL + poller cleanup)
 Task 3 (agent auth)   ──┘
                               │
 Task 6 (derive status)       │
@@ -226,5 +232,6 @@ uv run pytest tests/unit/agents/ examples/tests/ -q    # all tests pass
 
 **Robustness verification:**
 - Retry a failed step → same Job name (content-hash), no duplicate
-- Delete workflow runner → spawned Jobs cleaned up (owner refs)
+- Runner crash → recovery poller detects orphaned step → calls spawner.destroy() → Job deleted
+- Completed Jobs auto-clean after 300s (TTL)
 - Load workflow from DB → status matches derive_status(steps)
