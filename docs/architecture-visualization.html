@@ -18,6 +18,7 @@ svg { width: 100%; height: auto; display: block; }
 .desc { font-size: 9.5px; fill: #8b949e; }
 .mount { font-size: 9px; fill: #d2a8ff; font-family: 'SFMono-Regular', monospace; }
 .mount-hdr { font-size: 9.5px; fill: #a371f7; font-weight: 600; }
+.step-label { font-size: 11px; fill: #58a6ff; font-weight: 700; }
 
 .boundary { fill: none; stroke-dasharray: 7 4; stroke-width: 1.4; rx: 10; ry: 10; }
 .blbl { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
@@ -48,7 +49,7 @@ svg { width: 100%; height: auto; display: block; }
 </head>
 <body>
 <h1>Diagnostic Workflow — Step-by-Step</h1>
-<h2>diagnose → approve → fix → verify</h2>
+<h2>diagnose → approve → fix → verify &nbsp;(all steps use diagnostic-agent, each in its own ephemeral pod)</h2>
 
 <div class="scene">
 <svg viewBox="0 0 1140 580" xmlns="http://www.w3.org/2000/svg">
@@ -69,21 +70,19 @@ svg { width: 100%; height: auto; display: block; }
 <text x="155" y="125" class="blbl" fill="#58a6ff" opacity="0.55">Platform Framework</text>
 
 <rect class="boundary" x="390" y="108" width="365" height="330" stroke="#238636" opacity="0.35"/>
-<text x="405" y="125" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pods (spawned per step)</text>
+<text x="405" y="125" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pod (one per step)</text>
 
 <rect class="boundary" x="800" y="75" width="200" height="470" stroke="#a371f7" opacity="0.25"/>
 <text x="815" y="93" class="blbl" fill="#a371f7" opacity="0.45">External</text>
 
 <!-- ===== STATIC COMPONENTS ===== -->
 
-<!-- User -->
 <g class="comp" id="c-user">
   <rect x="15" y="220" width="90" height="50" fill="#1f2937" stroke="#6366f1"/>
   <text x="60" y="243" text-anchor="middle" class="lbl">User</text>
   <text x="60" y="258" text-anchor="middle" class="desc">API caller</text>
 </g>
 
-<!-- Workflow Runner -->
 <g class="comp" id="c-wf">
   <rect x="155" y="195" width="180" height="100" fill="#1c2333" stroke="#58a6ff"/>
   <text x="245" y="220" text-anchor="middle" class="lbl">Workflow Runner</text>
@@ -93,35 +92,30 @@ svg { width: 100%; height: auto; display: block; }
   <text x="245" y="278" text-anchor="middle" class="desc">RemoteAgentClient</text>
 </g>
 
-<!-- Spawner -->
 <g class="comp" id="c-sp">
   <rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/>
   <text x="245" y="365" text-anchor="middle" class="lbl">Spawner</text>
   <text x="245" y="381" text-anchor="middle" class="desc">K8s Jobs / Podman containers</text>
 </g>
 
-<!-- Registry -->
 <g class="comp" id="c-reg">
   <rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/>
   <text x="245" y="155" text-anchor="middle" class="lbl">Agent Registry</text>
   <text x="245" y="168" text-anchor="middle" class="desc">registry.yaml</text>
 </g>
 
-<!-- Persistence -->
 <g class="comp" id="c-db">
   <rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/>
   <text x="245" y="470" text-anchor="middle" class="lbl">Persistence</text>
   <text x="245" y="484" text-anchor="middle" class="desc">PostgreSQL / InMemory</text>
 </g>
 
-<!-- Approval -->
 <g class="comp" id="c-appr">
   <rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/>
   <text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text>
   <text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text>
 </g>
 
-<!-- LLM -->
 <g class="comp" id="c-llm">
   <rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/>
   <text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text>
@@ -129,67 +123,72 @@ svg { width: 100%; height: auto; display: block; }
   <text x="900" y="250" text-anchor="middle" class="desc">pydantic-ai tool calling</text>
 </g>
 
-<!-- Observability -->
 <g class="comp" id="c-obs">
   <rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/>
   <text x="900" y="333" text-anchor="middle" class="lbl">Observability</text>
   <text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text>
 </g>
 
-<!-- Human -->
 <g class="comp" id="c-human">
   <rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/>
   <text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text>
   <text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text>
 </g>
 
-<!-- ===== EPHEMERAL PODS (hidden initially) ===== -->
+<!-- ===== EPHEMERAL PODS ===== -->
 
-<!-- Diagnostic pod (diagnose step) -->
-<g class="comp eph" id="pod-diag" style="opacity:0">
-  <rect x="410" y="135" width="230" height="160" fill="#0d2818" stroke="#238636"/>
-  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-a1b2</text>
-  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (generic image) ──</text>
-  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent + output validator</text>
-  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="210" class="mount-hdr">Mounts:</text>
-  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="238" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
-  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <text x="435" y="266" class="mount">/app/skills/ ← Volume (optional)</text>
-  <line x1="420" y1="275" x2="630" y2="275" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="288" class="desc">Tools: list_hosts, check_host, run_remediation</text>
+<!-- Step: diagnose -->
+<g class="comp eph" id="pod-diagnose" style="opacity:0">
+  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
+  <rect x="415" y="139" width="85" height="18" rx="4" fill="#1a4731" stroke="none"/>
+  <text x="457" y="152" text-anchor="middle" class="step-label">DIAGNOSE</text>
+  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-a1b2</text>
+  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (generic image) ──</text>
+  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="206" class="mount-hdr">Mounts:</text>
+  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
+  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
+  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="284" class="desc">Tools: list_hosts, check_host, get_alerts, get_recent_deploys</text>
+  <text x="425" y="297" class="desc">Output: DiagnosticReport {summary, issues_found, confidence}</text>
 </g>
 
-<!-- Diagnostic pod (fix step — same agent, new pod) -->
+<!-- Step: fix -->
 <g class="comp eph" id="pod-fix" style="opacity:0">
-  <rect x="410" y="135" width="230" height="160" fill="#0d2818" stroke="#238636"/>
-  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-d4e5</text>
-  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (same image) ──</text>
-  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent + output validator</text>
-  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="210" class="mount-hdr">Mounts:</text>
-  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="238" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
-  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <text x="435" y="266" class="mount">/app/skills/ ← Volume (optional)</text>
-  <line x1="420" y1="275" x2="630" y2="275" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="288" class="desc">Tools: run_remediation (fix step)</text>
+  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
+  <rect x="415" y="139" width="45" height="18" rx="4" fill="#1a4731" stroke="none"/>
+  <text x="437" y="152" text-anchor="middle" class="step-label">FIX</text>
+  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-d4e5</text>
+  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text>
+  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="206" class="mount-hdr">Mounts:</text>
+  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
+  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
+  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="284" class="desc">Tools: run_remediation (rollback_deploy, restart_service)</text>
+  <text x="425" y="297" class="desc">Output: DiagnosticReport {actions_taken, cluster_healthy}</text>
 </g>
 
-<!-- Monitoring pod (verify step) -->
-<g class="comp eph" id="pod-mon" style="opacity:0">
-  <rect x="410" y="135" width="230" height="145" fill="#0d2818" stroke="#238636"/>
-  <text x="525" y="155" text-anchor="middle" class="lbl" fill="#3fb950">monitoring-agent-g7h8</text>
-  <text x="525" y="170" text-anchor="middle" class="desc">── Agent Runtime (same image) ──</text>
-  <text x="525" y="186" text-anchor="middle" class="desc">Pydantic AI Agent</text>
-  <line x1="420" y1="195" x2="630" y2="195" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="210" class="mount-hdr">Mounts:</text>
-  <text x="435" y="224" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="238" class="mount">/app/tools/monitoring_tools.py ← ConfigMap</text>
-  <text x="435" y="252" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <line x1="420" y1="261" x2="630" y2="261" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="274" class="desc">Tools: get_cluster_summary (read-only)</text>
+<!-- Step: verify -->
+<g class="comp eph" id="pod-verify" style="opacity:0">
+  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
+  <rect x="415" y="139" width="65" height="18" rx="4" fill="#1a4731" stroke="none"/>
+  <text x="447" y="152" text-anchor="middle" class="step-label">VERIFY</text>
+  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-g7h8</text>
+  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text>
+  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="206" class="mount-hdr">Mounts:</text>
+  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
+  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
+  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
+  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
+  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
+  <text x="425" y="284" class="desc">Tools: list_hosts, check_host (verify fix worked)</text>
+  <text x="425" y="297" class="desc">Output: DiagnosticReport {cluster_healthy, remaining_issues}</text>
 </g>
 
 <!-- ===== FLOW LINES ===== -->
@@ -223,40 +222,41 @@ svg { width: 100%; height: auto; display: block; }
 <div id="log"><div id="lc"></div></div>
 
 <script>
+const pods = ['pod-diagnose','pod-fix','pod-verify'];
 const S = [
-  {n:'1/7', t:'User triggers workflow: POST /v1/workflows/run',
+  {n:'1/8', t:'User triggers workflow: POST /v1/workflows/run',
    on:['f1'], log:'<span class="ls">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}'},
 
-  {n:'2/7', t:'Executor loads workflow.yaml, resolves agents from registry',
-   on:['f2'], log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n<span class="ls">→ Registry lookup</span> diagnostic-agent, monitoring-agent'},
+  {n:'2/8', t:'Executor loads workflow.yaml, resolves diagnostic-agent from registry',
+   on:['f2'], log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n  all steps use: diagnostic-agent'},
 
-  {n:'3/7', t:'Step "diagnose": Spawner creates ephemeral pod with mounted config + tools → agent calls LLM + tools',
-   on:['f3','f4','f5'], show:['pod-diag'],
-   log:'<span class="ld">↑ spawn</span> K8s Job: agent-diagnostic-agent-a1b2\n  image: agent-runtime:latest (generic)\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → run_remediation("web-02","rollback_deploy:frontend","bad deploy")\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 fixed", cluster_healthy:true, confidence:"high"}'},
+  {n:'3/8', t:'Step "diagnose": Spawner creates ephemeral diagnostic-agent pod → agent investigates cluster',
+   on:['f3','f4','f5'], show:['pod-diagnose'],
+   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-a1b2\n  image: agent-runtime:latest\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → get_alerts() → get_recent_deploys()\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 degraded after deploy v2.3.1", issues_found:2, confidence:"high"}'},
 
-  {n:'4/7', t:'DiagnosticReport returned to executor → ephemeral pod DESTROYED',
-   on:['f6'], hide:['pod-diag'],
-   log:'<span class="ld">↓ destroy</span> agent-diagnostic-agent-a1b2 — Job + Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
+  {n:'4/8', t:'DiagnosticReport returned → ephemeral pod DESTROYED',
+   on:['f6'], hide:['pod-diagnose'],
+   log:'<span class="ld">↓ destroy</span> diagnostic-agent-a1b2 — Job+Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
 
-  {n:'5/7', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
+  {n:'5/8', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
    on:['f8','f9','f10'],
-   log:'<span class="lw">⏸ Workflow paused</span> at step "approve-fix"\n<span class="lw">→ Slack #sre-approvals:</span> "Review remediation: rolled back frontend on web-02"\n  Approver sees: DiagnosticReport, risk_level, rollback_plan\n<span class="ld">← Approved</span> by sre-lead@redhat.com (response time: 45s)'},
+   log:'<span class="lw">⏸ Workflow paused</span> at step "approve"\n<span class="lw">→ Slack #sre-approvals:</span> "2 issues found on web-02. Approve remediation?"\n  Approver sees: DiagnosticReport, risk_level, rollback_plan\n<span class="ld">← Approved</span> by sre-lead@redhat.com (45s)'},
 
-  {n:'6/7', t:'Step "fix": NEW ephemeral pod spawned (same image, fresh state) → agent remediates → pod DESTROYED',
+  {n:'6/8', t:'Step "fix": NEW ephemeral diagnostic-agent pod → agent remediates → pod DESTROYED',
    on:['f3','f4','f5'], show:['pod-fix'],
-   log:'<span class="ld">↑ spawn</span> K8s Job: agent-diagnostic-agent-d4e5 (new pod, clean state)\n  mounts: same agent.yaml + diagnostic_tools.py\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","restart_service:app","post-rollback cleanup")\n<span class="ld">← DiagnosticReport</span> {actions_taken:1, cluster_healthy:true}'},
+   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-d4e5 (new pod, clean state)\n  same image, same mounts, different pod ID\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","rollback_deploy:frontend","bad deploy") → run_remediation("web-02","restart_service:app","post-rollback")\n<span class="ld">← DiagnosticReport</span> {actions_taken:2, cluster_healthy:true}'},
 
   {n:'6b', t:'Fix result returned → ephemeral pod DESTROYED',
    on:['f6'], hide:['pod-fix'],
-   log:'<span class="ld">↓ destroy</span> agent-diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
+   log:'<span class="ld">↓ destroy</span> diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
 
-  {n:'7/7', t:'Step "verify": Monitoring agent (different tools) checks cluster independently → workflow COMPLETE',
-   on:['f3','f4','f5'], show:['pod-mon'],
-   log:'<span class="ld">↑ spawn</span> K8s Job: agent-monitoring-agent-g7h8\n  mounts: monitoring-agent.yaml + monitoring_tools.py (different tools!)\n<span class="ld">⚙ LLM → tools:</span> get_cluster_summary() → all 4 hosts healthy\n<span class="ld">← MonitoringResult</span> {cluster_healthy:true, alerts:[]}'},
+  {n:'7/8', t:'Step "verify": ANOTHER ephemeral diagnostic-agent pod → independently confirms fix worked',
+   on:['f3','f4','f5'], show:['pod-verify'],
+   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-g7h8 (third pod, clean state)\n  same image, same mounts — independent verification\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → check_host("web-01")\n<span class="ld">← DiagnosticReport</span> {cluster_healthy:true, issues_found:0, remaining_issues:[]}'},
 
-  {n:'7b', t:'Verification passed → ephemeral pod DESTROYED → state persisted',
-   on:['f6','f7'], hide:['pod-mon'],
-   log:'<span class="ld">↓ destroy</span> agent-monitoring-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>\n<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL'},
+  {n:'8/8', t:'Verification passed → pod DESTROYED → workflow COMPLETE → state persisted',
+   on:['f6','f7'], hide:['pod-verify'],
+   log:'<span class="ld">↓ destroy</span> diagnostic-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>\n<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL\n\n  3 ephemeral pods created and destroyed. Zero long-running agent pods.'},
 ];
 
 let ci=0, tm=null, mode='idle';
@@ -300,7 +300,7 @@ function next(){
 function reset(){
   if(tm)clearTimeout(tm); mode='idle'; ci=0; off();
   $('sbar').style.opacity=0;
-  ['pod-diag','pod-fix','pod-mon'].forEach(id=>{$(id).style.opacity=0;});
+  pods.forEach(id=>{$(id).style.opacity=0;});
   $('lc').innerHTML=''; $('info').textContent=''; $('bn').disabled=false;
 }
 </script>
