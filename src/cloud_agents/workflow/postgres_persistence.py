@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sqlalchemy import Column, JSON, String, text
+from sqlalchemy import Column, Integer, JSON, String, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -30,8 +30,7 @@ class WorkflowStateRow(Base):
     workflow_id = Column(String, primary_key=True)
     workflow_name = Column(String, nullable=False)
     status = Column(String, nullable=False)
-    # Using generic JSON (not PostgreSQL JSONB) for SQLite test compatibility.
-    # Production gap: switch to JSONB for GIN index support on PostgreSQL.
+    version = Column(Integer, nullable=False, default=1)
     state_json = Column(JSON, nullable=False)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
@@ -69,6 +68,7 @@ class PostgresPersistence(WorkflowPersistence):
                 if existing:
                     existing.workflow_name = state.workflow_name
                     existing.status = state.status
+                    existing.version = state.version
                     existing.state_json = state.model_dump(mode="json")
                     existing.updated_at = state.updated_at
                 else:
@@ -76,11 +76,45 @@ class PostgresPersistence(WorkflowPersistence):
                         workflow_id=state.workflow_id,
                         workflow_name=state.workflow_name,
                         status=state.status,
+                        version=state.version,
                         state_json=state.model_dump(mode="json"),
                         created_at=state.created_at,
                         updated_at=state.updated_at,
                     )
                     session.add(row)
+
+    async def save_cas(self, state: WorkflowState, expected_version: int) -> bool:
+        """Compare-and-swap save with version check.
+
+        Atomically updates only if the current DB version matches expected.
+
+        Returns:
+            True if update succeeded, False if version mismatch.
+        """
+        import json as json_mod
+
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "UPDATE workflow_states "
+                        "SET status = :status, version = :new_version, "
+                        "    state_json = cast(:state_json as json), updated_at = :updated_at "
+                        "WHERE workflow_id = :workflow_id AND version = :expected_version"
+                    ),
+                    {
+                        "status": state.status,
+                        "new_version": expected_version + 1,
+                        "state_json": json_mod.dumps(state.model_dump(mode="json")),
+                        "updated_at": state.updated_at,
+                        "workflow_id": state.workflow_id,
+                        "expected_version": expected_version,
+                    },
+                )
+                if result.rowcount == 0:
+                    return False
+                state.version = expected_version + 1
+                return True
 
     async def load(self, workflow_id: str) -> Optional[WorkflowState]:
         """Load workflow state by ID."""
