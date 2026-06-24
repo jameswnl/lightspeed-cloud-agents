@@ -26,6 +26,8 @@ class KubernetesSpawner(AgentSpawner):
         self,
         namespace: str = "cloud-agents",
         service_account: str = "workflow-runner",
+        config_configmap: str | None = None,
+        tools_configmap: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Kubernetes spawner.
@@ -33,10 +35,14 @@ class KubernetesSpawner(AgentSpawner):
         Args:
             namespace: K8s namespace for Jobs.
             service_account: ServiceAccount for spawned pods.
+            config_configmap: ConfigMap name for agent.yaml + registry.yaml.
+            tools_configmap: ConfigMap name for tool modules.
         """
         super().__init__(**kwargs)
         self._namespace = namespace
         self._service_account = service_account
+        self._config_configmap = config_configmap
+        self._tools_configmap = tools_configmap
 
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
@@ -62,6 +68,26 @@ class KubernetesSpawner(AgentSpawner):
         job_name = f"agent-{agent_name}"
         env_list = [client.V1EnvVar(name=k, value=v) for k, v in env.items()]
 
+        volumes = []
+        volume_mounts = []
+        if self._config_configmap:
+            volumes.append(client.V1Volume(
+                name="agent-config",
+                config_map=client.V1ConfigMapVolumeSource(name=self._config_configmap),
+            ))
+            volume_mounts.extend([
+                client.V1VolumeMount(name="agent-config", mount_path="/app/agent.yaml", sub_path="agent.yaml", read_only=True),
+                client.V1VolumeMount(name="agent-config", mount_path="/app/registry.yaml", sub_path="registry.yaml", read_only=True),
+            ])
+        if self._tools_configmap:
+            volumes.append(client.V1Volume(
+                name="agent-tools",
+                config_map=client.V1ConfigMapVolumeSource(name=self._tools_configmap),
+            ))
+            volume_mounts.append(
+                client.V1VolumeMount(name="agent-tools", mount_path="/app/tools", read_only=True),
+            )
+
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=job_name,
@@ -81,14 +107,17 @@ class KubernetesSpawner(AgentSpawner):
                             client.V1Container(
                                 name="agent",
                                 image=image,
+                                image_pull_policy="Never",
                                 env=env_list,
                                 ports=[client.V1ContainerPort(container_port=8080)],
                                 resources=client.V1ResourceRequirements(
                                     requests={"cpu": cfg.cpu_request, "memory": cfg.memory_request},
                                     limits={"cpu": cfg.cpu_limit, "memory": cfg.memory_limit},
                                 ),
+                                volume_mounts=volume_mounts or None,
                             ),
                         ],
+                        volumes=volumes or None,
                     ),
                 ),
             ),

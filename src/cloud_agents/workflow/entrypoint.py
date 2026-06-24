@@ -69,8 +69,13 @@ def _create_spawner():
         from agents.spawner.kubernetes_spawner import KubernetesSpawner
         namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
         service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
+        config_cm = os.environ.get("SPAWNER_CONFIG_CONFIGMAP")
+        tools_cm = os.environ.get("SPAWNER_TOOLS_CONFIGMAP")
         logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
-        return KubernetesSpawner(namespace=namespace, service_account=service_account)
+        return KubernetesSpawner(
+            namespace=namespace, service_account=service_account,
+            config_configmap=config_cm, tools_configmap=tools_cm,
+        )
     if SPAWNER_TYPE == "podman":
         from agents.spawner.podman_spawner import PodmanSpawner
         network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")

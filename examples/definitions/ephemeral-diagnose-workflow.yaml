@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: ephemeral-diagnose
+spec:
+  steps:
+    - name: diagnose
+      type: agent
+      agent: diagnostic-agent
+      prompt: "Check all hosts. Report what you find."
+      output_key: diagnosis
+      spawn: ephemeral

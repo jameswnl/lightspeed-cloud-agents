@@ -37,6 +37,10 @@ spec:
               value: "workflow-runner"
             - name: AGENT_IMAGE
               value: "docker.io/library/agent-runtime:latest"
+            - name: SPAWNER_CONFIG_CONFIGMAP
+              value: "diagnostic-agent-config"
+            - name: SPAWNER_TOOLS_CONFIGMAP
+              value: "diagnostic-agent-tools"
             - name: AGENT_MODEL
               value: "gpt-4"
             - name: OPENAI_API_KEY

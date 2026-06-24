@@ -403,7 +403,11 @@ class WorkflowExecutor:
                     spawned_name = f"{step.agent}-{spawn_id}"
                     endpoint = await self._spawner.spawn(
                         spawned_name, self._agent_image,
-                        env={"AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini")},
+                        env={
+                            "AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini"),
+                            "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434/v1"),
+                            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+                        },
                         config=step.spawn_config,
                     )
                     await self._spawner.wait_ready(endpoint)
