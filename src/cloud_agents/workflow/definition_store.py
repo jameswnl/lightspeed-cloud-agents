@@ -98,12 +98,24 @@ class DefinitionStore:
     async def get(self, name: str) -> Optional[StoredDefinition]:
         """Get the latest active version of a definition.
 
+        Reads from shared persistence if available, falls back to local.
+
         Args:
             name: Workflow name.
 
         Returns:
             Latest StoredDefinition, or None if not found.
         """
+        if self._persistence:
+            states = await self._persistence.list_active()
+            candidates = [
+                s for s in states
+                if s.workflow_name == f"definition:{name}" and s.definition_snapshot
+            ]
+            if candidates:
+                latest = max(candidates, key=lambda s: s.created_at)
+                return StoredDefinition.model_validate(latest.definition_snapshot)
+
         stored = self._definitions.get(name)
         if stored and not stored.active:
             return None
@@ -126,6 +138,21 @@ class DefinitionStore:
 
     async def list_all(self) -> list[StoredDefinition]:
         """List all active definitions (latest version of each)."""
+        if self._persistence:
+            states = await self._persistence.list_active()
+            defs_by_name: dict[str, StoredDefinition] = {}
+            for s in states:
+                if s.workflow_name and s.workflow_name.startswith("definition:") and s.definition_snapshot:
+                    try:
+                        sd = StoredDefinition.model_validate(s.definition_snapshot)
+                        if sd.active:
+                            existing = defs_by_name.get(sd.name)
+                            if not existing or sd.version > existing.version:
+                                defs_by_name[sd.name] = sd
+                    except Exception:
+                        continue
+            return list(defs_by_name.values())
+
         return [d for d in self._definitions.values() if d.active]
 
     async def delete(self, name: str) -> bool:
@@ -137,9 +164,25 @@ class DefinitionStore:
         Returns:
             True if deleted, False if not found.
         """
-        stored = self._definitions.get(name)
+        stored = await self.get(name)
         if not stored:
             return False
+
         stored.active = False
+        self._definitions[name] = stored
+
+        if self._persistence:
+            from agents.workflow.state import WorkflowState
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+            state = WorkflowState(
+                workflow_id=f"def:{name}:v{stored.version}",
+                workflow_name=f"definition:{name}",
+                status="completed",
+                definition_snapshot=stored.model_dump(mode="json"),
+                created_at=now, updated_at=now,
+            )
+            await self._persistence.save(state)
+
         logger.info("Soft-deleted workflow definition '%s'", name)
         return True

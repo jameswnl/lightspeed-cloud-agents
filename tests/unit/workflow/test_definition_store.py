@@ -83,6 +83,58 @@ class TestDefinitionStore:
         assert await store.delete("missing") is False
 
 
+class TestSharedDefinitionStore:
+    """Tests for cross-instance shared persistence."""
+
+    @pytest.mark.asyncio
+    async def test_definition_visible_across_instances(self) -> None:
+        """Test that a definition saved by one store is readable by another."""
+        from agents.workflow.persistence import InMemoryPersistence
+        shared = InMemoryPersistence()
+
+        store_a = DefinitionStore(persistence=shared)
+        store_b = DefinitionStore(persistence=shared)
+
+        await store_a.save(_make_defn("shared-wf"))
+
+        retrieved = await store_b.get("shared-wf")
+        assert retrieved is not None
+        assert retrieved.name == "shared-wf"
+
+    @pytest.mark.asyncio
+    async def test_list_all_across_instances(self) -> None:
+        """Test that list_all returns definitions from shared persistence."""
+        from agents.workflow.persistence import InMemoryPersistence
+        shared = InMemoryPersistence()
+
+        store_a = DefinitionStore(persistence=shared)
+        store_b = DefinitionStore(persistence=shared)
+
+        await store_a.save(_make_defn("wf-1"))
+        await store_a.save(_make_defn("wf-2"))
+
+        defs = await store_b.list_all()
+        names = {d.name for d in defs}
+        assert "wf-1" in names
+        assert "wf-2" in names
+
+    @pytest.mark.asyncio
+    async def test_delete_across_instances(self) -> None:
+        """Test that deleting on one store is visible on another."""
+        from agents.workflow.persistence import InMemoryPersistence
+        shared = InMemoryPersistence()
+
+        store_a = DefinitionStore(persistence=shared)
+        store_b = DefinitionStore(persistence=shared)
+
+        await store_a.save(_make_defn("del-wf"))
+        assert await store_b.get("del-wf") is not None
+
+        await store_a.delete("del-wf")
+        result = await store_b.get("del-wf")
+        assert result is None or not result.active
+
+
 class TestStatelessExecutor:
     """Tests that the executor uses persistence instead of in-memory state."""
 
