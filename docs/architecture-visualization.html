@@ -224,39 +224,55 @@ svg { width: 100%; height: auto; display: block; }
 <script>
 const pods = ['pod-diagnose','pod-fix','pod-verify'];
 const S = [
-  {n:'1/8', t:'User triggers workflow: POST /v1/workflows/run',
+  {n:'1/11', t:'User triggers workflow: POST /v1/workflows/run',
    on:['f1'], log:'<span class="ls">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}'},
 
-  {n:'2/8', t:'Executor loads workflow.yaml, resolves diagnostic-agent from registry',
+  {n:'2/11', t:'Executor loads workflow.yaml, resolves diagnostic-agent from registry',
    on:['f2'], log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n  all steps use: diagnostic-agent'},
 
-  {n:'3/8', t:'Step "diagnose": Spawner creates ephemeral diagnostic-agent pod → agent investigates cluster',
+  {n:'3/11', t:'Step "diagnose": Spawner creates ephemeral diagnostic-agent pod → agent calls LLM + tools',
    on:['f3','f4','f5'], show:['pod-diagnose'],
    log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-a1b2\n  image: agent-runtime:latest\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → get_alerts() → get_recent_deploys()\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 degraded after deploy v2.3.1", issues_found:2, confidence:"high"}'},
 
-  {n:'4/8', t:'DiagnosticReport returned → ephemeral pod DESTROYED',
-   on:['f6'], hide:['pod-diagnose'],
+  {n:'4/11', t:'DiagnosticReport returned to workflow runner',
+   on:['f6'],
+   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+
+  {n:'4b', t:'Ephemeral pod DESTROYED — clean up Job + Service',
+   hide:['pod-diagnose'],
    log:'<span class="ld">↓ destroy</span> diagnostic-agent-a1b2 — Job+Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
 
-  {n:'5/8', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
+  {n:'5/11', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
    on:['f8','f9','f10'],
    log:'<span class="lw">⏸ Workflow paused</span> at step "approve"\n<span class="lw">→ Slack #sre-approvals:</span> "2 issues found on web-02. Approve remediation?"\n  Approver sees: DiagnosticReport, risk_level, rollback_plan\n<span class="ld">← Approved</span> by sre-lead@redhat.com (45s)'},
 
-  {n:'6/8', t:'Step "fix": NEW ephemeral diagnostic-agent pod → agent remediates → pod DESTROYED',
+  {n:'6/11', t:'Step "fix": NEW ephemeral diagnostic-agent pod → agent remediates cluster',
    on:['f3','f4','f5'], show:['pod-fix'],
    log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-d4e5 (new pod, clean state)\n  same image, same mounts, different pod ID\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","rollback_deploy:frontend","bad deploy") → run_remediation("web-02","restart_service:app","post-rollback")\n<span class="ld">← DiagnosticReport</span> {actions_taken:2, cluster_healthy:true}'},
 
-  {n:'6b', t:'Fix result returned → ephemeral pod DESTROYED',
-   on:['f6'], hide:['pod-fix'],
+  {n:'7/11', t:'Fix result returned to workflow runner',
+   on:['f6'],
+   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+
+  {n:'7b', t:'Ephemeral pod DESTROYED',
+   hide:['pod-fix'],
    log:'<span class="ld">↓ destroy</span> diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
 
-  {n:'7/8', t:'Step "verify": ANOTHER ephemeral diagnostic-agent pod → independently confirms fix worked',
+  {n:'8/11', t:'Step "verify": ANOTHER ephemeral diagnostic-agent pod → independently confirms fix worked',
    on:['f3','f4','f5'], show:['pod-verify'],
    log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-g7h8 (third pod, clean state)\n  same image, same mounts — independent verification\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → check_host("web-01")\n<span class="ld">← DiagnosticReport</span> {cluster_healthy:true, issues_found:0, remaining_issues:[]}'},
 
-  {n:'8/8', t:'Verification passed → pod DESTROYED → workflow COMPLETE → state persisted',
-   on:['f6','f7'], hide:['pod-verify'],
-   log:'<span class="ld">↓ destroy</span> diagnostic-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>\n<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL\n\n  3 ephemeral pods created and destroyed. Zero long-running agent pods.'},
+  {n:'9/11', t:'Verification result returned to workflow runner',
+   on:['f6'],
+   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+
+  {n:'10/11', t:'Ephemeral pod DESTROYED',
+   hide:['pod-verify'],
+   log:'<span class="ld">↓ destroy</span> diagnostic-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>'},
+
+  {n:'11/11', t:'Workflow COMPLETE → state persisted to PostgreSQL',
+   on:['f7'],
+   log:'<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL\n\n  3 ephemeral pods created and destroyed. Zero long-running agent pods.'},
 ];
 
 let ci=0, tm=null, mode='idle';
