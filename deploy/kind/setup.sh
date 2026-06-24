@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Setup Kind cluster with diagnostic agent for Phase 1a
+# Setup Kind cluster with cloud agents using the generic agent-runtime image
 #
 # Usage: ./deploy/kind/setup.sh
 #
@@ -7,6 +7,11 @@
 #   - kind (with KIND_EXPERIMENTAL_PROVIDER=podman)
 #   - podman
 #   - kubectl
+#
+# Environment:
+#   OPENAI_API_KEY  — required for OpenAI-backed agents
+#   AGENT_MODEL     — model name (default: gpt-4)
+#   OLLAMA_URL      — LLM backend URL (default: https://api.openai.com/v1)
 
 set -euo pipefail
 
@@ -16,7 +21,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 export KIND_EXPERIMENTAL_PROVIDER=podman
 
-echo "=== Phase 1a: Cloud Agents Kind Setup ==="
+echo "=== Cloud Agents Kind Setup ==="
 echo ""
 
 # Check prerequisites
@@ -35,35 +40,52 @@ else
     kind create cluster --config "$SCRIPT_DIR/kind-config.yaml"
 fi
 
-# Build diagnostic agent image
-echo "[build] Building diagnostic-agent image..."
-if ! podman build -f "$REPO_ROOT/deploy/diagnostic-agent/Containerfile" \
-    -t diagnostic-agent:latest "$REPO_ROOT"; then
-    echo "ERROR: Diagnostic agent image build failed"
+# Build the generic agent-runtime image
+echo "[build] Building agent-runtime image..."
+if ! podman build -f "$REPO_ROOT/deploy/agent-runtime/Containerfile" \
+    -t agent-runtime:latest "$REPO_ROOT"; then
+    echo "ERROR: agent-runtime image build failed"
     exit 1
 fi
 
-# Build monitoring agent image
-echo "[build] Building monitoring-agent image..."
-if ! podman build -f "$REPO_ROOT/deploy/monitoring-agent/Containerfile" \
-    -t monitoring-agent:latest "$REPO_ROOT"; then
-    echo "ERROR: Monitoring agent image build failed"
-    exit 1
-fi
+# Load image into Kind
+echo "[kind] Loading agent-runtime image into cluster..."
+kind load docker-image localhost/agent-runtime:latest --name "$CLUSTER_NAME"
 
-# Load images into Kind
-echo "[kind] Loading images into cluster..."
-kind load docker-image diagnostic-agent:latest --name "$CLUSTER_NAME"
-kind load docker-image monitoring-agent:latest --name "$CLUSTER_NAME"
+# Create ConfigMaps from example agent definitions and tools
+echo "[kind] Creating ConfigMaps for agent configs..."
+kubectl create configmap diagnostic-agent-config \
+    --from-file=agent.yaml="$REPO_ROOT/examples/agents/definitions/diagnostic-agent.yaml" \
+    --from-file=registry.yaml="$REPO_ROOT/examples/agents/registry.yaml" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create configmap diagnostic-agent-tools \
+    --from-file=diagnostic_tools.py="$REPO_ROOT/examples/agents/tools/diagnostic_tools.py" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create configmap monitoring-agent-config \
+    --from-file=agent.yaml="$REPO_ROOT/examples/agents/definitions/monitoring-agent.yaml" \
+    --from-file=registry.yaml="$REPO_ROOT/examples/agents/registry.yaml" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create configmap monitoring-agent-tools \
+    --from-file=monitoring_tools.py="$REPO_ROOT/examples/agents/tools/monitoring_tools.py" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+# Create secret for API key
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+    kubectl create secret generic llm-api-key \
+        --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    echo "[kind] LLM API key secret created"
+else
+    echo "[WARN] OPENAI_API_KEY not set — agents will fail to call LLM"
+fi
 
 # Apply RBAC and NetworkPolicy
 echo "[kind] Applying RBAC and NetworkPolicy..."
 kubectl apply -f "$SCRIPT_DIR/rbac.yaml"
 kubectl apply -f "$SCRIPT_DIR/network-policy.yaml"
-
-# Deploy Ollama LLM backend
-echo "[kind] Deploying Ollama LLM backend..."
-kubectl apply -f "$SCRIPT_DIR/ollama.yaml"
 
 # Apply agent manifests
 echo "[kind] Applying agent manifests..."
@@ -78,10 +100,11 @@ kubectl rollout status deployment/monitoring-agent --timeout=120s
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-kubectl get pods -l app=diagnostic-agent
+kubectl get pods
 echo ""
 echo "To test:"
 echo "  kubectl port-forward svc/diagnostic-agent 8081:8080 &"
+echo "  kubectl port-forward svc/monitoring-agent 8082:8080 &"
 echo "  curl http://localhost:8081/healthz"
 echo "  curl -X POST http://localhost:8081/v1/run -H 'Content-Type: application/json' -d '{\"prompt\":\"Check hosts\"}'"
 echo ""

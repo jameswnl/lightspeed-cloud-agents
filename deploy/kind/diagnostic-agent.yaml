@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostic-agent
+  labels:
+    app: diagnostic-agent
+    environment: cloud-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: diagnostic-agent
+  template:
+    metadata:
+      labels:
+        app: diagnostic-agent
+        environment: cloud-agents
+    spec:
+      containers:
+        - name: agent
+          image: docker.io/library/agent-runtime:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_URL
+              value: "https://api.openai.com/v1"
+            - name: AGENT_MODEL
+              value: "gpt-4"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-key
+                  key: OPENAI_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: agent-config
+              mountPath: /app/agent.yaml
+              subPath: agent.yaml
+              readOnly: true
+            - name: agent-config
+              mountPath: /app/registry.yaml
+              subPath: registry.yaml
+              readOnly: true
+            - name: agent-tools
+              mountPath: /app/tools/diagnostic_tools.py
+              subPath: diagnostic_tools.py
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: agent-config
+          configMap:
+            name: diagnostic-agent-config
+        - name: agent-tools
+          configMap:
+            name: diagnostic-agent-tools
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostic-agent
+  labels:
+    app: diagnostic-agent
+    environment: cloud-agents
+spec:
+  selector:
+    app: diagnostic-agent
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
