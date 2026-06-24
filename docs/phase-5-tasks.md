@@ -79,13 +79,14 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 - `GraphExecutor` — constructor takes same args as `WorkflowExecutor`, builds graph via `build_workflow_graph()`
 - `run()` — creates `GraphWorkflowState`, runs graph via `Graph.iter()`, handles `ApprovalNeeded` by pausing
 - `resume()` — restores paused state, continues graph execution
-- Approval pause: hold `GraphRun` async generator in memory (Option A — simplest for PoC). Document limitation: cannot survive pod restarts.
+- Approval pause: hold `GraphRun` async generator in memory. **GraphExecutor is scoped to same-process exploratory execution only** — it cannot survive pod restarts or process recycling. This is an intentional limitation for the fit exploration, not a production gap to close later.
+- `WorkflowExecutor` remains the production executor with durable persistence across restarts.
 
 **Files:**
 - Create: `src/agents/workflow/graph_executor.py`
 - Create: `tests/unit/agents/workflow/test_graph_executor.py`
 
-**Tests:** Mirror all `test_executor.py` scenarios: single step, two-step, failure, conditions, approval pause/resume, rejection, retry, escalation, spawner, advisory mode.
+**Tests:** Mirror all `test_executor.py` scenarios: single step, two-step, failure, conditions, approval pause/resume, rejection, retry, escalation, spawner, advisory mode. Durability tests (persist + restart + resume) are **excluded** — GraphExecutor is not expected to pass them.
 
 ---
 
@@ -97,6 +98,7 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 - Extend `graph_builder_factory.py`: consecutive steps with same `parallel_group` → `Fork` node → N parallel step nodes → `Join` node
 - Join uses a reducer that merges `StepResult` dicts back into `WorkflowState.steps`
 - Fail-fast: if any parallel step fails, cancel others
+- **Reduced subset:** Phase 5 evaluates Fork/Join with fail-fast only. The full Phase 4c parallel contract (fail-fast vs continue strategy, same-agent warnings, retry independence within groups) is the target for the comparison suite but not all invariants may map cleanly to pydantic-graph's Fork/Join. Divergences are documented in the fit assessment, not forced into the graph model.
 
 **Files:**
 - Modify: `src/agents/workflow/graph_builder_factory.py`
@@ -114,7 +116,7 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 - Change `WorkflowStepSpec.spawn` default from `"pre-deployed"` to `"ephemeral"`
 - Rename `"on-demand"` to `"ephemeral"` for clarity; keep `"on-demand"` as alias
 - Both executors respect the new default
-- When `spawn == "ephemeral"` and no spawner is configured, fall back to `pre-deployed` with a warning
+- **Fail closed:** When `spawn == "ephemeral"` and no spawner is configured, raise a validation error at workflow load time. The workflow author must explicitly opt into `spawn: pre-deployed` if no spawner is available. No silent fallback — silent fallback would undermine the isolation guarantee.
 
 **Files:**
 - Modify: `src/agents/workflow/definition.py` — change default, add alias
@@ -132,6 +134,7 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 **Design:**
 - `SpawnConfig` model: `cpu_request`, `cpu_limit`, `memory_request`, `memory_limit`, `timeout_seconds`, `health_path`
 - **Validation bounds** on `SpawnConfig` to prevent resource abuse (e.g., max 4 CPU, max 4Gi memory)
+- **Precedence rule:** `AgentDefinition.spec.resources` sets the maximum allowed envelope. `SpawnConfig` may request a narrower per-step override within that envelope. Any request exceeding the agent-level limits is rejected at validation time. This is one rule, not a merge.
 - Add optional `spawn_config` to `WorkflowStepSpec`
 - Both spawners accept `SpawnConfig` in `_do_spawn`
 - Container cleanup robustness: metric for cleanup failures (`ls_spawn_cleanup_errors_total`), log warning on failed destroy
@@ -173,7 +176,14 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 **Files:**
 - Create: `tests/unit/agents/workflow/test_executor_comparison.py`
 
-**Scenarios:** Linear workflow, conditions (true/false), approval (pause/resume/reject/timeout), retry (success/exhaustion), parallel group, ephemeral spawn, advisory mode, concurrent workflow runs, event emission order, persistence round-trip (expect GraphExecutor to diverge — document in assessment).
+**Observable contract:** Only user-authored workflow steps (from the YAML) are externally visible. Internal graph nodes (Decision, Fork, Join) do NOT emit public `WorkflowEvent`s. For parallel groups, compare ordering constraints (all steps in group started before any completes) rather than a strict total order.
+
+**Scenarios:**
+- Linear workflow, conditions (true/false), approval (pause/resume/reject/timeout)
+- Retry (success/exhaustion), parallel group, ephemeral spawn, advisory mode
+- Concurrent workflow runs, event emission (ordering constraints, not strict order)
+- **Behavioral equivalence:** matching `state.status`, `state.steps` keys/statuses, outputs
+- **Durability parity (separate):** persistence round-trip (save → restart → resume). GraphExecutor is expected to fail this — document as known limitation in assessment.
 
 ---
 
