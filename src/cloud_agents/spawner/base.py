@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 MAX_SPAWNED_PODS = int(os.environ.get("MAX_SPAWNED_PODS", "10"))
 
 
+class SecretKeyRef(BaseModel):
+    """Reference to a K8s Secret key for sensitive env vars.
+
+    Attributes:
+        secret_name: Name of the K8s Secret.
+        key: Key within the Secret.
+    """
+
+    secret_name: str
+    key: str
+
+
 class SpawnConfig(BaseModel):
     """Per-step resource configuration for ephemeral pods.
 

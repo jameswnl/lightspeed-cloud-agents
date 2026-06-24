@@ -102,6 +102,28 @@ class FilePersistence(WorkflowPersistence):
                 continue
         return states
 
+    async def save_cas(self, state: WorkflowState, expected_version: int) -> bool:
+        """Compare-and-swap save using tempfile + atomic rename."""
+        import tempfile
+
+        path = self._dir / f"{state.workflow_id}.json"
+        if path.exists():
+            current = WorkflowState.model_validate_json(path.read_text())
+            if current.version != expected_version:
+                return False
+        state.version = expected_version + 1
+        fd, tmp = tempfile.mkstemp(dir=str(self._dir), suffix=".tmp")
+        try:
+            os.write(fd, state.model_dump_json(indent=2).encode())
+            os.close(fd)
+            os.rename(tmp, str(path))
+            os.chmod(str(path), 0o600)
+        except Exception:
+            os.close(fd) if not os.get_inheritable(fd) else None
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        return True
+
     async def delete(self, workflow_id: str) -> None:
         """Delete the state file."""
         path = self._dir / f"{workflow_id}.json"

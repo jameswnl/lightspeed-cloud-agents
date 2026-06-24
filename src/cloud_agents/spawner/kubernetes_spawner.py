@@ -28,6 +28,7 @@ class KubernetesSpawner(AgentSpawner):
         service_account: str = "workflow-runner",
         config_configmap: str | None = None,
         tools_configmap: str | None = None,
+        secret_env_vars: dict[str, "SecretKeyRef"] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Kubernetes spawner.
@@ -43,6 +44,7 @@ class KubernetesSpawner(AgentSpawner):
         self._service_account = service_account
         self._config_configmap = config_configmap
         self._tools_configmap = tools_configmap
+        self._secret_env_vars = secret_env_vars or {}
 
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
@@ -65,8 +67,24 @@ class KubernetesSpawner(AgentSpawner):
         except Exception as exc:
             raise RuntimeError(f"Cannot connect to K8s API: {exc}") from exc
 
+        from agents.spawner.base import SecretKeyRef
+
         job_name = f"agent-{agent_name}"
-        env_list = [client.V1EnvVar(name=k, value=v) for k, v in env.items()]
+        env_list = []
+        sensitive_keys = set(self._secret_env_vars.keys())
+        for k, v in env.items():
+            if k in sensitive_keys:
+                continue
+            env_list.append(client.V1EnvVar(name=k, value=v))
+        for env_name, ref in self._secret_env_vars.items():
+            env_list.append(client.V1EnvVar(
+                name=env_name,
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name=ref.secret_name, key=ref.key,
+                    ),
+                ),
+            ))
 
         volumes = []
         volume_mounts = []

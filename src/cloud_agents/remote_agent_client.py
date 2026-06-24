@@ -22,15 +22,17 @@ class RemoteAgentClient:
         timeout: Request timeout in seconds.
     """
 
-    def __init__(self, endpoint: str, timeout: float = 600.0) -> None:
+    def __init__(self, endpoint: str, timeout: float = 600.0, auth_token: Optional[str] = None) -> None:
         """Initialize the client.
 
         Args:
             endpoint: Base URL of the agent pod.
             timeout: Request timeout in seconds.
+            auth_token: Optional bearer token for authenticated requests.
         """
         self.endpoint = endpoint.rstrip("/")
         self.timeout = timeout
+        self._auth_token = auth_token
 
     async def run(
         self,
@@ -57,6 +59,8 @@ class RemoteAgentClient:
 
         headers: dict[str, str] = {}
         inject_traceparent(headers)
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
 
         try:
             async with httpx.AsyncClient(

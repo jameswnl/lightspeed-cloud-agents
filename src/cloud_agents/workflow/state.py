@@ -43,6 +43,25 @@ class WorkflowState(BaseModel):
         updated_at: ISO timestamp of the last state change.
     """
 
+    @staticmethod
+    def derive_status(steps: dict[str, "StepResult"]) -> str:
+        """Derive workflow status from step results.
+
+        Pure function — prevents status from drifting out of sync.
+        """
+        if not steps:
+            return "running"
+        statuses = {s.status for s in steps.values()}
+        if "awaiting_approval" in statuses:
+            return "paused"
+        if "dispatched" in statuses or "running" in statuses:
+            return "running"
+        if "failed" in statuses:
+            return "failed"
+        if all(s in ("completed", "skipped") for s in statuses):
+            return "completed"
+        return "running"
+
     workflow_id: str
     workflow_name: str
     status: Literal["running", "completed", "failed", "paused"] = "running"

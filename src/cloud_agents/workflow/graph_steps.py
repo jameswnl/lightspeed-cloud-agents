@@ -155,7 +155,6 @@ async def _execute_once(
                 env={
                     "AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini"),
                     "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434/v1"),
-                    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
                 },
                 config=step_spec.spawn_config,
             )

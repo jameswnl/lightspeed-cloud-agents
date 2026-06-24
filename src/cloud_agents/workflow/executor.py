@@ -103,6 +103,7 @@ class WorkflowExecutor:
         state = WorkflowState(
             workflow_id=workflow_id,
             workflow_name=self._definition.metadata["name"],
+            definition_snapshot=self._definition.model_dump(mode="json"),
             created_at=now,
             updated_at=now,
         )
@@ -398,14 +399,15 @@ class WorkflowExecutor:
             span.set_attribute("step.spawn", step.spawn)
             try:
                 if step.spawn in ("on-demand", "ephemeral") and self._spawner:
-                    spawn_id = uuid.uuid4().hex[:8]
+                    import hashlib
+                    hash_input = f"{state.workflow_id}:{step.name}:1"
+                    spawn_id = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
                     spawned_name = f"{step.agent}-{spawn_id}"
                     endpoint = await self._spawner.spawn(
                         spawned_name, self._agent_image,
                         env={
                             "AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini"),
                             "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434/v1"),
-                            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
                         },
                         config=step.spawn_config,
                     )
@@ -416,6 +418,9 @@ class WorkflowExecutor:
                 context: dict[str, Any] = {}
                 if self._advisory.enabled:
                     context["advisory_mode"] = True
+                if step.permissions:
+                    context["allowed_tools"] = step.permissions.allowed_tools
+                    context["denied_tools"] = step.permissions.denied_tools
                 response = await client.run(prompt, context=context or None)
             except Exception as exc:
                 set_span_error(span, exc)

@@ -37,6 +37,7 @@ class WorkflowStepSpec(BaseModel):
     timeout_seconds: int = 3600
     max_retries: int = Field(default=1, ge=1)
     spawn: Literal["pre-deployed", "on-demand", "ephemeral"] = "ephemeral"
+    risk_level: Optional[Literal["low", "medium", "high", "critical"]] = None
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
     spawn_config: Optional[SpawnConfig] = None

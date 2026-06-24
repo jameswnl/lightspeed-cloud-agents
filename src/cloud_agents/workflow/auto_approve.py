@@ -6,7 +6,10 @@ steps without human intervention.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -86,28 +89,20 @@ def _classify_agent_risk(
     step: WorkflowStepSpec,
     policy: ApprovalPolicy,
 ) -> Literal["low", "medium", "high", "critical"]:
-    """Classify risk for an agent step based on its name and prompt."""
-    name_lower = step.name.lower()
-    prompt_lower = (step.prompt or "").lower()
+    """Classify risk for an agent step.
 
-    # Production gap: keyword-based classification is naive.
-    # "check-and-delete" would match "check" first (low risk) due to name-first ordering.
-    # Production should use explicit risk annotations per step in the workflow YAML,
-    # or inspect the agent's actual tool manifest for destructive operations.
-    high_risk_keywords = ["execute", "remediat", "delete", "restart", "rollback", "scale"]
-    low_risk_keywords = ["check", "diagnos", "analyze", "inspect", "list", "verify", "read"]
+    Uses explicit risk_level from the step spec when set.
+    Fails closed (defaults to "high") when not set.
+    """
+    if step.risk_level:
+        return step.risk_level
 
-    # Check step name first (most intentional signal)
-    if any(kw in name_lower for kw in low_risk_keywords):
-        return "low"
-    if any(kw in name_lower for kw in high_risk_keywords):
-        return "high"
-    # Fall back to prompt keywords
-    if any(kw in prompt_lower for kw in high_risk_keywords):
-        return "high"
-    if any(kw in prompt_lower for kw in low_risk_keywords):
-        return "low"
-    return policy.default_risk
+    logger.warning(
+        "Step '%s' has no explicit risk_level — defaulting to 'high' "
+        "(manual approval required). Set risk_level in workflow YAML.",
+        step.name,
+    )
+    return "high"
 
 
 def _explain_agent_risk(
