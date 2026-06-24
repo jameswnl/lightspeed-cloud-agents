@@ -332,6 +332,69 @@ agents:
 
 ---
 
+## Best Practice: Diagnose → Propose → Gate → Execute → Verify
+
+The recommended pattern for remediation workflows follows 5 phases (from KubeKlaw learnings). Each phase is a regular workflow step — no special step types needed.
+
+```yaml
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: remediation-workflow
+spec:
+  steps:
+    # Phase 1: Diagnose — gather evidence, identify root cause
+    - name: diagnose
+      type: agent
+      agent: diagnostic-agent
+      prompt: "Investigate the reported issue. Identify root cause with confidence level."
+      output_key: diagnosis
+
+    # Phase 2: Propose — present options with risk and rollback
+    - name: propose
+      type: agent
+      agent: diagnostic-agent
+      prompt: |
+        Based on diagnosis: {{ steps.diagnosis.output.summary }}
+        Propose remediation actions with risk levels and rollback plans.
+      output_key: proposal
+
+    # Phase 3: Gate — human reviews before execution
+    - name: approve
+      type: human-approval
+      message: "Review proposed actions and approve execution."
+      output_key: approval
+
+    # Phase 4: Execute — carry out the approved plan
+    - name: execute
+      type: agent
+      agent: diagnostic-agent
+      prompt: |
+        Execute the approved remediation: {{ steps.proposal.output.actions }}
+        Follow rollback plan if any step fails.
+      output_key: execution
+      condition: "steps.approval.output.approved == true"
+
+    # Phase 5: Verify — independent agent confirms the fix worked
+    - name: verify
+      type: agent
+      agent: monitoring-agent
+      prompt: |
+        Independently verify the cluster is healthy after remediation.
+        Previous diagnosis was: {{ steps.diagnosis.output.summary }}
+      output_key: verification
+      condition: "steps.execution.output.success == true"
+```
+
+Key principles:
+- **Diagnose before acting** — never go from problem to fix in one step
+- **Structured output** — every agent returns a schema with confidence, risk, rollback plan
+- **Human gate** — org policy decides what needs approval (auto-approve low-risk, require approval for high-risk)
+- **Independent verify** — use a *different* agent to verify, not the one that did the fix
+- **Ephemeral execution** — use `spawn: on-demand` so each step runs in an isolated sandbox (Phase 5)
+
+---
+
 ## Examples in this repo
 
 | Agent | YAML | Tools | Type |
