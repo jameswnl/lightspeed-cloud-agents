@@ -17,7 +17,7 @@ The workflow runner must be **stateless** so it can scale horizontally behind a 
 | `_paused_at` dict in memory | Resume index lost on pod restart | Persist `paused_step_index` in WorkflowState |
 | Single workflow.yaml per runner | Deploy new pod per workflow | Workflow definition API: submit/list/run |
 | Sync agent dispatch blocks runner | `RemoteAgentClient.run()` blocks until agent responds | Async dispatch: spawn pod, record step as "running", poll or callback for result |
-| SSE event queue in memory | Events lost on disconnect | Event persistence, client resume via last_event_id |
+| SSE event queue in memory | Events lost on disconnect | **Deferred** — resumable SSE is out of scope for Phase 6. Current SSE works within a single connection. Persisted event replay is a backlog item. |
 
 ### Architecture change
 
@@ -69,15 +69,22 @@ Replace `self._states` dict with persistence lookups. Every `get_state()`, `resu
 Replace file-based workflow loading with an HTTP API. Definitions stored in the persistence backend.
 
 **Endpoints:**
-- `POST /v1/workflows/definitions` — submit a workflow YAML
+- `POST /v1/workflows/definitions` — submit a workflow YAML (creates a new version)
 - `GET /v1/workflows/definitions` — list stored definitions
-- `GET /v1/workflows/definitions/{name}` — get a specific definition
-- `DELETE /v1/workflows/definitions/{name}` — remove a definition
-- `POST /v1/workflows/run` — now takes `{"workflow_name": "..."}` instead of running the single loaded workflow
+- `GET /v1/workflows/definitions/{name}` — get latest version of a definition
+- `DELETE /v1/workflows/definitions/{name}` — soft-delete (blocked if active runs reference it)
+- `POST /v1/workflows/run` — takes `{"workflow_name": "..."}`, binds run to an **immutable snapshot** of the current definition version
+
+**Definition versioning:**
+- Each `POST /v1/workflows/definitions` creates a new version (auto-incrementing)
+- When a workflow run is created, it stores `definition_version` — a snapshot of the definition at that point
+- The run uses the snapshot for all subsequent steps, retries, and resume operations — definition changes after run creation do not affect in-flight runs
+- `DELETE` is blocked if any active run references the definition; only removes future availability
 
 **Files:**
-- Create: `src/agents/workflow/definition_store.py` — CRUD for workflow definitions in DB
+- Create: `src/agents/workflow/definition_store.py` — CRUD with versioning for workflow definitions in DB
 - Modify: `src/agents/workflow/api.py` — add definition endpoints, update run endpoint
+- Modify: `src/agents/workflow/state.py` — add `definition_version` and `definition_snapshot` to WorkflowState
 - Modify: `src/agents/workflow/entrypoint.py` — no longer loads single workflow.yaml (optional bootstrap)
 - Update: tests
 
@@ -85,26 +92,34 @@ Replace file-based workflow loading with an HTTP API. Definitions stored in the 
 
 ### Task 4: Async step dispatch with DB-backed results
 
-Replace the synchronous `RemoteAgentClient.run()` pattern with async dispatch. **Hybrid approach** (from evaluator review): ephemeral pod writes result to DB directly, callback is a "go advance" notification. If callback is lost, the recovery poller picks it up.
+Replace the synchronous `RemoteAgentClient.run()` pattern with async dispatch. **Result-ingest API approach** (from reviewer): ephemeral pods never get DB credentials. They POST results to a trusted runner endpoint. The runner writes to DB and advances the workflow.
 
-**Leverages existing infrastructure:** The agent runtime already supports async runs via `run_async()` + `poll_run()` + `RunStore`. The spawner passes `RESULT_CALLBACK_URL` and `STEP_ID` env vars.
+**Security principle:** Ephemeral agent pods are untrusted workloads. They receive only: the prompt, an API token, and a result callback URL. They never get direct database access.
+
+**Leverages existing infrastructure:** The agent runtime already supports async runs via `run_async()` + `poll_run()` + `RunStore`. The spawner passes `RESULT_CALLBACK_URL`, `STEP_ID`, and `ATTEMPT_ID` env vars.
 
 **Flow:**
-1. Runner creates step record in DB with status `"dispatched"`
-2. Runner spawns ephemeral pod with env: `STEP_ID`, `RESULT_CALLBACK_URL`, `WORKFLOW_POSTGRES_URL`
+1. Runner creates step record in DB with status `"dispatched"`, assigns unique `step_id` + `attempt_id`
+2. Runner spawns ephemeral pod with env: `STEP_ID`, `ATTEMPT_ID`, `RESULT_CALLBACK_URL`, `AGENT_API_TOKEN`
 3. Runner returns immediately (non-blocking)
-4. Ephemeral pod runs the agent, writes result **directly to DB** (primary — survives pod crash)
-5. Ephemeral pod POSTs "step done" notification to callback URL (secondary — triggers advancement)
-6. Runner replica receiving callback advances the workflow immediately
-7. Pod cleanup: spawner destroys pod after DB write confirmed
+4. Ephemeral pod runs the agent, POSTs result to `RESULT_CALLBACK_URL` (authenticated via token)
+5. Runner replica receiving callback validates `step_id`/`attempt_id`, writes to DB, advances workflow
+6. If callback is lost (pod crash, network issue), recovery poller detects orphaned step and retries
+7. Pod cleanup: runner destroys pod after result is persisted
+
+**Idempotency contract:**
+- Each dispatch creates a unique `attempt_id` (UUID)
+- Only the first completion for a given `attempt_id` is accepted; duplicates are ignored
+- If a step is retried (new attempt), the old `attempt_id` becomes stale — completions for stale attempts are rejected
+- Terminal states (`completed`, `failed`) are immutable — no further transitions allowed
 
 **Files:**
 - Create: `src/agents/workflow/step_dispatcher.py` — async dispatch logic
 - Modify: `src/agents/workflow/executor.py` — use dispatcher instead of direct `client.run()`
-- Modify: `src/agents/workflow/state.py` — add `"dispatched"` status to StepResult
-- Modify: `src/agents/workflow/api.py` — add `POST /v1/workflows/steps/{step_id}/complete` callback endpoint that triggers advancement
-- Modify: agent runtime — write result to DB after run, then POST notification
-- Modify: spawner — pass callback URL + step ID + DB URL to spawned pods
+- Modify: `src/agents/workflow/state.py` — add `"dispatched"` status, `step_id`, `attempt_id` to StepResult
+- Modify: `src/agents/workflow/api.py` — add `POST /v1/workflows/steps/{step_id}/complete` result-ingest endpoint with token auth
+- Modify: agent runtime — POST result to callback URL after run completes
+- Modify: spawner — pass callback URL + step ID + attempt ID to spawned pods (NO DB credentials)
 - Update: tests
 
 ---
@@ -179,7 +194,16 @@ uv run pytest examples/tests/ -q                      # example tests
 **E2E (2-replica stateless test):**
 1. Deploy workflow-runner with `replicas: 2` in Kind
 2. Submit a workflow definition via API
-3. Start a workflow run
+3. Start a workflow run, verify step dispatched
 4. Kill one runner replica mid-execution
-5. Verify the other replica picks up and completes the workflow
-6. Verify approval pause/resume works across replicas
+5. Verify the other replica picks up and completes via recovery poller
+6. Verify approval pause/resume works across replicas (pause on replica A, resume on replica B)
+
+**Concurrency/failure test cases (unit):**
+- Duplicate callback: same `step_id`/`attempt_id` submitted twice → second is ignored
+- Stale callback: old `attempt_id` submitted after retry created new attempt → rejected
+- Optimistic lock conflict: two replicas try to advance same workflow → one succeeds, other retries
+- Lost callback: step stays `"dispatched"` past timeout → recovery poller marks failed or retries
+- Definition update during active run: run continues with original snapshot, not updated definition
+- Definition delete with active run: delete is blocked with error
+- Approval resume on different replica: works because state is loaded from DB
