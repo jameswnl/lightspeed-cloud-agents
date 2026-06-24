@@ -14,6 +14,17 @@ Phases 1-4c built a cloud agents framework with a hand-rolled sequential workflo
 
 **Process:** TDD, every task gets an independent opus evaluator.
 
+### Implementation outcome
+
+Phase 5 was completed as a **linear-graph-only exploration** with **partial SpawnConfig support**. The following items from the original plan were **not implemented** and are deferred:
+
+- **Task 2 (partial):** Decision nodes for conditional routing — conditions handled inside step functions instead
+- **Task 5:** Fork/Join parallel execution — not built, remains theoretical fit
+- **Task 7 (partial):** SpawnConfig enforcement in PodmanSpawner, wait_ready health_path/timeout, agent-level envelope precedence
+- **Task 9 (partial):** Full parametrized comparison suite — GraphExecutor tests mirror WorkflowExecutor scenarios but not via shared parametrized fixture
+
+See `phase-5-pydantic-graph-assessment.md` for the fit matrix and recommendation.
+
 ---
 
 ## Task 1: Executor Protocol + Graph State Models + Dependency Setup
