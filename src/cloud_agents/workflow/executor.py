@@ -78,6 +78,17 @@ class WorkflowExecutor:
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, int] = {}
 
+        self._validate_spawn_config()
+
+    def _validate_spawn_config(self) -> None:
+        """Validate that ephemeral steps have a spawner configured."""
+        for step in self._definition.spec.steps:
+            if step.spawn in ("ephemeral", "on-demand") and not self._spawner:
+                raise ValueError(
+                    f"Step '{step.name}' uses spawn='{step.spawn}' but no spawner "
+                    f"is configured. Set spawn: pre-deployed or configure a spawner."
+                )
+
     async def run(self, input_prompt: str | None = None) -> WorkflowState:
         """Execute the workflow from start.
 

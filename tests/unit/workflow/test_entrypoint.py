@@ -18,7 +18,7 @@ MINIMAL_WORKFLOW = {
     "spec": {
         "steps": [
             {"name": "s1", "type": "agent", "agent": "diag",
-             "prompt": "test", "output_key": "r1"},
+             "prompt": "test", "output_key": "r1", "spawn": "pre-deployed"},
         ],
     },
 }

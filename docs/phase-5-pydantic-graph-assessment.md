@@ -12,7 +12,7 @@ pydantic-graph's `GraphBuilder` API was evaluated as an alternative workflow exe
 | Conditional branching | Works with adaptation | Decision nodes possible but conditions live in step functions, not graph topology |
 | Approval pause/resume | Impedance mismatch | GraphRun is an async generator — cannot be serialized and resumed after process restart |
 | Retry with escalation | Works with adaptation | Retry loop lives inside step function, not in graph semantics |
-| Parallel (Fork/Join) | Natural fit | pydantic-graph's Fork/Join is type-safe with proper fan-out/fan-in — superior to hand-rolled asyncio.gather |
+| Parallel (Fork/Join) | Not yet evaluated | pydantic-graph's Fork/Join API exists but was not implemented in this phase. Linear topology only. Future evaluation needed. |
 | Ephemeral spawn | Works with adaptation | Spawn/destroy lifecycle lives in step function, transparent to graph |
 | Durable persistence | Impedance mismatch | GraphBuilder has no built-in state persistence. Cannot survive pod restarts. Fundamental gap. |
 | Event emission | Works with adaptation | Events emitted from step functions, not from graph topology |

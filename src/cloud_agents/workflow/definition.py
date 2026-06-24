@@ -9,6 +9,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from agents.spawner.base import SpawnConfig
 from agents.workflow.permissions import PermissionScope
 
 
@@ -38,6 +39,7 @@ class WorkflowStepSpec(BaseModel):
     spawn: Literal["pre-deployed", "on-demand", "ephemeral"] = "ephemeral"
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
+    spawn_config: Optional[SpawnConfig] = None
 
 
 class WorkflowSpec(BaseModel):

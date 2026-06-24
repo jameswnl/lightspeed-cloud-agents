@@ -462,7 +462,7 @@ class TestWorkflowExecutorAdvisory:
         """Test that advisory mode is auto-detected from workflow metadata."""
         step_specs = [WorkflowStepSpec(
             name="s1", type="agent", agent="diagnostic-agent",
-            prompt="Check", output_key="r1",
+            prompt="Check", output_key="r1", spawn="pre-deployed",
         )]
         defn = WorkflowDefinition(
             apiVersion="v1", kind="AgentWorkflow",

@@ -20,6 +20,7 @@ from agents.spawner.base import AgentSpawner
 from agents.workflow.advisory import AdvisoryEnforcer
 from agents.workflow.auto_approve import ApprovalPolicy
 from agents.workflow.definition import WorkflowDefinition
+from agents.workflow.events import WorkflowEvent
 from agents.workflow.graph_builder_factory import build_workflow_graph
 from agents.workflow.graph_state import GraphWorkflowDeps, GraphWorkflowState
 from agents.workflow.graph_steps import APPROVAL_NEEDED_SENTINEL
@@ -84,6 +85,13 @@ class GraphExecutor:
         self._states: dict[str, WorkflowState] = {}
         self._paused_at: dict[str, GraphWorkflowState] = {}
 
+        for step in definition.spec.steps:
+            if step.spawn in ("ephemeral", "on-demand") and not self._spawner:
+                raise ValueError(
+                    f"Step '{step.name}' uses spawn='{step.spawn}' but no spawner "
+                    f"is configured. Set spawn: pre-deployed or configure a spawner."
+                )
+
     async def run(self, input_prompt: Optional[str] = None) -> WorkflowState:
         """Execute the workflow using pydantic-graph.
 
@@ -102,6 +110,9 @@ class GraphExecutor:
             updated_at=now,
         )
         self._states[workflow_id] = ws
+        await self._emit(WorkflowEvent(
+            event_type="workflow.started", workflow_id=workflow_id,
+        ))
 
         graph_state = GraphWorkflowState(workflow_state=ws)
         deps = self._build_deps()
@@ -119,9 +130,16 @@ class GraphExecutor:
             )
             ws.status = "failed" if has_failures else "completed"
             ws.current_step = None
+            event_type = "workflow.failed" if ws.status == "failed" else "workflow.completed"
+            await self._emit(WorkflowEvent(
+                event_type=event_type, workflow_id=workflow_id,
+            ))
 
         if ws.status == "paused":
             self._paused_at[workflow_id] = graph_state
+            await self._emit(WorkflowEvent(
+                event_type="workflow.paused", workflow_id=workflow_id,
+            ))
             for step_spec in self._definition.spec.steps:
                 sr = ws.steps.get(step_spec.output_key)
                 if sr and sr.status == "awaiting_approval":
@@ -217,6 +235,17 @@ class GraphExecutor:
         ws.updated_at = datetime.now(timezone.utc).isoformat()
         await self._persistence.save(ws)
         return ws
+
+    async def _emit(self, event: WorkflowEvent) -> None:
+        """Emit a workflow event via the callback if configured."""
+        if self._event_callback:
+            import asyncio
+            try:
+                result = self._event_callback(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning("Event callback failed for %s", event.event_type)
 
     async def get_state(self, workflow_id: str) -> Optional[WorkflowState]:
         """Get current workflow state."""
