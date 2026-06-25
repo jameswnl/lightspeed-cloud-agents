@@ -163,9 +163,12 @@ class WorkflowExecutor:
         return await self._execute_from(state, start_index=paused_index + 1)
 
     async def get_state(self, workflow_id: str) -> WorkflowState | None:
-        """Get current workflow state. Checks approval timeouts."""
+        """Get current workflow state. Re-derives status, checks timeouts."""
         state = await self._persistence.load(workflow_id)
         if state:
+            derived = WorkflowState.derive_status(state.steps)
+            if state.status != derived and state.status not in ("paused",):
+                state.status = derived
             self._check_approval_timeout(state)
         return state
 

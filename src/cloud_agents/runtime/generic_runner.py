@@ -126,7 +126,35 @@ def create_generic_runner(
             extra={"agent_name": agent_name, "correlation_id": correlation_id},
         )
 
-        active_agent = (advisory_agent if is_advisory and advisory_agent else default_agent)
+        ctx = request.context or {}
+        ctx_allowed = ctx.get("allowed_tools")
+        ctx_denied = ctx.get("denied_tools")
+        needs_permission_filter = ctx_allowed is not None or ctx_denied is not None
+
+        if is_advisory and advisory_agent:
+            active_agent = advisory_agent
+        elif needs_permission_filter:
+            from agents.workflow.permissions import PermissionScope
+            scope = PermissionScope(allowed_tools=ctx_allowed, denied_tools=ctx_denied)
+            effective = set(scope.effective_tools([n for n, _ in all_tools]))
+            filtered_tools = [(n, f) for n, f in all_tools if n in effective]
+            removed = [n for n, _ in all_tools if n not in effective]
+            if removed:
+                logger.info("PermissionScope: removed tools: %s", removed)
+            mcp_svrs = mcp_servers if mcp_servers else None
+            perm_agent: Agent[None, Any] = Agent(
+                model, output_type=output_type, retries=spec.retries,
+                defer_model_check=spec.defer_model_check,
+                instructions=spec.instructions,
+                capabilities=capabilities or None,
+                mcp_servers=mcp_svrs,
+            )
+            for fn_name, fn in filtered_tools:
+                instrumented_fn = instrument_tool(fn, agent_name, fn_name)
+                perm_agent.tool_plain(instrumented_fn, docstring_format="google")
+            active_agent = perm_agent
+        else:
+            active_agent = default_agent
 
         try:
             result = await active_agent.run(request.prompt)

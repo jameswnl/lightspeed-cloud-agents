@@ -202,6 +202,92 @@ class TestDefinitionSnapshotOnAllRuns:
         assert loaded.definition_snapshot["metadata"]["name"] == "test"
 
 
+class TestPermissionScopeEnforcement:
+    """Tests that PermissionScope actually filters tools at runtime."""
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_not_available(self) -> None:
+        """Test that a denied tool is excluded from the agent's tool set."""
+        from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+        from pydantic_ai.models.function import AgentInfo, FunctionModel
+        from agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
+        from agents.models import AgentRunRequest, DiagnosticReport
+        from agents.runtime.generic_runner import create_generic_runner
+        from examples.agents.diagnostic.cluster_state import init_scenario
+
+        init_scenario("healthy")
+
+        tool_names_seen = []
+
+        def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            tool_names_seen.extend(t.name for t in info.function_tools)
+            report = DiagnosticReport(
+                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
+            return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
+
+        spec = AgentSpec(
+            instructions="Test agent",
+            output_type="DiagnosticReport",
+            tools=ToolsSpec(
+                module="examples.agents.diagnostic.tools",
+                functions=["list_hosts", "check_host", "run_remediation"],
+            ),
+            lifecycle=LifecycleSpec(type="request-response"),
+        )
+        runner = create_generic_runner(spec, FunctionModel(mock_llm), "test-agent")
+        request = AgentRunRequest(
+            prompt="check",
+            context={"denied_tools": ["run_remediation"]},
+        )
+        await runner(request)
+
+        assert "list_hosts" in tool_names_seen
+        assert "check_host" in tool_names_seen
+        assert "run_remediation" not in tool_names_seen
+
+    @pytest.mark.asyncio
+    async def test_allowed_tools_whitelist(self) -> None:
+        """Test that only allowed tools are available."""
+        from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+        from pydantic_ai.models.function import AgentInfo, FunctionModel
+        from agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
+        from agents.models import AgentRunRequest, DiagnosticReport
+        from agents.runtime.generic_runner import create_generic_runner
+        from examples.agents.diagnostic.cluster_state import init_scenario
+
+        init_scenario("healthy")
+
+        tool_names_seen = []
+
+        def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            tool_names_seen.extend(t.name for t in info.function_tools)
+            report = DiagnosticReport(
+                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+            )
+            return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
+
+        spec = AgentSpec(
+            instructions="Test agent",
+            output_type="DiagnosticReport",
+            tools=ToolsSpec(
+                module="examples.agents.diagnostic.tools",
+                functions=["list_hosts", "check_host", "run_remediation"],
+            ),
+            lifecycle=LifecycleSpec(type="request-response"),
+        )
+        runner = create_generic_runner(spec, FunctionModel(mock_llm), "test-agent")
+        request = AgentRunRequest(
+            prompt="check",
+            context={"allowed_tools": ["list_hosts"]},
+        )
+        await runner(request)
+
+        assert "list_hosts" in tool_names_seen
+        assert "check_host" not in tool_names_seen
+        assert "run_remediation" not in tool_names_seen
+
+
 class TestRetryEscalationIntegration:
     """Integration test for retry → escalation lifecycle."""
 
