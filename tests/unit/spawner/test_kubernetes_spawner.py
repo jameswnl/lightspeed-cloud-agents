@@ -60,6 +60,109 @@ class TestKubernetesSpawnerInit:
         assert spawner._secret_env_vars == {}
 
 
+class TestKubernetesSpawnerAlreadyExists:
+    """Tests for idempotent Job creation (409 handling)."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_job_409_same_image_succeeds(self) -> None:
+        """Job AlreadyExists with matching image is treated as success."""
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        exc_409 = Exception("conflict")
+        exc_409.status = 409
+        mock_batch.create_namespaced_job.side_effect = exc_409
+
+        existing_job = MagicMock()
+        existing_job.spec.template.spec.containers = [MagicMock(image="agent-runtime:latest")]
+        mock_batch.read_namespaced_job.return_value = existing_job
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(sys.modules, {
+            "kubernetes": mock_k8s,
+            "kubernetes.client": mock_k8s_client,
+            "kubernetes.config": mock_k8s_config,
+        }):
+            spawner = KubernetesSpawner(namespace="default")
+            endpoint = await spawner._do_spawn("test-agent", "agent-runtime:latest", {})
+
+        assert "test-agent" in endpoint
+        mock_batch.read_namespaced_job.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_spawn_job_409_wrong_image_raises(self) -> None:
+        """Job AlreadyExists with different image raises RuntimeError."""
+        import sys
+
+        mock_batch = MagicMock()
+        exc_409 = Exception("conflict")
+        exc_409.status = 409
+        mock_batch.create_namespaced_job.side_effect = exc_409
+
+        existing_job = MagicMock()
+        existing_job.spec.template.spec.containers = [MagicMock(image="wrong-image:v2")]
+        mock_batch.read_namespaced_job.return_value = existing_job
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = MagicMock()
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(sys.modules, {
+            "kubernetes": mock_k8s,
+            "kubernetes.client": mock_k8s_client,
+            "kubernetes.config": mock_k8s_config,
+        }):
+            spawner = KubernetesSpawner(namespace="default")
+            with pytest.raises(RuntimeError, match="different image"):
+                await spawner._do_spawn("test-agent", "agent-runtime:latest", {})
+
+    @pytest.mark.asyncio
+    async def test_spawn_service_409_succeeds(self) -> None:
+        """Service AlreadyExists is treated as success."""
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        svc_exc_409 = Exception("conflict")
+        svc_exc_409.status = 409
+        mock_core.create_namespaced_service.side_effect = svc_exc_409
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(sys.modules, {
+            "kubernetes": mock_k8s,
+            "kubernetes.client": mock_k8s_client,
+            "kubernetes.config": mock_k8s_config,
+        }):
+            spawner = KubernetesSpawner(namespace="default")
+            endpoint = await spawner._do_spawn("test-agent", "agent-runtime:latest", {})
+
+        assert "test-agent" in endpoint
+
+
 class TestKubernetesSpawnerSecretFiltering:
     """Tests for secret env var filtering in Job specs."""
 

@@ -15,7 +15,7 @@ class MockSpawner(AgentSpawner):
         self.spawned = []
         self.destroyed = []
 
-    async def _do_spawn(self, agent_name, image, env, config=None):
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None):
         self.spawned.append(agent_name)
         return f"http://{agent_name}:8080"
 
@@ -26,7 +26,7 @@ class MockSpawner(AgentSpawner):
 class FailingSpawner(AgentSpawner):
     """Spawner that always fails."""
 
-    async def _do_spawn(self, agent_name, image, env, config=None):
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None):
         raise RuntimeError("Spawn failed")
 
     async def _do_destroy(self, agent_name):

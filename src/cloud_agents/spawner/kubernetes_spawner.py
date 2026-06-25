@@ -49,6 +49,7 @@ class KubernetesSpawner(AgentSpawner):
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
         config_override: "SpawnConfig | None" = None,
+        labels: dict[str, str] | None = None,
     ) -> str:
         """Create a K8s Job for the agent.
 
@@ -106,17 +107,24 @@ class KubernetesSpawner(AgentSpawner):
                 client.V1VolumeMount(name="agent-tools", mount_path="/app/tools", read_only=True),
             )
 
+        job_labels = {"app": agent_name, "spawned-by": "workflow-runner"}
+        if labels:
+            job_labels.update(labels)
+        pod_labels = {"app": agent_name}
+        if labels:
+            pod_labels.update(labels)
+
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=job_name,
-                labels={"app": agent_name, "spawned-by": "workflow-runner"},
+                labels=job_labels,
             ),
             spec=client.V1JobSpec(
                 backoff_limit=0,
                 ttl_seconds_after_finished=300,
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(
-                        labels={"app": agent_name},
+                        labels=pod_labels,
                     ),
                     spec=client.V1PodSpec(
                         restart_policy="Never",
@@ -141,7 +149,20 @@ class KubernetesSpawner(AgentSpawner):
             ),
         )
 
-        batch.create_namespaced_job(namespace=self._namespace, body=job)
+        try:
+            batch.create_namespaced_job(namespace=self._namespace, body=job)
+        except Exception as exc:
+            if getattr(exc, "status", None) == 409:
+                existing = batch.read_namespaced_job(name=job_name, namespace=self._namespace)
+                existing_image = existing.spec.template.spec.containers[0].image
+                if existing_image != image:
+                    raise RuntimeError(
+                        f"Job '{job_name}' exists with different image: "
+                        f"{existing_image} vs {image}"
+                    ) from exc
+                logger.info("Job '%s' already exists (idempotent retry)", job_name)
+            else:
+                raise
 
         svc = client.V1Service(
             metadata=client.V1ObjectMeta(name=job_name),
@@ -150,7 +171,13 @@ class KubernetesSpawner(AgentSpawner):
                 ports=[client.V1ServicePort(port=8080, target_port=8080)],
             ),
         )
-        core.create_namespaced_service(namespace=self._namespace, body=svc)
+        try:
+            core.create_namespaced_service(namespace=self._namespace, body=svc)
+        except Exception as exc:
+            if getattr(exc, "status", None) == 409:
+                logger.info("Service '%s' already exists (idempotent retry)", job_name)
+            else:
+                raise
 
         logger.info("Spawned K8s Job '%s' in namespace '%s'", job_name, self._namespace)
         return f"http://{job_name}.{self._namespace}.svc:8080"

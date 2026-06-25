@@ -79,6 +79,7 @@ class AgentSpawner(ABC):
         image: str,
         env: dict[str, str] | None = None,
         config: SpawnConfig | None = None,
+        labels: dict[str, str] | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -87,6 +88,7 @@ class AgentSpawner(ABC):
             image: Container image to use.
             env: Environment variables for the pod.
             config: Optional per-step resource configuration.
+            labels: Optional metadata labels for the spawned resource.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -102,7 +104,7 @@ class AgentSpawner(ABC):
             self._active_count += 1
 
         try:
-            endpoint = await self._do_spawn(agent_name, image, env or {}, config)
+            endpoint = await self._do_spawn(agent_name, image, env or {}, config, labels)
             return endpoint
         except Exception:
             async with self._lock:
@@ -113,6 +115,7 @@ class AgentSpawner(ABC):
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
         config: SpawnConfig | None = None,
+        labels: dict[str, str] | None = None,
     ) -> str:
         """Implementation-specific pod creation."""
 

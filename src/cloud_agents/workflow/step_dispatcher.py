@@ -118,3 +118,97 @@ class StepDispatcher:
             started_at=started_at,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    async def dispatch_async(
+        self,
+        step: WorkflowStepSpec,
+        prompt: str,
+        workflow_id: str,
+        persistence: Any = None,
+        attempt: int = 1,
+        context: dict[str, Any] | None = None,
+    ) -> StepResult:
+        """Dispatch a step asynchronously (fire-and-forget).
+
+        Persists 'dispatched' state before spawning (persist-before-spawn).
+        Does NOT block on result. Does NOT destroy the pod.
+
+        Args:
+            step: The step specification.
+            prompt: The interpolated prompt.
+            workflow_id: The workflow run ID.
+            persistence: Persistence backend for state writes.
+            attempt: Current attempt number (1-indexed).
+            context: Optional request context.
+
+        Returns:
+            StepResult with status="dispatched".
+        """
+        import hashlib
+
+        started_at = datetime.now(timezone.utc).isoformat()
+
+        hash_input = f"{workflow_id}:{step.name}:{attempt}"
+        spawn_id = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        spawned_name = f"{step.agent}-{spawn_id}"
+
+        dispatched_result = StepResult(
+            step_name=step.name,
+            status="dispatched",
+            started_at=started_at,
+            output={
+                "spawned_name": spawned_name,
+                "run_id": None,
+                "endpoint": None,
+                "attempt": attempt,
+            },
+        )
+
+        if persistence:
+            state = await persistence.load(workflow_id)
+            if state:
+                state.steps[step.output_key] = dispatched_result
+                state.status = "running"
+                await persistence.save(state)
+
+        if not self._spawner:
+            raise RuntimeError("Async dispatch requires a spawner")
+
+        callback_url = (
+            f"{self._callback_base_url}/v1/workflows/{workflow_id}"
+            f"/steps/{step.output_key}/result"
+        )
+        env = {
+            "AGENT_MODEL": os.environ.get("AGENT_MODEL", "gpt-4o-mini"),
+            "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434/v1"),
+            "RESULT_CALLBACK_URL": callback_url,
+            "RESULT_CALLBACK_ATTEMPT": str(attempt),
+        }
+        api_token = os.environ.get("AGENT_API_TOKEN", "")
+        if api_token:
+            env["AGENT_API_TOKEN"] = api_token
+
+        endpoint = await self._spawner.spawn(
+            spawned_name, self._agent_image, env=env, config=step.spawn_config,
+            labels={
+                "cloud-agents/workflow-id": workflow_id,
+                "cloud-agents/step-name": step.name,
+                "cloud-agents/attempt": str(attempt),
+            },
+        )
+        await self._spawner.wait_ready(endpoint)
+
+        from agents.runtime.auth import get_api_token
+        client = RemoteAgentClient(endpoint, auth_token=get_api_token() or None)
+        run_id = await client.run_async(prompt, context=context)
+
+        dispatched_result.output["run_id"] = run_id
+        dispatched_result.output["endpoint"] = endpoint
+
+        if persistence:
+            state = await persistence.load(workflow_id)
+            if state:
+                state.steps[step.output_key] = dispatched_result
+                await persistence.save(state)
+
+        return dispatched_result

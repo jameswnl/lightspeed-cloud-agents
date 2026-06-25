@@ -15,7 +15,11 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+import logging
+
 from agents.runtime.auth import BearerAuthMiddleware, get_api_token
+
+logger = logging.getLogger(__name__)
 from agents.workflow.definition import WorkflowDefinition
 from agents.workflow.definition_store import DefinitionStore
 from agents.workflow.events import WorkflowEvent
@@ -132,6 +136,38 @@ def create_workflow_app(
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Definition '{name}' not found")
         return {"status": "deleted", "name": name}
+
+    @app.post("/v1/workflows/{workflow_id}/steps/{step_name}/result")
+    async def ingest_result(workflow_id: str, step_name: str, request: Request) -> Any:
+        """Receive a step result from an agent pod callback or recovery poller."""
+        from agents.workflow.advancement import IngestError, ingest_step_result
+        from agents.workflow.state import StepResultPayload
+
+        body = await request.json()
+        try:
+            payload = StepResultPayload.model_validate(body)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        try:
+            state = await ingest_step_result(
+                app.state.executor._persistence, workflow_id, step_name, payload,
+            )
+        except IngestError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        from agents.workflow.advancement import advance_workflow
+        try:
+            await advance_workflow(
+                app.state.executor._persistence,
+                getattr(app.state.executor, '_dispatcher', None),
+                workflow_id,
+            )
+        except Exception as exc:
+            logger.warning("Advancement after ingest failed: %s", exc)
+
+        state = await app.state.executor._persistence.load(workflow_id)
+        return {"workflow_id": state.workflow_id, "status": state.status}
 
     @app.get("/v1/workflows/{workflow_id}")
     async def get_workflow(workflow_id: str) -> Any:

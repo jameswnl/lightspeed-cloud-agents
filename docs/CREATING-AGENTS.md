@@ -314,7 +314,6 @@ agents:
 | `AGENT_MODEL` | `qwen3.6:latest` | LLM model name |
 | `OLLAMA_URL` | `http://localhost:11434/v1` | LLM backend URL |
 | `OPENAI_API_KEY` | `not-needed` | API key for OpenAI/Azure |
-| `MONITOR_INTERVAL` | from YAML | Override loop interval |
 | `AGENT_BOOTSTRAP_MODULE` | none | Optional startup hook module |
 | `AGENT_BOOTSTRAP_FUNCTION` | none | Optional startup hook function |
 | `AGENT_BOOTSTRAP_ARGS` | none | Optional startup hook arguments |
@@ -402,3 +401,10 @@ Key principles:
 | Diagnostic | `examples/agents/definitions/diagnostic-agent.yaml` | `examples/agents/tools/diagnostic_tools.py` | request-response, with output validator |
 | Monitoring | `examples/agents/definitions/monitoring-agent.yaml` | `examples/agents/tools/monitoring_tools.py` | periodic-loop, dispatches to diagnostic |
 | Deploy Readiness | `examples/agents/definitions/deploy-readiness-agent.yaml` | `examples/agents/tools/readiness_tools.py` | request-response, custom output type |
+
+### Example Workflows
+
+| Workflow | YAML | Pattern |
+|----------|------|---------|
+| Diagnose & Fix | `examples/agents/definitions/diagnose-fix-workflow.yaml` | diagnose → approve → fix → verify (pre-deployed agents) |
+| Ephemeral Diagnose | `examples/agents/definitions/ephemeral-diagnose-workflow.yaml` | single ephemeral step |

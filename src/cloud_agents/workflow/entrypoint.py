@@ -61,6 +61,8 @@ PERSISTENCE_PATH = os.environ.get("WORKFLOW_STATE_DIR", "/app/state")
 POSTGRES_URL = os.environ.get("WORKFLOW_POSTGRES_URL", "")
 
 
+CALLBACK_BASE_URL = os.environ.get("CALLBACK_BASE_URL", "")
+
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
 
@@ -129,6 +131,7 @@ def build_workflow_app(
             approval_policy=ApprovalPolicy(),
             spawner=spawner,
             agent_image=agent_image,
+            callback_base_url=CALLBACK_BASE_URL,
         )
     return create_workflow_app(executor, workflow_name, lifespan=_lifespan)
 
@@ -172,6 +175,7 @@ def build_stateless_app() -> "fastapi.FastAPI":
         approval_policy=ApprovalPolicy(),
         spawner=spawner,
         agent_image=agent_image,
+        callback_base_url=CALLBACK_BASE_URL,
     )
     return create_workflow_app(executor, "workflow-runner", lifespan=_lifespan)
 

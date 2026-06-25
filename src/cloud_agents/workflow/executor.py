@@ -51,6 +51,7 @@ class WorkflowExecutor:
         agent_image: str = "agent-runtime:latest",
         advisory: Optional[AdvisoryEnforcer] = None,
         event_callback: Optional[Callable[[WorkflowEvent], Any]] = None,
+        callback_base_url: str = "",
     ) -> None:
         """Initialize the executor.
 
@@ -60,6 +61,8 @@ class WorkflowExecutor:
             client_factory: Optional factory for creating RemoteAgentClient.
             persistence: Optional state persistence backend. Defaults to in-memory.
             advisory: Optional advisory mode enforcer.
+            callback_base_url: Base URL for async dispatch callbacks.
+                When set, ephemeral steps use fire-and-forget dispatch.
         """
         self._definition = definition
         self._registry = registry
@@ -70,6 +73,16 @@ class WorkflowExecutor:
         self._approval_policy = approval_policy or ApprovalPolicy()
         self._spawner = spawner
         self._agent_image = agent_image
+        self._callback_base_url = callback_base_url
+        self._dispatcher = None
+        if callback_base_url and spawner:
+            from agents.workflow.step_dispatcher import StepDispatcher
+            self._dispatcher = StepDispatcher(
+                client_factory=self._client_factory,
+                spawner=spawner,
+                agent_image=agent_image,
+                callback_base_url=callback_base_url,
+            )
         self._advisory = advisory or AdvisoryEnforcer(
             enabled=definition.metadata.get("mode") == "advisory"
         )
@@ -291,6 +304,22 @@ class WorkflowExecutor:
                     event_type="step.started", workflow_id=state.workflow_id,
                     step_name=step.name,
                 ))
+                if (self._dispatcher and self._callback_base_url
+                        and step.spawn in ("ephemeral", "on-demand")):
+                    prompt = step.prompt or ""
+                    try:
+                        prompt = interpolate(prompt, state)
+                    except ValueError:
+                        pass
+                    result = await self._dispatcher.dispatch_async(
+                        step, prompt, state.workflow_id,
+                        persistence=self._persistence, attempt=1,
+                    )
+                    state.steps[step.output_key] = result
+                    state.status = WorkflowState.derive_status(state.steps)
+                    await self._persist(state)
+                    return state
+
                 result = await self._execute_agent_step_with_retry(step, state)
                 state.steps[step.output_key] = result
                 await self._persist(state)
@@ -395,6 +424,14 @@ class WorkflowExecutor:
 
         logger.info("Executing step '%s' with agent '%s' (spawn=%s)", step.name, step.agent, step.spawn)
 
+        if (self._dispatcher and self._callback_base_url
+                and step.spawn in ("ephemeral", "on-demand")):
+            result = await self._dispatcher.dispatch_async(
+                step, prompt, state.workflow_id,
+                persistence=self._persistence, attempt=1,
+            )
+            return result
+
         spawned_name = None
         with self._tracer.start_as_current_span(f"workflow.step.{step.name}") as span:
             span.set_attribute("step.name", step.name)
@@ -414,6 +451,12 @@ class WorkflowExecutor:
                     )
                     await self._persist(state)
 
+                    workflow_labels = {
+                        "cloud-agents/workflow-id": state.workflow_id,
+                        "cloud-agents/step-name": step.name,
+                        "cloud-agents/attempt": "1",
+                        "cloud-agents/created-at": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                    }
                     endpoint = await self._spawner.spawn(
                         spawned_name, self._agent_image,
                         env={
@@ -421,6 +464,7 @@ class WorkflowExecutor:
                             "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434/v1"),
                         },
                         config=step.spawn_config,
+                        labels=workflow_labels,
                     )
                     await self._spawner.wait_ready(endpoint)
                     from agents.runtime.auth import get_api_token

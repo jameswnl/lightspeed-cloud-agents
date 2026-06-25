@@ -45,6 +45,7 @@ class PodmanSpawner(AgentSpawner):
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
         config: "SpawnConfig | None" = None,
+        labels: dict[str, str] | None = None,
     ) -> str:
         """Create a Podman container for the agent."""
         try:
@@ -57,6 +58,25 @@ class PodmanSpawner(AgentSpawner):
         volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
 
         with PodmanClient() as client:
+            try:
+                existing = client.containers.get(container_name)
+                if existing.status == "running":
+                    logger.info("Container '%s' already running (idempotent)", container_name)
+                    existing.reload()
+                    port_bindings = existing.ports or {}
+                    host_port = None
+                    for binding in port_bindings.get("8080/tcp", []):
+                        host_port = binding.get("HostPort")
+                        if host_port:
+                            break
+                    if host_port:
+                        return f"http://localhost:{host_port}"
+                    return f"http://{container_name}:8080"
+                existing.remove(force=True)
+                logger.info("Removed stale container '%s'", container_name)
+            except Exception:
+                pass
+
             container = client.containers.run(
                 image=image,
                 name=container_name,
@@ -65,6 +85,7 @@ class PodmanSpawner(AgentSpawner):
                 network=self._network,
                 volumes=volumes or None,
                 ports={"8080/tcp": None},
+                labels=labels or {},
                 remove=False,
             )
 

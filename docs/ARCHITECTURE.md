@@ -143,6 +143,24 @@ A single generic container image (`agent-runtime:latest`) that runs any agent. A
 | `/app/skills/` | Domain knowledge packages (SKILL.md files) |
 | `/app/registry.yaml` | Agent endpoint registry |
 
+### Stateless Execution (Phase 6-7)
+
+The workflow runner is stateless — all state lives in PostgreSQL:
+
+- **DefinitionStore** — CRUD for workflow definitions with versioning. Definitions submitted via API, stored in shared persistence. Runs bind to immutable snapshots.
+- **StepDispatcher** — dispatches workflow steps to ephemeral pods. Writes `"dispatched"` status + `spawned_name` to DB before spawning for crash recovery.
+- **RecoveryPoller** — background task on every runner replica. Detects orphaned dispatched steps (past timeout), marks them failed, and calls `spawner.destroy()` to clean up the backing Job.
+- **Optimistic locking** — `save_cas()` with version-based compare-and-swap prevents duplicate advancement across replicas.
+- **derive_status()** — pure function that computes workflow status from step results, preventing status drift.
+
+### Security (Phase 7)
+
+- **K8s Secrets** — API keys injected via `secretKeyRef`, never as plain env vars in pod specs
+- **Explicit risk_level** — workflow steps declare risk level; missing risk_level fails closed to "high" (manual approval required)
+- **Bearer auth** — `RemoteAgentClient` sends `Authorization: Bearer` header; agent runtime validates via `BearerAuthMiddleware`
+- **PermissionScope enforcement** — `allowed_tools`/`denied_tools` in request context actually filters tools at runtime in `generic_runner`
+- **definition_snapshot** — every workflow run stores an immutable copy of its definition at creation time
+
 ### Spawner
 
 Abstract interface for creating and destroying agent pods on demand:
@@ -251,4 +269,5 @@ Failed steps retry with full failure history. Each attempt sees what was tried b
 | 4b | PostgreSQL persistence, on-demand spawning | Done |
 | 4c | OTel tracing, metrics, SSE, advisory mode, MCP | Done |
 | 5 | pydantic-graph exploration, ephemeral-by-default | Done |
-| 6 | Stateless workflow runner, definition API | Done |
+| 6 | Stateless workflow runner, definition API, recovery poller | Done |
+| 7 | Security hardening: K8s Secrets, explicit risk_level, bearer auth, derive_status, PermissionScope enforcement, FilePersistence CAS | Done |

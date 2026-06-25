@@ -103,3 +103,144 @@ class TestRecoveryPoller:
 
         poller = RecoveryPoller(p, step_timeout=1)
         await poller._poll_once()
+
+    @pytest.mark.asyncio
+    async def test_recovery_polls_agent_and_recovers_completed(self) -> None:
+        """Poller polls agent pod and recovers completed result."""
+        from unittest.mock import AsyncMock, MagicMock
+        from agents.models import AgentRunResponse, RunState, RunStatus
+
+        p = InMemoryPersistence()
+        state = _make_state()
+        state.definition_snapshot = {
+            "apiVersion": "v1", "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [
+                {"name": "s1", "type": "agent", "agent": "diag",
+                 "prompt": "test", "output_key": "r1", "spawn": "ephemeral"},
+            ]},
+        }
+        state.steps["r1"] = StepResult(
+            step_name="s1", status="dispatched",
+            started_at="2020-01-01T00:00:00Z",
+            output={
+                "spawned_name": "diag-abc",
+                "run_id": "run-123",
+                "endpoint": "http://diag-abc:8080",
+                "attempt": 1,
+            },
+        )
+        await p.save(state)
+
+        mock_run_state = RunState(
+            run_id="run-123",
+            status=RunStatus.COMPLETED,
+            created_at="2026-01-01T00:00:00Z",
+            result=AgentRunResponse(
+                output={"summary": "fixed"},
+                output_type="str",
+                usage={"input_tokens": 1, "output_tokens": 1},
+                agent_name="diag",
+                success=True,
+            ),
+        )
+
+        mock_client = AsyncMock()
+        mock_client.poll_run = AsyncMock(return_value=mock_run_state)
+
+        spawner = AsyncMock()
+        spawner.destroy = AsyncMock()
+
+        poller = RecoveryPoller(
+            p, step_timeout=10, spawner=spawner,
+            client_factory=lambda endpoint: mock_client,
+        )
+        await poller._poll_once()
+
+        updated = await p.load("wf-1")
+        assert updated.steps["r1"].status == "completed"
+        assert updated.steps["r1"].output["summary"] == "fixed"
+        spawner.destroy.assert_called_once_with("diag-abc")
+
+    @pytest.mark.asyncio
+    async def test_recovery_marks_failed_when_pod_unreachable(self) -> None:
+        """Poller marks step failed when pod is unreachable."""
+        from unittest.mock import AsyncMock
+
+        p = InMemoryPersistence()
+        state = _make_state()
+        state.definition_snapshot = {
+            "apiVersion": "v1", "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [
+                {"name": "s1", "type": "agent", "agent": "diag",
+                 "prompt": "test", "output_key": "r1", "spawn": "ephemeral"},
+            ]},
+        }
+        state.steps["r1"] = StepResult(
+            step_name="s1", status="dispatched",
+            started_at="2020-01-01T00:00:00Z",
+            output={
+                "spawned_name": "diag-abc",
+                "run_id": "run-123",
+                "endpoint": "http://diag-abc:8080",
+                "attempt": 1,
+            },
+        )
+        await p.save(state)
+
+        mock_client = AsyncMock()
+        mock_client.poll_run = AsyncMock(side_effect=Exception("Connection refused"))
+
+        spawner = AsyncMock()
+
+        poller = RecoveryPoller(
+            p, step_timeout=10, spawner=spawner,
+            client_factory=lambda endpoint: mock_client,
+        )
+        await poller._poll_once()
+
+        updated = await p.load("wf-1")
+        assert updated.steps["r1"].status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_recovery_no_run_id_pod_unreachable_marks_failed(self) -> None:
+        """Poller marks step failed when run_id is None and pod unreachable."""
+        from unittest.mock import AsyncMock
+
+        p = InMemoryPersistence()
+        state = _make_state()
+        state.definition_snapshot = {
+            "apiVersion": "v1", "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [
+                {"name": "s1", "type": "agent", "agent": "diag",
+                 "prompt": "test", "output_key": "r1", "spawn": "ephemeral"},
+            ]},
+        }
+        state.steps["r1"] = StepResult(
+            step_name="s1", status="dispatched",
+            started_at="2020-01-01T00:00:00Z",
+            output={
+                "spawned_name": "diag-abc",
+                "run_id": None,
+                "endpoint": "http://diag-abc:8080",
+                "attempt": 1,
+            },
+        )
+        await p.save(state)
+
+        mock_client = AsyncMock()
+        mock_client.healthz = AsyncMock(return_value=False)
+
+        spawner = AsyncMock()
+
+        poller = RecoveryPoller(
+            p, step_timeout=10, spawner=spawner,
+            client_factory=lambda endpoint: mock_client,
+        )
+        await poller._poll_once()
+
+        updated = await p.load("wf-1")
+        assert updated.steps["r1"].status == "failed"
+        assert "pod never spawned" in updated.steps["r1"].error.lower() or "dispatch interrupted" in updated.steps["r1"].error.lower()

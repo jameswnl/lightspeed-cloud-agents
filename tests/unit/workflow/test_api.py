@@ -150,6 +150,92 @@ class TestWorkflowAPIAuth:
         assert tc.get("/healthz").status_code == 200
 
 
+class TestWorkflowAPIIngest:
+    """Tests for POST /v1/workflows/{id}/steps/{step}/result."""
+
+    def _make_app_with_persistence(self):
+        """Create app with in-memory persistence."""
+        from agents.workflow.persistence import InMemoryPersistence
+        defn = _make_definition([
+            {"name": "step1", "type": "agent", "agent": "diag",
+             "prompt": "Do something", "output_key": "result"},
+        ])
+        registry = AgentRegistry({"diag": "http://diag:8080"})
+        persistence = InMemoryPersistence()
+        executor = WorkflowExecutor(defn, registry, persistence=persistence)
+        app = create_workflow_app(executor, "test-workflow")
+        return TestClient(app), persistence
+
+    def test_ingest_valid_result(self) -> None:
+        """Valid result callback returns 200."""
+        from agents.workflow.state import StepResult, WorkflowState
+        tc, persistence = self._make_app_with_persistence()
+
+        import asyncio
+        state = WorkflowState(
+            workflow_id="wf-1", workflow_name="test", status="running",
+            steps={"result": StepResult(
+                step_name="step1", status="dispatched",
+                started_at="2026-01-01T00:00:00Z",
+                output={"spawned_name": "agent-abc", "attempt": 1},
+            )},
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+        )
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(persistence.save(state))
+        loop.close()
+
+        resp = tc.post("/v1/workflows/wf-1/steps/result/result", json={
+            "status": "completed",
+            "output": {"summary": "done"},
+            "completed_at": "2026-01-01T00:01:00Z",
+            "attempt": 1,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["workflow_id"] == "wf-1"
+
+    def test_ingest_unknown_workflow_404(self) -> None:
+        """Unknown workflow returns 404."""
+        tc, _ = self._make_app_with_persistence()
+        resp = tc.post("/v1/workflows/nonexistent/steps/result/result", json={
+            "status": "completed",
+            "output": {},
+            "completed_at": "2026-01-01T00:01:00Z",
+            "attempt": 1,
+        })
+        assert resp.status_code == 404
+
+    def test_ingest_invalid_payload_422(self) -> None:
+        """Invalid payload returns 422."""
+        tc, _ = self._make_app_with_persistence()
+        resp = tc.post("/v1/workflows/wf-1/steps/result/result", json={
+            "bad_field": "value",
+        })
+        assert resp.status_code == 422
+
+    def test_ingest_auth_required(self) -> None:
+        """Ingest endpoint requires auth when token is set."""
+        import os
+        from unittest.mock import patch
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "agent": "diag",
+             "prompt": "test", "output_key": "r1"},
+        ])
+        registry = AgentRegistry({"diag": "http://diag:8080"})
+        executor = WorkflowExecutor(defn, registry)
+        with patch.dict(os.environ, {"AGENT_API_TOKEN": "secret-123"}):
+            app = create_workflow_app(executor, "test")
+        tc = TestClient(app)
+
+        resp = tc.post("/v1/workflows/wf-1/steps/r1/result", json={
+            "status": "completed", "output": {},
+            "completed_at": "2026-01-01T00:01:00Z", "attempt": 1,
+        })
+        assert resp.status_code == 401
+
+
 class TestWorkflowAPIList:
     """Tests for /v1/workflows."""
 
