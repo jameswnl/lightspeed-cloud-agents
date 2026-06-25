@@ -29,6 +29,7 @@ class KubernetesSpawner(AgentSpawner):
         config_configmap: str | None = None,
         tools_configmap: str | None = None,
         secret_env_vars: dict[str, "SecretKeyRef"] | None = None,
+        projected_sa_token: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the Kubernetes spawner.
@@ -38,6 +39,7 @@ class KubernetesSpawner(AgentSpawner):
             service_account: ServiceAccount for spawned pods.
             config_configmap: ConfigMap name for agent.yaml + registry.yaml.
             tools_configmap: ConfigMap name for tool modules.
+            projected_sa_token: Mount projected SA token for TokenReview auth.
         """
         super().__init__(**kwargs)
         self._namespace = namespace
@@ -45,6 +47,7 @@ class KubernetesSpawner(AgentSpawner):
         self._config_configmap = config_configmap
         self._tools_configmap = tools_configmap
         self._secret_env_vars = secret_env_vars or {}
+        self._projected_sa_token = projected_sa_token
 
     async def _do_spawn(
         self, agent_name: str, image: str, env: dict[str, str],
@@ -114,6 +117,25 @@ class KubernetesSpawner(AgentSpawner):
         if labels:
             pod_labels.update(labels)
 
+        if self._projected_sa_token:
+            volumes.append(client.V1Volume(
+                name="sa-token",
+                projected=client.V1ProjectedVolumeSource(sources=[
+                    client.V1VolumeProjection(
+                        service_account_token=client.V1ServiceAccountTokenProjection(
+                            audience="cloud-agents",
+                            expiration_seconds=3600,
+                            path="token",
+                        ),
+                    ),
+                ]),
+            ))
+            volume_mounts.append(client.V1VolumeMount(
+                name="sa-token",
+                mount_path="/var/run/secrets/cloud-agents",
+                read_only=True,
+            ))
+
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=job_name,
@@ -129,6 +151,7 @@ class KubernetesSpawner(AgentSpawner):
                     spec=client.V1PodSpec(
                         restart_policy="Never",
                         service_account_name=self._service_account,
+                        automount_service_account_token=False,
                         containers=[
                             client.V1Container(
                                 name="agent",
