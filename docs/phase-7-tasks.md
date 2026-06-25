@@ -77,10 +77,10 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 - Modify: `src/agents/spawner/podman_spawner.py` — pass `AGENT_API_TOKEN` env var
 - Update: tests
 
-**Token model (deployment-specific):**
-- **Podman:** Shared bearer token from `AGENT_API_TOKEN` env var. Acceptable because Podman deployments have a single trust domain (host-level network).
-- **Kubernetes (production):** Projected ServiceAccount tokens. Each spawned Job gets a short-lived, audience-scoped SA token via `projected` volume. The agent runtime validates the token against the K8s TokenReview API. This provides per-pod identity, not a shared secret.
-- The spawner interface accepts an `auth_mode: Literal["shared_secret", "sa_token"]` config to select the model per deployment target.
+**Token model (shipped in Phase 7):**
+- **Podman:** Shared bearer token from `AGENT_API_TOKEN` env var.
+- **Kubernetes:** Same shared bearer token, injected via K8s Secret `secretKeyRef` (not plain env var). All pods reference the same Secret.
+- Per-pod identity via projected SA tokens + TokenReview is deferred to backlog (see above).
 
 ---
 
@@ -208,7 +208,8 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 - Add K8s/Podman spawner unit tests with mocked API clients
 
 **Files:**
-- Create: `tests/integration/agents/test_executor_spawner.py`
+- Shipped: `tests/e2e/test_phase7_podman_pytest.py` — pytest-compatible E2E with Podman fixtures
+- Shipped: `tests/unit/agents/test_phase7_robustness.py` — retry→escalation integration test
 - Create: `tests/unit/agents/spawner/test_kubernetes_spawner.py`
 - Create: `tests/unit/agents/spawner/test_podman_spawner.py`
 
