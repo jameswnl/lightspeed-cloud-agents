@@ -136,15 +136,13 @@ class RecoveryPoller:
                     wf.status = "failed"
                     try:
                         await save_with_version(self._persistence, wf, wf.version)
-                        if self._spawner:
-                            import hashlib
-                            hash_input = f"{wf.workflow_id}:{step_result.step_name}:1"
-                            spawn_id = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-                            spawned_name = f"{step_result.step_name}-{spawn_id}"
-                            try:
-                                await self._spawner.destroy(spawned_name)
-                                logger.info("Destroyed orphaned Job '%s'", spawned_name)
-                            except Exception as destroy_exc:
-                                logger.warning("Failed to destroy orphaned Job '%s': %s", spawned_name, destroy_exc)
+                        if self._spawner and step_result.output:
+                            spawned_name = step_result.output.get("spawned_name")
+                            if spawned_name:
+                                try:
+                                    await self._spawner.destroy(spawned_name)
+                                    logger.info("Destroyed orphaned Job '%s'", spawned_name)
+                                except Exception as destroy_exc:
+                                    logger.warning("Failed to destroy orphaned Job '%s': %s", spawned_name, destroy_exc)
                     except StaleStateError:
                         logger.info("Another replica already handled workflow %s", wf.workflow_id)

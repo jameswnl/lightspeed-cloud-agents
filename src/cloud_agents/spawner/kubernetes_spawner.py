@@ -106,23 +106,6 @@ class KubernetesSpawner(AgentSpawner):
                 client.V1VolumeMount(name="agent-tools", mount_path="/app/tools", read_only=True),
             )
 
-        # Projected SA token for per-pod identity (K8s production auth)
-        volumes.append(client.V1Volume(
-            name="agent-token",
-            projected=client.V1ProjectedVolumeSource(
-                sources=[client.V1VolumeProjection(
-                    service_account_token=client.V1ServiceAccountTokenProjection(
-                        path="agent-token",
-                        expiration_seconds=3600,
-                        audience="cloud-agents",
-                    ),
-                )],
-            ),
-        ))
-        volume_mounts.append(
-            client.V1VolumeMount(name="agent-token", mount_path="/var/run/secrets/tokens", read_only=True),
-        )
-
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=job_name,

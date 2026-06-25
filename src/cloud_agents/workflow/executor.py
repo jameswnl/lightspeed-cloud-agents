@@ -406,6 +406,14 @@ class WorkflowExecutor:
                     hash_input = f"{state.workflow_id}:{step.name}:1"
                     spawn_id = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
                     spawned_name = f"{step.agent}-{spawn_id}"
+
+                    state.steps[step.output_key] = StepResult(
+                        step_name=step.name, status="dispatched",
+                        started_at=started_at,
+                        output={"spawned_name": spawned_name},
+                    )
+                    await self._persist(state)
+
                     endpoint = await self._spawner.spawn(
                         spawned_name, self._agent_image,
                         env={

@@ -49,15 +49,17 @@ def agent_env():
 @pytest.fixture(scope="module")
 def agent_endpoint(spawner, agent_env):
     """Spawn an agent container and return its endpoint. Destroy after tests."""
-    endpoint = asyncio.get_event_loop().run_until_complete(
+    loop = asyncio.new_event_loop()
+    endpoint = loop.run_until_complete(
         spawner.spawn("pytest-auth", "localhost/agent-runtime:latest", agent_env)
     )
-    ready = asyncio.get_event_loop().run_until_complete(
+    ready = loop.run_until_complete(
         spawner.wait_ready(endpoint, timeout=60.0)
     )
     assert ready, f"Agent did not become ready at {endpoint}"
     yield endpoint
-    asyncio.get_event_loop().run_until_complete(spawner.destroy("pytest-auth"))
+    loop.run_until_complete(spawner.destroy("pytest-auth"))
+    loop.close()
 
 
 class TestBearerAuth:
