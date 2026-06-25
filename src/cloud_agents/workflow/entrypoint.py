@@ -74,10 +74,12 @@ def _create_spawner():
         service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
         config_cm = os.environ.get("SPAWNER_CONFIG_CONFIGMAP")
         tools_cm = os.environ.get("SPAWNER_TOOLS_CONFIGMAP")
-        logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
+        use_sa_token = os.environ.get("AUTH_MODE", "shared_secret") == "sa_token"
+        logger.info("Using KubernetesSpawner (namespace=%s, projected_sa_token=%s)", namespace, use_sa_token)
         return KubernetesSpawner(
             namespace=namespace, service_account=service_account,
             config_configmap=config_cm, tools_configmap=tools_cm,
+            projected_sa_token=use_sa_token,
         )
     if SPAWNER_TYPE == "podman":
         from agents.spawner.podman_spawner import PodmanSpawner
@@ -108,6 +110,9 @@ def build_workflow_app(
     init_tracing(f"workflow-{workflow_name}")
     persistence = _create_persistence()
 
+    spawner = _create_spawner()
+    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
+
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Initialize persistence and start recovery poller on startup."""
@@ -116,14 +121,15 @@ def build_workflow_app(
             await persistence.initialize()
 
         from agents.workflow.advancement import RecoveryPoller
-        poller = RecoveryPoller(persistence)
+        from agents.remote_agent_client import RemoteAgentClient
+        poller = RecoveryPoller(
+            persistence, spawner=spawner,
+            client_factory=lambda ep: RemoteAgentClient(ep),
+        )
         poller_task = asyncio.create_task(poller.start())
         yield
         await poller.stop()
         poller_task.cancel()
-
-    spawner = _create_spawner()
-    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
 
     executor = WorkflowExecutor(
             defn, registry,
@@ -145,12 +151,19 @@ def build_stateless_app() -> "fastapi.FastAPI":
     init_tracing("workflow-runner")
     persistence = _create_persistence()
 
+    spawner = _create_spawner()
+    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
+
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if hasattr(persistence, "initialize"):
             await persistence.initialize()
         from agents.workflow.advancement import RecoveryPoller
-        poller = RecoveryPoller(persistence)
+        from agents.remote_agent_client import RemoteAgentClient
+        poller = RecoveryPoller(
+            persistence, spawner=spawner,
+            client_factory=lambda ep: RemoteAgentClient(ep),
+        )
         poller_task = asyncio.create_task(poller.start())
         yield
         await poller.stop()
@@ -165,9 +178,6 @@ def build_stateless_app() -> "fastapi.FastAPI":
                              prompt="", output_key="noop", spawn="pre-deployed"),
         ]),
     )
-
-    spawner = _create_spawner()
-    agent_image = os.environ.get("AGENT_IMAGE", "agent-runtime:latest")
 
     executor = WorkflowExecutor(
         placeholder_defn, registry,

@@ -164,12 +164,14 @@ class StepDispatcher:
             },
         )
 
+        from agents.workflow.advancement import save_with_version, StaleStateError
+
         if persistence:
             state = await persistence.load(workflow_id)
             if state:
                 state.steps[step.output_key] = dispatched_result
                 state.status = "running"
-                await persistence.save(state)
+                await save_with_version(persistence, state, state.version)
 
         if not self._spawner:
             raise RuntimeError("Async dispatch requires a spawner")
@@ -209,6 +211,6 @@ class StepDispatcher:
             state = await persistence.load(workflow_id)
             if state:
                 state.steps[step.output_key] = dispatched_result
-                await persistence.save(state)
+                await save_with_version(persistence, state, state.version)
 
         return dispatched_result

@@ -1,6 +1,9 @@
-"""E2E tests for Phase 8 multi-replica workflow runner with PostgreSQL.
+"""E2E tests for Phase 8 multi-replica infrastructure with PostgreSQL.
 
-Tests stateless scaling, callback dispatch, and replica failover.
+Verifies deployment infrastructure: 2 runner replicas with PostgreSQL
+persistence, cross-replica healthz, ingest endpoint validation, and
+auth enforcement. Does NOT test full callback/recovery flows (those
+require a running LLM and real workflow execution).
 
 Prerequisites:
   - kind installed with KIND_EXPERIMENTAL_PROVIDER=podman
