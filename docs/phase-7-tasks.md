@@ -135,7 +135,7 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 3. TTL: completed Jobs self-clean after 300s regardless
 
 **Files:**
-- Modify: `src/agents/spawner/kubernetes_spawner.py` — add workflow labels to Jobs
+- Modify: `src/agents/spawner/kubernetes_spawner.py` — add workflow labels to Jobs — **deferred to backlog**
 - Modify: `src/agents/workflow/advancement.py` — recovery poller calls `spawner.destroy()` for orphaned steps
 - Document: cleanup procedures in ARCHITECTURE.md
 
