@@ -259,6 +259,7 @@ class RecoveryPoller:
         step_timeout: int = 600,
         spawner: Any = None,
         client_factory: Any = None,
+        dispatcher: Any = None,
     ) -> None:
         """Initialize the recovery poller.
 
@@ -268,12 +269,14 @@ class RecoveryPoller:
             step_timeout: Seconds before orphan detection.
             spawner: Spawner for pod cleanup.
             client_factory: Factory for creating RemoteAgentClient from endpoint.
+            dispatcher: StepDispatcher for advancing recovered workflows.
         """
         self._persistence = persistence
         self._poll_interval = poll_interval
         self._step_timeout = step_timeout
         self._spawner = spawner
         self._client_factory = client_factory
+        self._dispatcher = dispatcher
         self._running = False
 
     async def start(self) -> None:
@@ -330,7 +333,7 @@ class RecoveryPoller:
                                     attempt=attempt,
                                 )
                                 await ingest_step_result(self._persistence, wf.workflow_id, key, payload)
-                                await advance_workflow(self._persistence, None, wf.workflow_id)
+                                await advance_workflow(self._persistence, self._dispatcher, wf.workflow_id)
                                 recovered = True
                             elif run_state.status == RunStatus.FAILED:
                                 error = run_state.result.error if run_state.result else "Unknown error"
@@ -339,7 +342,7 @@ class RecoveryPoller:
                                     completed_at=now.isoformat(), attempt=attempt,
                                 )
                                 await ingest_step_result(self._persistence, wf.workflow_id, key, payload)
-                                await advance_workflow(self._persistence, None, wf.workflow_id)
+                                await advance_workflow(self._persistence, self._dispatcher, wf.workflow_id)
                                 recovered = True
                         else:
                             is_reachable = await client.healthz()
@@ -351,7 +354,7 @@ class RecoveryPoller:
                                     attempt=attempt,
                                 )
                                 await ingest_step_result(self._persistence, wf.workflow_id, key, payload)
-                                await advance_workflow(self._persistence, None, wf.workflow_id)
+                                await advance_workflow(self._persistence, self._dispatcher, wf.workflow_id)
                                 recovered = True
                     except IngestError:
                         recovered = True

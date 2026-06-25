@@ -48,9 +48,14 @@ def create_workflow_app(
     if lifespan is not None:
         kwargs["lifespan"] = lifespan
     app = FastAPI(**kwargs)
-    api_token = get_api_token()
-    if api_token:
-        app.add_middleware(BearerAuthMiddleware, token=api_token)
+    from agents.runtime.auth import get_auth_mode, TokenReviewAuthMiddleware
+    auth_mode = get_auth_mode()
+    if auth_mode == "sa_token":
+        app.add_middleware(TokenReviewAuthMiddleware)
+    else:
+        api_token = get_api_token()
+        if api_token:
+            app.add_middleware(BearerAuthMiddleware, token=api_token)
     app.state.executor = executor
 
     @app.get("/healthz")

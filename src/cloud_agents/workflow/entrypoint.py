@@ -125,6 +125,7 @@ def build_workflow_app(
         poller = RecoveryPoller(
             persistence, spawner=spawner,
             client_factory=lambda ep: RemoteAgentClient(ep),
+            dispatcher=executor._dispatcher,
         )
         poller_task = asyncio.create_task(poller.start())
         yield
@@ -163,6 +164,7 @@ def build_stateless_app() -> "fastapi.FastAPI":
         poller = RecoveryPoller(
             persistence, spawner=spawner,
             client_factory=lambda ep: RemoteAgentClient(ep),
+            dispatcher=executor._dispatcher,
         )
         poller_task = asyncio.create_task(poller.start())
         yield
