@@ -107,7 +107,7 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 - Hash the step config (`workflow_id` + `step_name` + `attempt_number`) into the Job/container name — must include workflow_id to avoid cross-workflow collisions
 - Same input = same name = safe retry (create-only idempotency)
 - **Design requirement:** Content-hash naming makes Job names reconstructible from persisted workflow state. The recovery poller (Task 5) depends on this — it can reconstruct the expected Job name from the step config without having seen the original spawn call.
-- `KubernetesSpawner`: handle `AlreadyExists` on Job creation
+- `KubernetesSpawner`: handle `AlreadyExists` on Job creation — **deferred to backlog**
 - `PodmanSpawner`: check if container exists before creating
 
 **Files:**
@@ -126,7 +126,7 @@ The reviewer validated Cloud Agents as the right foundation but the critical sec
 **Fix:**
 - **Completed Jobs:** `ttlSecondsAfterFinished: 300` — K8s auto-cleans after 5 minutes
 - **Orphaned running Jobs:** The recovery poller detects dispatched steps past timeout, marks them failed in workflow state, then calls `spawner.destroy(spawned_name)` to delete the backing K8s Job + Service. This is the same `destroy()` path used in normal step cleanup.
-- Add `spawner_labels` to spawned Jobs: `workflow-id`, `step-name`, `created-at` for visibility
+- Add `spawner_labels` to spawned Jobs: `workflow-id`, `step-name`, `created-at` for visibility — **deferred to backlog**
 - Manual fallback: `kubectl delete jobs -l spawned-by=workflow-runner` for emergency cleanup
 
 **Cleanup responsibility chain:**
