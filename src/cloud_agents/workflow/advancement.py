@@ -12,6 +12,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+# Any is used for spawner type hint to avoid circular imports
+
 from agents.workflow.persistence import WorkflowPersistence
 from agents.workflow.state import WorkflowState
 
@@ -78,6 +80,7 @@ class RecoveryPoller:
         persistence: WorkflowPersistence,
         poll_interval: int = RECOVERY_POLL_INTERVAL,
         step_timeout: int = 600,
+        spawner: Any = None,
     ) -> None:
         """Initialize the recovery poller.
 
@@ -89,6 +92,7 @@ class RecoveryPoller:
         self._persistence = persistence
         self._poll_interval = poll_interval
         self._step_timeout = step_timeout
+        self._spawner = spawner
         self._running = False
 
     async def start(self) -> None:
@@ -132,5 +136,15 @@ class RecoveryPoller:
                     wf.status = "failed"
                     try:
                         await save_with_version(self._persistence, wf, wf.version)
+                        if self._spawner:
+                            import hashlib
+                            hash_input = f"{wf.workflow_id}:{step_result.step_name}:1"
+                            spawn_id = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+                            spawned_name = f"{step_result.step_name}-{spawn_id}"
+                            try:
+                                await self._spawner.destroy(spawned_name)
+                                logger.info("Destroyed orphaned Job '%s'", spawned_name)
+                            except Exception as destroy_exc:
+                                logger.warning("Failed to destroy orphaned Job '%s': %s", spawned_name, destroy_exc)
                     except StaleStateError:
                         logger.info("Another replica already handled workflow %s", wf.workflow_id)

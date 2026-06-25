@@ -51,10 +51,31 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+SA_TOKEN_PATH = "/var/run/secrets/tokens/agent-token"
+
+
 def get_api_token() -> str:
-    """Get the API token from environment.
+    """Get the API token from environment or projected SA token file.
+
+    Checks in order:
+    1. AGENT_API_TOKEN env var (Podman / shared secret mode)
+    2. Projected SA token file at /var/run/secrets/tokens/agent-token (K8s mode)
+    3. Empty string (auth disabled)
 
     Returns:
         Token string. Empty string means auth is disabled.
     """
-    return os.environ.get("AGENT_API_TOKEN", "")
+    env_token = os.environ.get("AGENT_API_TOKEN", "")
+    if env_token:
+        return env_token
+
+    if os.path.exists(SA_TOKEN_PATH):
+        try:
+            with open(SA_TOKEN_PATH) as f:
+                token = f.read().strip()
+            if token:
+                return token
+        except Exception:
+            pass
+
+    return ""

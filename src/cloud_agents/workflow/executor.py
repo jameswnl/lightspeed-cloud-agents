@@ -415,7 +415,8 @@ class WorkflowExecutor:
                         config=step.spawn_config,
                     )
                     await self._spawner.wait_ready(endpoint)
-                    client = RemoteAgentClient(endpoint)
+                    from agents.runtime.auth import get_api_token
+                    client = RemoteAgentClient(endpoint, auth_token=get_api_token() or None)
                 else:
                     client = self._client_factory(step.agent)
                 context: dict[str, Any] = {}
