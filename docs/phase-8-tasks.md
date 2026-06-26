@@ -74,9 +74,13 @@ All state mutations use `save_with_version()` (CAS). The advancement contract:
 
 ### K8s Trust Boundary
 
-Phase 8 scopes callback-mode as **production-ready for Podman** (shared-secret auth in single trust domain). For Kubernetes, callback mode works but with shared-secret auth — Task 10 (TokenReview) is required before K8s production rollout of async callbacks. This is explicitly called out in the deployment docs and BACKLOG.md.
+Phase 8 delivers **audience-scoped TokenReview authentication** for Kubernetes. Pods authenticate via projected SA tokens validated by the K8s API server (audience: `cloud-agents`). This replaces the shared-secret model with per-pod cryptographic tokens.
 
-The ingest endpoint validates the bearer token but does not bind caller identity to a specific spawned Job. Task 10 closes this gap by making each spawned Job's projected SA token the only valid credential for its callback.
+**What Phase 8 delivers**: any pod with a valid projected SA token for the `cloud-agents` audience can authenticate to both the agent runtime and the workflow runner's ingest endpoint. This is a significant improvement over shared secrets — tokens are short-lived (3600s), cryptographically signed, and validated by the K8s API server.
+
+**What is deferred**: per-job identity binding — verifying that the specific spawned Job/attempt is the one making the callback. This requires generating per-job ServiceAccounts at spawn time. See BACKLOG.md.
+
+For Podman, shared-secret auth (`AGENT_API_TOKEN`) remains the production model.
 
 ## Tasks
 
@@ -243,19 +247,23 @@ cloud-agents/created-at: {timestamp}
 
 ### Task 9: Multi-Replica E2E with PostgreSQL
 
-Integration capstone with concrete failure-path coverage:
+Infrastructure smoke test verifying multi-replica deployment with PostgreSQL persistence.
 
 **Infrastructure**: Kind cluster, 2 workflow-runner replicas, PostgreSQL StatefulSet.
 
-**Test scenarios**:
-1. **Happy path**: submit workflow → callback completes each step → workflow completes
-2. **Cross-replica status**: both replicas serve `GET /v1/workflows/{id}` for same workflow
-3. **Duplicate callback**: POST same result twice → first 200, second 200 (idempotent, no double-advance)
-4. **Stale callback after retry**: attempt 1 late callback arrives after attempt 2 dispatched → 409 rejected
-5. **Lost callback — poller recovery**: block callback URL, wait for poller to poll agent pod and recover result
-6. **Crash after persist, before advance**: kill replica between result save and next-step dispatch → other replica's poller picks up
-7. **Orphaned resource reconciliation**: spawn a pod with workflow labels but no matching persisted "dispatched" step → label-based reconciliation scan detects and destroys it
-8. **Visibility labels**: `kubectl get jobs -l cloud-agents/workflow-id=...` returns spawned Jobs
+**Shipped test coverage** (infrastructure verification):
+1. **Cluster bring-up**: PostgreSQL ready, 2 runner replicas ready
+2. **Cross-replica healthz**: both replicas respond to `/healthz`
+3. **Ingest endpoint validation**: 404 for unknown workflow, 422 for invalid payload
+4. **Auth enforcement**: 401 without bearer token on ingest endpoint
+5. **Label query**: `kubectl get jobs -l cloud-agents/workflow-id` selector works
+
+**Deferred runtime scenarios** (require running LLM + real workflow execution):
+- Happy path workflow completion via callbacks
+- Duplicate/stale callback handling
+- Lost-callback poller recovery
+- Crash-after-persist replica failover
+- Orphaned resource reconciliation
 
 **Depends on**: All prior tasks
 
