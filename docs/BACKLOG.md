@@ -4,7 +4,7 @@ Unscheduled items deferred from completed phases. Pick based on priority and tea
 
 ## Security
 
-- **K8s per-pod identity via TokenReview API** — projected SA tokens are pod-specific, can't be compared cross-pod. Needs cluster-side validation on the callee. *(deferred from Phase 7 Task 3)*
+- **Per-job identity binding for callbacks** — generate per-job ServiceAccounts at spawn time, verify TokenReview caller identity matches the specific spawned Job/attempt in the ingest endpoint. Phase 8 implements audience-scoped TokenReview (any valid `cloud-agents` token authenticates), but does not bind caller to a specific job. *(deferred from Phase 8 Task 10)*
 - **Tool origin validation allowlist** — `load_tools()` uses `importlib.import_module()` with module paths from YAML. Add optional `allowed_tool_modules` in runner config. *(deferred from Phase 7 Task 3b)*
 - **Approval routing with channel plugins + RBAC** — per-step approver scoping, Slack/webhook/conversational channels, audit trail. *(design doc: approval-routing-design.md)*
 

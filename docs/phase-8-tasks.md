@@ -263,12 +263,16 @@ Integration capstone with concrete failure-path coverage:
 
 **Scope**: required before K8s production rollout of async callbacks. Until completed, K8s callback mode uses shared-secret auth (same as Podman). Podman callback mode is production-ready without this task.
 
+**Implemented scope**: audience-scoped TokenReview authentication. Any pod with a valid projected SA token for audience `cloud-agents` can authenticate. This replaces the shared-secret model with per-pod cryptographic tokens validated by the K8s API server.
+
 - New `TokenReviewAuthMiddleware` in `src/agents/runtime/auth.py`
-- Projected SA token volume on spawned Jobs (audience: `cloud-agents`, expiry: 3600s)
+- Projected SA token volume on spawned Jobs and workflow runner (audience: `cloud-agents`, expiry: 3600s)
 - `automountServiceAccountToken: false` on spawned pods
 - Auth mode selection via `AUTH_MODE` env var (`shared_secret` | `sa_token`)
-- RBAC: add `authentication.k8s.io/tokenreviews` create permission
-- Ingest endpoint binds caller identity to the specific spawned Job's ServiceAccount
+- RBAC: `ClusterRole` granting `authentication.k8s.io/tokenreviews` create permission
+- `get_runner_auth_token()` reads projected token on both runner and callback sides
+
+**Deferred to backlog**: per-job identity binding — generating per-job ServiceAccounts at spawn time and verifying the TokenReview caller identity matches the specific spawned Job/attempt. This is a deeper change (dynamic SA creation, RBAC per SA, identity-to-step mapping in the ingest endpoint).
 
 **Depends on**: Nothing code-wise, but is a prerequisite for K8s production callback mode
 
