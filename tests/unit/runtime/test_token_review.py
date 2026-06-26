@@ -143,6 +143,34 @@ class TestGetRunnerAuthToken:
 class TestWorkflowRunnerManifest:
     """Tests that K8s manifest provides projected SA token."""
 
+    def test_rbac_grants_tokenreview_permission(self) -> None:
+        """Verify rbac.yaml grants tokenreviews create to workflow-runner."""
+        import os
+        import yaml
+
+        rbac_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "..",
+            "deploy", "kind", "rbac.yaml",
+        )
+        with open(rbac_path) as f:
+            docs = list(yaml.safe_load_all(f))
+
+        cluster_roles = [d for d in docs if d.get("kind") == "ClusterRole"]
+        tokenreview_role = next(
+            (r for r in cluster_roles if r["metadata"]["name"] == "workflow-runner-tokenreview"),
+            None,
+        )
+        assert tokenreview_role is not None, "ClusterRole workflow-runner-tokenreview not found"
+
+        rules = tokenreview_role["rules"]
+        tr_rule = next(
+            (r for r in rules if "tokenreviews" in r.get("resources", [])),
+            None,
+        )
+        assert tr_rule is not None
+        assert "authentication.k8s.io" in tr_rule["apiGroups"]
+        assert "create" in tr_rule["verbs"]
+
     def test_runner_manifest_has_projected_token_volume(self) -> None:
         """Verify workflow-runner.yaml mounts projected SA token."""
         import os
