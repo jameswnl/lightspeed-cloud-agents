@@ -90,6 +90,56 @@ class TestTokenReviewAuth:
         assert resp.status_code == 401
 
 
+class TestGetRunnerAuthToken:
+    """Tests for get_runner_auth_token()."""
+
+    def test_shared_secret_returns_api_token(self) -> None:
+        """In shared_secret mode, returns AGENT_API_TOKEN."""
+        import os
+        from agents.runtime.auth import get_runner_auth_token
+        with patch.dict(os.environ, {"AUTH_MODE": "shared_secret", "AGENT_API_TOKEN": "shared-tok"}):
+            assert get_runner_auth_token() == "shared-tok"
+
+    def test_shared_secret_returns_none_when_empty(self) -> None:
+        """In shared_secret mode with no token, returns None."""
+        import os
+        from agents.runtime.auth import get_runner_auth_token
+        with patch.dict(os.environ, {"AUTH_MODE": "shared_secret"}, clear=True):
+            assert get_runner_auth_token() is None
+
+    def test_sa_token_reads_projected_file(self) -> None:
+        """In sa_token mode, reads from projected volume path."""
+        import os
+        import tempfile
+        from agents.runtime.auth import get_runner_auth_token, SA_TOKEN_PATH
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".token", delete=False) as f:
+            f.write("projected-runner-token")
+            tmp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"AUTH_MODE": "sa_token"}), \
+                 patch("agents.runtime.auth.SA_TOKEN_PATH", tmp_path):
+                from importlib import reload
+                import agents.runtime.auth as auth_mod
+                original_path = auth_mod.SA_TOKEN_PATH
+                auth_mod.SA_TOKEN_PATH = tmp_path
+                try:
+                    result = get_runner_auth_token()
+                    assert result == "projected-runner-token"
+                finally:
+                    auth_mod.SA_TOKEN_PATH = original_path
+        finally:
+            os.unlink(tmp_path)
+
+    def test_sa_token_returns_none_when_file_missing(self) -> None:
+        """In sa_token mode with missing file, returns None."""
+        import os
+        from agents.runtime.auth import get_runner_auth_token
+        with patch.dict(os.environ, {"AUTH_MODE": "sa_token"}):
+            assert get_runner_auth_token() is None
+
+
 class TestGetAuthMode:
     """Tests for auth mode selection."""
 

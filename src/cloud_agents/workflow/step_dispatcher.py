@@ -200,8 +200,8 @@ class StepDispatcher:
         )
         await self._spawner.wait_ready(endpoint)
 
-        from agents.runtime.auth import get_api_token
-        client = RemoteAgentClient(endpoint, auth_token=get_api_token() or None)
+        from agents.runtime.auth import get_runner_auth_token
+        client = RemoteAgentClient(endpoint, auth_token=get_runner_auth_token())
         run_id = await client.run_async(prompt, context=context)
 
         dispatched_result.output["run_id"] = run_id

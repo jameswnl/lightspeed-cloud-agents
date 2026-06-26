@@ -127,10 +127,29 @@ def get_api_token() -> str:
     (Podman) or K8s Secret secretKeyRef (K8s). The same shared
     token is used by all pods in the deployment.
 
-    Future: per-pod identity via K8s TokenReview API (requires
-    cluster-side validation, not just string comparison).
-
     Returns:
         Token string. Empty string means auth is disabled.
     """
     return os.environ.get("AGENT_API_TOKEN", "")
+
+
+SA_TOKEN_PATH = "/var/run/secrets/cloud-agents/token"
+
+
+def get_runner_auth_token() -> Optional[str]:
+    """Get the auth token for runner-to-agent calls based on AUTH_MODE.
+
+    In shared_secret mode, returns AGENT_API_TOKEN.
+    In sa_token mode, reads the projected SA token from the volume mount.
+
+    Returns:
+        Token string, or None if auth is disabled.
+    """
+    if get_auth_mode() == "sa_token":
+        try:
+            with open(SA_TOKEN_PATH) as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+    token = get_api_token()
+    return token or None

@@ -63,6 +63,12 @@ POSTGRES_URL = os.environ.get("WORKFLOW_POSTGRES_URL", "")
 
 CALLBACK_BASE_URL = os.environ.get("CALLBACK_BASE_URL", "")
 
+
+def _get_runner_token():
+    """Get auth token for runner-to-agent calls."""
+    from agents.runtime.auth import get_runner_auth_token
+    return get_runner_auth_token()
+
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
 
@@ -124,7 +130,7 @@ def build_workflow_app(
         from agents.remote_agent_client import RemoteAgentClient
         poller = RecoveryPoller(
             persistence, spawner=spawner,
-            client_factory=lambda ep: RemoteAgentClient(ep),
+            client_factory=lambda ep: RemoteAgentClient(ep, auth_token=_get_runner_token()),
             dispatcher=executor._dispatcher,
         )
         poller_task = asyncio.create_task(poller.start())
@@ -163,7 +169,7 @@ def build_stateless_app() -> "fastapi.FastAPI":
         from agents.remote_agent_client import RemoteAgentClient
         poller = RecoveryPoller(
             persistence, spawner=spawner,
-            client_factory=lambda ep: RemoteAgentClient(ep),
+            client_factory=lambda ep: RemoteAgentClient(ep, auth_token=_get_runner_token()),
             dispatcher=executor._dispatcher,
         )
         poller_task = asyncio.create_task(poller.start())
