@@ -17,6 +17,7 @@ spec:
         environment: cloud-agents
     spec:
       serviceAccountName: workflow-runner
+      automountServiceAccountToken: false
       containers:
         - name: workflow-runner
           image: docker.io/library/agent-runtime:latest
@@ -43,6 +44,8 @@ spec:
               value: "diagnostic-agent-tools"
             - name: AGENT_MODEL
               value: "gpt-4"
+            - name: AUTH_MODE
+              value: "sa_token"
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -57,6 +60,9 @@ spec:
             - name: workflow-config
               mountPath: /app/registry.yaml
               subPath: registry.yaml
+              readOnly: true
+            - name: sa-token
+              mountPath: /var/run/secrets/cloud-agents
               readOnly: true
           readinessProbe:
             httpGet:
@@ -75,6 +81,13 @@ spec:
         - name: workflow-config
           configMap:
             name: workflow-runner-config
+        - name: sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: cloud-agents
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: v1
 kind: Service

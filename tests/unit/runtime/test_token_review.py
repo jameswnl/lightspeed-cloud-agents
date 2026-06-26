@@ -140,6 +140,40 @@ class TestGetRunnerAuthToken:
             assert get_runner_auth_token() is None
 
 
+class TestWorkflowRunnerManifest:
+    """Tests that K8s manifest provides projected SA token."""
+
+    def test_runner_manifest_has_projected_token_volume(self) -> None:
+        """Verify workflow-runner.yaml mounts projected SA token."""
+        import os
+        import yaml
+
+        manifest_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "..",
+            "deploy", "kind", "workflow-runner.yaml",
+        )
+        with open(manifest_path) as f:
+            docs = list(yaml.safe_load_all(f))
+
+        deployment = next(d for d in docs if d.get("kind") == "Deployment")
+        spec = deployment["spec"]["template"]["spec"]
+
+        volume_names = [v["name"] for v in spec.get("volumes", [])]
+        assert "sa-token" in volume_names
+
+        sa_vol = next(v for v in spec["volumes"] if v["name"] == "sa-token")
+        token_source = sa_vol["projected"]["sources"][0]["serviceAccountToken"]
+        assert token_source["audience"] == "cloud-agents"
+        assert token_source["path"] == "token"
+
+        container = spec["containers"][0]
+        mount_paths = [m["mountPath"] for m in container.get("volumeMounts", [])]
+        assert "/var/run/secrets/cloud-agents" in mount_paths
+
+        env_dict = {e["name"]: e.get("value") for e in container.get("env", [])}
+        assert env_dict.get("AUTH_MODE") == "sa_token"
+
+
 class TestGetAuthMode:
     """Tests for auth mode selection."""
 
