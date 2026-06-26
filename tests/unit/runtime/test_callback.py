@@ -187,3 +187,28 @@ class TestGetCallback:
             assert cb._callback_url == "http://runner:8080/ingest"
             assert cb._auth_token == "tok-123"
             assert cb._attempt == 2
+
+    def test_sa_token_mode_reads_projected_token(self) -> None:
+        """In sa_token mode, reads token from projected volume."""
+        import os
+        import tempfile
+
+        from agents.runtime.callback import _get_auth_token
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".token", delete=False) as f:
+            f.write("projected-sa-token-value")
+            token_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"AUTH_MODE": "sa_token"}), \
+                 patch("agents.runtime.callback._get_auth_token") as mock_get:
+                mock_get.return_value = "projected-sa-token-value"
+                with patch.dict(os.environ, {
+                    "RESULT_CALLBACK_URL": "http://runner:8080/ingest",
+                    "AUTH_MODE": "sa_token",
+                }):
+                    cb = get_callback()
+                    assert cb is not None
+                    assert cb._auth_token == "projected-sa-token-value"
+        finally:
+            os.unlink(token_path)

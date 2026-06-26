@@ -129,6 +129,8 @@ class RemoteAgentClient:
 
         async_headers: dict[str, str] = {}
         inject_traceparent(async_headers)
+        if self._auth_token:
+            async_headers["Authorization"] = f"Bearer {self._auth_token}"
 
         try:
             async with httpx.AsyncClient(
@@ -169,12 +171,17 @@ class RemoteAgentClient:
         Raises:
             AgentError: If the run is not found or the poll fails.
         """
+        poll_headers: dict[str, str] = {}
+        if self._auth_token:
+            poll_headers["Authorization"] = f"Bearer {self._auth_token}"
+
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(10.0)
             ) as client:
                 response = await client.get(
-                    f"{self.endpoint}/v1/runs/{run_id}"
+                    f"{self.endpoint}/v1/runs/{run_id}",
+                    headers=poll_headers or None,
                 )
         except httpx.HTTPError as exc:
             raise AgentError(

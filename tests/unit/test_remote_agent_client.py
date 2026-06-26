@@ -201,6 +201,40 @@ class TestRemoteAgentClientAsync:
         assert state.result.success is True
 
     @pytest.mark.asyncio
+    async def test_run_async_sends_auth_header(self) -> None:
+        """Test that run_async sends the bearer token."""
+        mock_response = httpx.Response(
+            202, json={"run_id": "run-abc", "status": "running"}
+        )
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_post:
+            client = RemoteAgentClient("http://agent:8080", auth_token="secret-tok")
+            await client.run_async("Check hosts")
+
+        call_kwargs = mock_post.call_args
+        headers = call_kwargs[1].get("headers", {})
+        assert headers.get("Authorization") == "Bearer secret-tok"
+
+    @pytest.mark.asyncio
+    async def test_poll_run_sends_auth_header(self) -> None:
+        """Test that poll_run sends the bearer token."""
+        state_data = RunState(
+            run_id="run-abc", status=RunStatus.RUNNING,
+            created_at="2026-06-17T14:00:00+00:00",
+        )
+        mock_response = httpx.Response(200, json=state_data.model_dump(mode="json"))
+        with patch.object(
+            httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_get:
+            client = RemoteAgentClient("http://agent:8080", auth_token="secret-tok")
+            await client.poll_run("run-abc")
+
+        call_kwargs = mock_get.call_args
+        headers = call_kwargs[1].get("headers", {}) or {}
+        assert headers.get("Authorization") == "Bearer secret-tok"
+
+    @pytest.mark.asyncio
     async def test_poll_run_not_found_raises(self) -> None:
         """Test that polling a nonexistent run raises AgentError."""
         mock_response = httpx.Response(404, json={"detail": "not found"})

@@ -98,6 +98,20 @@ class ResultCallback:
         return False
 
 
+def _get_auth_token() -> str | None:
+    """Get the auth token for callbacks based on AUTH_MODE."""
+    auth_mode = os.environ.get("AUTH_MODE", "shared_secret")
+    if auth_mode == "sa_token":
+        token_path = "/var/run/secrets/cloud-agents/token"
+        try:
+            with open(token_path) as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            logger.warning("Projected SA token not found at %s", token_path)
+            return None
+    return os.environ.get("AGENT_API_TOKEN")
+
+
 def get_callback() -> Optional[ResultCallback]:
     """Create a ResultCallback from environment variables if configured."""
     url = os.environ.get("RESULT_CALLBACK_URL")
@@ -105,6 +119,6 @@ def get_callback() -> Optional[ResultCallback]:
         return None
     return ResultCallback(
         callback_url=url,
-        auth_token=os.environ.get("AGENT_API_TOKEN"),
+        auth_token=_get_auth_token(),
         attempt=int(os.environ.get("RESULT_CALLBACK_ATTEMPT", "1")),
     )
