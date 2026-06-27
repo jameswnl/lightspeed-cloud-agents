@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cloud Agents — Diagnostic Workflow Animation</title>
+<title>Cloud Agents — Architecture Visualization</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; }
 h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #58a6ff; }
-h2 { text-align: center; padding: 4px 0 12px; font-size: 0.95em; color: #8b949e; font-weight: normal; }
+h2 { text-align: center; padding: 4px 0 12px; font-size: 0.95em; color: #8b949e; font-weight: normal; max-width: 900px; margin: 0 auto; }
 .scene { max-width: 1200px; margin: 0 auto; padding: 10px 20px; }
 svg { width: 100%; height: auto; display: block; }
 
@@ -19,6 +19,8 @@ svg { width: 100%; height: auto; display: block; }
 .mount { font-size: 9px; fill: #d2a8ff; font-family: 'SFMono-Regular', monospace; }
 .mount-hdr { font-size: 9.5px; fill: #a371f7; font-weight: 600; }
 .step-label { font-size: 11px; fill: #58a6ff; font-weight: 700; }
+.tool-name { font-size: 10px; fill: #3fb950; font-family: 'SFMono-Regular', monospace; }
+.tool-hdr { font-size: 10px; fill: #58a6ff; font-weight: 600; }
 
 .boundary { fill: none; stroke-dasharray: 7 4; stroke-width: 1.4; rx: 10; ry: 10; }
 .blbl { font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
@@ -34,290 +36,550 @@ svg { width: 100%; height: auto; display: block; }
 .step-n { font-size: 12px; fill: #58a6ff; font-weight: 700; }
 .step-t { font-size: 11px; fill: #c9d1d9; }
 
+/* Tabs */
+.tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 16px 10px 0; max-width: 1200px; margin: 0 auto; }
+.tabs button { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; font-weight: 600; border-bottom: none; position: relative; top: 1px; white-space: nowrap; }
+.tabs button:hover { background: #30363d; color: #c9d1d9; }
+.tabs button.active { background: #0d1117; color: #58a6ff; border-color: #58a6ff; border-bottom: 1px solid #0d1117; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.tab-divider { max-width: 1200px; margin: 0 auto; border-top: 1px solid #58a6ff; }
+@media (max-width: 700px) { .tabs button { font-size: 11px; padding: 6px 10px; } }
+
 .controls { text-align: center; padding: 12px; }
 .controls button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 7px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; margin: 0 3px; }
 .controls button:hover { background: #30363d; }
 .controls button.go { background: #238636; border-color: #238636; color: #fff; }
 .controls button.go:hover { background: #2ea043; }
 .controls button:disabled { opacity: 0.35; cursor: default; }
-#info { color: #8b949e; font-size: 12px; margin-left: 10px; }
+.info { color: #8b949e; font-size: 12px; margin-left: 10px; }
 
-#log { max-width: 1200px; margin: 0 auto; padding: 0 20px 30px; }
-#lc { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; font-family: 'SFMono-Regular', monospace; font-size: 11.5px; line-height: 1.7; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
-.ls { color: #58a6ff; } .ld { color: #3fb950; } .lw { color: #d29922; }
+.log { max-width: 1200px; margin: 0 auto; padding: 0 20px 30px; }
+.logc { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; font-family: 'SFMono-Regular', monospace; font-size: 11.5px; line-height: 1.7; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+.ls { color: #58a6ff; } .ld { color: #3fb950; } .lw { color: #d29922; } .lp { color: #d2a8ff; }
+.chat-u { color: #79c0ff; } .chat-a { color: #3fb950; }
+
+/* Static content tabs */
+.static-content { max-width: 1000px; margin: 0 auto; padding: 30px 40px 40px; }
+.goal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+@media (max-width: 800px) { .goal-grid { grid-template-columns: 1fr; } }
+.goal-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 18px 20px; }
+.goal-card:hover { border-color: #58a6ff; }
+.goal-id { font-size: 11px; font-weight: 700; color: #58a6ff; letter-spacing: 0.5px; margin-bottom: 4px; }
+.goal-title { font-size: 15px; font-weight: 600; color: #f0f6fc; margin-bottom: 6px; }
+.goal-desc { font-size: 13px; color: #8b949e; line-height: 1.5; }
+.req-section-title { font-size: 14px; font-weight: 700; color: #58a6ff; margin: 28px 0 14px; letter-spacing: 0.3px; border-bottom: 1px solid #21262d; padding-bottom: 6px; }
+.req-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 18px; margin-bottom: 10px; }
+.req-card:hover { border-color: #58a6ff; }
+.req-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.req-id { font-size: 11px; font-weight: 700; color: #3fb950; }
+.req-name { font-size: 14px; font-weight: 600; color: #f0f6fc; }
+.req-goals { font-size: 11px; font-weight: 600; }
+.req-goals a { color: #58a6ff; text-decoration: none; cursor: pointer; border-bottom: 1px dotted #58a6ff; }
+.req-goals a:hover { color: #79c0ff; border-bottom-color: #79c0ff; }
+.goal-card.highlight { border-color: #58a6ff; box-shadow: 0 0 12px rgba(88,166,255,0.3); transition: box-shadow 0.3s, border-color 0.3s; }
+
+.req-desc { font-size: 12.5px; color: #8b949e; line-height: 1.5; margin-top: 4px; }
+.faq-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; }
+.faq-card:hover { border-color: #58a6ff; }
+.faq-q { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 8px; }
+.faq-a { font-size: 13px; color: #8b949e; line-height: 1.6; }
+.faq-a strong { color: #c9d1d9; }
+.faq-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.faq-table th { text-align: left; color: #58a6ff; border-bottom: 1px solid #30363d; padding: 4px 8px; }
+.faq-table td { color: #8b949e; border-bottom: 1px solid #21262d; padding: 4px 8px; }
+.faq-table td:first-child { color: #c9d1d9; }
 </style>
 </head>
 <body>
-<h1>Diagnostic Workflow — Step-by-Step</h1>
-<h2>diagnose → approve → fix → verify &nbsp;(all steps use diagnostic-agent, each in its own ephemeral pod)</h2>
+
+<div id="lock-screen" style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column;">
+  <h1 style="color:#58a6ff; margin-bottom:20px;">Cloud Agents Framework</h1>
+  <input id="passcode" type="password" placeholder="Enter passcode"
+    style="background:#161b22; color:#c9d1d9; border:1px solid #30363d; padding:10px 16px; border-radius:6px; font-size:14px; width:200px; text-align:center;"
+    onkeydown="if(event.key==='Enter')unlock()">
+  <p id="lock-err" style="color:#f85149; font-size:12px; margin-top:8px; visibility:hidden;">Incorrect passcode</p>
+</div>
+
+<div id="main-content" style="display:none;">
+<h1>Cloud Agents Framework</h1>
+
+<div class="tabs">
+  <button class="active" onclick="switchTab('goals')">Goals</button>
+  <button onclick="switchTab('dp')">Design Principles</button>
+  <button onclick="switchTab('tr')">Technical Requirements</button>
+  <button onclick="switchTab('faq')">FAQ</button>
+  <button onclick="switchTab('wf')">Diagnostic Workflow</button>
+  <button onclick="switchTab('aat')">Agents-as-Tools</button>
+</div>
+<div class="tab-divider"></div>
+
+<!-- ============================================================ -->
+<!-- TAB: GOALS                                                    -->
+<!-- ============================================================ -->
+<div id="tab-goals" class="tab-content active">
+<div class="static-content">
+<div class="goal-grid">
+  <div class="goal-card" id="goal-G1">
+    <div class="goal-id">G1</div>
+    <div class="goal-title">Bring Your Own Agents &amp; Workflows</div>
+    <div class="goal-desc">YAML + any tools. No forking, no rebuilds, no framework changes. Product teams deploy AI agents without changing framework code.</div>
+  </div>
+  <div class="goal-card" id="goal-G2">
+    <div class="goal-id">G2</div>
+    <div class="goal-title">Secured &amp; Governed Execution</div>
+    <div class="goal-desc">Ephemeral containers, scoped permissions, human approval gates. Full observability: tracing, metrics, event streaming.</div>
+  </div>
+  <div class="goal-card" id="goal-G3">
+    <div class="goal-id">G3</div>
+    <div class="goal-title">Composable Agent Ecosystem</div>
+    <div class="goal-desc">Agents and workflows are reusable building blocks. Multiple trigger points: conversations, alerts, API, schedules.</div>
+  </div>
+  <div class="goal-card" id="goal-G4">
+    <div class="goal-id">G4</div>
+    <div class="goal-title">Seamless Human-Agent Handoff</div>
+    <div class="goal-desc">When automation reaches its limit, users continue in an AI CLI with full workflow context.</div>
+  </div>
+  <div class="goal-card" id="goal-G5">
+    <div class="goal-id">G5</div>
+    <div class="goal-title">Dual Deployment: Kubernetes + Podman</div>
+    <div class="goal-desc">Same agents run on both. Both are production targets.</div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TAB: DESIGN PRINCIPLES                                        -->
+<!-- ============================================================ -->
+<div id="tab-dp" class="tab-content">
+<div class="static-content">
+<div class="req-section-title">Design Principles</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R1</span> <span class="req-name">Framework, not pre-built agents</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
+  <div class="req-desc">Examples ship as examples. Framework provides runtime, executor, spawner, and observability. Teams provide agent.yaml, tools, and workflow definitions. One generic container image for all agent types.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R2</span> <span class="req-name">Multi-step workflows with human oversight</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Chain agents with conditions, retry, approval gates, escalation. Low-risk steps auto-approve; high-risk steps require human review.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Fresh container per step. Only configured tools loaded. Hard timeouts. Destroyed after execution. Untrusted pods never receive secrets beyond their API token. Pre-deployed option for latency-sensitive steps.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R4</span> <span class="req-name">Human-in-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Diagnose &rarr; Propose &rarr; Gate &rarr; Execute &rarr; Verify. Structured output: confidence, risk, rollback plan. Approval gates pause workflows for human review.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
+  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history, tools, cluster state. User picks up in an interactive AI CLI session and continues investigating where the agent left off.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R6</span> <span class="req-name">Retry with escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
+  <div class="req-desc">Each retry sees full failure history. Exhausted &rarr; R4 (approval) or R5 (interactive handoff).</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
+  <div class="req-desc">No in-memory state. Durable external store. Scales horizontally behind a load balancer. Replica crashes don't lose workflows.</div>
+</div>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TAB: TECHNICAL REQUIREMENTS                                   -->
+<!-- ============================================================ -->
+<div id="tab-tr" class="tab-content">
+<div class="static-content">
+<div class="req-section-title">Technical Requirements</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Execution engine</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Consider reuse/adapt OLS's sandbox for agent isolation, combined with Temporal workflow engine for durable orchestration.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R9</span> <span class="req-name">Runtime</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
+  <div class="req-desc">Pydantic AI + FastAPI + Temporal workflow (TBD)</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R10</span> <span class="req-name">Deployment</span></span> <span class="req-goals"><a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
+  <div class="req-desc">K8s: Jobs, Services, ConfigMaps, Secrets, RBAC<br>Podman: containers, volume mounts, port mapping</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R11</span> <span class="req-name">Persistence</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
+  <div class="req-desc">Durable store with optimistic locking. Atomic reads/writes, pluggable backend.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R12</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Secrets via K8s refs, bearer auth on all endpoints. Explicit risk_level, per-step permission scoping.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R13</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">RBAC for workflows: who can trigger, approve, view. RBAC for tools: which tools each agent/user can invoke. Scoped by team, role, or namespace.</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R14</span> <span class="req-name">Observability</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">OTel tracing, Prometheus metrics, SSE streaming</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R15</span> <span class="req-name">Triggers</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
+  <div class="req-desc">Chatbot, alerts, API, scheduled events</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R16</span> <span class="req-name">Agents-as-tools</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
+  <div class="req-desc">Registry auto-generates tools from definitions</div>
+</div>
+
+<div class="req-card">
+  <div class="req-header"><span><span class="req-id">R17</span> <span class="req-name">Escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
+  <div class="req-desc">Context packaging: workflow state, failure history, tools, cluster context &rarr; CLI handoff</div>
+</div>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TAB: FAQ                                                      -->
+<!-- ============================================================ -->
+<div id="tab-faq" class="tab-content">
+<div class="static-content">
+<div class="req-section-title">Frequently Asked Questions</div>
+
+<div class="faq-card">
+  <div class="faq-q">What is the schema of the workflow definition (workflow.yaml)? Is it standardized?</div>
+  <div class="faq-a">Custom YAML schema (<strong>apiVersion: v1, kind: AgentWorkflow</strong>). Not an industry standard &mdash; there isn't one for agentic workflows yet. The schema defines steps with type (agent/human-approval), conditions, retry, parallel groups, risk level, and spawn mode. It's a Pydantic model so validation is strict and errors are clear. We should evaluate alignment with emerging standards (e.g. A2A protocol) as they mature.</div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">How are agents going to be defined? Custom YAML schema?</div>
+  <div class="faq-a">Custom YAML (<strong>apiVersion: lightspeed.redhat.com/v1alpha1, kind: AgentDefinition</strong>). Defines: system prompt, tools to load, output type, lifecycle (request-response or periodic-loop), resource limits. The schema is intentionally minimal &mdash; just enough to configure the generic runtime. No code generation, no framework lock-in.</div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
+  <div class="faq-a">Multiple layers:<br>
+    &bull; <strong>Workflow level</strong>: risk_level per step, approval gates, advisory mode (read-only tool filtering)<br>
+    &bull; <strong>Agent level</strong>: allowed_tools / denied_tools per step via PermissionScope<br>
+    &bull; <strong>Runtime level</strong>: hard timeouts, resource limits (CPU/memory), ephemeral container isolation<br>
+    &bull; <strong>Cluster level</strong>: K8s RBAC, NetworkPolicy, ServiceAccount scoping<br>
+    &bull; <strong>Future</strong>: RBAC for who can trigger/approve/view workflows (R12)</div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">Are these agents going to be available as a ready-made template?</div>
+  <div class="faq-a">Example agents ship as templates in <strong>examples/agents/</strong>: diagnostic, monitoring, deploy-readiness. Teams copy and modify. The framework itself is not a marketplace &mdash; it's a runtime. Template distribution (OCI artifacts, git-sync) is a backlog item.</div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
+  <div class="faq-a">Both paths:<br>
+    &bull; <strong>YAML + tools</strong>: Define agent via YAML, bring Python/bash/CLI tools. Framework runs them in the generic runtime. No SDK needed.<br>
+    &bull; <strong>Standardized API</strong>: Any service exposing a /v1/run HTTP endpoint (prompt in, structured output out) can be called as a pre-deployed agent. No framework dependency. This aligns with the direction of A2A/OpenAI-compatible APIs.</div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">Which components need to be built from scratch vs reused from open source?</div>
+  <div class="faq-a">
+    <table class="faq-table">
+      <tr><th>Component</th><th>Build vs Reuse</th></tr>
+      <tr><td>Workflow runner / executor</td><td>Reuse: Temporal (proposed)</td></tr>
+      <tr><td>Spawner (K8s/Podman)</td><td>Build: domain-specific, ~200 lines each</td></tr>
+      <tr><td>Agent &amp; Workflow Registry</td><td>Build: lightweight, ~150 lines</td></tr>
+      <tr><td>Agent runtime (generic image)</td><td>Build: thin wrapper around pydantic-ai, ~300 lines</td></tr>
+      <tr><td>Persistence / state</td><td>Reuse: Temporal Server</td></tr>
+      <tr><td>Auth middleware</td><td>Build: ~100 lines, standard pattern</td></tr>
+      <tr><td>Observability</td><td>Reuse: OpenTelemetry, Prometheus</td></tr>
+      <tr><td>Approval routing</td><td>Partial build: Slack/webhook notifiers, ~100 lines</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="faq-card">
+  <div class="faq-q">Does it support durable agents with long-running tasks?</div>
+  <div class="faq-a">Yes, two modes:<br>
+    &bull; <strong>Pre-deployed agents</strong> (spawn: pre-deployed): long-running services that persist across workflow executions. Called via HTTP, not spawned/destroyed per step. Suitable for agents that maintain state, connections, or caches.<br>
+    &bull; <strong>Temporal durable execution</strong> (proposed): workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). The agent step itself runs in an ephemeral container, but the workflow orchestration is durable.<br><br>
+    What's missing: agents that maintain conversational memory across multiple workflow invocations. That's a backlog item (agent state persistence / memory).</div>
+</div>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TAB: DIAGNOSTIC WORKFLOW                                      -->
+<!-- ============================================================ -->
+<div id="tab-wf" class="tab-content">
+<h2>diagnose &rarr; approve &rarr; fix &rarr; verify &nbsp;(all steps use diagnostic-agent, each in its own ephemeral pod)</h2>
 
 <div class="scene">
 <svg viewBox="0 0 1140 580" xmlns="http://www.w3.org/2000/svg">
 <defs>
-  <pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0L0 0 0 20" fill="none" stroke="#21262d" stroke-width="0.5"/></pattern>
-  <marker id="a1" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#58a6ff"/></marker>
-  <marker id="a2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#3fb950"/></marker>
-  <marker id="a3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#d29922"/></marker>
-  <marker id="a4" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a371f7"/></marker>
+  <pattern id="g1" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0L0 0 0 20" fill="none" stroke="#21262d" stroke-width="0.5"/></pattern>
+  <marker id="w-a1" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#58a6ff"/></marker>
+  <marker id="w-a2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#3fb950"/></marker>
+  <marker id="w-a3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#d29922"/></marker>
+  <marker id="w-a4" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a371f7"/></marker>
 </defs>
-<rect width="1140" height="580" fill="url(#g)"/>
+<rect width="1140" height="580" fill="url(#g1)"/>
 
-<!-- ===== BOUNDARIES ===== -->
 <rect class="boundary" x="130" y="75" width="640" height="470" stroke="#30363d"/>
 <text x="148" y="93" class="blbl" fill="#484f58">K8s Cluster / Podman Host</text>
-
 <rect class="boundary" x="145" y="108" width="200" height="420" stroke="#58a6ff" opacity="0.35"/>
 <text x="155" y="125" class="blbl" fill="#58a6ff" opacity="0.55">Platform Framework</text>
-
 <rect class="boundary" x="390" y="108" width="365" height="330" stroke="#238636" opacity="0.35"/>
 <text x="405" y="125" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pod (one per step)</text>
-
 <rect class="boundary" x="800" y="75" width="200" height="470" stroke="#a371f7" opacity="0.25"/>
 <text x="815" y="93" class="blbl" fill="#a371f7" opacity="0.45">External</text>
 
-<!-- ===== STATIC COMPONENTS ===== -->
+<g class="comp"><rect x="15" y="220" width="90" height="50" fill="#1f2937" stroke="#6366f1"/><text x="60" y="243" text-anchor="middle" class="lbl">User</text><text x="60" y="258" text-anchor="middle" class="desc">API caller</text></g>
+<g class="comp"><rect x="155" y="195" width="180" height="100" fill="#1c2333" stroke="#58a6ff"/><text x="245" y="220" text-anchor="middle" class="lbl">Workflow Runner</text><text x="245" y="236" text-anchor="middle" class="desc">WorkflowExecutor</text><text x="245" y="250" text-anchor="middle" class="desc">workflow.yaml → steps</text><text x="245" y="264" text-anchor="middle" class="desc">conditions, retry, events</text><text x="245" y="278" text-anchor="middle" class="desc">RemoteAgentClient</text></g>
+<g class="comp"><rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/><text x="245" y="365" text-anchor="middle" class="lbl">Spawner</text><text x="245" y="381" text-anchor="middle" class="desc">K8s Jobs / Podman containers</text></g>
+<g class="comp"><rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/><text x="245" y="155" text-anchor="middle" class="lbl">Agent &amp; Workflow Registry</text><text x="245" y="168" text-anchor="middle" class="desc">definitions + endpoints</text></g>
+<g class="comp"><rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/><text x="245" y="470" text-anchor="middle" class="lbl">Persistence</text><text x="245" y="484" text-anchor="middle" class="desc">PostgreSQL / InMemory</text></g>
+<g class="comp"><rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/><text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text><text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text></g>
+<g class="comp"><rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="900" y="236" text-anchor="middle" class="desc">OpenAI gpt-4</text><text x="900" y="250" text-anchor="middle" class="desc">pydantic-ai tool calling</text></g>
+<g class="comp"><rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/><text x="900" y="333" text-anchor="middle" class="lbl">Observability</text><text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text></g>
+<g class="comp"><rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/><text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text><text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text></g>
 
-<g class="comp" id="c-user">
-  <rect x="15" y="220" width="90" height="50" fill="#1f2937" stroke="#6366f1"/>
-  <text x="60" y="243" text-anchor="middle" class="lbl">User</text>
-  <text x="60" y="258" text-anchor="middle" class="desc">API caller</text>
-</g>
+<g class="comp eph" id="w-pod-diagnose" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="85" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="457" y="152" text-anchor="middle" class="step-label">DIAGNOSE</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-a1b2</text><text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (generic image) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Mounts:</text><text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text><text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text><text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Tools: list_hosts, check_host, get_alerts, get_recent_deploys</text><text x="425" y="297" class="desc">Output: DiagnosticReport {summary, issues_found, confidence}</text></g>
+<g class="comp eph" id="w-pod-fix" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="45" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="437" y="152" text-anchor="middle" class="step-label">FIX</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-d4e5</text><text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Mounts:</text><text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text><text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text><text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Tools: run_remediation (rollback_deploy, restart_service)</text><text x="425" y="297" class="desc">Output: DiagnosticReport {actions_taken, cluster_healthy}</text></g>
+<g class="comp eph" id="w-pod-verify" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="65" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="447" y="152" text-anchor="middle" class="step-label">VERIFY</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-g7h8</text><text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Mounts:</text><text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text><text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text><text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Tools: list_hosts, check_host (verify fix worked)</text><text x="425" y="297" class="desc">Output: DiagnosticReport {cluster_healthy, remaining_issues}</text></g>
 
-<g class="comp" id="c-wf">
-  <rect x="155" y="195" width="180" height="100" fill="#1c2333" stroke="#58a6ff"/>
-  <text x="245" y="220" text-anchor="middle" class="lbl">Workflow Runner</text>
-  <text x="245" y="236" text-anchor="middle" class="desc">WorkflowExecutor</text>
-  <text x="245" y="250" text-anchor="middle" class="desc">workflow.yaml → steps</text>
-  <text x="245" y="264" text-anchor="middle" class="desc">conditions, retry, events</text>
-  <text x="245" y="278" text-anchor="middle" class="desc">RemoteAgentClient</text>
-</g>
+<line id="w-f1" class="flow" x1="105" y1="245" x2="150" y2="245" stroke="#58a6ff" marker-end="url(#w-a1)"/>
+<line id="w-f2" class="flow" x1="245" y1="195" x2="245" y2="178" stroke="#8b949e" marker-end="url(#w-a1)"/>
+<line id="w-f3" class="flow" x1="245" y1="300" x2="245" y2="335" stroke="#d29922" marker-end="url(#w-a3)"/>
+<line id="w-f4" class="flow" x1="335" y1="360" x2="405" y2="240" stroke="#3fb950" marker-end="url(#w-a2)"/>
+<line id="w-f5" class="flow" x1="640" y1="220" x2="825" y2="220" stroke="#a371f7" marker-end="url(#w-a4)"/>
+<line id="w-f6" class="flow" x1="410" y1="240" x2="340" y2="250" stroke="#3fb950" marker-end="url(#w-a2)"/>
+<line id="w-f7" class="flow" x1="245" y1="300" x2="245" y2="445" stroke="#79c0ff" marker-end="url(#w-a1)"/>
+<line id="w-f8" class="flow" x1="335" y1="270" x2="415" y2="490" stroke="#d29922" marker-end="url(#w-a3)"/>
+<line id="w-f9" class="flow" x1="600" y1="492" x2="825" y2="445" stroke="#d29922" marker-end="url(#w-a3)"/>
+<line id="w-f10" class="flow" x1="830" y1="450" x2="340" y2="270" stroke="#3fb950" marker-end="url(#w-a2)"/>
 
-<g class="comp" id="c-sp">
-  <rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/>
-  <text x="245" y="365" text-anchor="middle" class="lbl">Spawner</text>
-  <text x="245" y="381" text-anchor="middle" class="desc">K8s Jobs / Podman containers</text>
-</g>
-
-<g class="comp" id="c-reg">
-  <rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/>
-  <text x="245" y="155" text-anchor="middle" class="lbl">Agent Registry</text>
-  <text x="245" y="168" text-anchor="middle" class="desc">registry.yaml</text>
-</g>
-
-<g class="comp" id="c-db">
-  <rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/>
-  <text x="245" y="470" text-anchor="middle" class="lbl">Persistence</text>
-  <text x="245" y="484" text-anchor="middle" class="desc">PostgreSQL / InMemory</text>
-</g>
-
-<g class="comp" id="c-appr">
-  <rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/>
-  <text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text>
-  <text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text>
-</g>
-
-<g class="comp" id="c-llm">
-  <rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/>
-  <text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text>
-  <text x="900" y="236" text-anchor="middle" class="desc">OpenAI gpt-4</text>
-  <text x="900" y="250" text-anchor="middle" class="desc">pydantic-ai tool calling</text>
-</g>
-
-<g class="comp" id="c-obs">
-  <rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/>
-  <text x="900" y="333" text-anchor="middle" class="lbl">Observability</text>
-  <text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text>
-</g>
-
-<g class="comp" id="c-human">
-  <rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/>
-  <text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text>
-  <text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text>
-</g>
-
-<!-- ===== EPHEMERAL PODS ===== -->
-
-<!-- Step: diagnose -->
-<g class="comp eph" id="pod-diagnose" style="opacity:0">
-  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
-  <rect x="415" y="139" width="85" height="18" rx="4" fill="#1a4731" stroke="none"/>
-  <text x="457" y="152" text-anchor="middle" class="step-label">DIAGNOSE</text>
-  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-a1b2</text>
-  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (generic image) ──</text>
-  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="206" class="mount-hdr">Mounts:</text>
-  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
-  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
-  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="284" class="desc">Tools: list_hosts, check_host, get_alerts, get_recent_deploys</text>
-  <text x="425" y="297" class="desc">Output: DiagnosticReport {summary, issues_found, confidence}</text>
-</g>
-
-<!-- Step: fix -->
-<g class="comp eph" id="pod-fix" style="opacity:0">
-  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
-  <rect x="415" y="139" width="45" height="18" rx="4" fill="#1a4731" stroke="none"/>
-  <text x="437" y="152" text-anchor="middle" class="step-label">FIX</text>
-  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-d4e5</text>
-  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text>
-  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="206" class="mount-hdr">Mounts:</text>
-  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
-  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
-  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="284" class="desc">Tools: run_remediation (rollback_deploy, restart_service)</text>
-  <text x="425" y="297" class="desc">Output: DiagnosticReport {actions_taken, cluster_healthy}</text>
-</g>
-
-<!-- Step: verify -->
-<g class="comp eph" id="pod-verify" style="opacity:0">
-  <rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/>
-  <rect x="415" y="139" width="65" height="18" rx="4" fill="#1a4731" stroke="none"/>
-  <text x="447" y="152" text-anchor="middle" class="step-label">VERIFY</text>
-  <text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent-g7h8</text>
-  <text x="525" y="183" text-anchor="middle" class="desc">── Agent Runtime (same image, fresh pod) ──</text>
-  <line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="206" class="mount-hdr">Mounts:</text>
-  <text x="435" y="220" class="mount">/app/agent.yaml ← ConfigMap</text>
-  <text x="435" y="234" class="mount">/app/tools/diagnostic_tools.py ← ConfigMap</text>
-  <text x="435" y="248" class="mount">/app/registry.yaml ← ConfigMap</text>
-  <text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text>
-  <line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/>
-  <text x="425" y="284" class="desc">Tools: list_hosts, check_host (verify fix worked)</text>
-  <text x="425" y="297" class="desc">Output: DiagnosticReport {cluster_healthy, remaining_issues}</text>
-</g>
-
-<!-- ===== FLOW LINES ===== -->
-<line id="f1" class="flow" x1="105" y1="245" x2="150" y2="245" stroke="#58a6ff" marker-end="url(#a1)"/>
-<line id="f2" class="flow" x1="245" y1="195" x2="245" y2="178" stroke="#8b949e" marker-end="url(#a1)"/>
-<line id="f3" class="flow" x1="245" y1="300" x2="245" y2="335" stroke="#d29922" marker-end="url(#a3)"/>
-<line id="f4" class="flow" x1="335" y1="360" x2="405" y2="240" stroke="#3fb950" marker-end="url(#a2)"/>
-<line id="f5" class="flow" x1="640" y1="220" x2="825" y2="220" stroke="#a371f7" marker-end="url(#a4)"/>
-<line id="f6" class="flow" x1="410" y1="240" x2="340" y2="250" stroke="#3fb950" marker-end="url(#a2)"/>
-<line id="f7" class="flow" x1="245" y1="300" x2="245" y2="445" stroke="#79c0ff" marker-end="url(#a1)"/>
-<line id="f8" class="flow" x1="335" y1="270" x2="415" y2="490" stroke="#d29922" marker-end="url(#a3)"/>
-<line id="f9" class="flow" x1="600" y1="492" x2="825" y2="445" stroke="#d29922" marker-end="url(#a3)"/>
-<line id="f10" class="flow" x1="830" y1="450" x2="340" y2="270" stroke="#3fb950" marker-end="url(#a2)"/>
-
-<!-- Step bar -->
-<g id="sbar" style="opacity:0">
-  <rect class="step-bar" x="15" y="20" width="1110" height="42"/>
-  <text id="sn" class="step-n" x="30" y="47"></text>
-  <text id="st" class="step-t" x="75" y="47"></text>
-</g>
+<g id="w-sbar" style="opacity:0"><rect class="step-bar" x="15" y="20" width="1110" height="42"/><text id="w-sn" class="step-n" x="30" y="47"></text><text id="w-st" class="step-t" x="75" y="47"></text></g>
 </svg>
 </div>
 
 <div class="controls">
-  <button class="go" id="bp" onclick="autoPlay()">Auto Play</button>
-  <button class="go" id="bn" onclick="next()">Next Step &rarr;</button>
-  <button onclick="reset()">Reset</button>
-  <span id="info"></span>
+  <button class="go" onclick="W.autoPlay()">Auto Play</button>
+  <button class="go" id="w-bn" onclick="W.next()">Next Step &rarr;</button>
+  <button onclick="W.reset()">Reset</button>
+  <span class="info" id="w-info"></span>
+</div>
+<div class="log"><div class="logc" id="w-lc"></div></div>
 </div>
 
-<div id="log"><div id="lc"></div></div>
+<!-- ============================================================ -->
+<!-- TAB 2: AGENTS-AS-TOOLS                                        -->
+<!-- ============================================================ -->
+<div id="tab-aat" class="tab-content">
+<h2>A chatbot agent uses registered agents and workflows as pydantic-ai tools. The LLM decides which workflow to call based on the user's question. Results flow back into the conversation.</h2>
+
+<div class="scene">
+<svg viewBox="0 0 1140 520" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <pattern id="g2" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0L0 0 0 20" fill="none" stroke="#21262d" stroke-width="0.5"/></pattern>
+  <marker id="t-a1" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#58a6ff"/></marker>
+  <marker id="t-a2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#3fb950"/></marker>
+  <marker id="t-a3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#d29922"/></marker>
+  <marker id="t-a4" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a371f7"/></marker>
+  <marker id="t-a5" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#79c0ff"/></marker>
+</defs>
+<rect width="1140" height="520" fill="url(#g2)"/>
+
+<rect class="boundary" x="195" y="60" width="600" height="430" stroke="#30363d"/>
+<text x="210" y="78" class="blbl" fill="#484f58">K8s Cluster / Podman Host</text>
+<rect class="boundary" x="210" y="90" width="275" height="385" stroke="#58a6ff" opacity="0.35"/>
+<text x="220" y="107" class="blbl" fill="#58a6ff" opacity="0.55">Platform Services</text>
+<rect class="boundary" x="530" y="90" width="250" height="290" stroke="#238636" opacity="0.35"/>
+<text x="545" y="107" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pods</text>
+<rect class="boundary" x="830" y="60" width="200" height="430" stroke="#a371f7" opacity="0.25"/>
+<text x="845" y="78" class="blbl" fill="#a371f7" opacity="0.45">External</text>
+
+<g class="comp"><rect x="15" y="210" width="130" height="70" fill="#1f2937" stroke="#6366f1"/><text x="80" y="235" text-anchor="middle" class="lbl">User</text><text x="80" y="252" text-anchor="middle" class="desc">"Is web-02 healthy?</text><text x="80" y="264" text-anchor="middle" class="desc">Can I deploy v3.0?"</text></g>
+
+<g class="comp"><rect x="220" y="115" width="250" height="40" fill="#1c2333" stroke="#8b949e"/><text x="345" y="135" text-anchor="middle" class="lbl">Agent &amp; Workflow Registry</text><text x="345" y="148" text-anchor="middle" class="desc">Definitions + endpoints → auto-generated tools</text></g>
+
+<g class="comp"><rect x="220" y="170" width="250" height="180" fill="#1c2333" stroke="#58a6ff"/><text x="345" y="195" text-anchor="middle" class="lbl">Chatbot Agent (/query)</text><text x="345" y="212" text-anchor="middle" class="desc">pydantic-ai Agent with tool calling</text><line x1="230" y1="222" x2="460" y2="222" stroke="#30363d" stroke-width="0.5"/><text x="235" y="238" class="tool-hdr">Registered tools (auto-generated):</text><text x="245" y="254" class="tool-name">start_diagnostic_workflow(cluster, issue)</text><text x="245" y="269" class="tool-name">start_deploy_readiness(namespace)</text><text x="245" y="284" class="tool-name">start_diagnose_fix_workflow(cluster)</text><text x="245" y="299" class="tool-name">check_workflow_status(workflow_id)</text><line x1="230" y1="308" x2="460" y2="308" stroke="#30363d" stroke-width="0.5"/><text x="235" y="324" class="desc">Each tool = one registered agent or workflow definition</text><text x="235" y="338" class="desc">LLM selects which to call based on user question</text></g>
+
+<g class="comp"><rect x="220" y="380" width="250" height="60" fill="#1c2333" stroke="#d29922"/><text x="345" y="405" text-anchor="middle" class="lbl">Workflow Runner</text><text x="345" y="422" text-anchor="middle" class="desc">Receives start_*() → dispatches steps</text></g>
+
+<g class="comp"><rect x="860" y="150" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="930" y="175" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="930" y="191" text-anchor="middle" class="desc">OpenAI / local model</text><text x="930" y="205" text-anchor="middle" class="desc">pydantic-ai tool calling</text></g>
+<g class="comp"><rect x="860" y="260" width="140" height="50" fill="#1c2333" stroke="#8b949e"/><text x="930" y="283" text-anchor="middle" class="lbl">Observability</text><text x="930" y="299" text-anchor="middle" class="desc">Prometheus + OTel</text></g>
+<g class="comp"><rect x="860" y="360" width="140" height="50" fill="#1f2937" stroke="#6366f1"/><text x="930" y="383" text-anchor="middle" class="lbl">Human Approver</text><text x="930" y="399" text-anchor="middle" class="desc">SRE / Operator</text></g>
+
+<g class="comp eph" id="t-pod-diag" style="opacity:0"><rect x="540" y="115" width="225" height="115" fill="#0d2818" stroke="#238636"/><rect x="545" y="119" width="95" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="592" y="132" text-anchor="middle" class="step-label">DIAGNOSE</text><text x="652" y="152" text-anchor="middle" class="lbl" fill="#3fb950">diagnostic-agent</text><text x="652" y="167" text-anchor="middle" class="desc">ephemeral pod with diagnostic_tools</text><line x1="550" y1="175" x2="755" y2="175" stroke="#30363d" stroke-width="0.5"/><text x="555" y="190" class="desc">list_hosts → check_host → get_alerts</text><text x="555" y="203" class="desc">→ DiagnosticReport {summary, issues, confidence}</text></g>
+<g class="comp eph" id="t-pod-ready" style="opacity:0"><rect x="540" y="245" width="225" height="100" fill="#0d2818" stroke="#238636"/><rect x="545" y="249" width="125" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="607" y="262" text-anchor="middle" class="step-label">DEPLOY READINESS</text><text x="652" y="282" text-anchor="middle" class="lbl" fill="#3fb950">readiness-agent</text><text x="652" y="297" text-anchor="middle" class="desc">ephemeral pod with readiness_tools</text><line x1="550" y1="305" x2="755" y2="305" stroke="#30363d" stroke-width="0.5"/><text x="555" y="320" class="desc">check_capacity → check_incidents → check_health</text><text x="555" y="333" class="desc">→ DeploymentReadiness {ready, blockers, warnings}</text></g>
+
+<line id="t-f-user-chat" class="flow" x1="145" y1="245" x2="215" y2="250" stroke="#58a6ff" marker-end="url(#t-a1)"/>
+<line id="t-f-chat-user" class="flow" x1="215" y1="235" x2="145" y2="230" stroke="#3fb950" marker-end="url(#t-a2)"/>
+<line id="t-f-chat-wf" class="flow" x1="345" y1="355" x2="345" y2="375" stroke="#d29922" marker-end="url(#t-a3)"/>
+<line id="t-f-chat-llm" class="flow" x1="470" y1="240" x2="855" y2="180" stroke="#a371f7" marker-end="url(#t-a4)"/>
+<line id="t-f-wf-pod" class="flow" x1="470" y1="400" x2="535" y2="175" stroke="#3fb950" marker-end="url(#t-a2)"/>
+<line id="t-f-pod-wf" class="flow" x1="540" y1="200" x2="475" y2="410" stroke="#3fb950" marker-end="url(#t-a2)"/>
+<line id="t-f-wf-chat" class="flow" x1="345" y1="375" x2="345" y2="355" stroke="#3fb950" marker-end="url(#t-a2)"/>
+<line id="t-f-defs-chat" class="flow" x1="345" y1="158" x2="345" y2="165" stroke="#79c0ff" marker-end="url(#t-a5)"/>
+<line id="t-f-wf-rpod" class="flow" x1="470" y1="420" x2="535" y2="295" stroke="#3fb950" marker-end="url(#t-a2)"/>
+<line id="t-f-rpod-wf" class="flow" x1="540" y1="310" x2="475" y2="420" stroke="#3fb950" marker-end="url(#t-a2)"/>
+
+<g id="t-sbar" style="opacity:0"><rect class="step-bar" x="15" y="10" width="1110" height="42"/><text id="t-sn" class="step-n" x="30" y="37"></text><text id="t-st" class="step-t" x="75" y="37"></text></g>
+</svg>
+</div>
+
+<div class="controls">
+  <button class="go" onclick="T.autoPlay()">Auto Play</button>
+  <button class="go" id="t-bn" onclick="T.next()">Next Step &rarr;</button>
+  <button onclick="T.reset()">Reset</button>
+  <span class="info" id="t-info"></span>
+</div>
+<div class="log"><div class="logc" id="t-lc"></div></div>
+</div>
 
 <script>
-const pods = ['pod-diagnose','pod-fix','pod-verify'];
-const S = [
-  {n:'1/11', t:'User triggers workflow: POST /v1/workflows/run',
-   on:['f1'], log:'<span class="ls">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}'},
+const goalTitles = {
+  G1: 'Bring Your Own Agents & Workflows',
+  G2: 'Secured & Governed Execution',
+  G3: 'Composable Agent Ecosystem',
+  G4: 'Seamless Human-Agent Handoff',
+  G5: 'Dual Deployment: Kubernetes + Podman',
+};
 
-  {n:'2/11', t:'Executor loads workflow.yaml, resolves diagnostic-agent from registry',
-   on:['f2'], log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n  all steps use: diagnostic-agent'},
-
-  {n:'3/11', t:'Step "diagnose": Spawner creates ephemeral diagnostic-agent pod → agent calls LLM + tools',
-   on:['f3','f4','f5'], show:['pod-diagnose'],
-   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-a1b2\n  image: agent-runtime:latest\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → get_alerts() → get_recent_deploys()\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 degraded after deploy v2.3.1", issues_found:2, confidence:"high"}'},
-
-  {n:'4/11', t:'DiagnosticReport returned to workflow runner',
-   on:['f6'],
-   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
-
-  {n:'4b', t:'Ephemeral pod DESTROYED — clean up Job + Service',
-   hide:['pod-diagnose'],
-   log:'<span class="ld">↓ destroy</span> diagnostic-agent-a1b2 — Job+Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
-
-  {n:'5/11', t:'Step "approve": Workflow PAUSES → Slack notification → human reviews diagnosis + approves',
-   on:['f8','f9','f10'],
-   log:'<span class="lw">⏸ Workflow paused</span> at step "approve"\n<span class="lw">→ Slack #sre-approvals:</span> "2 issues found on web-02. Approve remediation?"\n  Approver sees: DiagnosticReport, risk_level, rollback_plan\n<span class="ld">← Approved</span> by sre-lead@redhat.com (45s)'},
-
-  {n:'6/11', t:'Step "fix": NEW ephemeral diagnostic-agent pod → agent remediates cluster',
-   on:['f3','f4','f5'], show:['pod-fix'],
-   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-d4e5 (new pod, clean state)\n  same image, same mounts, different pod ID\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","rollback_deploy:frontend","bad deploy") → run_remediation("web-02","restart_service:app","post-rollback")\n<span class="ld">← DiagnosticReport</span> {actions_taken:2, cluster_healthy:true}'},
-
-  {n:'7/11', t:'Fix result returned to workflow runner',
-   on:['f6'],
-   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
-
-  {n:'7b', t:'Ephemeral pod DESTROYED',
-   hide:['pod-fix'],
-   log:'<span class="ld">↓ destroy</span> diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
-
-  {n:'8/11', t:'Step "verify": ANOTHER ephemeral diagnostic-agent pod → independently confirms fix worked',
-   on:['f3','f4','f5'], show:['pod-verify'],
-   log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-g7h8 (third pod, clean state)\n  same image, same mounts — independent verification\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → check_host("web-01")\n<span class="ld">← DiagnosticReport</span> {cluster_healthy:true, issues_found:0, remaining_issues:[]}'},
-
-  {n:'9/11', t:'Verification result returned to workflow runner',
-   on:['f6'],
-   log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
-
-  {n:'10/11', t:'Ephemeral pod DESTROYED',
-   hide:['pod-verify'],
-   log:'<span class="ld">↓ destroy</span> diagnostic-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>'},
-
-  {n:'11/11', t:'Workflow COMPLETE → state persisted to PostgreSQL',
-   on:['f7'],
-   log:'<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span> to PostgreSQL\n\n  3 ephemeral pods created and destroyed. Zero long-running agent pods.'},
-];
-
-let ci=0, tm=null, mode='idle';
-
-function off(){document.querySelectorAll('.flow').forEach(l=>l.classList.remove('on'));}
-
-function step(i){
-  if(i>=S.length){off();$('info').textContent='Done';$('bn').disabled=true;return;}
-  const s=S[i];
-  $('sbar').style.opacity=1;
-  $('sn').textContent='Step '+s.n;
-  $('st').textContent=s.t;
-  off();
-  (s.on||[]).forEach(id=>{const e=$(id);if(e)e.classList.add('on');});
-  (s.show||[]).forEach(id=>{const e=$(id);if(e){e.style.opacity=1;e.style.transition='opacity 0.4s';}});
-  (s.hide||[]).forEach(id=>{const e=$(id);if(e){e.style.opacity=0;e.style.transition='opacity 0.6s';}});
-  const lc=$('lc'); lc.innerHTML+=s.log+'\n'; lc.scrollTop=lc.scrollHeight;
+function goToGoal(gid) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-goals').classList.add('active');
+  document.querySelector('.tabs button[onclick*="goals"]').classList.add('active');
+  W.reset(); T.reset();
+  document.querySelectorAll('.goal-card').forEach(c => c.classList.remove('highlight'));
+  const card = document.getElementById('goal-' + gid);
+  if (card) {
+    card.classList.add('highlight');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => card.classList.remove('highlight'), 2500);
+  }
 }
 
-function $(id){return document.getElementById(id);}
-
-function autoPlay(){
-  reset(); mode='auto'; ci=0;
-  $('info').textContent='Auto playing...'; $('bn').disabled=true;
-  (function go(){
-    if(ci>=S.length||mode!=='auto'){if(ci>=S.length){off();$('info').textContent='Done';}return;}
-    step(ci); ci++;
-    tm=setTimeout(go, ci<=2?2000:ci===5?3500:2500);
-  })();
+function switchTab(id) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+  W.reset(); T.reset();
 }
 
-function next(){
-  if(mode==='auto')return;
-  if(mode==='idle'){reset();mode='manual';}
-  if(ci>=S.length)return;
-  step(ci); ci++;
-  $('info').textContent=ci>=S.length?'Done':`${ci}/${S.length} — click Next Step`;
-  if(ci>=S.length)$('bn').disabled=true;
+function createPlayer(prefix, tabId, podIds, steps, logSuffix) {
+  let ci = 0, tm = null, mode = 'idle';
+  const $ = id => document.getElementById(id);
+
+  function off() {
+    document.querySelectorAll('#' + tabId + ' .flow').forEach(l => l.classList.remove('on'));
+  }
+
+  function doStep(i) {
+    if (i >= steps.length) { off(); $(prefix + 'info').textContent = 'Done'; $(prefix + 'bn').disabled = true; return; }
+    const s = steps[i];
+    $(prefix + 'sbar').style.opacity = 1;
+    $(prefix + 'sn').textContent = 'Step ' + s.n;
+    $(prefix + 'st').textContent = s.t;
+    off();
+    (s.on || []).forEach(id => { const e = $(id); if (e) e.classList.add('on'); });
+    (s.show || []).forEach(id => { const e = $(id); if (e) { e.style.opacity = 1; e.style.transition = 'opacity 0.4s'; } });
+    (s.hide || []).forEach(id => { const e = $(id); if (e) { e.style.opacity = 0; e.style.transition = 'opacity 0.6s'; } });
+    const lc = $(prefix + 'lc');
+    lc.innerHTML += s.log + (logSuffix || '\n');
+    lc.scrollTop = lc.scrollHeight;
+  }
+
+  return {
+    autoPlay() {
+      this.reset(); mode = 'auto'; ci = 0;
+      $(prefix + 'info').textContent = 'Auto playing...'; $(prefix + 'bn').disabled = true;
+      (function go() {
+        if (ci >= steps.length || mode !== 'auto') { if (ci >= steps.length) { off(); $(prefix + 'info').textContent = 'Done'; } return; }
+        doStep(ci); ci++;
+        tm = setTimeout(go, ci <= 2 ? 2000 : 2800);
+      })();
+    },
+    next() {
+      if (mode === 'auto') return;
+      if (mode === 'idle') { this.reset(); mode = 'manual'; }
+      if (ci >= steps.length) return;
+      doStep(ci); ci++;
+      $(prefix + 'info').textContent = ci >= steps.length ? 'Done' : ci + '/' + steps.length + ' — click Next Step';
+      if (ci >= steps.length) $(prefix + 'bn').disabled = true;
+    },
+    reset() {
+      if (tm) clearTimeout(tm); mode = 'idle'; ci = 0; off();
+      $(prefix + 'sbar').style.opacity = 0;
+      podIds.forEach(id => { $(id).style.opacity = 0; });
+      $(prefix + 'lc').innerHTML = ''; $(prefix + 'info').textContent = ''; $(prefix + 'bn').disabled = false;
+    }
+  };
 }
 
-function reset(){
-  if(tm)clearTimeout(tm); mode='idle'; ci=0; off();
-  $('sbar').style.opacity=0;
-  pods.forEach(id=>{$(id).style.opacity=0;});
-  $('lc').innerHTML=''; $('info').textContent=''; $('bn').disabled=false;
+const W = createPlayer('w-', 'tab-wf', ['w-pod-diagnose','w-pod-fix','w-pod-verify'], [
+  {n:'1/11',t:'User triggers workflow: POST /v1/workflows/run',on:['w-f1'],log:'<span class="ls">→ POST /v1/workflows/run</span> {workflow: "diagnose-and-fix"}'},
+  {n:'2/11',t:'Executor loads workflow.yaml, resolves diagnostic-agent from Agent & Workflow Registry',on:['w-f2'],log:'<span class="ls">→ Load workflow.yaml</span>\n  steps: diagnose → approve → fix → verify\n  all steps use: diagnostic-agent'},
+  {n:'3/11',t:'Step "diagnose": Spawner creates ephemeral pod → agent calls LLM + tools',on:['w-f3','w-f4','w-f5'],show:['w-pod-diagnose'],log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-a1b2\n  image: agent-runtime:latest\n  mounts: agent.yaml, diagnostic_tools.py, registry.yaml\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02") → get_alerts()\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 degraded after deploy v2.3.1", issues_found:2, confidence:"high"}'},
+  {n:'4/11',t:'DiagnosticReport returned to workflow runner',on:['w-f6'],log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+  {n:'4b',t:'Ephemeral pod DESTROYED — clean up Job + Service',hide:['w-pod-diagnose'],log:'<span class="ld">↓ destroy</span> diagnostic-agent-a1b2 — Job+Service deleted\n<span class="ls">✓ Step "diagnose" completed</span>'},
+  {n:'5/11',t:'Step "approve": Workflow PAUSES → Slack notification → human approves',on:['w-f8','w-f9','w-f10'],log:'<span class="lw">⏸ Workflow paused</span> at step "approve"\n<span class="lw">→ Slack #sre-approvals:</span> "2 issues found on web-02. Approve remediation?"\n<span class="ld">← Approved</span> by sre-lead@redhat.com (45s)'},
+  {n:'6/11',t:'Step "fix": NEW ephemeral pod → agent remediates cluster',on:['w-f3','w-f4','w-f5'],show:['w-pod-fix'],log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-d4e5 (new pod, clean state)\n<span class="ld">⚙ LLM → tools:</span> run_remediation("web-02","rollback_deploy:frontend")\n<span class="ld">← DiagnosticReport</span> {actions_taken:2, cluster_healthy:true}'},
+  {n:'7/11',t:'Fix result returned to workflow runner',on:['w-f6'],log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+  {n:'7b',t:'Ephemeral pod DESTROYED',hide:['w-pod-fix'],log:'<span class="ld">↓ destroy</span> diagnostic-agent-d4e5\n<span class="ls">✓ Step "fix" completed</span>'},
+  {n:'8/11',t:'Step "verify": ANOTHER ephemeral pod → independently confirms fix',on:['w-f3','w-f4','w-f5'],show:['w-pod-verify'],log:'<span class="ld">↑ spawn</span> Job: diagnostic-agent-g7h8 (third pod, clean state)\n<span class="ld">⚙ LLM → tools:</span> list_hosts() → check_host("web-02")\n<span class="ld">← DiagnosticReport</span> {cluster_healthy:true, issues_found:0}'},
+  {n:'9/11',t:'Verification result returned',on:['w-f6'],log:'<span class="ld">← result</span> DiagnosticReport sent back to WorkflowExecutor'},
+  {n:'10/11',t:'Ephemeral pod DESTROYED',hide:['w-pod-verify'],log:'<span class="ld">↓ destroy</span> diagnostic-agent-g7h8\n<span class="ls">✓ Step "verify" completed</span>'},
+  {n:'11/11',t:'Workflow COMPLETE → state persisted',on:['w-f7'],log:'<span class="ls">✓ Workflow "diagnose-and-fix" COMPLETED</span>\n<span class="ld">→ State persisted</span>\n\n  3 ephemeral pods created and destroyed. Zero long-running agent pods.'},
+], '\n');
+
+const T = createPlayer('t-', 'tab-aat', ['t-pod-diag','t-pod-ready'], [
+  {n:'1/14',t:'Startup: Registry registers agents/workflows as chatbot tools',on:['t-f-defs-chat'],log:'<span class="ls">⚙ Agent & Workflow Registry</span> scans registered definitions:\n  • diagnostic-agent.yaml → <span class="ld">start_diagnostic_workflow(cluster, issue)</span>\n  • deploy-readiness-agent.yaml → <span class="ld">start_deploy_readiness(namespace)</span>\n  • diagnose-fix-workflow.yaml → <span class="ld">start_diagnose_fix_workflow(cluster)</span>\n  • (shared) → <span class="ld">check_workflow_status(workflow_id)</span>\n\nEach definition becomes a pydantic-ai tool on the chatbot agent.'},
+  {n:'2/14',t:'User asks: "Is web-02 healthy enough to deploy frontend v3.0?"',on:['t-f-user-chat'],log:'<span class="chat-u">User:</span> Is web-02 healthy enough to deploy frontend v3.0?'},
+  {n:'3/14',t:'Chatbot sends question to LLM — LLM decides to call two tools',on:['t-f-chat-llm'],log:'<span class="lp">→ LLM</span> reasoning: "I need to check cluster health AND deploy readiness."\n\n<span class="lp">← tool_call:</span> start_diagnostic_workflow(cluster="web-02", issue="general health check")'},
+  {n:'4/14',t:'Tool call → Workflow Runner submits diagnostic workflow',on:['t-f-chat-wf'],log:'<span class="lw">→ start_diagnostic_workflow()</span>\n  POST /v1/workflows/run {workflow_name: "diagnostic-agent"}\n  ← 202 {workflow_id: "wf-8a3b", status: "running"}'},
+  {n:'5/14',t:'Workflow Runner spawns ephemeral diagnostic-agent pod',on:['t-f-wf-pod'],show:['t-pod-diag'],log:'<span class="ld">↑ spawn</span> diagnostic-agent-c2d3 (ephemeral)\n<span class="ld">⚙ Agent runs:</span> list_hosts() → check_host("web-02") → get_alerts()\n<span class="ld">← DiagnosticReport</span> {summary:"web-02 healthy, CPU 45%", issues_found:0}'},
+  {n:'6/14',t:'Result callback → chatbot receives diagnostic result',on:['t-f-pod-wf','t-f-wf-chat'],log:'<span class="ld">← callback</span> POST /v1/workflows/wf-8a3b/steps/result/result'},
+  {n:'6b',t:'Ephemeral diagnostic pod DESTROYED',hide:['t-pod-diag'],log:'<span class="ld">↓ destroy</span> diagnostic-agent-c2d3\n\n<span class="lp">→ LLM</span> receives tool result: {healthy: true, issues: 0}\n<span class="lp">← tool_call:</span> start_deploy_readiness(namespace="frontend")'},
+  {n:'7/14',t:'Second tool call → spawns readiness-agent pod',on:['t-f-chat-wf','t-f-wf-rpod'],show:['t-pod-ready'],log:'<span class="lw">→ start_deploy_readiness()</span>\n  POST /v1/workflows/run {workflow_name: "readiness-agent"}\n  ← 202 {workflow_id: "wf-9c4d"}\n\n<span class="ld">↑ spawn</span> readiness-agent-e5f6 (ephemeral)\n<span class="ld">⚙ Agent runs:</span> check_capacity() → check_incidents() → check_health()'},
+  {n:'8/14',t:'Readiness result callback → chatbot receives result',on:['t-f-rpod-wf','t-f-wf-chat'],log:'<span class="ld">← DeploymentReadiness</span> {ready:true, warnings:["web-03 at 68% CPU"]}'},
+  {n:'8b',t:'Ephemeral readiness pod DESTROYED',hide:['t-pod-ready'],log:'<span class="ld">↓ destroy</span> readiness-agent-e5f6'},
+  {n:'9/14',t:'LLM synthesizes both results into a natural language answer',on:['t-f-chat-llm'],log:'<span class="lp">→ LLM</span> has both tool results:\n  • Diagnostic: web-02 healthy, no issues\n  • Readiness: cluster ready, one warning\n\n<span class="lp">← LLM response:</span> "web-02 is healthy. Safe to deploy. Note web-03 at 68% CPU."'},
+  {n:'10/14',t:'Chatbot responds to user',on:['t-f-chat-user'],log:'<span class="chat-a">Chatbot:</span> web-02 is healthy — CPU at 45%, no active alerts.\nThe cluster has capacity for frontend v3.0, but note that web-03 is at 68% CPU.\nRecommendation: safe to deploy. Consider scaling web-03 afterwards.'},
+  {n:'11/14',t:'User follows up: "Go ahead and deploy it"',on:['t-f-user-chat'],log:'<span class="chat-u">User:</span> Go ahead and deploy it.\n\n<span class="lp">← tool_call:</span> start_diagnose_fix_workflow(cluster="web-02")'},
+  {n:'12/14',t:'Chatbot triggers multi-step workflow with approval gate',on:['t-f-chat-wf'],log:'<span class="lw">→ start_diagnose_fix_workflow()</span>\n  POST /v1/workflows/run {workflow_name: "diagnose-fix"}\n  ← 202 {workflow_id: "wf-b7c8", status: "running"}\n\n<span class="chat-a">Chatbot:</span> I\'ve started the deployment workflow (wf-b7c8).\n  It will diagnose → approve → deploy → verify.\n  You\'ll be asked to approve before any changes are made.\n\n<span class="ls">✓ The chatbot never ran agent code — it used tools to invoke the framework.</span>'},
+], '\n\n');
+</script>
+</div><!-- end main-content -->
+<script>
+function unlock(){
+  if(document.getElementById('passcode').value==='lcs'){
+    document.getElementById('lock-screen').style.display='none';
+    document.getElementById('main-content').style.display='block';
+    sessionStorage.setItem('unlocked','1');
+  } else {
+    document.getElementById('lock-err').style.visibility='visible';
+  }
+}
+if(sessionStorage.getItem('unlocked')==='1'){
+  document.getElementById('lock-screen').style.display='none';
+  document.getElementById('main-content').style.display='block';
 }
 </script>
 </body>

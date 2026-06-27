@@ -8,17 +8,15 @@ The framework is built on **Pydantic AI** for agent execution and provides a gen
 
 ## Goals & Objectives
 
-1. **Bring your own agents** — product teams define agents via YAML + Python tools. The framework runs them. No forking, no image rebuilds, no PRs to the platform repo.
+1. **Bring your own agents & workflows** — define agents and multi-step agentic workflows via YAML + any tools. No forking, no rebuilds, no framework changes. Product teams deploy AI agents without changing framework code.
 
-2. **Multi-step workflows with human oversight** — chain agents into workflows with conditions, retry, approval gates, and escalation. Humans stay in the loop for high-risk operations.
+2. **Secured & governed execution** — each step runs in its own disposable container with scoped permissions, hard timeouts, and no shared state. Untrusted pods never receive secrets beyond their API token. Human oversight on high-risk operations via approval gates. Full observability: tracing, metrics, event streaming.
 
-3. **Ephemeral isolated execution** — each workflow step runs in its own disposable container. Clean state, scoped permissions, hard timeouts. A stuck or misbehaving agent can't affect other steps or the platform.
+3. **Composable agent ecosystem** — agents and workflows are reusable building blocks. A chatbot invokes workflows as tools. Workflows chain agents. Multiple trigger points: conversations, alerts, API, schedules.
 
-4. **Dual deployment targets** — the same agents and workflows run on both Kubernetes (OCP) and Podman. Product teams like Ansible and RH Developer Hub ship GA features on Podman. Both are first-class production targets.
+4. **Seamless human-agent handoff** — when automation reaches its limit, users pick up in an AI CLI with full workflow context — diagnosis, steps taken, failure history — and continue where the agent left off.
 
-5. **Stateless horizontal scaling** — the workflow runner scales behind a load balancer. All state lives in PostgreSQL. Any replica can serve any request. Pod crashes don't lose workflows.
-
-6. **Production-grade observability** — OpenTelemetry distributed tracing, per-tool Prometheus metrics, SSE streaming for real-time progress, structured logging with correlation IDs.
+5. **Dual deployment: Kubernetes + Podman** — same agents run on both. Both are first-class production targets.
 
 ## Design Principles
 
