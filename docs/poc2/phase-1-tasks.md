@@ -145,7 +145,7 @@ New file: `src/agents/workflow/temporal_workflow.py`
 
 Single generic `@workflow.defn` class that interprets any workflow YAML at runtime:
 - `@workflow.run` — step loop with sequential and parallel group support
-- `@workflow.signal` — `approve(step_name, decision)` for human approval
+- `@workflow.signal` — `approve(step_name, decision, selected_option_id=None)` for human approval (see Approved Option Selection Contract)
 - `@workflow.query` — `get_status()` returns steps + events
 - Condition evaluation via existing `conditions.py` (pure, deterministic)
 - Prompt interpolation via existing `interpolation.py` (pure, deterministic)
@@ -161,9 +161,11 @@ New file: `src/agents/workflow/temporal_activities.py`
 
 `run_sandbox_step(input: SandboxStepInput) -> StepResult`:
 1. Compute content-hash pod name from `workflow_id:step_name:attempt`
-2. Build env vars: `LIGHTSPEED_PROVIDER`, `LIGHTSPEED_MODEL`, credentials via `SecretKeyRef`
-3. Build volume mounts: skills OCI image volume
-4. Call `spawner.spawn()` with sandbox image
+2. Build env vars: `LIGHTSPEED_PROVIDER`, `LIGHTSPEED_MODEL`
+3. Build credentials: K8s via `SecretKeyRef`, Podman via host env propagation (see Credential Contract)
+4. Build volume mounts: skills OCI image volume
+5. Build labels: `cloud-agents/workflow-id`, `cloud-agents/step-name`, `cloud-agents/attempt` (see Crash-Boundary Contract)
+6. Call `spawner.spawn()` with sandbox image, labels, and credentials
 5. Call `spawner.wait_ready(endpoint, path="/health")`
 6. Build sandbox request: `query`, `systemPrompt`, `outputSchema`, `context`, `timeout_ms`
 7. POST to `{endpoint}/v1/agent/run`
@@ -189,7 +191,7 @@ New file or function in `temporal_activities.py`:
 - Build `approvedOption` from analysis step output (by role)
 - Build `executionResult` from execution step output (by role)
 
-Uses step `role` field (analysis | execution | verification) to find the right step output without hardcoding names.
+Uses step `role` field (analysis | execution | verification) to find the right step output without hardcoding names. Builds `approvedOption` from the approval step's `selected_option_id` + the analysis step's options list (see Approved Option Selection Contract), not hardcoded `options[0]`.
 
 ### Task 10: Spawner changes for sandbox
 
@@ -205,6 +207,13 @@ Update `PodmanSpawner._do_spawn()`:
 
 Update `AgentSpawner.spawn()` signature to accept new parameters.
 
+Both spawners must:
+- Apply `cloud-agents/workflow-id`, `step-name`, `attempt` labels to spawned workloads
+- Support label-based cleanup: `spawner.cleanup_by_labels(labels)` for orphan reconciliation
+- Handle credentials per the Credential Contract:
+  - K8s: `SecretKeyRef` for provider-specific env vars
+  - Podman: host env propagation for provider-specific env vars
+
 ### Task 11: Temporal worker
 
 New file: `src/agents/workflow/temporal_worker.py`
@@ -215,7 +224,7 @@ New file: `src/agents/workflow/temporal_worker.py`
 - Spawner and registry injected via activity context
 - Start as sidecar container (separate from FastAPI)
 
-### Task 12: v2 API endpoints
+### Task 12: Workflow API endpoints
 
 Add to `src/agents/workflow/temporal_api.py` (new file):
 
@@ -246,7 +255,7 @@ Update `src/agents/workflow/entrypoint.py` or create new entrypoint:
 - `WORKFLOW_ENGINE` env var: `temporal` | `legacy` (default: `legacy`)
 - When `temporal`:
   - Create Temporal Client in lifespan
-  - Register v2 API router
+  - Register workflow API router
   - Start Temporal worker as sidecar (or in-process for dev)
 - When `legacy`: existing behavior unchanged
 - v1 endpoints always available regardless of engine
@@ -321,7 +330,7 @@ Task 2 (sandbox PR)        │        ├──→ Task 7 (workflow class)
                             │        │
 Task 10 (spawner changes) ─┘        ├──→ Task 11 (worker)
 Task 14 (definition updates) ──────┘        │
-                                             ├──→ Task 12 (v2 API)
+                                             ├──→ Task 12 (API)
                                              ├──→ Task 13 (entrypoint)
                                              │
                                              ├──→ Task 15 (unit tests)
