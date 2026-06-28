@@ -63,9 +63,11 @@ Tests: low-risk auto-approves, high-risk waits, no risk_level defaults to manual
 
 ### Task 2: Wire advisory mode into workflow + activity
 
-Add `advisory: bool = False` to `WorkflowInput` and `WorkflowDefinition`. In workflow: `annotate_prompt()` before dispatch, `should_skip_approval()` for approval steps, `annotate_output()` after completion. In activity: pass `advisory` flag in sandbox request AND set `service_account` to read-only SA when advisory=true (see Advisory Enforcement Contract).
+Add `advisory: bool = False` to `WorkflowInput` and `WorkflowDefinition`. In workflow: `annotate_prompt()` before dispatch, `should_skip_approval()` for approval steps, `annotate_output()` after completion. In activity: pass `advisory` flag in sandbox request AND enforce read-only execution per the Advisory Enforcement Contract:
+- **K8s**: Set `service_account` to read-only SA (e.g., `advisory-sa`) on the spawner call.
+- **Podman**: Pass `read_only=True` to spawner, which adds `--read-only` flag and omits host mounts.
 
-Tests: prompt annotation, approval skip, output marking, non-advisory unchanged, advisory spawns with read-only service_account.
+Tests: prompt annotation, approval skip, output marking, non-advisory unchanged, K8s advisory spawns with read-only service_account, Podman advisory spawns with `--read-only` flag.
 
 **Depends on:** Task 3 (service_account passthrough).
 
@@ -77,9 +79,9 @@ Tests: service_account forwarded, timeout override, defaults when None.
 
 ### Task 4: Wire notification activity for approval pauses
 
-New `send_approval_notification` activity using `notifier.py`. At-most-once delivery, no retry (see Notification Delivery Contract). `notifier_config` is a config ref, not raw secrets (see Secret-Safe Delivery Config Contract). Activity resolves ref to actual credentials from env vars at runtime. Each notification includes `correlation_id` for deduplication.
+New `send_approval_notification` activity using `notifier.py`. Best-effort delivery with possible duplicates in crash window, `maximum_attempts=1` (see Notification Delivery Contract). `notifier_config` is a config ref, not raw secrets (see Secret-Safe Delivery Config Contract). Activity resolves ref to actual credentials from env vars at runtime. Each notification includes `correlation_id` (`{workflow_id}:{step_name}`) for receiver-side deduplication.
 
-Tests: Slack notifier called with correlation_id, webhook called, NullNotifier default, config ref resolved from env, no retry on failure.
+Tests: Slack notifier called with correlation_id, webhook called, NullNotifier default, config ref resolved from env, single attempt (no retry on failure).
 
 ### Task 5: Wire escalation delivery into activity
 
@@ -123,7 +125,7 @@ Full lifecycle: spawn→HTTP→destroy with real pods, escalation on failure, pa
 
 ### Task 12: Integration tests with Temporal test environment
 
-Policy combinations using `WorkflowEnvironment.start_time_skipping()`: mixed risk levels, advisory E2E, permissions in request, notification on pause, escalation delivery.
+Policy combinations using `WorkflowEnvironment.start_time_skipping()`: mixed risk levels (auto-approve + manual), advisory E2E (prompt annotation + read-only SA enforcement), service_account passthrough + timeout override, notification on pause with correlation_id, escalation delivery with durable artifact in workflow state.
 
 **Depends on:** Tasks 1-5.
 
