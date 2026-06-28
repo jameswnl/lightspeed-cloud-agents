@@ -147,6 +147,27 @@ class TestCancelWorkflow:
         handle.cancel.assert_called_once()
 
 
+class TestDefinitionRoutes:
+    """Tests for definition management routes."""
+
+    def test_get_definitions_returns_list(self, mocker: MockerFixture) -> None:
+        """GET /definitions returns a list, not workflow status."""
+        from agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+
+        app = FastAPI()
+        store = DefinitionStore()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/definitions")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+
 class TestAuthEnforcement:
     """Tests that auth dependency is enforced when provided."""
 
