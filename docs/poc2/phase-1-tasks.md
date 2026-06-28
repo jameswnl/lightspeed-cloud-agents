@@ -212,7 +212,7 @@ Update `PodmanSpawner._do_spawn()`:
 Update `AgentSpawner.spawn()` signature to accept new parameters.
 
 Both spawners must:
-- Apply `cloud-agents/workflow-id`, `step-name`, `attempt` labels to spawned workloads
+- Apply `cloud-agents/workflow-id`, `cloud-agents/step-name`, `cloud-agents/attempt` labels to spawned workloads
 - Support label-based cleanup: `spawner.cleanup_by_labels(labels)` for orphan reconciliation
 - Handle credentials per the Credential Contract:
   - K8s: `SecretKeyRef` for provider-specific env vars
