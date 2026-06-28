@@ -15,6 +15,7 @@ from temporalio import activity
 from agents.workflow.temporal_activities import (
     build_escalation_activity,
     run_sandbox_step,
+    send_approval_notification,
 )
 from agents.workflow.temporal_workflow import AgentWorkflow
 
@@ -66,5 +67,5 @@ def build_worker_config(
         task_queue=task_queue,
         max_concurrent_activities=max_concurrent_activities,
         workflows=[AgentWorkflow],
-        activities=[sandbox_activity, build_escalation_activity],
+        activities=[sandbox_activity, build_escalation_activity, send_approval_notification],
     )

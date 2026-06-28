@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-logger = logging.getLogger(__name__)
-
 from pydantic import BaseModel, Field
 
 from agents.workflow.definition import WorkflowStepSpec
+
+logger = logging.getLogger(__name__)
 
 
 class ApprovalPolicy(BaseModel):
@@ -66,8 +66,8 @@ def classify_step_risk(
         Risk classification with auto-approve decision.
     """
     if step.type == "human-approval":
-        risk = policy.default_risk
-        reason = "Human approval step — uses default risk level"
+        risk = step.risk_level or policy.default_risk
+        reason = "Human approval step — uses explicit risk level" if step.risk_level else "Human approval step — uses default risk level"
     elif step.type == "agent":
         risk = _classify_agent_risk(step, policy)
         reason = _explain_agent_risk(step, risk)

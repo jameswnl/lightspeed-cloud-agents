@@ -71,6 +71,8 @@ class WorkflowInput(BaseModel):
     sandbox_image: str = "lightspeed-agentic-sandbox:latest"
     skills_image: Optional[str] = None
     skills_paths: Optional[list[str]] = None
+    approval_policy: Optional[dict[str, Any]] = None
+    advisory: bool = False
 
 
 class WorkflowOutput(BaseModel):

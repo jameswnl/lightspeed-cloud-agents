@@ -16,7 +16,10 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
+    from agents.workflow.advisory import AdvisoryEnforcer
+    from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
     from agents.workflow.conditions import evaluate_condition
+    from agents.workflow.definition import WorkflowStepSpec
     from agents.workflow.interpolation import interpolate
     from agents.workflow.state import StepResult as LegacyStepResult
     from agents.workflow.state import WorkflowState
@@ -89,6 +92,7 @@ class AgentWorkflow:
         """Execute a single step with condition evaluation."""
         step_name = step["name"]
         output_key = step["output_key"]
+        enforcer = AdvisoryEnforcer(enabled=input.advisory)
 
         if condition := step.get("condition"):
             if not self._evaluate_condition(condition):
@@ -97,18 +101,47 @@ class AgentWorkflow:
                 return None
 
         if step["type"] == "human-approval":
-            return await self._handle_approval(step)
+            if enforcer.should_skip_approval():
+                result = StepResult(
+                    status="completed",
+                    output={"approved": True, "advisory": True},
+                )
+                self._steps[output_key] = result
+                self._emit("step.advisory_skipped", step_name)
+                return result
+            return await self._handle_approval(step, input)
 
         if step["type"] == "agent":
-            return await self._handle_agent_step(step, input)
+            return await self._handle_agent_step(step, input, enforcer)
 
         return None
 
-    async def _handle_approval(self, step: dict[str, Any]) -> StepResult:
-        """Handle a human-approval step with signal + timeout."""
+    async def _handle_approval(
+        self, step: dict[str, Any], input: WorkflowInput,
+    ) -> StepResult:
+        """Handle a human-approval step with auto-approve check + signal."""
         step_name = step["name"]
         output_key = step["output_key"]
         timeout_seconds = step.get("timeout_seconds", 86400)
+
+        policy_dict = input.approval_policy or {}
+        policy = ApprovalPolicy(**policy_dict)
+        step_spec = WorkflowStepSpec(
+            name=step_name, type=step["type"],
+            output_key=output_key,
+            risk_level=step.get("risk_level"),
+            message=step.get("message"),
+        )
+        classification = classify_step_risk(step_spec, policy)
+
+        if classification.auto_approved:
+            result = StepResult(
+                status="completed",
+                output={"approved": True, "auto_approved": True},
+            )
+            self._steps[output_key] = result
+            self._emit("step.auto_approved", step_name)
+            return result
 
         self._emit("workflow.paused", step_name)
 
@@ -141,16 +174,22 @@ class AgentWorkflow:
 
     async def _handle_agent_step(
         self, step: dict[str, Any], input: WorkflowInput,
+        enforcer: Optional[AdvisoryEnforcer] = None,
     ) -> StepResult:
         """Handle an agent step by dispatching to the sandbox activity."""
         step_name = step["name"]
         output_key = step["output_key"]
         timeout_seconds = step.get("timeout_seconds", 600)
         max_retries = step.get("max_retries", 1)
+        if enforcer is None:
+            enforcer = AdvisoryEnforcer(enabled=False)
 
         resolved_step = dict(step)
         if prompt := step.get("prompt"):
-            resolved_step["prompt"] = self._interpolate_prompt(prompt, input)
+            interpolated = self._interpolate_prompt(prompt, input)
+            resolved_step["prompt"] = enforcer.annotate_prompt(interpolated)
+        if input.advisory:
+            resolved_step["advisory"] = True
 
         self._emit("step.started", step_name)
 
@@ -171,6 +210,12 @@ class AgentWorkflow:
             )
 
             step_result = StepResult(**result) if isinstance(result, dict) else result
+            if enforcer.enabled and step_result.output:
+                step_result = StepResult(
+                    status=step_result.status,
+                    output=enforcer.annotate_output(step_result.output),
+                    error=step_result.error,
+                )
 
         except ActivityError:
             step_result = StepResult(status="failed", error="retries exhausted")

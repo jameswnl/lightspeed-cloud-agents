@@ -258,3 +258,153 @@ class TestQueryStatus:
 
             await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
             await handle.result()
+
+
+class TestAdvisoryMode:
+    """Tests for advisory mode enforcement."""
+
+    @pytest.mark.asyncio
+    async def test_advisory_skips_approval(self, env: WorkflowEnvironment) -> None:
+        """Advisory mode auto-completes approval steps."""
+        steps = [
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "timeout_seconds": 2},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.advisory = True
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-adv-1", task_queue="test-q",
+            )
+
+        assert result.steps["approval"].status == "completed"
+        assert result.steps["approval"].output.get("advisory") is True
+
+    @pytest.mark.asyncio
+    async def test_advisory_annotates_prompt(self, env: WorkflowEnvironment) -> None:
+        """Advisory mode annotates agent step prompts."""
+        steps = [
+            {"name": "diag", "type": "agent", "output_key": "r1",
+             "prompt": "diagnose issue", "runtime": "sandbox", "spawn": "ephemeral"},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.advisory = True
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[run_sandbox_step, build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-adv-2", task_queue="test-q",
+            )
+
+        assert result.steps["r1"].status == "completed"
+        assert result.steps["r1"].output.get("advisory") is True
+
+    @pytest.mark.asyncio
+    async def test_non_advisory_unchanged(self, env: WorkflowEnvironment) -> None:
+        """Non-advisory workflow behaves normally."""
+        steps = [
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "timeout_seconds": 2},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.advisory = False
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-adv-3", task_queue="test-q",
+            )
+
+        assert result.steps["approval"].status == "denied"
+
+
+class TestAutoApproval:
+    """Tests for auto-approval based on risk classification."""
+
+    @pytest.mark.asyncio
+    async def test_low_risk_auto_approves(self, env: WorkflowEnvironment) -> None:
+        """Low-risk approval step completes without a signal."""
+        steps = [
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "risk_level": "low", "timeout_seconds": 2},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-auto-1", task_queue="test-q",
+            )
+
+        assert result.steps["approval"].status == "completed"
+        assert result.steps["approval"].output["approved"] is True
+        assert result.steps["approval"].output.get("auto_approved") is True
+
+    @pytest.mark.asyncio
+    async def test_high_risk_waits_for_signal(self, env: WorkflowEnvironment) -> None:
+        """High-risk approval step still requires human signal."""
+        steps = [
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "risk_level": "high", "timeout_seconds": 2},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-auto-2", task_queue="test-q",
+            )
+
+        assert result.steps["approval"].status == "denied"
+        assert result.steps["approval"].output["reason"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_no_risk_level_defaults_to_manual(self, env: WorkflowEnvironment) -> None:
+        """Step without risk_level defaults to manual approval."""
+        steps = [
+            {"name": "approve", "type": "human-approval",
+             "message": "OK?", "output_key": "approval",
+             "timeout_seconds": 2},
+        ]
+        wf_input = _make_input(steps)
+        wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run, wf_input,
+                id="wf-auto-3", task_queue="test-q",
+            )
+
+        assert result.steps["approval"].status == "denied"

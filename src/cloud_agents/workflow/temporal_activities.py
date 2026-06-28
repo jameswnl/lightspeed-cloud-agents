@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import UTC
 from typing import Any, Optional
 
 import httpx
 from temporalio import activity
 
+from agents.workflow.escalation import LogPackager
+from agents.workflow.notifier import NullNotifier
 from agents.workflow.temporal_context import build_sandbox_context
 from agents.workflow.temporal_models import StepResult
 
@@ -68,6 +71,11 @@ async def run_sandbox_step(
         "LIGHTSPEED_MODEL": provider["model"],
     }
 
+    permissions = step.get("permissions") or {}
+    if sa := permissions.get("service_account"):
+        env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
+    http_timeout = float(permissions.get("timeout_seconds", 600))
+
     if spawner is None:
         logger.info("No spawner configured — returning stub result for '%s'", step_name)
         return {"status": "completed", "output": {"summary": f"executed-{step_name}"}}
@@ -102,7 +110,7 @@ async def run_sandbox_step(
         if output_schema := step.get("output_schema"):
             request_body["outputSchema"] = output_schema
 
-        async with httpx.AsyncClient(timeout=600.0) as client:
+        async with httpx.AsyncClient(timeout=http_timeout) as client:
             response = await client.post(
                 f"{endpoint}/v1/agent/run", json=request_body,
             )
@@ -135,15 +143,47 @@ async def run_sandbox_step(
 
 
 @activity.defn
+async def send_approval_notification(input: dict[str, Any]) -> dict[str, Any]:
+    """Send a notification when a workflow pauses for approval.
+
+    Best-effort with possible duplicates. Single attempt, no retry.
+    """
+    workflow_id = input["workflow_id"]
+    step_name = input["step_name"]
+    message = input.get("message", "")
+    correlation_id = f"{workflow_id}:{step_name}"
+
+    try:
+        notifier = NullNotifier()
+        approve_url = f"/v1/workflows/{workflow_id}/approve"
+        await notifier.notify(
+            workflow_id=workflow_id,
+            step_name=step_name,
+            message=f"[{correlation_id}] {message}",
+            approve_url=approve_url,
+        )
+        return {"status": "notification_sent", "correlation_id": correlation_id}
+    except Exception:
+        logger.warning(
+            "Notification failed for %s (best-effort)", correlation_id, exc_info=True,
+        )
+        return {"status": "notification_failed", "correlation_id": correlation_id}
+
+
+@activity.defn
 async def build_escalation_activity(steps: dict[str, Any]) -> dict[str, Any]:
-    """Package workflow context for escalation handoff."""
+    """Package workflow context for escalation handoff.
+
+    Primary artifact is always returned in the result (queryable via
+    workflow status). External delivery via packager is secondary/best-effort.
+    """
     failed_steps = [
         {"step": k, "error": v.get("error", "unknown")}
         for k, v in steps.items()
         if v.get("status") == "failed"
     ]
 
-    return {
+    result = {
         "status": "escalated",
         "output": {
             "type": "escalation_handoff",
@@ -151,3 +191,21 @@ async def build_escalation_activity(steps: dict[str, Any]) -> dict[str, Any]:
             "total_steps": len(steps),
         },
     }
+
+    try:
+        packager = LogPackager()
+        from datetime import datetime
+
+        from agents.workflow.escalation import EscalationPackage
+        pkg = EscalationPackage(
+            workflow_name="workflow",
+            step_name=failed_steps[0]["step"] if failed_steps else "unknown",
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            escalation=result["output"],
+            workflow_snapshot=steps,
+        )
+        await packager.package(pkg)
+    except Exception:
+        logger.warning("Escalation delivery failed (best-effort)", exc_info=True)
+
+    return result
