@@ -18,11 +18,11 @@ Integration test: prove an advisory step cannot take a write path (spawned with 
 
 ### Notification Delivery Contract
 
-Notification is **at-most-once, best-effort**:
+Notification is **best-effort with possible duplicates**:
 - Single attempt, no retry. Temporal's activity retry policy: `maximum_attempts=1`.
-- Duplicates on replay: the notification activity is marked `non_deterministic=false` — Temporal replays skip it. If the worker crashes after sending but before recording, the notification may be re-sent. This is acceptable for approval notifications.
-- Each notification includes a stable `correlation_id` (`{workflow_id}:{step_name}`) so receivers can deduplicate.
-- Tests verify: notification sent once, correlation_id present, no retry on failure.
+- Duplicate window: if the worker crashes after sending the notification but before Temporal records the activity completion, a replay may re-send the notification. This is an accepted trade-off — true at-most-once would require a persisted send marker, which is not worth the complexity for approval notifications.
+- Each notification includes a stable `correlation_id` (`{workflow_id}:{step_name}`) so receivers can deduplicate if needed.
+- Tests verify: notification sent, correlation_id present, no retry on failure.
 
 ### Secret-Safe Delivery Config Contract
 
@@ -97,9 +97,9 @@ Tests: API propagates from request, from definition, request overrides definitio
 
 ### Task 7: Skills image support in spawners
 
-Add `skills_image`/`skills_paths` to `AgentSpawner.spawn()`. K8s: init container. Podman: `podman cp`. Activity forwards params.
+Add `skills_image`/`skills_paths` to `AgentSpawner.spawn()`. K8s: init container copies skills to emptyDir volume. Podman: named volume extraction via `podman volume create` + `podman run --rm -v` (see Skills Image Loading Contract). Activity forwards params. Cleanup: volume removed in `finally` block.
 
-Tests: K8s init container spec, Podman volume, activity forwards params.
+Tests: K8s init container spec, no-skills no init container, Podman named volume extraction, volume cleanup, activity forwards params.
 
 ### Task 8: Temporal Server deployment — Podman
 
