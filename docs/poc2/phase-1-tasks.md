@@ -55,6 +55,10 @@ Single authoritative contract (from `temporal-sandbox-architecture.md` env var t
 
 Provider-specific credential env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) are set by the spawner from the `credentials_secret` field in the workflow YAML.
 
+### Note on companion architecture doc
+
+This phase-1 plan supersedes stale examples in `temporal-sandbox-architecture.md` where they conflict — specifically the approval signal signature (now includes `selected_option_id`) and the provider env var name (`LIGHTSPEED_PROVIDER`, not `LIGHTSPEED_AGENT_PROVIDER`). The architecture doc will be refreshed after Phase 1 implementation.
+
 ## Sandbox Adaptations (upstream PRs)
 
 ### Task 1: Add `executionResult` handling to sandbox context formatting
@@ -235,7 +239,8 @@ Add to `src/agents/workflow/temporal_api.py` (new file):
   - Return 202 with workflow_id
 
 - `POST /v1/workflows/{id}/approve` — send signal
-  - `handle.signal(AgentWorkflow.approve, step_name, decision)`
+  - Body: `{step_name, decision, selected_option_id?}` (selected_option_id required when analysis produced multiple options)
+  - `handle.signal(AgentWorkflow.approve, step_name, decision, selected_option_id)`
 
 - `GET /v1/workflows/{id}` — query workflow status
   - `handle.query(AgentWorkflow.get_status)`
