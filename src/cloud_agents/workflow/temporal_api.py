@@ -184,4 +184,31 @@ def build_temporal_router(
         await handle.cancel()
         return {"status": "cancelled"}
 
+    if definition_store:
+        @router.post("/definitions", status_code=status.HTTP_201_CREATED)
+        async def submit_definition(body: dict[str, Any]) -> dict[str, Any]:
+            """Submit a workflow definition to the store."""
+            from agents.workflow.definition import WorkflowDefinition
+            defn = WorkflowDefinition.model_validate(body)
+            stored = await definition_store.save(defn)
+            return {"name": stored.name, "version": stored.version}
+
+        @router.get("/definitions")
+        async def list_definitions() -> list[dict[str, Any]]:
+            """List all active workflow definitions."""
+            defs = await definition_store.list_all()
+            return [{"name": d.name, "version": d.version} for d in defs]
+
+        @router.get("/definitions/{name}")
+        async def get_definition(name: str) -> dict[str, Any]:
+            """Get a workflow definition by name."""
+            stored = await definition_store.get(name)
+            if not stored:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Definition '{name}' not found",
+                )
+            return {"name": stored.name, "version": stored.version,
+                    "definition": stored.definition.model_dump()}
+
     return router

@@ -28,15 +28,43 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 WORKFLOW_ENGINE = os.environ.get("WORKFLOW_ENGINE", "temporal")
 
 
+SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
+
+
+def _create_spawner():
+    """Create spawner based on environment config."""
+    if SPAWNER_TYPE == "kubernetes":
+        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
+        service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
+        logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
+        return KubernetesSpawner(namespace=namespace, service_account=service_account)
+    if SPAWNER_TYPE == "podman":
+        from agents.spawner.podman_spawner import PodmanSpawner
+        network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
+        logger.info("Using PodmanSpawner (network=%s)", network)
+        return PodmanSpawner(network=network)
+    logger.info("No spawner configured — sandbox activity will use stub mode")
+    return None
+
+
+AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
+
+
 def _get_auth_dependency():
     """Load auth dependency from the stack configuration.
 
-    Returns None if auth is not configured (e.g. dev/test mode).
+    Returns None in dev/test mode. Fails closed when AUTH_REQUIRED=true.
     """
     try:
         from authentication import get_auth_dependency
         return get_auth_dependency()
     except Exception:
+        if AUTH_REQUIRED:
+            raise RuntimeError(
+                "AUTH_REQUIRED=true but auth dependency failed to initialize. "
+                "Refusing to start with unauthenticated workflow endpoints."
+            )
         logger.warning("Auth dependency not available — endpoints unauthenticated")
         return None
 
@@ -54,7 +82,8 @@ def build_temporal_app(
     Returns:
         FastAPI application with lifespan-managed Temporal client and worker.
     """
-    worker_config = build_worker_config()
+    spawner = _create_spawner()
+    worker_config = build_worker_config(spawner=spawner)
     temporal_client_holder: dict[str, Client] = {}
 
     @asynccontextmanager
