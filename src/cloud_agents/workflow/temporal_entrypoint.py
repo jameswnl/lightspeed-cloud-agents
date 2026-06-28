@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from agents.workflow.definition_store import DefinitionStore
 from agents.workflow.temporal_api import build_temporal_router
 from agents.workflow.temporal_worker import build_worker_config
 
@@ -25,6 +26,19 @@ logger = logging.getLogger(__name__)
 TEMPORAL_URL = os.environ.get("TEMPORAL_URL", "localhost:7233")
 TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 WORKFLOW_ENGINE = os.environ.get("WORKFLOW_ENGINE", "temporal")
+
+
+def _get_auth_dependency():
+    """Load auth dependency from the stack configuration.
+
+    Returns None if auth is not configured (e.g. dev/test mode).
+    """
+    try:
+        from authentication import get_auth_dependency
+        return get_auth_dependency()
+    except Exception:
+        logger.warning("Auth dependency not available — endpoints unauthenticated")
+        return None
 
 
 def build_temporal_app(
@@ -68,7 +82,14 @@ def build_temporal_app(
     app = FastAPI(title="Cloud Agents Workflow Runner (Temporal)", lifespan=lifespan)
 
     placeholder_client = _DeferredClient(temporal_client_holder)
-    router = build_temporal_router(placeholder_client)  # type: ignore[arg-type]
+    definition_store = DefinitionStore()
+
+    auth_dep = _get_auth_dependency()
+    router = build_temporal_router(
+        placeholder_client,  # type: ignore[arg-type]
+        auth_dependency=auth_dep,
+        definition_store=definition_store,
+    )
     app.include_router(router)
 
     @app.get("/healthz")

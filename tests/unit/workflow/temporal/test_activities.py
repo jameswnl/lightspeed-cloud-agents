@@ -140,6 +140,68 @@ class TestRunSandboxStep:
         mock_spawner.destroy.assert_called_once()
 
 
+    @pytest.mark.asyncio
+    async def test_context_includes_prior_steps(self, mocker: MockerFixture) -> None:
+        """Prior step results are passed to build_sandbox_context."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {"ok": True}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_build_ctx = mocker.patch(
+            "agents.workflow.temporal_activities.build_sandbox_context",
+            return_value={},
+        )
+
+        await run_sandbox_step({
+            "step": {"name": "exec", "prompt": "fix", "output_key": "r2",
+                     "role": "execution", "execution_step": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {
+                "r1": {"status": "completed", "output": {"summary": "found issue"}},
+            },
+        }, spawner=mock_spawner)
+
+        call_args = mock_build_ctx.call_args
+        workflow_steps = call_args.kwargs.get("workflow_steps") or call_args[0][0]
+        assert "r1" in workflow_steps
+        assert workflow_steps["r1"].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_readiness_timeout_raises(self, mocker: MockerFixture) -> None:
+        """Readiness timeout raises RuntimeError for Temporal retry."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = False
+
+        with pytest.raises(RuntimeError, match="never became ready"):
+            await run_sandbox_step({
+                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            }, spawner=mock_spawner)
+
+        mock_spawner.destroy.assert_called_once()
+
+
 class TestBuildEscalation:
     """Tests for escalation activity."""
 

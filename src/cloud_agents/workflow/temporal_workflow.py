@@ -17,6 +17,7 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from agents.workflow.conditions import evaluate_condition
+    from agents.workflow.interpolation import interpolate
     from agents.workflow.state import StepResult as LegacyStepResult
     from agents.workflow.state import WorkflowState
     from agents.workflow.temporal_models import (
@@ -147,13 +148,17 @@ class AgentWorkflow:
         timeout_seconds = step.get("timeout_seconds", 600)
         max_retries = step.get("max_retries", 1)
 
+        resolved_step = dict(step)
+        if prompt := step.get("prompt"):
+            resolved_step["prompt"] = self._interpolate_prompt(prompt, input)
+
         self._emit("step.started", step_name)
 
         try:
             result = await workflow.execute_activity(
                 "run_sandbox_step",
                 args=[{
-                    "step": step,
+                    "step": resolved_step,
                     "workflow_id": input.workflow_id,
                     "provider": input.provider.model_dump(),
                     "sandbox_image": input.sandbox_image,
@@ -185,11 +190,8 @@ class AgentWorkflow:
         self._emit(event_type, step_name)
         return step_result
 
-    def _evaluate_condition(self, condition: str) -> bool:
-        """Evaluate a step condition using the shared safe evaluator.
-
-        Fails closed: unparseable conditions return False.
-        """
+    def _build_workflow_state(self) -> WorkflowState:
+        """Build a WorkflowState from current Temporal step results."""
         status_map = {"denied": "failed", "escalated": "failed"}
         legacy_steps = {
             k: LegacyStepResult(
@@ -199,15 +201,32 @@ class AgentWorkflow:
             )
             for k, v in self._steps.items()
         }
-        state = WorkflowState(
+        return WorkflowState(
             workflow_id="eval", workflow_name="eval",
             created_at="", updated_at="",
             steps=legacy_steps,
         )
+
+    def _evaluate_condition(self, condition: str) -> bool:
+        """Evaluate a step condition using the shared safe evaluator.
+
+        Fails closed: unparseable conditions return False.
+        """
         try:
-            return evaluate_condition(condition, state)
+            return evaluate_condition(condition, self._build_workflow_state())
         except ValueError:
             return False
+
+    def _interpolate_prompt(self, template: str, input: WorkflowInput) -> str:
+        """Interpolate prompt template with step outputs and input_prompt."""
+        if input.input_prompt and "{{ input }}" in template:
+            template = template.replace("{{ input }}", input.input_prompt)
+        if "{{" not in template:
+            return template
+        try:
+            return interpolate(template, self._build_workflow_state())
+        except ValueError:
+            return template
 
     def _emit(self, event_type: str, step_name: str) -> None:
         """Emit a workflow event."""

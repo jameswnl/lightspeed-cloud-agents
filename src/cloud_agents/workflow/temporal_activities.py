@@ -14,6 +14,7 @@ import httpx
 from temporalio import activity
 
 from agents.workflow.temporal_context import build_sandbox_context
+from agents.workflow.temporal_models import StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,18 @@ async def run_sandbox_step(
         endpoint = await spawner.spawn(
             pod_name, sandbox_image, env=env_vars, labels=labels,
         )
-        await spawner.wait_ready(endpoint)
+        ready = await spawner.wait_ready(endpoint)
+        if not ready:
+            raise RuntimeError(
+                f"Sandbox pod '{pod_name}' never became ready for step '{step_name}'",
+            )
 
+        prior_steps = {
+            k: StepResult(status=v.get("status", "completed"), output=v.get("output"), error=v.get("error"))
+            for k, v in input.get("context", {}).items()
+        }
         context = build_sandbox_context(
-            workflow_steps={},
+            workflow_steps=prior_steps,
             current_step=step,
         )
 
