@@ -6,6 +6,55 @@ This phase combines the sandbox adaptations and Temporal workflow engine integra
 
 The lightspeed-agentic-sandbox is the agent runtime. Temporal is the workflow orchestrator. The existing spawner abstraction (K8s/Podman) creates sandbox pods per step.
 
+## Contracts (from review round 1)
+
+### Approval Timeout Contract
+
+Approval steps declare timeout via `timeout_seconds` (default from config `approval.default_timeout_seconds`, default 86400 = 24h). Enforced by `workflow.wait_condition(..., timeout=timedelta(seconds=step.timeout_seconds))`. On timeout:
+- Step status: `"denied"` with `output.reason = "timeout"`
+- Event: `step.denied` emitted
+- Workflow continues to next step (condition evaluation decides whether to proceed)
+
+### Approved Option Selection Contract
+
+Analysis steps produce options with a stable `id` field. The approval step emits the selected option `id` (not just approve/deny). Context building uses the approval output's `selected_option_id` to look up the matching option from the analysis step, not hardcoded `options[0]`:
+
+```python
+# Approval signal includes selected option
+await handle.signal(AgentWorkflow.approve, step_name, "approved", selected_option_id="opt-2")
+
+# Context builder resolves approved option by id
+approval_output = workflow_steps[approval_key].output
+selected_id = approval_output.get("selected_option_id")
+analysis_options = workflow_steps[analysis_key].output.get("options", [])
+approved_option = next((o for o in analysis_options if o.get("id") == selected_id), analysis_options[0])
+```
+
+### Crash-Boundary Cleanup Contract
+
+Three cleanup mechanisms, in order of priority:
+1. **Normal path**: `finally: spawner.destroy(pod_name)` in the activity
+2. **Worker crash**: spawned pods carry labels `cloud-agents/workflow-id`, `cloud-agents/step-name`, `cloud-agents/attempt`. A label-based reconciler (background task or manual `kubectl delete pods -l cloud-agents/workflow-id=X`) cleans orphans
+3. **Activity timeout**: Temporal cancels the activity after `start_to_close_timeout`. The `finally` block runs on cancellation. If the worker is dead, mechanism 2 applies
+
+Tests: `test_crash_after_spawn_cleanup` (verify label-based cleanup finds orphans), `test_cancel_while_running` (verify activity cancellation triggers destroy)
+
+### API Version Contract
+
+Phase 1 uses `/v1/workflows/*` — same as the architecture doc. No v2 prefix. The `WORKFLOW_ENGINE=temporal` env var selects the Temporal backend; the API surface is the same regardless of engine.
+
+### Sandbox Env Var & Credential Contract
+
+Single authoritative contract (from `temporal-sandbox-architecture.md` env var table):
+
+**Provider selection**: `LIGHTSPEED_PROVIDER` (not `LIGHTSPEED_AGENT_PROVIDER`)
+**Model selection**: `LIGHTSPEED_MODEL`
+**Credentials**:
+- **K8s**: `SecretKeyRef` → env var or file mount at `/var/run/secrets/llm-credentials/`
+- **Podman**: host env propagation. The Podman spawner reads credentials from the host environment and passes them as container env vars. This is an accepted compromise — Podman deployments are single-host with a single trust domain. The credentials are not in pod specs (no `kubectl describe` exposure) because there is no kubectl.
+
+Provider-specific credential env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) are set by the spawner from the `credentials_secret` field in the workflow YAML.
+
 ## Sandbox Adaptations (upstream PRs)
 
 ### Task 1: Add `executionResult` handling to sandbox context formatting
@@ -170,22 +219,22 @@ New file: `src/agents/workflow/temporal_worker.py`
 
 Add to `src/agents/workflow/temporal_api.py` (new file):
 
-- `POST /v2/workflows/run` — start workflow via Temporal Client
+- `POST /v1/workflows/run` — start workflow via Temporal Client
   - Parse workflow name or inline YAML
   - Resolve definition from registry
   - `temporal_client.start_workflow(AgentWorkflow.run, ...)`
   - Return 202 with workflow_id
 
-- `POST /v2/workflows/{id}/approve` — send signal
+- `POST /v1/workflows/{id}/approve` — send signal
   - `handle.signal(AgentWorkflow.approve, step_name, decision)`
 
-- `GET /v2/workflows/{id}` — query workflow status
+- `GET /v1/workflows/{id}` — query workflow status
   - `handle.query(AgentWorkflow.get_status)`
 
-- `GET /v2/workflows/{id}/events` — SSE via query polling (1s)
+- `GET /v1/workflows/{id}/events` — SSE via query polling (1s)
   - Poll `get_status`, yield new events, stop on terminal
 
-- `POST /v2/workflows/{id}/cancel` — cancel workflow
+- `POST /v1/workflows/{id}/cancel` — cancel workflow
   - `handle.cancel()`
 
 Auth: use stack's `get_auth_dependency()` on all endpoints.
@@ -234,6 +283,10 @@ Using Temporal's `WorkflowEnvironment` test harness:
 - `test_context_building` — verify `build_sandbox_context` output shape
 - `test_content_hash_naming` — same inputs → same pod name
 - `test_pre_deployed_skips_spawn` — spawn: pre-deployed calls registry endpoint
+- `test_approval_timeout_produces_denied` — no signal within timeout → denied status + event
+- `test_approved_option_selection_by_id` — approval selects option by id, not hardcoded [0]
+- `test_crash_after_spawn_labels_for_cleanup` — spawned pod has workflow labels for reconciliation
+- `test_cancel_activity_triggers_destroy` — activity cancellation runs finally block
 
 ### Task 16: E2E tests
 
@@ -242,6 +295,9 @@ Using Temporal's `WorkflowEnvironment` test harness:
 - Deploy worker + FastAPI with `WORKFLOW_ENGINE=temporal`
 - Submit 2-step workflow → sandbox pods spawn → LLM runs → results
 - Verify approval signal flow
+- Failure path: HTTP 502 → Temporal retry → eventual success
+- Failure path: retry exhaustion → escalation → cleanup verified
+- Crash boundary: label-based orphan cleanup after worker kill
 
 **Podman**:
 - `docker-compose.temporal.yaml` starts Temporal + PostgreSQL
