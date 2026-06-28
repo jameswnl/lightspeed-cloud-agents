@@ -200,17 +200,9 @@ def create_app(
                     ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
                     ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
                     await store.complete_run(run_id, result)
-                    from agents.runtime.callback import get_callback
-                    cb = get_callback()
-                    if cb:
-                        await cb.post_result("completed", output=result.output)
                 else:
                     ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
                     await store.fail_run(run_id, result)
-                    from agents.runtime.callback import get_callback
-                    cb = get_callback()
-                    if cb:
-                        await cb.post_result("failed", error=result.error)
             except asyncio.TimeoutError as exc:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
                 set_span_error(span, exc)
@@ -223,10 +215,6 @@ def create_app(
                     error=f"Agent run timed out after {app.state.run_timeout}s",
                 )
                 await store.fail_run(run_id, error_response)
-                from agents.runtime.callback import get_callback
-                cb = get_callback()
-                if cb:
-                    await cb.post_result("failed", error=error_response.error)
             except Exception as exc:
                 ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
                 set_span_error(span, exc)
@@ -239,10 +227,6 @@ def create_app(
                     error=f"{type(exc).__name__}: {exc}",
                 )
                 await store.fail_run(run_id, error_response)
-                from agents.runtime.callback import get_callback
-                cb = get_callback()
-                if cb:
-                    await cb.post_result("failed", error=error_response.error)
             finally:
                 span.end()
                 app.state.last_heartbeat = time.monotonic()

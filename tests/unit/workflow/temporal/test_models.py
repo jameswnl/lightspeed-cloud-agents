@@ -5,7 +5,6 @@ import pytest
 from agents.workflow.temporal_models import (
     ProviderConfig,
     SandboxStepInput,
-    SkillsConfig,
     StepResult,
     WorkflowEvent,
     WorkflowInput,

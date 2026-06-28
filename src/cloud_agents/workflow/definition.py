@@ -41,6 +41,12 @@ class WorkflowStepSpec(BaseModel):
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
     spawn_config: Optional[SpawnConfig] = None
+    runtime: Literal["sandbox", "generic"] = "sandbox"
+    role: Optional[Literal["analysis", "execution", "verification"]] = None
+    instructions: Optional[str] = None
+    output_schema: Optional[dict[str, Any]] = None
+    service_account: Optional[str] = None
+    target_namespaces: Optional[list[str]] = None
 
 
 class WorkflowSpec(BaseModel):
@@ -55,6 +61,32 @@ class WorkflowSpec(BaseModel):
     steps: list[WorkflowStepSpec] = Field(..., min_length=1)
 
 
+class ProviderSpec(BaseModel):
+    """Provider configuration at the workflow level.
+
+    Attributes:
+        name: Provider name (openai, claude, gemini).
+        model: Model identifier.
+        credentials_secret: K8s secret name or env var prefix for credentials.
+    """
+
+    name: str
+    model: str
+    credentials_secret: str
+
+
+class SkillsSpec(BaseModel):
+    """Skills configuration for sandbox agents.
+
+    Attributes:
+        image: OCI image containing skills.
+        paths: Paths within the image to mount.
+    """
+
+    image: str
+    paths: Optional[list[str]] = None
+
+
 class WorkflowDefinition(BaseModel):
     """Top-level workflow definition from workflow.yaml.
 
@@ -63,9 +95,13 @@ class WorkflowDefinition(BaseModel):
         kind: Must be AgentWorkflow.
         metadata: Workflow metadata including name.
         spec: Full workflow specification.
+        provider: Default provider for all steps.
+        skills: Skills OCI image configuration.
     """
 
     apiVersion: str
     kind: Literal["AgentWorkflow"]
     metadata: dict[str, Any]
     spec: WorkflowSpec
+    provider: Optional[ProviderSpec] = None
+    skills: Optional[SkillsSpec] = None

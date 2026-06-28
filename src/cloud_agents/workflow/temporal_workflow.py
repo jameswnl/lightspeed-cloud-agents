@@ -16,6 +16,9 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
+    from agents.workflow.conditions import evaluate_condition
+    from agents.workflow.state import StepResult as LegacyStepResult
+    from agents.workflow.state import WorkflowState
     from agents.workflow.temporal_models import (
         StepResult,
         WorkflowEvent,
@@ -25,7 +28,7 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
-@workflow.defn
+@workflow.defn(sandboxed=False)
 class AgentWorkflow:
     """Interprets any workflow YAML at runtime."""
 
@@ -56,10 +59,26 @@ class AgentWorkflow:
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
-        for step in steps:
-            result = await self._execute_step(step, input)
-            if result and result.status in ("failed", "denied"):
-                break
+        i = 0
+        while i < len(steps):
+            step = steps[i]
+            group = step.get("parallel_group")
+
+            if group:
+                group_steps = []
+                while i < len(steps) and steps[i].get("parallel_group") == group:
+                    group_steps.append(steps[i])
+                    i += 1
+                results = await asyncio.gather(
+                    *[self._execute_step(s, input) for s in group_steps]
+                )
+                if any(r and r.status in ("failed", "denied") for r in results):
+                    break
+            else:
+                result = await self._execute_step(step, input)
+                if result and result.status in ("failed", "denied"):
+                    break
+                i += 1
 
         return WorkflowOutput(steps=self._steps)
 
@@ -71,8 +90,7 @@ class AgentWorkflow:
         output_key = step["output_key"]
 
         if condition := step.get("condition"):
-            from agents.workflow.conditions import evaluate_condition
-            if not evaluate_condition(condition, self._steps):
+            if not self._evaluate_condition(condition):
                 self._steps[output_key] = StepResult(status="skipped")
                 self._emit("step.skipped", step_name)
                 return None
@@ -166,6 +184,30 @@ class AgentWorkflow:
         event_type = "step.completed" if step_result.status == "completed" else "step.failed"
         self._emit(event_type, step_name)
         return step_result
+
+    def _evaluate_condition(self, condition: str) -> bool:
+        """Evaluate a step condition using the shared safe evaluator.
+
+        Fails closed: unparseable conditions return False.
+        """
+        status_map = {"denied": "failed", "escalated": "failed"}
+        legacy_steps = {
+            k: LegacyStepResult(
+                step_name=k,
+                status=status_map.get(v.status, v.status),
+                output=v.output,
+            )
+            for k, v in self._steps.items()
+        }
+        state = WorkflowState(
+            workflow_id="eval", workflow_name="eval",
+            created_at="", updated_at="",
+            steps=legacy_steps,
+        )
+        try:
+            return evaluate_condition(condition, state)
+        except ValueError:
+            return False
 
     def _emit(self, event_type: str, step_name: str) -> None:
         """Emit a workflow event."""

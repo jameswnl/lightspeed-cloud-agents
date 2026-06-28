@@ -7,24 +7,20 @@ to make them pass.
 
 from __future__ import annotations
 
-import asyncio
-from datetime import timedelta
-from unittest.mock import AsyncMock
-
 import pytest
-from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from agents.workflow.temporal_activities import (
+    build_escalation_activity,
+    run_sandbox_step,
+)
 from agents.workflow.temporal_models import (
     ProviderConfig,
-    StepResult,
     WorkflowInput,
-    WorkflowOutput,
     WorkflowStatus,
 )
 from agents.workflow.temporal_workflow import AgentWorkflow
-from agents.workflow.temporal_activities import run_sandbox_step, build_escalation_activity
 
 
 def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowInput:
@@ -44,9 +40,11 @@ def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowI
 
 @pytest.fixture
 async def env():
-    """Create a Temporal test environment."""
+    """Create a Temporal test environment with time skipping."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
         yield env
+
+
 
 
 class TestSequentialWorkflow:
@@ -66,6 +64,7 @@ class TestSequentialWorkflow:
             env.client, task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
+
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -96,6 +95,7 @@ class TestConditionEvaluation:
             env.client, task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
+
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -108,6 +108,69 @@ class TestConditionEvaluation:
         assert result.steps["r2"].status == "skipped"
 
 
+class TestConditionFailClosed:
+    """Tests that invalid conditions fail closed (skip step)."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_condition_skips_step(self, env: WorkflowEnvironment) -> None:
+        """Unparseable condition skips the step instead of running it."""
+        steps = [
+            {"name": "step1", "type": "agent", "output_key": "r1",
+             "prompt": "check", "runtime": "sandbox", "spawn": "ephemeral"},
+            {"name": "step2", "type": "agent", "output_key": "r2",
+             "prompt": "fix", "runtime": "sandbox", "spawn": "ephemeral",
+             "condition": "this is not a valid condition expression"},
+        ]
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[run_sandbox_step, build_escalation_activity],
+
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run,
+                _make_input(steps),
+                id="wf-failclosed-1",
+                task_queue="test-q",
+            )
+
+        assert result.steps["r1"].status == "completed"
+        assert result.steps["r2"].status == "skipped"
+
+
+class TestParallelGroup:
+    """Tests for parallel group execution."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_steps_run(self, env: WorkflowEnvironment) -> None:
+        """Steps in the same parallel_group run concurrently."""
+        steps = [
+            {"name": "a", "type": "agent", "output_key": "ra",
+             "prompt": "check-a", "runtime": "sandbox", "spawn": "ephemeral",
+             "parallel_group": "diag"},
+            {"name": "b", "type": "agent", "output_key": "rb",
+             "prompt": "check-b", "runtime": "sandbox", "spawn": "ephemeral",
+             "parallel_group": "diag"},
+        ]
+
+        async with Worker(
+            env.client, task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[run_sandbox_step, build_escalation_activity],
+
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run,
+                _make_input(steps),
+                id="wf-parallel-1",
+                task_queue="test-q",
+            )
+
+        assert result.steps["ra"].status == "completed"
+        assert result.steps["rb"].status == "completed"
+
+
 class TestApprovalFlow:
     """Tests for human approval via signals."""
 
@@ -116,13 +179,15 @@ class TestApprovalFlow:
         """Sending an approve signal unblocks a paused workflow."""
         steps = [
             {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval"},
+             "message": "OK?", "output_key": "approval",
+             "timeout_seconds": 86400},
         ]
 
         async with Worker(
             env.client, task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
+
         ):
             handle = await env.client.start_workflow(
                 AgentWorkflow.run,
@@ -131,8 +196,7 @@ class TestApprovalFlow:
                 task_queue="test-q",
             )
 
-            await asyncio.sleep(0.5)
-            await handle.signal(AgentWorkflow.approve, "approval", "approved", None)
+            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
             result = await handle.result()
 
         assert result.steps["approval"].status == "completed"
@@ -151,6 +215,7 @@ class TestApprovalFlow:
             env.client, task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
+
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -178,6 +243,7 @@ class TestQueryStatus:
             env.client, task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
+
         ):
             handle = await env.client.start_workflow(
                 AgentWorkflow.run,
@@ -186,11 +252,9 @@ class TestQueryStatus:
                 task_queue="test-q",
             )
 
-            await asyncio.sleep(0.5)
             status = await handle.query(AgentWorkflow.get_status)
-
             assert isinstance(status, WorkflowStatus)
             assert len(status.events) > 0
 
-            await handle.signal(AgentWorkflow.approve, "approval", "approved", None)
+            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
             await handle.result()
