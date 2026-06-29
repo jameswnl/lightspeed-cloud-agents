@@ -160,7 +160,7 @@ T12, T13 (upstream) — independent, submit early
 
 ### Kind-based smoke (weekly / pre-release)
 - `helm install` on Kind cluster → all pods Ready
-- Workflow-runner `/healthz`, `/readyz`, `/metrics` respond correctly
+- Workflow-runner `/livez`, `/readyz`, `/metrics` respond correctly (`/healthz` retained as compatibility alias)
 - NetworkPolicy: sandbox pod can reach LLM endpoint, cannot reach arbitrary hosts
 - TLS: workflow-runner connects to Temporal with mTLS when configured
 - Probes: `/livez` returns 200 when process alive; `/readyz` returns 200 when Temporal reachable, 503 otherwise
