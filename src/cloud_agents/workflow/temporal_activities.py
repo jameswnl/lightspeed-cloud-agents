@@ -23,6 +23,16 @@ from agents.workflow.temporal_models import StepResult
 logger = logging.getLogger(__name__)
 
 
+def _normalize_config_ref(ref: str) -> str:
+    """Normalize a config ref to a valid env var segment.
+
+    Replaces hyphens and other non-alphanumeric chars with underscores.
+    e.g. 'slack-approval-channel' -> 'SLACK_APPROVAL_CHANNEL'
+    """
+    import re
+    return re.sub(r"[^a-zA-Z0-9]", "_", ref).upper()
+
+
 def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
     """Compute a content-hash pod name for idempotent spawning.
 
@@ -168,15 +178,13 @@ async def send_approval_notification(input: dict[str, Any]) -> dict[str, Any]:
         notifier_type = config.get("type", "null")
         if notifier_type == "slack":
             from agents.workflow.notifier import SlackNotifier
-            webhook_url = os.environ.get(
-                f"NOTIFIER_SLACK_{config.get('config_ref', 'DEFAULT')}_WEBHOOK_URL".upper(), "",
-            )
+            ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
+            webhook_url = os.environ.get(f"NOTIFIER_SLACK_{ref}_WEBHOOK_URL", "")
             notifier = SlackNotifier(webhook_url=webhook_url)
         elif notifier_type == "webhook":
             from agents.workflow.notifier import WebhookNotifier
-            url = os.environ.get(
-                f"NOTIFIER_WEBHOOK_{config.get('config_ref', 'DEFAULT')}_URL".upper(), "",
-            )
+            ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
+            url = os.environ.get(f"NOTIFIER_WEBHOOK_{ref}_URL", "")
             notifier = WebhookNotifier(url=url)
         else:
             notifier = NullNotifier()
@@ -226,9 +234,8 @@ async def build_escalation_activity(
         config_type = (escalation_config or {}).get("type", "log")
         if config_type == "webhook":
             from agents.workflow.escalation import WebhookPackager
-            url = os.environ.get(
-                f"ESCALATION_WEBHOOK_{(escalation_config or {}).get('config_ref', 'DEFAULT')}_URL".upper(), "",
-            )
+            ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
+            url = os.environ.get(f"ESCALATION_WEBHOOK_{ref}_URL", "")
             packager = WebhookPackager(url=url)
         else:
             packager = LogPackager()
