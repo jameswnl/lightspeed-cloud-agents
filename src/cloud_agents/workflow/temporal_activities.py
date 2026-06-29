@@ -126,7 +126,7 @@ async def _run_sandbox_step_inner(
             service_account=sa,
             read_only=advisory,
         )
-        ready = await spawner.wait_ready(endpoint)
+        ready = await spawner.wait_ready(endpoint, health_path="/health")
         if not ready:
             raise RuntimeError(
                 f"Sandbox pod '{pod_name}' never became ready for step '{step_name}'",

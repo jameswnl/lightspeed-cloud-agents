@@ -69,7 +69,10 @@ class KubernetesSpawner(AgentSpawner):
         try:
             from kubernetes import client, config
 
-            config.load_incluster_config()
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
             batch = client.BatchV1Api()
             core = client.CoreV1Api()
         except Exception as exc:
@@ -239,7 +242,10 @@ class KubernetesSpawner(AgentSpawner):
         try:
             from kubernetes import client, config
 
-            config.load_incluster_config()
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
             batch = client.BatchV1Api()
             core = client.CoreV1Api()
 

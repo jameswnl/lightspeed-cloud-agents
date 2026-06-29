@@ -108,7 +108,7 @@ class PodmanSpawner(AgentSpawner):
                 "detach": True,
                 "environment": env,
                 "network": self._network,
-                "volumes": volumes or None,
+                "volumes": volumes if volumes else {},
                 "ports": {"8080/tcp": None},
                 "labels": labels or {},
                 "remove": False,
