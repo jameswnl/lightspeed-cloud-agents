@@ -169,9 +169,15 @@ async def _run_sandbox_step_inner(
                 "output": data.get("output"),
             }
 
+        output = data.get("output", {})
+        for k, v in data.items():
+            if k not in ("success", "output", "summary"):
+                output[k] = v
+        if summary := data.get("summary"):
+            output["summary"] = summary
         return {
             "status": "completed",
-            "output": data.get("output", {}),
+            "output": output,
         }
 
     finally:
