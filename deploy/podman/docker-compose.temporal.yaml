@@ -1,0 +1,74 @@
+# Temporal workflow engine stack for cloud agents.
+#
+# Usage:
+#   podman-compose -f deploy/podman/docker-compose.temporal.yaml up -d
+#   podman-compose -f deploy/podman/docker-compose.temporal.yaml down
+#
+# Temporal UI: http://localhost:8233
+# Temporal gRPC: localhost:7233
+# Workflow runner API: http://localhost:8080
+
+services:
+  temporal-db:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  temporal-server:
+    image: docker.io/temporalio/auto-setup:latest
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-db
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "namespace", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  temporal-ui:
+    image: docker.io/temporalio/ui:latest
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal-server:7233
+    ports:
+      - "8233:8080"
+
+  workflow-runner:
+    image: localhost/cloud-agents-runner:latest
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    environment:
+      TEMPORAL_URL: temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      WORKFLOW_SPAWNER: podman
+      SPAWNER_NETWORK: cloud-agents-temporal
+      AUTH_REQUIRED: "false"
+    ports:
+      - "8080:8080"
+    command: >
+      uvicorn agents.workflow.temporal_entrypoint:app
+      --host 0.0.0.0 --port 8080
+
+volumes:
+  temporal-db-data:

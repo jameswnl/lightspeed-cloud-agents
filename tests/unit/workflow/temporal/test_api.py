@@ -168,6 +168,51 @@ class TestDefinitionRoutes:
         assert isinstance(response.json(), list)
 
 
+class TestAdvisoryPropagation:
+    """Tests for advisory flag propagation through the API."""
+
+    def test_advisory_from_request(
+        self, client: TestClient, mock_client: Any,
+    ) -> None:
+        """Advisory flag from request is passed to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1", "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                },
+                "provider": {"name": "openai", "model": "gpt-4",
+                             "credentials_secret": "k"},
+                "advisory": True,
+            },
+        )
+        assert response.status_code == 202
+        call_args = mock_client.start_workflow.call_args
+        wf_input = call_args[0][1]
+        assert wf_input.advisory is True
+
+    def test_advisory_defaults_false(
+        self, client: TestClient, mock_client: Any,
+    ) -> None:
+        """Advisory defaults to False when not set."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1", "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                },
+                "provider": {"name": "openai", "model": "gpt-4",
+                             "credentials_secret": "k"},
+            },
+        )
+        assert response.status_code == 202
+        call_args = mock_client.start_workflow.call_args
+        wf_input = call_args[0][1]
+        assert wf_input.advisory is False
+
+
 class TestAuthEnforcement:
     """Tests that auth dependency is enforced when provided."""
 

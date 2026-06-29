@@ -1,0 +1,93 @@
+# Temporal Server deployment for Kind cluster.
+#
+# Prerequisites:
+#   - PostgreSQL must be running (deploy/kind/postgres.yaml)
+#   - Create the temporal database: kubectl exec postgres-0 -- psql -U postgres -c "CREATE DATABASE temporal;"
+#
+# Usage:
+#   kubectl apply -f deploy/kind/temporal.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-server
+  labels:
+    app: temporal-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-server
+  template:
+    metadata:
+      labels:
+        app: temporal-server
+    spec:
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:latest
+          ports:
+            - containerPort: 7233
+          env:
+            - name: DB
+              value: postgres12
+            - name: DB_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PWD
+              value: postgres
+            - name: POSTGRES_SEEDS
+              value: postgres
+          readinessProbe:
+            exec:
+              command: ["temporal", "operator", "namespace", "list"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+spec:
+  selector:
+    app: temporal-server
+  ports:
+    - port: 7233
+      targetPort: 7233
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-ui
+  labels:
+    app: temporal-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-ui
+  template:
+    metadata:
+      labels:
+        app: temporal-ui
+    spec:
+      containers:
+        - name: ui
+          image: temporalio/ui:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: temporal:7233
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-ui
+spec:
+  selector:
+    app: temporal-ui
+  ports:
+    - port: 8080
+      targetPort: 8080

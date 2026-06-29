@@ -34,6 +34,7 @@ class RunWorkflowRequest(BaseModel):
     sandbox_image: str = "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
     skills_image: str | None = None
     skills_paths: list[str] | None = None
+    advisory: bool | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -101,6 +102,14 @@ def build_temporal_router(
                 detail="Provider configuration is required",
             )
 
+        if request.advisory is not None:
+            advisory = request.advisory
+        elif request.workflow_name and definition_store:
+            stored_def = await definition_store.get(request.workflow_name)
+            advisory = stored_def.definition.advisory if stored_def else False
+        else:
+            advisory = False
+
         workflow_id = f"wf-{uuid.uuid4().hex[:12]}"
         workflow_input = WorkflowInput(
             definition=definition,
@@ -110,6 +119,7 @@ def build_temporal_router(
             sandbox_image=request.sandbox_image,
             skills_image=request.skills_image,
             skills_paths=request.skills_paths,
+            advisory=advisory,
         )
 
         await temporal_client.start_workflow(

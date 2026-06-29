@@ -105,3 +105,4 @@ class WorkflowDefinition(BaseModel):
     spec: WorkflowSpec
     provider: Optional[ProviderSpec] = None
     skills: Optional[SkillsSpec] = None
+    advisory: bool = False
