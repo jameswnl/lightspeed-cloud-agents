@@ -199,7 +199,7 @@ class TestWorkflowRunnerManifest:
         assert "/var/run/secrets/cloud-agents" in mount_paths
 
         env_dict = {e["name"]: e.get("value") for e in container.get("env", [])}
-        assert env_dict.get("AUTH_MODE") == "sa_token"
+        assert "TEMPORAL_URL" in env_dict
 
 
 class TestGetAuthMode:

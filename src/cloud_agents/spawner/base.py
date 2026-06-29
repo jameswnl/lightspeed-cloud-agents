@@ -113,6 +113,7 @@ class AgentSpawner(ABC):
             endpoint = await self._do_spawn(
                 agent_name, image, env or {}, config, labels,
                 skills_image=skills_image, skills_paths=skills_paths,
+                service_account=service_account,
             )
             return endpoint
         except Exception:
@@ -127,6 +128,7 @@ class AgentSpawner(ABC):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        service_account: str | None = None,
     ) -> str:
         """Implementation-specific pod creation."""
 

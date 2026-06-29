@@ -146,6 +146,21 @@ class AgentWorkflow:
         self._emit("workflow.paused", step_name)
 
         try:
+            await workflow.execute_activity(
+                "send_approval_notification",
+                args=[{
+                    "workflow_id": input.workflow_id,
+                    "step_name": step_name,
+                    "message": step.get("message", ""),
+                    "notifier_config": input.notifier_config,
+                }],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        except Exception:
+            pass
+
+        try:
             await workflow.wait_condition(
                 lambda: step_name in self._approval_decisions,
                 timeout=timedelta(seconds=timeout_seconds),
@@ -224,7 +239,11 @@ class AgentWorkflow:
 
             escalation = await workflow.execute_activity(
                 "build_escalation_activity",
-                args=[{k: v.model_dump() for k, v in self._steps.items()}],
+                args=[
+                    {k: v.model_dump() for k, v in self._steps.items()},
+                    input.definition.get("metadata", {}).get("name", "workflow"),
+                    input.escalation_config,
+                ],
                 start_to_close_timeout=timedelta(seconds=60),
             )
             self._steps["escalation"] = StepResult(**escalation) if isinstance(escalation, dict) else escalation

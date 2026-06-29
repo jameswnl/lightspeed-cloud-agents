@@ -73,6 +73,8 @@ class WorkflowInput(BaseModel):
     skills_paths: Optional[list[str]] = None
     approval_policy: Optional[dict[str, Any]] = None
     advisory: bool = False
+    notifier_config: Optional[dict[str, Any]] = None
+    escalation_config: Optional[dict[str, Any]] = None
 
 
 class WorkflowOutput(BaseModel):

@@ -83,10 +83,16 @@ async def run_sandbox_step(
     logger.info("Running sandbox step '%s' (pod=%s)", step_name, pod_name)
     endpoint = None
     try:
+        sa = permissions.get("service_account")
+        advisory = step.get("advisory", False)
+        if advisory and not sa:
+            sa = "advisory-sa"
+
         endpoint = await spawner.spawn(
             pod_name, sandbox_image, env=env_vars, labels=labels,
             skills_image=input.get("skills_image"),
             skills_paths=input.get("skills_paths"),
+            service_account=sa,
         )
         ready = await spawner.wait_ready(endpoint)
         if not ready:
@@ -173,7 +179,11 @@ async def send_approval_notification(input: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
-async def build_escalation_activity(steps: dict[str, Any]) -> dict[str, Any]:
+async def build_escalation_activity(
+    steps: dict[str, Any],
+    workflow_name: str = "workflow",
+    escalation_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Package workflow context for escalation handoff.
 
     Primary artifact is always returned in the result (queryable via
@@ -200,7 +210,7 @@ async def build_escalation_activity(steps: dict[str, Any]) -> dict[str, Any]:
 
         from agents.workflow.escalation import EscalationPackage
         pkg = EscalationPackage(
-            workflow_name="workflow",
+            workflow_name=workflow_name,
             step_name=failed_steps[0]["step"] if failed_steps else "unknown",
             timestamp=datetime.now(tz=UTC).isoformat(),
             escalation=result["output"],

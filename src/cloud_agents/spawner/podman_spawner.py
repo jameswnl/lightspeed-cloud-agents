@@ -48,6 +48,7 @@ class PodmanSpawner(AgentSpawner):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        service_account: str | None = None,
     ) -> str:
         """Create a Podman container for the agent."""
         try:
@@ -58,8 +59,25 @@ class PodmanSpawner(AgentSpawner):
         container_name = f"agent-{agent_name}"
 
         volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
+        skills_volume_name = None
 
         with PodmanClient() as client:
+            if skills_image:
+                skills_volume_name = f"skills-{agent_name}"
+                try:
+                    client.volumes.create({"Name": skills_volume_name})
+                except Exception:
+                    pass
+                copy_paths = skills_paths or ["/skills"]
+                copy_cmd = " && ".join(f"cp -r {p} /skills-data/" for p in copy_paths)
+                client.containers.run(
+                    skills_image,
+                    command=["sh", "-c", copy_cmd],
+                    volumes={skills_volume_name: {"bind": "/skills-data", "mode": "rw"}},
+                    remove=True,
+                    detach=False,
+                )
+                volumes[skills_volume_name] = {"bind": "/app/skills", "mode": "ro"}
             try:
                 existing = client.containers.get(container_name)
                 if existing.status == "running":
@@ -121,5 +139,11 @@ class PodmanSpawner(AgentSpawner):
                     logger.info("Destroyed Podman container '%s'", container_name)
                 except Exception as exc:
                     logger.warning("Failed to destroy container '%s': %s", container_name, exc)
+                try:
+                    skills_vol = client.volumes.get(f"skills-{agent_name}")
+                    skills_vol.remove()
+                    logger.info("Removed skills volume 'skills-%s'", agent_name)
+                except Exception:
+                    pass
         except ImportError:
             logger.warning("podman-py not installed, cannot destroy container")

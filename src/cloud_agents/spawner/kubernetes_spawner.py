@@ -55,6 +55,7 @@ class KubernetesSpawner(AgentSpawner):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        service_account: str | None = None,
     ) -> str:
         """Create a K8s Job for the agent.
 
@@ -176,7 +177,7 @@ class KubernetesSpawner(AgentSpawner):
                     ),
                     spec=client.V1PodSpec(
                         restart_policy="Never",
-                        service_account_name=self._service_account,
+                        service_account_name=service_account or self._service_account,
                         automount_service_account_token=False,
                         init_containers=init_containers,
                         containers=[
