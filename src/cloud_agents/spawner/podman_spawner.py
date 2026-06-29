@@ -46,6 +46,8 @@ class PodmanSpawner(AgentSpawner):
         self, agent_name: str, image: str, env: dict[str, str],
         config: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
+        skills_image: str | None = None,
+        skills_paths: list[str] | None = None,
     ) -> str:
         """Create a Podman container for the agent."""
         try:

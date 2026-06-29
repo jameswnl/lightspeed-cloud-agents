@@ -80,6 +80,9 @@ class AgentSpawner(ABC):
         env: dict[str, str] | None = None,
         config: SpawnConfig | None = None,
         labels: dict[str, str] | None = None,
+        skills_image: str | None = None,
+        skills_paths: list[str] | None = None,
+        service_account: str | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -89,6 +92,9 @@ class AgentSpawner(ABC):
             env: Environment variables for the pod.
             config: Optional per-step resource configuration.
             labels: Optional metadata labels for the spawned resource.
+            skills_image: Optional OCI image containing skills to mount.
+            skills_paths: Paths within skills image to copy.
+            service_account: Override ServiceAccount for this pod.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -104,7 +110,10 @@ class AgentSpawner(ABC):
             self._active_count += 1
 
         try:
-            endpoint = await self._do_spawn(agent_name, image, env or {}, config, labels)
+            endpoint = await self._do_spawn(
+                agent_name, image, env or {}, config, labels,
+                skills_image=skills_image, skills_paths=skills_paths,
+            )
             return endpoint
         except Exception:
             async with self._lock:
@@ -116,6 +125,8 @@ class AgentSpawner(ABC):
         self, agent_name: str, image: str, env: dict[str, str],
         config: SpawnConfig | None = None,
         labels: dict[str, str] | None = None,
+        skills_image: str | None = None,
+        skills_paths: list[str] | None = None,
     ) -> str:
         """Implementation-specific pod creation."""
 

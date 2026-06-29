@@ -85,6 +85,8 @@ async def run_sandbox_step(
     try:
         endpoint = await spawner.spawn(
             pod_name, sandbox_image, env=env_vars, labels=labels,
+            skills_image=input.get("skills_image"),
+            skills_paths=input.get("skills_paths"),
         )
         ready = await spawner.wait_ready(endpoint)
         if not ready:

@@ -53,6 +53,8 @@ class KubernetesSpawner(AgentSpawner):
         self, agent_name: str, image: str, env: dict[str, str],
         config_override: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
+        skills_image: str | None = None,
+        skills_paths: list[str] | None = None,
     ) -> str:
         """Create a K8s Job for the agent.
 
@@ -117,6 +119,30 @@ class KubernetesSpawner(AgentSpawner):
         if labels:
             pod_labels.update(labels)
 
+        init_containers = None
+        if skills_image:
+            copy_paths = skills_paths or ["/skills"]
+            copy_cmd = " && ".join(f"cp -r {p} /skills-data/" for p in copy_paths)
+            volumes.append(client.V1Volume(
+                name="skills-data",
+                empty_dir=client.V1EmptyDirVolumeSource(),
+            ))
+            volume_mounts.append(client.V1VolumeMount(
+                name="skills-data", mount_path="/app/skills",
+            ))
+            init_containers = [
+                client.V1Container(
+                    name="skills-loader",
+                    image=skills_image,
+                    command=["sh", "-c", copy_cmd],
+                    volume_mounts=[
+                        client.V1VolumeMount(
+                            name="skills-data", mount_path="/skills-data",
+                        ),
+                    ],
+                ),
+            ]
+
         if self._projected_sa_token:
             volumes.append(client.V1Volume(
                 name="sa-token",
@@ -152,6 +178,7 @@ class KubernetesSpawner(AgentSpawner):
                         restart_policy="Never",
                         service_account_name=self._service_account,
                         automount_service_account_token=False,
+                        init_containers=init_containers,
                         containers=[
                             client.V1Container(
                                 name="agent",
