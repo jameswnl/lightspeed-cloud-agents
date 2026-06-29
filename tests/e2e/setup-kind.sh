@@ -87,12 +87,9 @@ if [[ "${1:-}" == "--run" ]]; then
     echo "Starting port-forward and running tests..."
     kubectl port-forward svc/temporal 7233:7233 &
     PF_PID=$!
-    sleep 5
+    trap 'kill $PF_PID 2>/dev/null' EXIT
 
+    sleep 5
     cd "$REPO_ROOT"
     uv run pytest tests/e2e/temporal/ -v
-    TEST_EXIT=$?
-
-    kill $PF_PID 2>/dev/null
-    exit $TEST_EXIT
 fi

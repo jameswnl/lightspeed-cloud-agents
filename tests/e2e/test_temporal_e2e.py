@@ -1,4 +1,12 @@
-"""E2E tests for Temporal workflow integration.
+"""Temporal server integration tests for workflow orchestration.
+
+These tests validate the Temporal workflow engine against a real
+Temporal Server: workflow execution, signals, queries, policy
+features (auto-approval, advisory, conditions, parallel groups).
+
+The sandbox activity runs in stub mode (no spawner) — these tests
+prove the orchestration layer, not the spawn→HTTP→destroy path.
+For full sandbox E2E, deploy the workflow-runner with a real spawner.
 
 Requires a running Temporal Server. Set TEMPORAL_E2E_URL env var.
 Default: localhost:7233 (assumes port-forward or local Temporal).
