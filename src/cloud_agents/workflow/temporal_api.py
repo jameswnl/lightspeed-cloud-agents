@@ -36,6 +36,8 @@ class RunWorkflowRequest(BaseModel):
     skills_paths: list[str] | None = None
     advisory: bool | None = None
     approval_policy: dict[str, Any] | None = None
+    notifier_config: dict[str, Any] | None = None
+    escalation_config: dict[str, Any] | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -122,6 +124,8 @@ def build_temporal_router(
             skills_paths=request.skills_paths,
             advisory=advisory,
             approval_policy=request.approval_policy,
+            notifier_config=request.notifier_config,
+            escalation_config=request.escalation_config,
         )
 
         await temporal_client.start_workflow(

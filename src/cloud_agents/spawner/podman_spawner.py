@@ -59,7 +59,11 @@ class PodmanSpawner(AgentSpawner):
 
         container_name = f"agent-{agent_name}"
 
-        volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
+        if read_only:
+            volumes: dict[str, Any] = {}
+            logger.info("Advisory mode: omitting host mounts for '%s'", agent_name)
+        else:
+            volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
         skills_volume_name = None
 
         with PodmanClient() as client:
