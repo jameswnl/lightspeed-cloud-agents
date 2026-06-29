@@ -58,7 +58,7 @@ The chart includes: workflow-runner Deployment + Service, RBAC, NetworkPolicies,
 Replace stub activity path with real spawner calls. This is the core deliverable.
 
 **Runtime contract:**
-1. **Spawn**: Use `spawner.spawn()` with `lightspeed-agentic-sandbox` image (not generic agent-runtime). Set all 7 env vars from ProviderConfig + credential env var from `credentials_secret` via K8s `SecretKeyRef`.
+1. **Spawn**: Use `spawner.spawn()` with `lightspeed-agentic-sandbox` image (not generic agent-runtime). Set `LIGHTSPEED_PROVIDER` and `LIGHTSPEED_MODEL` from `ProviderConfig`. Forward `LIGHTSPEED_MODEL_PROVIDER`, `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION` from the workflow-runner's own `os.environ` (deployment config). Set credential env var from `credentials_secret` via K8s `SecretKeyRef` or Podman host env propagation.
 2. **Wait**: `spawner.wait_ready(endpoint)` polls the sandbox health endpoint. The sandbox exposes `/health` (not `/healthz`). Update `SpawnConfig.health_path` default or pass `health_path="/health"` to `wait_ready()` for sandbox steps.
 3. **Call**: Authenticated `POST {endpoint}/v1/agent/run` with request body matching documented contract (query, context, systemPrompt, outputSchema).
 4. **Parse**: Handle sandbox response: `success=true` → completed, `success=false` → failed, HTTP 502 → raise for Temporal retry.
