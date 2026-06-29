@@ -90,6 +90,17 @@ async def _run_sandbox_step_inner(
         "LIGHTSPEED_PROVIDER": provider["name"],
         "LIGHTSPEED_MODEL": provider["model"],
     }
+    for deploy_var in (
+        "LIGHTSPEED_MODEL_PROVIDER", "LIGHTSPEED_PROVIDER_URL",
+        "LIGHTSPEED_PROVIDER_PROJECT", "LIGHTSPEED_PROVIDER_REGION",
+        "LIGHTSPEED_PROVIDER_API_VERSION",
+    ):
+        if val := os.environ.get(deploy_var):
+            env_vars[deploy_var] = val
+
+    cred_secret = provider.get("credentials_secret", "")
+    if cred_secret and (cred_val := os.environ.get(cred_secret)):
+        env_vars[cred_secret] = cred_val
 
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):

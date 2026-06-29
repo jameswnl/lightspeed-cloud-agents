@@ -496,6 +496,44 @@ class TestAdvisorySpawnerEnforcement:
         assert spawn_call[1].get("read_only") is False
 
     @pytest.mark.asyncio
+    async def test_deployment_env_vars_forwarded(self, mocker: MockerFixture) -> None:
+        """Deployment env vars (LIGHTSPEED_PROVIDER_URL etc.) forwarded to sandbox."""
+        mocker.patch.dict("os.environ", {
+            "LIGHTSPEED_PROVIDER_URL": "https://api.openai.com/v1",
+            "LIGHTSPEED_MODEL_PROVIDER": "openai",
+        })
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step({
+            "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }, spawner=mock_spawner)
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert env_vars.get("LIGHTSPEED_PROVIDER_URL") == "https://api.openai.com/v1"
+        assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "openai"
+
+    @pytest.mark.asyncio
     async def test_skills_forwarded_to_spawner(self, mocker: MockerFixture) -> None:
         """Skills image and paths are forwarded to spawner.spawn()."""
         mock_spawner = mocker.AsyncMock()

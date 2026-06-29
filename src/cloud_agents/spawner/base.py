@@ -151,14 +151,17 @@ class AgentSpawner(ABC):
     async def _do_destroy(self, agent_name: str) -> None:
         """Implementation-specific pod destruction."""
 
-    async def wait_ready(self, endpoint: str, timeout: float = 60.0) -> bool:
+    async def wait_ready(
+        self, endpoint: str, timeout: float = 60.0, health_path: str = "/healthz",
+    ) -> bool:
         """Wait for a spawned pod to be ready.
 
-        Polls /healthz until it returns 200 or timeout.
+        Polls the health endpoint until it returns 200 or timeout.
 
         Args:
             endpoint: HTTP endpoint of the pod.
             timeout: Maximum wait time in seconds.
+            health_path: Health check path (default /healthz).
 
         Returns:
             True if the pod became ready, False if timed out.
@@ -169,7 +172,7 @@ class AgentSpawner(ABC):
         while time.monotonic() - start < timeout:
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{endpoint}/healthz")
+                    resp = await client.get(f"{endpoint}{health_path}")
                     if resp.status_code == 200:
                         return True
             except httpx.HTTPError:
