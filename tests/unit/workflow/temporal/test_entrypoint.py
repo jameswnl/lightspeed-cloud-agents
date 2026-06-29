@@ -42,6 +42,25 @@ class TestTemporalEntrypoint:
         routes = [r.path for r in app.routes if hasattr(r, "path")]
         assert "/metrics" in routes
 
+    def test_tls_config_read_from_env(self, mocker: MockerFixture) -> None:
+        """TLS config is built when TEMPORAL_TLS_ENABLED=true."""
+        mocker.patch.dict("os.environ", {
+            "TEMPORAL_TLS_ENABLED": "true",
+            "TEMPORAL_TLS_CERT_PATH": "/certs/client.pem",
+            "TEMPORAL_TLS_KEY_PATH": "/certs/client.key",
+        })
+        mocker.patch("builtins.open", mocker.mock_open(read_data=b"cert-data"))
+        from agents.workflow.temporal_entrypoint import _build_tls_config
+        tls = _build_tls_config()
+        assert tls is not None
+
+    def test_no_tls_by_default(self, mocker: MockerFixture) -> None:
+        """TLS is disabled by default."""
+        mocker.patch.dict("os.environ", {}, clear=False)
+        from agents.workflow.temporal_entrypoint import _build_tls_config
+        tls = _build_tls_config()
+        assert tls is None
+
     def test_metrics_returns_prometheus_format(self) -> None:
         """GET /metrics returns Prometheus exposition format."""
         from fastapi.testclient import TestClient

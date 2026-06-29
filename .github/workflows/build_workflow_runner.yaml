@@ -1,0 +1,42 @@
+name: Build workflow-runner image
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/workflow-runner/**'
+      - 'src/agents/workflow/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+
+env:
+  IMAGE_NAME: workflow-runner
+  LATEST_TAG: dev-latest
+  CONTAINER_FILE: deploy/workflow-runner/Containerfile
+
+jobs:
+  build-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Install qemu and buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah qemu-user-static
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build image with Buildah
+        id: build_image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ env.LATEST_TAG }}
+          containerfiles: |
+            ${{ env.CONTAINER_FILE }}
+          archs: amd64
+          oci: true
+      - name: Check images
+        run: |
+          buildah images | grep '${{ env.IMAGE_NAME }}'
+          echo '${{ steps.build_image.outputs.image }}'

@@ -1,0 +1,83 @@
+name: Temporal E2E tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/agents/workflow/**'
+      - 'tests/e2e/temporal/**'
+      - 'tests/integration/temporal/**'
+
+jobs:
+  temporal-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: temporal
+          POSTGRES_PASSWORD: temporal
+          POSTGRES_DB: temporal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      temporal:
+        image: temporalio/auto-setup:latest
+        env:
+          DB: postgres12
+          DB_PORT: "5432"
+          POSTGRES_USER: temporal
+          POSTGRES_PWD: temporal
+          POSTGRES_SEEDS: postgres
+          BIND_ON_IP: "0.0.0.0"
+        ports:
+          - 7233:7233
+        options: >-
+          --health-cmd "echo ok"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 60s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Wait for Temporal Server
+        run: |
+          for i in $(seq 1 30); do
+            if uv run python -c "
+          import asyncio
+          from temporalio.client import Client
+          async def check():
+              await Client.connect('localhost:7233')
+          asyncio.run(check())
+          " 2>/dev/null; then
+              echo "Temporal Server is ready"
+              break
+            fi
+            echo "Waiting for Temporal Server... ($i/30)"
+            sleep 5
+          done
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration/temporal/ -v
+
+      - name: Run E2E tests
+        env:
+          TEMPORAL_E2E_URL: localhost:7233
+        run: uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v

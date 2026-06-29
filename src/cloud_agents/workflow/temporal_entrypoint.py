@@ -29,6 +29,31 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 WORKFLOW_ENGINE = os.environ.get("WORKFLOW_ENGINE", "temporal")
 
 
+def _build_tls_config():
+    """Build TLS config from environment variables.
+
+    Returns None if TLS is not enabled.
+    """
+    if os.environ.get("TEMPORAL_TLS_ENABLED", "").lower() != "true":
+        return None
+
+    from temporalio.service import TLSConfig
+
+    cert_path = os.environ.get("TEMPORAL_TLS_CERT_PATH")
+    key_path = os.environ.get("TEMPORAL_TLS_KEY_PATH")
+    ca_path = os.environ.get("TEMPORAL_TLS_CA_PATH")
+
+    client_cert = open(cert_path, "rb").read() if cert_path else None
+    client_key = open(key_path, "rb").read() if key_path else None
+    server_root_ca = open(ca_path, "rb").read() if ca_path else None
+
+    return TLSConfig(
+        client_cert=client_cert,
+        client_private_key=client_key,
+        server_root_ca_cert=server_root_ca,
+    )
+
+
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
 
@@ -93,7 +118,12 @@ def build_temporal_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
         try:
-            client = await Client.connect(temporal_url, namespace=temporal_namespace)
+            tls_config = _build_tls_config()
+            connect_kwargs: dict = {"target_host": temporal_url, "namespace": temporal_namespace}
+            if tls_config:
+                connect_kwargs["tls"] = tls_config
+                logger.info("Temporal TLS enabled")
+            client = await Client.connect(**connect_kwargs)
             temporal_client_holder["client"] = client
             logger.info(
                 "Connected to Temporal at %s (namespace=%s)",
