@@ -56,6 +56,7 @@ class KubernetesSpawner(AgentSpawner):
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
+        read_only: bool = False,
     ) -> str:
         """Create a K8s Job for the agent.
 

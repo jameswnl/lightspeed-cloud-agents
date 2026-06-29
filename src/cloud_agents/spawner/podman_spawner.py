@@ -49,6 +49,7 @@ class PodmanSpawner(AgentSpawner):
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
+        read_only: bool = False,
     ) -> str:
         """Create a Podman container for the agent."""
         try:
@@ -97,17 +98,22 @@ class PodmanSpawner(AgentSpawner):
             except Exception:
                 pass
 
-            container = client.containers.run(
-                image=image,
-                name=container_name,
-                detach=True,
-                environment=env,
-                network=self._network,
-                volumes=volumes or None,
-                ports={"8080/tcp": None},
-                labels=labels or {},
-                remove=False,
-            )
+            run_kwargs: dict[str, Any] = {
+                "image": image,
+                "name": container_name,
+                "detach": True,
+                "environment": env,
+                "network": self._network,
+                "volumes": volumes or None,
+                "ports": {"8080/tcp": None},
+                "labels": labels or {},
+                "remove": False,
+            }
+            if read_only:
+                run_kwargs["read_only"] = True
+                logger.info("Advisory mode: running '%s' with read-only filesystem", container_name)
+
+            container = client.containers.run(**run_kwargs)
 
             container.reload()
             port_bindings = container.ports or {}

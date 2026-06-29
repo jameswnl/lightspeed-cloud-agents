@@ -83,6 +83,7 @@ class AgentSpawner(ABC):
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
+        read_only: bool = False,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -95,6 +96,7 @@ class AgentSpawner(ABC):
             skills_image: Optional OCI image containing skills to mount.
             skills_paths: Paths within skills image to copy.
             service_account: Override ServiceAccount for this pod.
+            read_only: Run container with read-only filesystem (advisory mode).
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -113,7 +115,7 @@ class AgentSpawner(ABC):
             endpoint = await self._do_spawn(
                 agent_name, image, env or {}, config, labels,
                 skills_image=skills_image, skills_paths=skills_paths,
-                service_account=service_account,
+                service_account=service_account, read_only=read_only,
             )
             return endpoint
         except Exception:
@@ -129,6 +131,7 @@ class AgentSpawner(ABC):
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
+        read_only: bool = False,
     ) -> str:
         """Implementation-specific pod creation."""
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from datetime import UTC
 from typing import Any, Optional
 
@@ -93,6 +94,7 @@ async def run_sandbox_step(
             skills_image=input.get("skills_image"),
             skills_paths=input.get("skills_paths"),
             service_account=sa,
+            read_only=advisory,
         )
         ready = await spawner.wait_ready(endpoint)
         if not ready:
@@ -162,7 +164,23 @@ async def send_approval_notification(input: dict[str, Any]) -> dict[str, Any]:
     correlation_id = f"{workflow_id}:{step_name}"
 
     try:
-        notifier = NullNotifier()
+        config = input.get("notifier_config") or {}
+        notifier_type = config.get("type", "null")
+        if notifier_type == "slack":
+            from agents.workflow.notifier import SlackNotifier
+            webhook_url = os.environ.get(
+                f"NOTIFIER_SLACK_{config.get('config_ref', 'DEFAULT')}_WEBHOOK_URL".upper(), "",
+            )
+            notifier = SlackNotifier(webhook_url=webhook_url)
+        elif notifier_type == "webhook":
+            from agents.workflow.notifier import WebhookNotifier
+            url = os.environ.get(
+                f"NOTIFIER_WEBHOOK_{config.get('config_ref', 'DEFAULT')}_URL".upper(), "",
+            )
+            notifier = WebhookNotifier(url=url)
+        else:
+            notifier = NullNotifier()
+
         approve_url = f"/v1/workflows/{workflow_id}/approve"
         await notifier.notify(
             workflow_id=workflow_id,
@@ -205,7 +223,16 @@ async def build_escalation_activity(
     }
 
     try:
-        packager = LogPackager()
+        config_type = (escalation_config or {}).get("type", "log")
+        if config_type == "webhook":
+            from agents.workflow.escalation import WebhookPackager
+            url = os.environ.get(
+                f"ESCALATION_WEBHOOK_{(escalation_config or {}).get('config_ref', 'DEFAULT')}_URL".upper(), "",
+            )
+            packager = WebhookPackager(url=url)
+        else:
+            packager = LogPackager()
+
         from datetime import datetime
 
         from agents.workflow.escalation import EscalationPackage
