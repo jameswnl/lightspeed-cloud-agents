@@ -15,10 +15,13 @@ from typing import Any, Optional
 import httpx
 from temporalio import activity
 
+from agents.runtime.tracing import get_tracer
 from agents.workflow.escalation import LogPackager
 from agents.workflow.notifier import NullNotifier
 from agents.workflow.temporal_context import build_sandbox_context
 from agents.workflow.temporal_models import StepResult
+
+_tracer = get_tracer("agents.workflow.temporal_activities")
 
 logger = logging.getLogger(__name__)
 
@@ -54,16 +57,22 @@ async def run_sandbox_step(
     input: dict[str, Any],
     spawner: Optional[Any] = None,
 ) -> dict[str, Any]:
-    """Spawn a sandbox pod, call POST /v1/agent/run, return result.
+    """Spawn a sandbox pod, call POST /v1/agent/run, return result."""
+    step = input["step"]
+    step_name = step["name"]
+    workflow_id = input["workflow_id"]
+    with _tracer.start_as_current_span(
+        "sandbox.step",
+        attributes={"step.name": step_name, "workflow.id": workflow_id},
+    ):
+        return await _run_sandbox_step_inner(input, spawner)
 
-    Infrastructure failures (HTTP 502, spawn errors) raise exceptions
-    for Temporal retry. Application failures return status="failed".
 
-    Parameters:
-        input: Step configuration, workflow context, and provider info.
-        spawner: Agent spawner instance (injected via activity context
-            in production, passed directly in tests).
-    """
+async def _run_sandbox_step_inner(
+    input: dict[str, Any],
+    spawner: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Inner implementation of run_sandbox_step."""
     step = input["step"]
     step_name = step["name"]
     workflow_id = input["workflow_id"]
@@ -164,10 +173,18 @@ async def run_sandbox_step(
 
 @activity.defn
 async def send_approval_notification(input: dict[str, Any]) -> dict[str, Any]:
-    """Send a notification when a workflow pauses for approval.
+    """Send a notification when a workflow pauses for approval."""
+    workflow_id = input["workflow_id"]
+    step_name = input["step_name"]
+    with _tracer.start_as_current_span(
+        "notification.send",
+        attributes={"workflow.id": workflow_id, "step.name": step_name},
+    ):
+        return await _send_notification_inner(input)
 
-    Best-effort with possible duplicates. Single attempt, no retry.
-    """
+
+async def _send_notification_inner(input: dict[str, Any]) -> dict[str, Any]:
+    """Inner implementation of send_approval_notification."""
     workflow_id = input["workflow_id"]
     step_name = input["step_name"]
     message = input.get("message", "")
@@ -210,11 +227,20 @@ async def build_escalation_activity(
     workflow_name: str = "workflow",
     escalation_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Package workflow context for escalation handoff.
+    """Package workflow context for escalation handoff."""
+    with _tracer.start_as_current_span(
+        "escalation.build",
+        attributes={"workflow.name": workflow_name},
+    ):
+        return await _build_escalation_inner(steps, workflow_name, escalation_config)
 
-    Primary artifact is always returned in the result (queryable via
-    workflow status). External delivery via packager is secondary/best-effort.
-    """
+
+async def _build_escalation_inner(
+    steps: dict[str, Any],
+    workflow_name: str = "workflow",
+    escalation_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inner implementation of build_escalation_activity."""
     failed_steps = [
         {"step": k, "error": v.get("error", "unknown")}
         for k, v in steps.items()
