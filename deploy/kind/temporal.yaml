@@ -34,14 +34,16 @@ spec:
             - name: DB_PORT
               value: "5432"
             - name: POSTGRES_USER
-              value: postgres
+              value: workflow
             - name: POSTGRES_PWD
-              value: postgres
+              value: workflow-pass
             - name: POSTGRES_SEEDS
               value: postgres
+            - name: BIND_ON_IP
+              value: "0.0.0.0"
           readinessProbe:
-            exec:
-              command: ["temporal", "operator", "namespace", "list"]
+            tcpSocket:
+              port: 7233
             initialDelaySeconds: 30
             periodSeconds: 10
 ---
