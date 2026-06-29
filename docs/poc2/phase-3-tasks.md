@@ -22,19 +22,23 @@ Phases 1-2 delivered the Temporal workflow engine with policy layer, LGTM'd afte
 
 ### Sandbox Env Var Contract
 
-The sandbox's `config.py:resolve_sdk()` reads these env vars. The spawner must set all of them from the workflow definition's `ProviderConfig`:
+The sandbox's `config.py:resolve_sdk()` reads these env vars. Source of truth for each:
 
 | Env Var | Source | Required |
 |---------|--------|----------|
-| `LIGHTSPEED_PROVIDER` | `provider.name` | Yes |
-| `LIGHTSPEED_MODEL` | `provider.model` | Yes |
-| `LIGHTSPEED_MODEL_PROVIDER` | Derived from provider name | Provider-dependent |
-| `LIGHTSPEED_PROVIDER_URL` | Provider endpoint URL | Provider-dependent |
-| `LIGHTSPEED_PROVIDER_PROJECT` | GCP project for Vertex | Gemini only |
-| `LIGHTSPEED_PROVIDER_REGION` | GCP region for Vertex | Gemini only |
-| `LIGHTSPEED_PROVIDER_API_VERSION` | API version override | Optional |
+| `LIGHTSPEED_PROVIDER` | `ProviderConfig.name` | Yes |
+| `LIGHTSPEED_MODEL` | `ProviderConfig.model` | Yes |
+| `LIGHTSPEED_MODEL_PROVIDER` | **Deployment config** (env var on workflow-runner) | Provider-dependent |
+| `LIGHTSPEED_PROVIDER_URL` | **Deployment config** (env var on workflow-runner) | Provider-dependent |
+| `LIGHTSPEED_PROVIDER_PROJECT` | **Deployment config** (env var on workflow-runner) | Gemini only |
+| `LIGHTSPEED_PROVIDER_REGION` | **Deployment config** (env var on workflow-runner) | Gemini only |
+| `LIGHTSPEED_PROVIDER_API_VERSION` | **Deployment config** (env var on workflow-runner) | Optional |
+
+**Schema rule**: `ProviderConfig` stays as `{name, model, credentials_secret}` — it defines WHAT to use. The 5 deployment-dependent vars (`MODEL_PROVIDER`, `PROVIDER_URL`, `PROJECT`, `REGION`, `API_VERSION`) come from the workflow-runner's own environment and are propagated to spawned sandbox pods as-is. This keeps workflow definitions portable across environments (the same workflow YAML works in dev and prod — only the runner's env changes).
 
 Credential env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) are resolved from `credentials_secret` via K8s `SecretKeyRef` or Podman host env propagation.
+
+**T0 implementation**: The activity reads deployment vars from `os.environ` and passes them to spawned pods alongside `ProviderConfig` values. No schema migration needed — `ProviderConfig` is unchanged.
 
 ### Helm Chart Scope
 
@@ -55,7 +59,7 @@ Replace stub activity path with real spawner calls. This is the core deliverable
 
 **Runtime contract:**
 1. **Spawn**: Use `spawner.spawn()` with `lightspeed-agentic-sandbox` image (not generic agent-runtime). Set all 7 env vars from ProviderConfig + credential env var from `credentials_secret` via K8s `SecretKeyRef`.
-2. **Wait**: `spawner.wait_ready(endpoint)` polls `/healthz` until sandbox is ready.
+2. **Wait**: `spawner.wait_ready(endpoint)` polls the sandbox health endpoint. The sandbox exposes `/health` (not `/healthz`). Update `SpawnConfig.health_path` default or pass `health_path="/health"` to `wait_ready()` for sandbox steps.
 3. **Call**: Authenticated `POST {endpoint}/v1/agent/run` with request body matching documented contract (query, context, systemPrompt, outputSchema).
 4. **Parse**: Handle sandbox response: `success=true` → completed, `success=false` → failed, HTTP 502 → raise for Temporal retry.
 5. **Destroy**: `spawner.destroy(pod_name)` in `finally` block. On crash, label-based cleanup (`cloud-agents/workflow-id`).
@@ -123,6 +127,7 @@ Validate YAML at submission time in the API layer. Catch: circular conditions, u
 ### P2 — Adoption / hardening
 
 #### T14: /livez liveness probe
+Process-health only — returns 200 whenever the workflow-runner process is alive and able to serve HTTP. Does NOT reflect worker idle/active state (that's metrics). An idle but healthy worker is still live.
 #### T15: /readyz with Temporal connectivity check
 #### T16: Podman compose update
 #### T17: Temporal OTel interceptor
@@ -158,7 +163,7 @@ T12, T13 (upstream) — independent, submit early
 - Workflow-runner `/healthz`, `/readyz`, `/metrics` respond correctly
 - NetworkPolicy: sandbox pod can reach LLM endpoint, cannot reach arbitrary hosts
 - TLS: workflow-runner connects to Temporal with mTLS when configured
-- Probes: `/livez` returns 503 when worker idle, 200 when active
+- Probes: `/livez` returns 200 when process alive; `/readyz` returns 200 when Temporal reachable, 503 otherwise
 - Real sandbox E2E: spawn sandbox pod, call LLM, verify pod cleanup (T0)
 
 ### Production gate (before claiming production-ready)
