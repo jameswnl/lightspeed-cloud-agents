@@ -1,0 +1,81 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-workflow-runner-ingress
+  labels:
+    app: workflow-runner
+spec:
+  podSelector:
+    matchLabels:
+      app: workflow-runner
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+{{- if .Values.networkPolicy.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-workflow-runner-egress
+  labels:
+    app: workflow-runner
+spec:
+  podSelector:
+    matchLabels:
+      app: workflow-runner
+  policyTypes:
+    - Egress
+  egress:
+    # Temporal Server
+    - ports:
+        - port: 7233
+          protocol: TCP
+    # Sandbox pods
+    - ports:
+        - port: 8080
+          protocol: TCP
+    # K8s API
+    - ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-egress
+  labels:
+    app: workflow-runner
+spec:
+  podSelector:
+    matchLabels:
+      spawned-by: workflow-runner
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # LLM provider endpoints
+    {{- range .Values.networkPolicy.egress.llmCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- end }}

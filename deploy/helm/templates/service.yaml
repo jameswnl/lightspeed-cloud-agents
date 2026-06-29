@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-workflow-runner
+  labels:
+    app: workflow-runner
+    chart: {{ .Chart.Name }}
+spec:
+  selector:
+    app: workflow-runner
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

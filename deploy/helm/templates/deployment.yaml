@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-workflow-runner
+  labels:
+    app: workflow-runner
+    chart: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.workflowRunner.replicas }}
+  selector:
+    matchLabels:
+      app: workflow-runner
+  template:
+    metadata:
+      labels:
+        app: workflow-runner
+    spec:
+      serviceAccountName: {{ .Values.workflowRunner.serviceAccount.name }}
+      containers:
+        - name: workflow-runner
+          image: "{{ .Values.workflowRunner.image.repository }}:{{ .Values.workflowRunner.image.tag }}"
+          imagePullPolicy: {{ .Values.workflowRunner.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TEMPORAL_URL
+              value: {{ .Values.temporal.url | quote }}
+            - name: TEMPORAL_NAMESPACE
+              value: {{ .Values.temporal.namespace | quote }}
+            - name: WORKFLOW_SPAWNER
+              value: {{ .Values.spawner.type | quote }}
+            - name: SPAWNER_NAMESPACE
+              value: {{ .Values.spawner.namespace | quote }}
+            - name: SPAWNER_SERVICE_ACCOUNT
+              value: {{ .Values.spawner.serviceAccount | quote }}
+            - name: AUTH_REQUIRED
+              value: {{ .Values.auth.required | quote }}
+            {{- if .Values.temporal.tls.enabled }}
+            - name: TEMPORAL_TLS_ENABLED
+              value: "true"
+            - name: TEMPORAL_TLS_CERT_PATH
+              value: {{ .Values.temporal.tls.certPath | quote }}
+            - name: TEMPORAL_TLS_KEY_PATH
+              value: {{ .Values.temporal.tls.keyPath | quote }}
+            - name: TEMPORAL_TLS_CA_PATH
+              value: {{ .Values.temporal.tls.caPath | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.workflowRunner.resources | nindent 12 }}

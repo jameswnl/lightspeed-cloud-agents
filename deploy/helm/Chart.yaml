@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cloud-agents-temporal
+description: Temporal workflow runner for cloud agents
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

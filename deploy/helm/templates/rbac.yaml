@@ -1,0 +1,40 @@
+{{- if .Values.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.workflowRunner.serviceAccount.name }}
+  labels:
+    app: workflow-runner
+    chart: {{ .Chart.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-workflow-runner
+  labels:
+    app: workflow-runner
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-workflow-runner
+  labels:
+    app: workflow-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.workflowRunner.serviceAccount.name }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-workflow-runner
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

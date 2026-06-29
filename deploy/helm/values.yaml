@@ -1,0 +1,44 @@
+workflowRunner:
+  image:
+    repository: quay.io/openshift-lightspeed/workflow-runner
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  serviceAccount:
+    create: true
+    name: workflow-runner
+
+temporal:
+  url: "temporal:7233"
+  namespace: "default"
+  tls:
+    enabled: false
+    certPath: ""
+    keyPath: ""
+    caPath: ""
+
+auth:
+  required: false
+
+spawner:
+  type: "kubernetes"
+  namespace: "default"
+  serviceAccount: "workflow-runner"
+
+sandboxImage: "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
+
+networkPolicy:
+  enabled: true
+  egress:
+    enabled: false
+    llmCidrs: []
+
+rbac:
+  create: true
