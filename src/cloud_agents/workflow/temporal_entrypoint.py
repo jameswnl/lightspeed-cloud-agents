@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from agents.runtime.tracing import init_tracing
 from agents.workflow.definition_store import DefinitionStore
 from agents.workflow.temporal_api import build_temporal_router
 from agents.workflow.temporal_worker import build_worker_config
@@ -82,6 +83,8 @@ def build_temporal_app(
     Returns:
         FastAPI application with lifespan-managed Temporal client and worker.
     """
+    init_tracing("workflow-runner")
+
     spawner = _create_spawner()
     worker_config = build_worker_config(spawner=spawner)
     temporal_client_holder: dict[str, Client] = {}
@@ -89,24 +92,32 @@ def build_temporal_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
-        client = await Client.connect(temporal_url, namespace=temporal_namespace)
-        temporal_client_holder["client"] = client
-        logger.info(
-            "Connected to Temporal at %s (namespace=%s)",
-            temporal_url, temporal_namespace,
-        )
+        try:
+            client = await Client.connect(temporal_url, namespace=temporal_namespace)
+            temporal_client_holder["client"] = client
+            logger.info(
+                "Connected to Temporal at %s (namespace=%s)",
+                temporal_url, temporal_namespace,
+            )
 
-        async with Worker(
-            client,
-            task_queue=worker_config.task_queue,
-            workflows=worker_config.workflows,
-            activities=worker_config.activities,
-            max_concurrent_activities=worker_config.max_concurrent_activities,
-        ):
-            logger.info("Temporal worker started on queue '%s'", worker_config.task_queue)
+            async with Worker(
+                client,
+                task_queue=worker_config.task_queue,
+                workflows=worker_config.workflows,
+                activities=worker_config.activities,
+                max_concurrent_activities=worker_config.max_concurrent_activities,
+            ):
+                logger.info("Temporal worker started on queue '%s'", worker_config.task_queue)
+                yield
+
+            logger.info("Temporal worker stopped")
+        except Exception as exc:
+            logger.warning(
+                "Cannot connect to Temporal at %s: %s. "
+                "App will serve healthz but workflows are unavailable.",
+                temporal_url, exc,
+            )
             yield
-
-        logger.info("Temporal worker stopped")
 
     app = FastAPI(title="Cloud Agents Workflow Runner (Temporal)", lifespan=lifespan)
 
@@ -126,6 +137,13 @@ def build_temporal_app(
         """Health check endpoint."""
         return {"status": "ok"}
 
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus metrics endpoint."""
+        from fastapi.responses import PlainTextResponse
+        from prometheus_client import generate_latest
+        return PlainTextResponse(generate_latest(), media_type="text/plain; charset=utf-8")
+
     return app
 
 
@@ -138,3 +156,6 @@ class _DeferredClient:
     def __getattr__(self, name: str):
         """Delegate attribute access to the held client."""
         return getattr(self._holder["client"], name)
+
+
+app = build_temporal_app()

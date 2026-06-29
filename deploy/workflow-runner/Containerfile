@@ -1,0 +1,47 @@
+# Temporal workflow-runner image
+#
+# Runs the Temporal workflow engine for cloud agents.
+# Connects to a Temporal Server and spawns sandbox pods per step.
+#
+# Build:
+#   podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
+#
+# Run:
+#   podman run -p 8080:8080 \
+#     -e TEMPORAL_URL=temporal:7233 \
+#     -e WORKFLOW_SPAWNER=kubernetes \
+#     workflow-runner:latest
+
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock LICENSE README.md ./
+
+RUN uv sync --no-dev --no-install-project
+
+COPY src/ src/
+
+RUN uv sync --no-dev
+
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+
+RUN useradd -r -u 1001 runner
+USER 1001
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    TEMPORAL_URL="localhost:7233" \
+    TEMPORAL_NAMESPACE="default"
+
+EXPOSE 8080
+
+CMD ["python", "-m", "uvicorn", "agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]

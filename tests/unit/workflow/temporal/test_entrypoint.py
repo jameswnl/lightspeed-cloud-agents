@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pytest_mock import MockerFixture
+
 from agents.workflow.temporal_entrypoint import build_temporal_app
 
 
@@ -25,3 +27,26 @@ class TestTemporalEntrypoint:
         app = build_temporal_app(temporal_url="localhost:7233")
         routes = [r.path for r in app.routes if hasattr(r, "path")]
         assert "/healthz" in routes
+
+    def test_tracing_initialized_on_build(self, mocker: MockerFixture) -> None:
+        """build_temporal_app calls init_tracing."""
+        mock_init = mocker.patch(
+            "agents.workflow.temporal_entrypoint.init_tracing",
+        )
+        build_temporal_app(temporal_url="localhost:7233")
+        mock_init.assert_called_once_with("workflow-runner")
+
+    def test_app_has_metrics_endpoint(self) -> None:
+        """The app includes a /metrics endpoint."""
+        app = build_temporal_app(temporal_url="localhost:7233")
+        routes = [r.path for r in app.routes if hasattr(r, "path")]
+        assert "/metrics" in routes
+
+    def test_metrics_returns_prometheus_format(self) -> None:
+        """GET /metrics returns Prometheus exposition format."""
+        from fastapi.testclient import TestClient
+        app = build_temporal_app(temporal_url="localhost:7233")
+        client = TestClient(app)
+        response = client.get("/metrics")
+        assert response.status_code == 200
+        assert "ls_workflow" in response.text or "python_info" in response.text
