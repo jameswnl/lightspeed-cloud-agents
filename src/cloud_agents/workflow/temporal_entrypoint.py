@@ -167,6 +167,19 @@ def build_temporal_app(
         """Health check endpoint."""
         return {"status": "ok"}
 
+    @app.get("/livez")
+    async def livez() -> dict[str, str]:
+        """Liveness probe — returns 200 when process is alive."""
+        return {"status": "alive"}
+
+    @app.get("/readyz")
+    async def readyz():
+        """Readiness probe — returns 200 when Temporal is reachable, 503 otherwise."""
+        if "client" in temporal_client_holder:
+            return {"status": "ready"}
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"status": "not_ready"}, status_code=503)
+
     @app.get("/metrics")
     async def metrics():
         """Prometheus metrics endpoint."""

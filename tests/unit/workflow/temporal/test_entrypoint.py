@@ -61,6 +61,26 @@ class TestTemporalEntrypoint:
         tls = _build_tls_config()
         assert tls is None
 
+    def test_app_has_livez_endpoint(self) -> None:
+        """The app includes a /livez endpoint."""
+        app = build_temporal_app(temporal_url="localhost:7233")
+        routes = [r.path for r in app.routes if hasattr(r, "path")]
+        assert "/livez" in routes
+
+    def test_app_has_readyz_endpoint(self) -> None:
+        """The app includes a /readyz endpoint."""
+        app = build_temporal_app(temporal_url="localhost:7233")
+        routes = [r.path for r in app.routes if hasattr(r, "path")]
+        assert "/readyz" in routes
+
+    def test_livez_returns_200(self) -> None:
+        """GET /livez returns 200 when process is alive."""
+        from fastapi.testclient import TestClient
+        app = build_temporal_app(temporal_url="localhost:7233")
+        client = TestClient(app)
+        response = client.get("/livez")
+        assert response.status_code == 200
+
     def test_metrics_returns_prometheus_format(self) -> None:
         """GET /metrics returns Prometheus exposition format."""
         from fastapi.testclient import TestClient

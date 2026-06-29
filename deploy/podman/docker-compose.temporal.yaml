@@ -54,7 +54,7 @@ services:
       - "8233:8080"
 
   workflow-runner:
-    image: localhost/cloud-agents-runner:latest
+    image: localhost/workflow-runner:latest
     depends_on:
       temporal-server:
         condition: service_healthy
