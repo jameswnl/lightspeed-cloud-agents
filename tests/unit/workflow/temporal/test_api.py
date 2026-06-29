@@ -213,6 +213,120 @@ class TestAdvisoryPropagation:
         assert wf_input.advisory is False
 
 
+class TestDefinitionManagement:
+    """Tests for definition submission and retrieval."""
+
+    def test_post_definition(self, mocker: MockerFixture) -> None:
+        """POST /definitions creates a definition."""
+        from agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1", "kind": "AgentWorkflow",
+                "metadata": {"name": "my-wf"},
+                "spec": {"steps": [
+                    {"name": "s1", "type": "agent", "agent": "diag",
+                     "prompt": "test", "output_key": "r1", "spawn": "pre-deployed"},
+                ]},
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["name"] == "my-wf"
+
+    def test_get_definition_by_name(self, mocker: MockerFixture) -> None:
+        """GET /definitions/{name} returns a stored definition."""
+        from agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1", "kind": "AgentWorkflow",
+                "metadata": {"name": "fetch-wf"},
+                "spec": {"steps": [
+                    {"name": "s1", "type": "agent", "agent": "diag",
+                     "prompt": "test", "output_key": "r1", "spawn": "pre-deployed"},
+                ]},
+            },
+        )
+
+        response = test_client.get("/v1/workflows/definitions/fetch-wf")
+        assert response.status_code == 200
+        assert response.json()["name"] == "fetch-wf"
+
+    def test_get_definition_not_found(self, mocker: MockerFixture) -> None:
+        """GET /definitions/{name} returns 404 for unknown name."""
+        from agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/definitions/missing")
+        assert response.status_code == 404
+
+
+class TestConfigPropagation:
+    """Tests for notifier/escalation config propagation."""
+
+    def test_notifier_config_propagated(
+        self, client: TestClient, mock_client: Any,
+    ) -> None:
+        """notifier_config flows from request to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1", "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                },
+                "provider": {"name": "openai", "model": "gpt-4",
+                             "credentials_secret": "k"},
+                "notifier_config": {"type": "slack", "config_ref": "my-channel"},
+            },
+        )
+        assert response.status_code == 202
+        wf_input = mock_client.start_workflow.call_args[0][1]
+        assert wf_input.notifier_config == {"type": "slack", "config_ref": "my-channel"}
+
+    def test_escalation_config_propagated(
+        self, client: TestClient, mock_client: Any,
+    ) -> None:
+        """escalation_config flows from request to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1", "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                },
+                "provider": {"name": "openai", "model": "gpt-4",
+                             "credentials_secret": "k"},
+                "escalation_config": {"type": "webhook", "config_ref": "ops-endpoint"},
+            },
+        )
+        assert response.status_code == 202
+        wf_input = mock_client.start_workflow.call_args[0][1]
+        assert wf_input.escalation_config == {"type": "webhook", "config_ref": "ops-endpoint"}
+
+
 class TestAuthEnforcement:
     """Tests that auth dependency is enforced when provided."""
 
