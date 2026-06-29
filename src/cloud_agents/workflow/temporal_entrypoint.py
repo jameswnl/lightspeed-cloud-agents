@@ -24,6 +24,15 @@ from agents.workflow.temporal_worker import build_worker_config
 
 logger = logging.getLogger(__name__)
 
+def _get_tracing_interceptors() -> list:
+    """Get Temporal tracing interceptors if OTel is available."""
+    try:
+        from temporalio.contrib.opentelemetry import TracingInterceptor
+        return [TracingInterceptor()]
+    except Exception:
+        return []
+
+
 TEMPORAL_URL = os.environ.get("TEMPORAL_URL", "localhost:7233")
 TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 WORKFLOW_ENGINE = os.environ.get("WORKFLOW_ENGINE", "temporal")
@@ -136,6 +145,7 @@ def build_temporal_app(
                 workflows=worker_config.workflows,
                 activities=worker_config.activities,
                 max_concurrent_activities=worker_config.max_concurrent_activities,
+                interceptors=_get_tracing_interceptors(),
             ):
                 logger.info("Temporal worker started on queue '%s'", worker_config.task_queue)
                 yield

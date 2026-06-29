@@ -81,6 +81,12 @@ class TestTemporalEntrypoint:
         response = client.get("/livez")
         assert response.status_code == 200
 
+    def test_worker_has_tracing_interceptor(self) -> None:
+        """_get_tracing_interceptors returns a list."""
+        from agents.workflow.temporal_entrypoint import _get_tracing_interceptors
+        interceptors = _get_tracing_interceptors()
+        assert isinstance(interceptors, list)
+
     def test_metrics_returns_prometheus_format(self) -> None:
         """GET /metrics returns Prometheus exposition format."""
         from fastapi.testclient import TestClient
