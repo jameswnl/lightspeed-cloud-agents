@@ -315,9 +315,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Does it support durable agents with long-running tasks?</div>
-  <div class="faq-a">Yes, two modes:<br>
-    &bull; <strong>Pre-deployed agents</strong> (spawn: pre-deployed): long-running services that persist across workflow executions. Called via HTTP, not spawned/destroyed per step. Suitable for agents that maintain state, connections, or caches.<br>
-    &bull; <strong>Temporal durable execution</strong> (implemented): workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). The agent step itself runs in an ephemeral container, but the workflow orchestration is durable. Crash recovery via content-hash pod naming + startup orphan reconciliation.<br><br>
+  <div class="faq-a">Yes. <strong>Temporal durable execution</strong> handles long-running work: workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). Each agent step runs in an ephemeral sandbox container, but the workflow orchestration is durable. Crash recovery uses content-hash pod naming for idempotent retries and startup orphan reconciliation for leaked containers.<br><br>
     What's missing: agents that maintain conversational memory across multiple workflow invocations. That's a backlog item (agent state persistence / memory).</div>
 </div>
 
