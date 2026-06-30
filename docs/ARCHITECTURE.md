@@ -32,21 +32,22 @@ The diagnostic and monitoring agents are **examples**, not the product. The fram
 Product teams provide:
 - `agent.yaml` — instructions, tools, output type, lifecycle
 - Tool modules — Python functions the agent can call
-- `workflow.yaml` — multi-step workflow definition
-- `skills/` — domain knowledge packages (optional)
+- Workflow definitions — submitted inline or stored and referenced by name
+- Optional skills directories — configured in `agent.yaml` and mounted into the runtime as needed
 
 ### Ephemeral-by-default execution
 
-Every workflow step spawns a fresh container. The container:
-- Starts clean — no state from previous steps
-- Has only the tools configured for this agent type
-- Has hard timeouts — killed automatically if it hangs
-- Has scoped permissions — only what the workflow author declares
-- Is destroyed after execution — no cleanup worries
+Each `agent` step spawns a sandbox container. The container:
+- Has isolated runtime state — no shared process or filesystem state across steps. Prior workflow outputs are passed explicitly via request context, not through shared container state.
+- Is bounded by timeouts — Temporal activity timeout and HTTP request timeout limit how long a step can run. A hung step occupies worker capacity until timeout, but does not block other workflow executions.
+- Is cleaned up after execution — the activity destroys the container in a `finally` block. Cleanup is best-effort; startup orphan reconciliation handles containers left behind by crashes.
+- Uses deterministic pod naming — retries may reuse an existing container with the same content-hash name rather than guaranteeing a fresh instance every time.
 
-This means a stuck LLM call can't block the workflow runner, a misbehaving agent can't crash the platform, and each step is isolated from every other step.
+This reduces the blast radius of failures: a misbehaving agent is isolated to its container, and timeout enforcement prevents unbounded resource consumption.
 
-All steps currently use ephemeral spawning. Pre-deployed (long-running) agents are a backlog item — the `spawn` field exists in the schema but is not yet implemented.
+`human-approval` steps do not spawn containers — they pause the workflow via Temporal signals.
+
+The `spawn` field exists in the step schema but is not consulted by the current execution path. All agent steps use spawned execution. Pre-deployed (long-running) agents are a backlog item.
 
 ### Durable execution via Temporal
 
