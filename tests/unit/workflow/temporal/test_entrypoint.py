@@ -20,8 +20,8 @@ class TestTemporalEntrypoint:
     def test_app_has_workflow_routes(self) -> None:
         """The app includes workflow API routes."""
         app = build_temporal_app(temporal_url="localhost:7233")
-        routes = [r.path for r in app.routes if hasattr(r, "path")]
-        assert "/v1/workflows/run" in routes
+        openapi = app.openapi()
+        assert "/v1/workflows/run" in openapi["paths"]
 
     def test_app_has_health_endpoint(self) -> None:
         """The app includes a health check endpoint."""
