@@ -80,6 +80,7 @@ jobs:
           archs: amd64
           oci: true
       - name: Push to registry
+        id: push_image
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ env.IMAGE_NAME }}
@@ -91,4 +92,4 @@ jobs:
         uses: sigstore/cosign-installer@v3
       - name: Sign image with cosign
         run: |
-          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}
+          cosign sign --yes ${{ steps.push_image.outputs.registry-path }}@${{ steps.push_image.outputs.digest }}
