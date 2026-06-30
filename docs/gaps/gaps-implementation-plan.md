@@ -198,6 +198,40 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 ---
 
+## Agent Progress Streaming
+
+### T36: Stream agent work-in-progress to callers
+
+**Status**: Open
+**ARCHITECTURE.md ref**: Observability; Sandbox Runtime
+
+**Problem**: The workflow activity makes a synchronous HTTP call to the sandbox and waits for the final result. The sandbox streams internally from the LLM (the OpenAI agents SDK supports it) but collapses everything into a single response. Callers see only workflow-level events (step started/completed) via SSE — no token-by-token output, tool calls, or intermediate results from the agent.
+
+**Architecture**:
+```
+User ← SSE ← Workflow Runner ← side channel ← Sandbox → LLM
+                    ↕ gRPC
+              Temporal (lifecycle only)
+```
+
+Temporal stays in control of lifecycle (start, timeout, retry, approval). The streaming data flows through a side channel, not through Temporal activities.
+
+**What to build**:
+1. **Sandbox → side channel**: The sandbox publishes progress events (LLM tokens, tool calls, intermediate results) to a side channel during execution. Options: Redis pubsub, SSE from sandbox directly, or a lightweight event bus. Events keyed by `(workflow_id, step_name)`.
+2. **Activity registers the side channel**: When the activity spawns the sandbox, it passes a channel endpoint (e.g., callback URL or Redis topic) so the sandbox knows where to publish.
+3. **Workflow runner SSE enrichment**: The existing `GET /v1/workflows/{id}/events` SSE endpoint subscribes to the side channel and forwards agent progress events alongside workflow-level events.
+4. **Contract extension**: The sandbox `/v1/agent/run` contract gains an optional `progressEndpoint` or `progressChannel` field in the request body.
+
+**What NOT to change**: The activity still makes a synchronous HTTP call for the final result. Temporal still controls retry/timeout. The streaming is a side channel, not a replacement for the activity return value.
+
+**Decision needed**:
+- Which side channel? Redis pubsub (requires Redis), direct SSE from sandbox to runner (simpler but requires network access), or shared volume with file-based events (no extra infra)?
+- Should streaming be opt-in per workflow step, or always-on?
+
+**Effort**: 1-2 weeks
+
+---
+
 ## Operational Readiness
 
 ### T17: Prometheus alerting rules
