@@ -99,13 +99,13 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 **Effort**: 1-2 weeks
 
-### T8: Per-job identity binding
+### T8: Per-sandbox identity binding
 
-**Status**: Open (from BACKLOG.md)
+**Status**: Open
 
-**Problem**: Current TokenReview validates any `cloud-agents` audience token. Does not bind caller identity to the specific spawned Job/attempt.
+**Problem**: Current TokenReview validates any `cloud-agents` audience token. Does not bind caller identity to the specific spawned sandbox container.
 
-**What to build**: Generate per-job ServiceAccounts at spawn time; verify TokenReview caller identity matches the specific spawned Job.
+**What to build**: Generate scoped ServiceAccounts per sandbox spawn; verify identity matches the specific sandbox when results are returned.
 
 **Effort**: 1-2 weeks
 
@@ -119,15 +119,9 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 **Effort**: 2-3 weeks
 
-### T10: Tool origin validation allowlist
+### ~~T10: Tool origin validation allowlist~~ — REMOVED
 
-**Status**: Open (from BACKLOG.md)
-
-**Problem**: No restriction on which tool modules can be loaded.
-
-**What to build**: Optional `allowed_tool_modules` config that restricts importable paths.
-
-**Effort**: 1-2 days
+PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the deleted generic runtime. The Temporal workflow path does not load tool modules — tools are built into the sandbox image or provided via MCP servers.
 
 ---
 
@@ -292,11 +286,9 @@ Schema migration + state compatibility for definition updates.
 
 Persisted event replay via `Last-Event-ID`.
 
-### T28: Async callback dispatch
+### ~~T28: Async callback dispatch~~ — REMOVED
 
-**Status**: Open
-
-Ephemeral pods POST results to trusted runner ingest API instead of synchronous HTTP.
+PoC1 leftover. Described ephemeral pods POSTing results back to a runner ingest API. In the Temporal architecture, the activity calls the sandbox synchronously via HTTP and collects the result directly. No callback mechanism needed.
 
 ---
 
@@ -308,11 +300,11 @@ Ephemeral pods POST results to trusted runner ingest API instead of synchronous 
 
 K8s 1.31+ image volumes instead of init container. Fallback for older versions.
 
-### T30: Template reuse / content-hash dedup
+### T30: Spawner spec caching
 
 **Status**: Open (from operator comparison Gap 7)
 
-Cache derived pod specs by config hash. Reuse for identical configurations.
+Cache spawner configurations (env vars, volumes, labels) by content hash. When multiple workflow steps use identical sandbox config, reuse the cached spec instead of rebuilding it. Low priority — negligible overhead at expected volumes.
 
 ### T31: Agent artifact storage
 
@@ -336,7 +328,7 @@ Image signing attestation and software bill of materials.
 
 **Status**: Open
 
-2-replica deployment with replica failover test.
+2-replica workflow runner deployment with Temporal. Test: start workflow on replica A, kill replica A, verify Temporal re-dispatches activities to replica B and workflow completes.
 
 ### T35: CRD-based K8s operator
 
