@@ -2,36 +2,36 @@
 
 ## Overview
 
-The Cloud Agents Framework is an **agent/workflow orchestration platform**. It enables product teams to create, deploy, and manage AI agents and multi-step workflows as server-side services.
+The Cloud Agents Framework is an **agent and workflow orchestration platform**. It enables product teams to define, deploy, and operate AI agents and multi-step workflows as server-side services.
 
-The framework uses **Temporal** for durable workflow execution and ephemeral **sandbox containers** for isolated agent execution. Each workflow step spawns a disposable container that calls an LLM via the `POST /v1/agent/run` contract — any sandbox image implementing this API works as an agent step. No framework code changes required to add new agent types.
+The framework uses **Temporal** for durable workflow execution and isolated runtime containers for step execution. Each workflow step runs in a spawned runtime behind an HTTP contract, which lets compatible runtime images participate in workflow execution without changing the orchestration engine.
 
 ## Goals & Objectives
 
 1. **Bring your own agents & workflows** — define agents and multi-step agentic workflows via YAML + any tools. No forking, no rebuilds, no framework changes. Product teams deploy AI agents without changing framework code.
 
-2. **Secured & governed execution** — each step runs in its own disposable container with scoped permissions, hard timeouts, and no shared state. Untrusted pods never receive secrets beyond their API token. Human oversight on high-risk operations via approval gates. Full observability: tracing, metrics, event streaming.
+2. **Secured & governed execution** — each step runs in its own disposable container with scoped permissions, hard timeouts, and no shared state. Untrusted runtimes receive only the credentials explicitly configured for the step. Human oversight on high-risk operations via approval gates. Full observability: tracing, metrics, event streaming.
 
 3. **Composable agent ecosystem** — agents and workflows are reusable building blocks. A chatbot invokes workflows as tools. Workflows chain agents. Multiple trigger points: conversations, alerts, API, schedules.
 
-4. **Seamless human-agent handoff** — when automation reaches its limit, users pick up in an AI CLI with full workflow context — diagnosis, steps taken, failure history — and continue where the agent left off.
+4. **Human follow-up with preserved context** — when automation reaches its limit, the framework can package workflow context for review, escalation, and operator follow-up.
 
-5. **Dual deployment: Kubernetes + Podman** — same agents run on both. Both are first-class production targets.
+5. **Kubernetes and Podman deployment targets** — the same orchestration model can run on both, with deployment-specific security and operational controls.
 
 ## Design Principles
 
 ### Framework, not pre-built agents
 
 The diagnostic and monitoring agents are **examples**, not the product. The framework provides:
-- Generic sandbox image (one image for all agent types)
+- Generic runtime and sandbox execution patterns
 - Temporal workflow engine with conditions, retry, approval, parallel steps
 - Spawner abstraction (K8s Jobs / Podman containers)
-- Durable execution via Temporal Server
+- Durable execution via Temporal
 - Observability (tracing, metrics, events)
 
 Product teams provide:
 - `agent.yaml` — instructions, tools, output type, lifecycle
-- `tools.py` — Python functions the agent can call
+- Tool modules — Python functions the agent can call
 - `workflow.yaml` — multi-step workflow definition
 - `skills/` — domain knowledge packages (optional)
 
@@ -50,18 +50,16 @@ All steps currently use ephemeral spawning. Pre-deployed (long-running) agents a
 
 ### Durable execution via Temporal
 
-The workflow runner delegates all state management to Temporal Server. This enables:
+The workflow runner delegates workflow durability, retry, and signaling semantics to Temporal. This enables:
 - **Horizontal scaling** — multiple worker replicas behind a Service/LB
 - **Pod resilience** — any replica crashes, Temporal re-dispatches activities to healthy workers
 - **Cross-replica operations** — start on replica A, approve on replica B via Temporal signals
 - **Automatic retry** — Temporal handles step retry with configurable `RetryPolicy`
 - **Timeout enforcement** — Temporal kills activities that exceed `start_to_close_timeout`
 
-No optimistic locking, no recovery poller, no PostgreSQL — Temporal provides all of these natively.
-
 ### Dual deployment: Kubernetes and Podman
 
-Both deployment targets provide **behavioral parity** (same features) but different **security mechanisms**:
+Both deployment targets use the same workflow model but rely on different operational and security mechanisms:
 
 | Capability | Kubernetes | Podman |
 |-----------|-----------|--------|
@@ -69,14 +67,14 @@ Both deployment targets provide **behavioral parity** (same features) but differ
 | Networking | K8s Services + ClusterIP DNS | Podman network + container DNS |
 | RBAC | ServiceAccounts + RoleBindings | OS-level access control |
 | NetworkPolicy | Enforced by CNI | Host firewall rules |
-| Durable execution | Temporal Server (PVC or external) | Temporal Server (local or external) |
+| Durable execution | Temporal deployment | Temporal deployment |
 | Config distribution | Env vars + K8s Secrets | Env vars |
 
-Deployers compensate for Podman's lack of K8s-native security with host-level controls. The spawner abstraction (`AgentSpawner` ABC) hides the deployment target from the workflow engine.
+The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent while allowing deployment-specific controls.
 
 ### Human-in-the-loop by design
 
-Following KubeKlaw learnings, the framework enforces phased execution:
+The framework supports phased execution when workflows need explicit review points:
 
 1. **Diagnose** — gather evidence, identify root cause
 2. **Propose** — present options with risk levels and rollback plans
@@ -84,11 +82,9 @@ Following KubeKlaw learnings, the framework enforces phased execution:
 4. **Execute** — carry out the approved plan
 5. **Verify** — independently confirm the fix worked
 
-Policy-driven approval classifies steps by risk:
-- **Low risk** (analysis, verification) → auto-approve
-- **High risk** (execution, remediation) → require human approval
+Policy-driven approval can classify steps by risk and auto-approve selected categories.
 
-The approval routing design supports pluggable channels (Slack, webhook, conversational) with RBAC-scoped approvers.
+Notification delivery is pluggable. Approval routing and identity-aware policy can evolve independently of the workflow engine.
 
 ## Architecture Components
 
@@ -99,16 +95,16 @@ The approval routing design supports pluggable channels (Slack, webhook, convers
 │  ┌─────────────────────┐    ┌─────────────────────────────┐ │
 │  │  Platform Framework  │    │  Sandbox Pods (per step)    │ │
 │  │                     │    │                             │ │
-│  │  Workflow Runner    │───▶│  lightspeed-agentic-sandbox │ │
-│  │  ├─ Temporal Worker │    │  ├─ OpenAI agents SDK       │ │
-│  │  ├─ Spawner         │    │  ├─ POST /v1/agent/run      │ │
+│  │  Workflow Runner    │───▶│  Sandbox Container          │ │
+│  │  ├─ Temporal Worker │    │  ├─ Runtime HTTP contract   │ │
+│  │  ├─ Spawner         │    │  ├─ Agent runtime + tools   │ │
 │  │  └─ Definition Store│    │  └─ /app/skills/ (optional) │ │
 │  └─────────┬───────────┘    └─────────────────────────────┘ │
 │            │ gRPC                       │ HTTPS              │
 │  ┌─────────▼───────────┐    ┌──────────▼──────────┐        │
 │  │  Temporal Server    │    │  LLM Provider       │        │
 │  │  durable execution  │    │  OpenAI / Vertex    │        │
-│  │  + state            │    │  OpenAI agents SDK  │        │
+│  │  + state            │    │  / other providers  │        │
 │  └─────────────────────┘    └─────────────────────┘        │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -118,13 +114,13 @@ The approval routing design supports pluggable channels (Slack, webhook, convers
 The stateless orchestrator. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
 
 - **Temporal AgentWorkflow** — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
-- **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls `POST /v1/agent/run`, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to Slack/webhook/null notifiers. `build_escalation_activity` packages failed workflow context for human handoff.
-- **DefinitionStore** — CRUD for workflow definitions with versioning. Definitions submitted via API. When initialized with a shared persistence backend, definitions are stored as JSON in the workflow state table (visible across all runner replicas); otherwise falls back to process-local in-memory storage. Runs bind to immutable snapshots.
-- **Spawner** — `AgentSpawner` ABC with `KubernetesSpawner` and `PodmanSpawner` implementations. Handles `spawn()` → endpoint URL, `wait_ready()` → healthz polling, `destroy()` → cleanup, and `list_active()` → orphan detection.
+- **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls the runtime HTTP interface, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to pluggable notifiers. `build_escalation_activity` packages failed workflow context for follow-up.
+- **DefinitionStore** — CRUD for workflow definitions with versioning. The current app wiring uses an in-memory store. Shared persistence is an extension point rather than the default runtime behavior.
+- **Spawner** — `AgentSpawner` ABC with `KubernetesSpawner` and `PodmanSpawner` implementations. Handles `spawn()` → endpoint URL, `wait_ready()` → readiness polling, `destroy()` → cleanup, and `list_active()` → orphan detection.
 
-### Sandbox Runtime (lightspeed-agentic-sandbox)
+### Sandbox Runtime
 
-A single generic container image (`lightspeed-agentic-sandbox:latest`) that runs any agent. Agent identity comes from environment variables and the OpenAI agents SDK:
+A spawned runtime is an HTTP service that executes a step with agent-specific configuration supplied by the workflow engine. The current implementation passes provider and runtime configuration through environment variables and optional mounted content such as skills:
 
 | Configuration | Purpose |
 |---------------|---------|
@@ -133,15 +129,11 @@ A single generic container image (`lightspeed-agentic-sandbox:latest`) that runs
 | Credential Secret (via `credentials_secret`) | K8s Secret or env var with API key |
 | `/app/skills/` (optional) | Domain knowledge packages from skills OCI image |
 
-The sandbox exposes a single endpoint — `POST /v1/agent/run` — accepting:
-- `query` — the prompt for this step
-- `context` — accumulated results from prior workflow steps
-- `systemPrompt` — optional agent instructions
-- `outputSchema` — optional structured output schema
+The architecture should treat the runtime interface generically: the workflow engine sends a prompt plus workflow context and receives structured output. Exact route shapes and runtime adapters are implementation details that may change as the runtime contract is unified.
 
 ### Temporal Server
 
-Temporal Server provides durable execution and replaces the previous PostgreSQL persistence layer:
+Temporal provides durable execution for workflow runs:
 
 - **Workflow state** — step results, approval decisions, and event history are stored as workflow state within Temporal, not in an external database.
 - **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. No separate recovery poller needed.
@@ -155,10 +147,10 @@ Temporal Server provides durable execution and replaces the previous PostgreSQL 
 
 - **TLS for Temporal gRPC** — optional mutual TLS via `TEMPORAL_TLS_CERT_PATH`, `TEMPORAL_TLS_KEY_PATH`, `TEMPORAL_TLS_CA_PATH` environment variables
 - **securityContext on pods** — advisory mode sets `read_only=True` on sandbox containers; scoped ServiceAccounts per step via `permissions.service_account`
-- **K8s Secrets** — API keys injected via `credentials_secret` reference, never as plain env vars in pod specs
-- **Explicit risk_level** — workflow steps declare risk level; missing risk_level fails closed to "high" (manual approval required)
+- **K8s Secrets** — provider and MCP credentials can be injected through explicit secret references
+- **Explicit risk_level** — agent steps can declare risk level; missing `risk_level` defaults to manual approval behavior
 - **Bearer auth** — workflow API endpoints protected by configurable auth dependency; fails closed when `AUTH_REQUIRED=true`
-- **PermissionScope enforcement** — `allowed_tools`/`denied_tools` in request context filters tools at runtime
+- **PermissionScope model** — `allowed_tools`/`denied_tools` defined per step; enforced in the generic agent runtime (not yet wired through the sandbox HTTP contract)
 - **Audit trail** — `emit_audit()` logs sandbox spawn/destroy and escalation events with workflow and step correlation
 - **Concurrency cap** — `MAX_SPAWNED_PODS` prevents resource exhaustion from runaway workflows
 
@@ -169,7 +161,7 @@ Abstract interface for creating and destroying agent pods on demand:
 - **KubernetesSpawner** — creates K8s Jobs with scoped ServiceAccounts, resource limits via `SpawnConfig`, skills init containers, credential Secret mounts
 - **PodmanSpawner** — creates Podman containers with env vars, port mapping, network configuration
 
-Both implement `spawn()` → endpoint URL, `wait_ready()` → healthz polling, `destroy()` → cleanup, `list_active()` → orphan enumeration.
+Both implement `spawn()` → endpoint URL, `wait_ready()` → readiness polling, `destroy()` → cleanup, `list_active()` → orphan enumeration.
 
 ## Workflow Definition
 
@@ -212,7 +204,7 @@ spec:
 
 ## Agent Definition
 
-The agent runtime also supports standalone agent definitions (not part of workflow execution):
+The runtime also supports standalone agent definitions (not part of workflow execution):
 
 ```yaml
 apiVersion: lightspeed.redhat.com/v1alpha1
@@ -235,23 +227,17 @@ spec:
 
 ### Security
 
-- **Ephemeral pods are untrusted** — they never receive database credentials or secrets beyond their API token
-- **Step results flow through the trusted runner** — agents POST results to sandbox activities, not directly to any database
-- **Tool filtering in advisory mode** — read-only classification removes write-capable tools when the workflow runs in advisory mode; sandbox filesystem set to read-only
+- **Ephemeral runtimes are untrusted** — they should receive only the credentials explicitly required for the step being executed
+- **Step results flow through the runner** — the workflow engine controls spawning, request dispatch, and result collection
+- **Advisory mode** — sandbox filesystem set to read-only; tool-level filtering is defined in the model but not yet enforced through the sandbox HTTP contract
 - **Auth middleware** — configurable auth dependency on all workflow endpoints; fails closed when AUTH_REQUIRED=true
-- **Approval RBAC** — designed for per-step approver scoping (backlog: channel plugins + identity integration)
+- **Approval RBAC** — approval policy and routing can be layered on top of workflow pause/resume semantics
 - **MCP secret injection** — MCP servers can reference secrets via file-reference mounts. The `MCP_ALLOWED_SECRETS` environment variable defines an allowlist of permitted secret names; any secret not in the allowlist is rejected at activity dispatch time
 - **TLS everywhere** — optional mutual TLS on Temporal gRPC; HTTPS between sandbox and LLM providers
 
 ### Structured Output
 
-Every agent returns a Pydantic model (e.g., `DiagnosticReport`) with:
-- `confidence` — how sure the agent is (low/medium/high)
-- `risk_level` — risk of proposed actions
-- `rollback_plan` — what to do if things go wrong
-- `required_permissions` — what access is needed
-
-This makes every response reviewable, comparable, and actionable.
+Agents return structured output, but the schema is agent-defined rather than framework-fixed. Built-in examples include models such as `DiagnosticReport` and `MonitoringResult`, and custom output types can be supplied through agent definitions.
 
 ### Retry with Context
 
@@ -264,21 +250,3 @@ Failed steps retry with full failure history. Each attempt sees what was tried b
 - **Structured logging** — JSON-formatted logs with workflow/step correlation
 - **Correlation IDs** — validated, propagated across all requests
 - **Health probes** — `/healthz`, `/livez`, `/readyz` (readyz returns 503 when Temporal is unreachable)
-
-## Phase History
-
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1a | Diagnostic agent in container, cross-pod HTTP | Done |
-| 1b | Monitoring agent, async runs, observability | Done |
-| 2 | Generic agent runtime template image | Done |
-| 3 | Workflow executor with approval gates | Done |
-| 4a | Auth middleware, enriched models, retry | Done |
-| 4b | PostgreSQL persistence, on-demand spawning | Done |
-| 4c | OTel tracing, metrics, SSE, advisory mode, MCP | Done |
-| 5 | pydantic-graph exploration, ephemeral-by-default | Done |
-| 6 | Stateless workflow runner, definition API, recovery poller | Done |
-| 7 | Security hardening: K8s Secrets, explicit risk_level, bearer auth, derive_status, PermissionScope enforcement, FilePersistence CAS | Done |
-| PoC2-1 | Temporal engine + sandbox activities | Done |
-| PoC2-2 | Policy layer (auto-approve, advisory, permissions) | Done |
-| PoC2-3 | Productization (Containerfile, OTel, Helm, CI, TLS) | Done |
