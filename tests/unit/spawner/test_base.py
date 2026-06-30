@@ -1,8 +1,9 @@
 """Unit tests for AgentSpawner base class."""
 
 import pytest
+from pydantic import ValidationError
 
-from agents.spawner.base import AgentSpawner
+from agents.spawner.base import AgentSpawner, SpawnConfig
 
 
 class MockSpawner(AgentSpawner):
@@ -105,3 +106,76 @@ class TestAgentSpawner:
             env={"OLLAMA_URL": "http://ollama:11434/v1"},
         )
         assert endpoint == "http://test:8080"
+
+
+class TestSpawnConfig:
+    """Tests for SpawnConfig resource limit validation."""
+
+    def test_default_values(self) -> None:
+        """Default SpawnConfig has reasonable defaults."""
+        cfg = SpawnConfig()
+        assert cfg.cpu_request == "100m"
+        assert cfg.cpu_limit == "500m"
+        assert cfg.memory_request == "256Mi"
+        assert cfg.memory_limit == "512Mi"
+        assert cfg.timeout_seconds == 60
+
+    def test_valid_custom_values(self) -> None:
+        """Valid custom values are accepted."""
+        cfg = SpawnConfig(
+            cpu_request="200m", cpu_limit="2",
+            memory_request="512Mi", memory_limit="2Gi",
+            timeout_seconds=120,
+        )
+        assert cfg.cpu_limit == "2"
+        assert cfg.memory_limit == "2Gi"
+
+    def test_timeout_too_low_rejected(self) -> None:
+        """Timeout below 5 seconds is rejected."""
+        with pytest.raises(ValidationError):
+            SpawnConfig(timeout_seconds=2)
+
+    def test_timeout_too_high_rejected(self) -> None:
+        """Timeout above 300 seconds is rejected."""
+        with pytest.raises(ValidationError):
+            SpawnConfig(timeout_seconds=600)
+
+    def test_timeout_boundary_low(self) -> None:
+        """Timeout of exactly 5 is accepted."""
+        cfg = SpawnConfig(timeout_seconds=5)
+        assert cfg.timeout_seconds == 5
+
+    def test_timeout_boundary_high(self) -> None:
+        """Timeout of exactly 300 is accepted."""
+        cfg = SpawnConfig(timeout_seconds=300)
+        assert cfg.timeout_seconds == 300
+
+    def test_cpu_limit_exceeds_max_rejected(self) -> None:
+        """CPU limit above 4 cores is rejected."""
+        with pytest.raises(ValidationError, match="cpu_limit"):
+            SpawnConfig(cpu_limit="8")
+
+    def test_cpu_limit_at_max_accepted(self) -> None:
+        """CPU limit of exactly 4 cores is accepted."""
+        cfg = SpawnConfig(cpu_limit="4")
+        assert cfg.cpu_limit == "4"
+
+    def test_memory_limit_exceeds_max_rejected(self) -> None:
+        """Memory limit above 4Gi is rejected."""
+        with pytest.raises(ValidationError, match="memory_limit"):
+            SpawnConfig(memory_limit="8Gi")
+
+    def test_memory_limit_at_max_accepted(self) -> None:
+        """Memory limit of exactly 4Gi is accepted."""
+        cfg = SpawnConfig(memory_limit="4Gi")
+        assert cfg.memory_limit == "4Gi"
+
+    def test_millicore_cpu_accepted(self) -> None:
+        """Millicore CPU values are accepted."""
+        cfg = SpawnConfig(cpu_limit="1500m")
+        assert cfg.cpu_limit == "1500m"
+
+    def test_millicore_cpu_exceeds_max_rejected(self) -> None:
+        """Millicore CPU above 4000m is rejected."""
+        with pytest.raises(ValidationError, match="cpu_limit"):
+            SpawnConfig(cpu_limit="5000m")

@@ -11,8 +11,10 @@ import logging
 import os
 from abc import ABC, abstractmethod
 
+import re
+
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,32 @@ class SpawnConfig(BaseModel):
     memory_limit: str = Field(default="512Mi")
     timeout_seconds: int = Field(default=60, ge=5, le=300)
     health_path: str = "/healthz"
+
+    @field_validator("cpu_limit")
+    @classmethod
+    def validate_cpu_limit(cls, v: str) -> str:
+        """Reject CPU limits above 4 cores."""
+        match = re.match(r"^(\d+)(m?)$", v)
+        if not match:
+            raise ValueError(f"Invalid cpu_limit format: {v}")
+        value, unit = int(match.group(1)), match.group(2)
+        cores = value / 1000 if unit == "m" else value
+        if cores > 4:
+            raise ValueError(f"cpu_limit {v} exceeds maximum of 4 cores")
+        return v
+
+    @field_validator("memory_limit")
+    @classmethod
+    def validate_memory_limit(cls, v: str) -> str:
+        """Reject memory limits above 4Gi."""
+        match = re.match(r"^(\d+)(Mi|Gi)$", v)
+        if not match:
+            raise ValueError(f"Invalid memory_limit format: {v}")
+        value, unit = int(match.group(1)), match.group(2)
+        mib = value if unit == "Mi" else value * 1024
+        if mib > 4096:
+            raise ValueError(f"memory_limit {v} exceeds maximum of 4Gi")
+        return v
 
 
 class AgentSpawner(ABC):
