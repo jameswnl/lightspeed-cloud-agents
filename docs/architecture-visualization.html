@@ -297,7 +297,10 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
-  <div class="faq-a">Standardized API &mdash; no SDK needed. The workflow runner calls sandbox pods via <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Any container exposing this endpoint works as an agent step. The default sandbox image (<strong>lightspeed-agentic-sandbox</strong>) uses the OpenAI agents SDK with Shell, Filesystem, and Skills capabilities, but teams can bring their own image as long as it implements the /v1/agent/run contract.</div>
+  <div class="faq-a">Yes &mdash; no SDK needed. Three paths, from easiest to most flexible:<br>
+    &bull; <strong>Workflow YAML + skills</strong> (easiest): Teams write a workflow definition with prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image and mounted at /app/skills/. No code required.<br>
+    &bull; <strong>Workflow YAML + MCP servers</strong>: Teams configure external tool servers (ServiceNow, Jira, PagerDuty) via <code>mcp_servers</code> in the workflow config. The sandbox calls the MCP servers as tools during execution. No code changes to the sandbox image.<br>
+    &bull; <strong>Custom container image</strong> (most flexible): Teams bring their own container image implementing <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Any image exposing this endpoint works as a workflow step. Use this when you need a completely different agent framework or runtime.</div>
 </div>
 
 <div class="faq-card">
