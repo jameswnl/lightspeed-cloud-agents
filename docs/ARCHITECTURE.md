@@ -88,25 +88,29 @@ Notification delivery is pluggable. Approval routing and identity-aware policy c
 
 ## Architecture Components
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  K8s Cluster / Podman Host                                  │
-│                                                             │
-│  ┌─────────────────────┐    ┌─────────────────────────────┐ │
-│  │  Platform Framework  │    │  Sandbox Pods (per step)    │ │
-│  │                     │    │                             │ │
-│  │  Workflow Runner    │───▶│  Sandbox Container          │ │
-│  │  ├─ Temporal Worker │    │  ├─ Runtime HTTP contract   │ │
-│  │  ├─ Spawner         │    │  ├─ Agent runtime + tools   │ │
-│  │  └─ Definition Store│    │  └─ /app/skills/ (optional) │ │
-│  └─────────┬───────────┘    └─────────────────────────────┘ │
-│            │ gRPC                       │ HTTPS              │
-│  ┌─────────▼───────────┐    ┌──────────▼──────────┐        │
-│  │  Temporal Server    │    │  LLM Provider       │        │
-│  │  durable execution  │    │  OpenAI / Vertex    │        │
-│  │  + state            │    │  / other providers  │        │
-│  └─────────────────────┘    └─────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph cluster["K8s Cluster / Podman Host"]
+        subgraph platform["Platform Framework"]
+            WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
+            WR --- TW["Temporal Worker"]
+            WR --- SP["Spawner<br/><i>K8s Jobs / Podman</i>"]
+            WR --- DS["Definition Store"]
+        end
+
+        subgraph sandbox["Sandbox Container <i>(per step)</i>"]
+            RT["Runtime HTTP contract"]
+            AG["Agent runtime + tools"]
+            SK["/app/skills/ <i>(optional)</i>"]
+        end
+
+        TS["Temporal Server<br/><i>durable execution + state</i>"]
+        LLM["LLM Provider<br/><i>OpenAI / Vertex / other</i>"]
+    end
+
+    WR -- "spawn / destroy" --> sandbox
+    WR -- "gRPC" --> TS
+    sandbox -- "HTTPS" --> LLM
 ```
 
 ### Workflow Runner
