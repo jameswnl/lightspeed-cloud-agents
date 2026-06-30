@@ -17,7 +17,11 @@ from pydantic import BaseModel
 from temporalio.client import Client
 
 from agents.workflow.definition_store import DefinitionStore
-from agents.workflow.temporal_models import ProviderConfig, WorkflowInput
+from agents.workflow.temporal_models import (
+    MCPServerConfig,
+    ProviderConfig,
+    WorkflowInput,
+)
 from agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
 from agents.workflow.temporal_workflow import AgentWorkflow
 
@@ -31,10 +35,14 @@ class RunWorkflowRequest(BaseModel):
     definition: dict[str, Any] | None = None
     input_prompt: str | None = None
     provider: ProviderConfig | None = None
-    sandbox_image: str = "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
+    sandbox_image: str = (
+        "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
+    )
     skills_image: str | None = None
     skills_paths: list[str] | None = None
     advisory: bool | None = None
+    workflow_id: str | None = None
+    mcp_servers: list[MCPServerConfig] | None = None
     approval_policy: dict[str, Any] | None = None
     notifier_config: dict[str, Any] | None = None
     escalation_config: dict[str, Any] | None = None
@@ -66,7 +74,9 @@ def build_temporal_router(
     """
     dependencies = [Depends(auth_dependency)] if auth_dependency else []
     router = APIRouter(
-        prefix="/v1/workflows", tags=["workflows"], dependencies=dependencies,
+        prefix="/v1/workflows",
+        tags=["workflows"],
+        dependencies=dependencies,
     )
 
     @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
@@ -89,7 +99,8 @@ def build_temporal_router(
             definition = stored.definition.model_dump()
             provider = request.provider or (
                 ProviderConfig(**stored.definition.provider.model_dump())
-                if stored.definition.provider else None
+                if stored.definition.provider
+                else None
             )
         else:
             provider = request.provider
@@ -113,7 +124,7 @@ def build_temporal_router(
         else:
             advisory = False
 
-        workflow_id = f"wf-{uuid.uuid4().hex[:12]}"
+        workflow_id = request.workflow_id or f"wf-{uuid.uuid4().hex[:12]}"
         workflow_input = WorkflowInput(
             definition=definition,
             input_prompt=request.input_prompt,
@@ -123,25 +134,38 @@ def build_temporal_router(
             skills_image=request.skills_image,
             skills_paths=request.skills_paths,
             advisory=advisory,
+            mcp_servers=request.mcp_servers,
             approval_policy=request.approval_policy,
             notifier_config=request.notifier_config,
             escalation_config=request.escalation_config,
         )
 
-        await temporal_client.start_workflow(
-            AgentWorkflow.run,
-            workflow_input,
-            id=workflow_id,
-            task_queue=DEFAULT_TASK_QUEUE,
-        )
+        try:
+            await temporal_client.start_workflow(
+                AgentWorkflow.run,
+                workflow_input,
+                id=workflow_id,
+                task_queue=DEFAULT_TASK_QUEUE,
+            )
+        except Exception as exc:
+            from temporalio.service import RPCError, RPCStatusCode
+
+            if isinstance(exc, RPCError) and exc.status == RPCStatusCode.ALREADY_EXISTS:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Workflow '{workflow_id}' already exists",
+                ) from exc
+            raise
 
         return {"workflow_id": workflow_id}
 
     if definition_store:
+
         @router.post("/definitions", status_code=status.HTTP_201_CREATED)
         async def submit_definition(body: dict[str, Any]) -> dict[str, Any]:
             """Submit a workflow definition to the store."""
             from agents.workflow.definition import WorkflowDefinition
+
             defn = WorkflowDefinition.model_validate(body)
             stored = await definition_store.save(defn)
             return {"name": stored.name, "version": stored.version}
@@ -161,12 +185,16 @@ def build_temporal_router(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Definition '{name}' not found",
                 )
-            return {"name": stored.name, "version": stored.version,
-                    "definition": stored.definition.model_dump()}
+            return {
+                "name": stored.name,
+                "version": stored.version,
+                "definition": stored.definition.model_dump(),
+            }
 
     @router.post("/{workflow_id}/approve")
     async def approve_workflow(
-        workflow_id: str, request: ApproveRequest,
+        workflow_id: str,
+        request: ApproveRequest,
     ) -> dict[str, str]:
         """Send an approval signal to a running workflow."""
         handle = temporal_client.get_workflow_handle(workflow_id)
@@ -198,26 +226,32 @@ def build_temporal_router(
                     result = await handle.query(AgentWorkflow.get_status)
                     events = result.events if hasattr(result, "events") else []
                     for event in events[seen_count:]:
-                        data = event.model_dump() if hasattr(event, "model_dump") else event
+                        data = (
+                            event.model_dump()
+                            if hasattr(event, "model_dump")
+                            else event
+                        )
                         yield f"data: {data}\n\n"
                     seen_count = len(events)
 
                     steps = result.steps if hasattr(result, "steps") else {}
                     all_terminal = steps and all(
-                        s.status in ("completed", "failed", "skipped", "denied", "escalated")
+                        s.status
+                        in ("completed", "failed", "skipped", "denied", "escalated")
                         for s in steps.values()
                     )
                     if all_terminal:
-                        yield "data: {\"type\": \"workflow.completed\"}\n\n"
+                        yield 'data: {"type": "workflow.completed"}\n\n'
                         break
                 except Exception:
-                    yield "data: {\"type\": \"workflow.error\"}\n\n"
+                    yield 'data: {"type": "workflow.error"}\n\n'
                     break
 
                 await asyncio.sleep(1)
 
         return StreamingResponse(
-            event_generator(), media_type="text/event-stream",
+            event_generator(),
+            media_type="text/event-stream",
         )
 
     @router.post("/{workflow_id}/cancel")

@@ -57,5 +57,14 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp-scratch
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.workflowRunner.resources | nindent 12 }}
+      volumes:
+        - name: tmp-scratch
+          emptyDir:
+            medium: Memory

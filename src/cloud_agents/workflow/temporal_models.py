@@ -11,6 +11,34 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class SecretHeaderRef(BaseModel):
+    """Reference to a K8s Secret key for an MCP auth header.
+
+    Attributes:
+        secret_name: Name of the K8s Secret containing the header value.
+        key: Key within the Secret to use as the header value.
+    """
+
+    secret_name: str
+    key: str
+
+
+class MCPServerConfig(BaseModel):
+    """MCP server configuration to inject into sandbox pods.
+
+    Attributes:
+        name: Unique name identifying this MCP server.
+        url: SSE endpoint URL of the MCP server.
+        headers: Optional plain-text headers to send with requests.
+        secret_headers: Optional Secret-backed headers encoded as file references.
+    """
+
+    name: str
+    url: str
+    headers: Optional[dict[str, str]] = None
+    secret_headers: Optional[dict[str, SecretHeaderRef]] = None
+
+
 class ProviderConfig(BaseModel):
     """LLM provider configuration for sandbox pods.
 
@@ -62,6 +90,7 @@ class WorkflowInput(BaseModel):
         sandbox_image: Container image for sandbox pods.
         skills_image: Optional OCI image for skills.
         skills_paths: Optional subdirectory paths in skills image.
+        mcp_servers: Optional MCP servers to inject into sandbox pods.
     """
 
     definition: dict[str, Any]
@@ -75,6 +104,7 @@ class WorkflowInput(BaseModel):
     advisory: bool = False
     notifier_config: Optional[dict[str, Any]] = None
     escalation_config: Optional[dict[str, Any]] = None
+    mcp_servers: Optional[list[MCPServerConfig]] = None
 
 
 class WorkflowOutput(BaseModel):

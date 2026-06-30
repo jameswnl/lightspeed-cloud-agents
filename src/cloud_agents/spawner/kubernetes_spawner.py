@@ -50,13 +50,18 @@ class KubernetesSpawner(AgentSpawner):
         self._projected_sa_token = projected_sa_token
 
     async def _do_spawn(
-        self, agent_name: str, image: str, env: dict[str, str],
+        self,
+        agent_name: str,
+        image: str,
+        env: dict[str, str],
         config_override: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
+        credential_secret_name: str | None = None,
+        mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
     ) -> str:
         """Create a K8s Job for the agent.
 
@@ -78,8 +83,6 @@ class KubernetesSpawner(AgentSpawner):
         except Exception as exc:
             raise RuntimeError(f"Cannot connect to K8s API: {exc}") from exc
 
-        from agents.spawner.base import SecretKeyRef
-
         job_name = f"agent-{agent_name}"
         env_list = []
         sensitive_keys = set(self._secret_env_vars.keys())
@@ -88,33 +91,68 @@ class KubernetesSpawner(AgentSpawner):
                 continue
             env_list.append(client.V1EnvVar(name=k, value=v))
         for env_name, ref in self._secret_env_vars.items():
-            env_list.append(client.V1EnvVar(
-                name=env_name,
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name=ref.secret_name, key=ref.key,
+            env_list.append(
+                client.V1EnvVar(
+                    name=env_name,
+                    value_from=client.V1EnvVarSource(
+                        secret_key_ref=client.V1SecretKeySelector(
+                            name=ref.secret_name,
+                            key=ref.key,
+                        ),
                     ),
-                ),
-            ))
+                )
+            )
 
-        volumes = []
-        volume_mounts = []
+        volumes = [
+            client.V1Volume(
+                name="tmp-scratch",
+                empty_dir=client.V1EmptyDirVolumeSource(medium="Memory"),
+            ),
+        ]
+        volume_mounts = [
+            client.V1VolumeMount(
+                name="tmp-scratch",
+                mount_path="/tmp",
+            ),
+        ]
         if self._config_configmap:
-            volumes.append(client.V1Volume(
-                name="agent-config",
-                config_map=client.V1ConfigMapVolumeSource(name=self._config_configmap),
-            ))
-            volume_mounts.extend([
-                client.V1VolumeMount(name="agent-config", mount_path="/app/agent.yaml", sub_path="agent.yaml", read_only=True),
-                client.V1VolumeMount(name="agent-config", mount_path="/app/registry.yaml", sub_path="registry.yaml", read_only=True),
-            ])
+            volumes.append(
+                client.V1Volume(
+                    name="agent-config",
+                    config_map=client.V1ConfigMapVolumeSource(
+                        name=self._config_configmap
+                    ),
+                )
+            )
+            volume_mounts.extend(
+                [
+                    client.V1VolumeMount(
+                        name="agent-config",
+                        mount_path="/app/agent.yaml",
+                        sub_path="agent.yaml",
+                        read_only=True,
+                    ),
+                    client.V1VolumeMount(
+                        name="agent-config",
+                        mount_path="/app/registry.yaml",
+                        sub_path="registry.yaml",
+                        read_only=True,
+                    ),
+                ]
+            )
         if self._tools_configmap:
-            volumes.append(client.V1Volume(
-                name="agent-tools",
-                config_map=client.V1ConfigMapVolumeSource(name=self._tools_configmap),
-            ))
+            volumes.append(
+                client.V1Volume(
+                    name="agent-tools",
+                    config_map=client.V1ConfigMapVolumeSource(
+                        name=self._tools_configmap
+                    ),
+                )
+            )
             volume_mounts.append(
-                client.V1VolumeMount(name="agent-tools", mount_path="/app/tools", read_only=True),
+                client.V1VolumeMount(
+                    name="agent-tools", mount_path="/app/tools", read_only=True
+                ),
             )
 
         job_labels = {"app": agent_name, "spawned-by": "workflow-runner"}
@@ -128,13 +166,18 @@ class KubernetesSpawner(AgentSpawner):
         if skills_image:
             copy_paths = skills_paths or ["/skills"]
             copy_cmd = " && ".join(f"cp -r {p} /skills-data/" for p in copy_paths)
-            volumes.append(client.V1Volume(
-                name="skills-data",
-                empty_dir=client.V1EmptyDirVolumeSource(),
-            ))
-            volume_mounts.append(client.V1VolumeMount(
-                name="skills-data", mount_path="/app/skills",
-            ))
+            volumes.append(
+                client.V1Volume(
+                    name="skills-data",
+                    empty_dir=client.V1EmptyDirVolumeSource(),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name="skills-data",
+                    mount_path="/app/skills",
+                )
+            )
             init_containers = [
                 client.V1Container(
                     name="skills-loader",
@@ -142,30 +185,81 @@ class KubernetesSpawner(AgentSpawner):
                     command=["sh", "-c", copy_cmd],
                     volume_mounts=[
                         client.V1VolumeMount(
-                            name="skills-data", mount_path="/skills-data",
+                            name="skills-data",
+                            mount_path="/skills-data",
                         ),
                     ],
                 ),
             ]
 
         if self._projected_sa_token:
-            volumes.append(client.V1Volume(
-                name="sa-token",
-                projected=client.V1ProjectedVolumeSource(sources=[
-                    client.V1VolumeProjection(
-                        service_account_token=client.V1ServiceAccountTokenProjection(
-                            audience="cloud-agents",
-                            expiration_seconds=3600,
-                            path="token",
-                        ),
+            volumes.append(
+                client.V1Volume(
+                    name="sa-token",
+                    projected=client.V1ProjectedVolumeSource(
+                        sources=[
+                            client.V1VolumeProjection(
+                                service_account_token=client.V1ServiceAccountTokenProjection(
+                                    audience="cloud-agents",
+                                    expiration_seconds=3600,
+                                    path="token",
+                                ),
+                            ),
+                        ]
                     ),
-                ]),
-            ))
-            volume_mounts.append(client.V1VolumeMount(
-                name="sa-token",
-                mount_path="/var/run/secrets/cloud-agents",
-                read_only=True,
-            ))
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name="sa-token",
+                    mount_path="/var/run/secrets/cloud-agents",
+                    read_only=True,
+                )
+            )
+
+        env_from = None
+        if credential_secret_name:
+            volumes.append(
+                client.V1Volume(
+                    name="llm-credentials",
+                    secret=client.V1SecretVolumeSource(
+                        secret_name=credential_secret_name,
+                    ),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name="llm-credentials",
+                    mount_path="/var/run/secrets/llm-credentials/",
+                    read_only=True,
+                )
+            )
+            env_from = [
+                client.V1EnvFromSource(
+                    secret_ref=client.V1SecretEnvSource(
+                        name=credential_secret_name,
+                    ),
+                ),
+            ]
+
+        if mcp_secret_mounts:
+            for secret_name, _key, mount_path in mcp_secret_mounts:
+                vol_name = f"mcp-secret-{secret_name}"
+                volumes.append(
+                    client.V1Volume(
+                        name=vol_name,
+                        secret=client.V1SecretVolumeSource(
+                            secret_name=secret_name,
+                        ),
+                    )
+                )
+                volume_mounts.append(
+                    client.V1VolumeMount(
+                        name=vol_name,
+                        mount_path=mount_path,
+                        read_only=True,
+                    )
+                )
 
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
@@ -188,12 +282,24 @@ class KubernetesSpawner(AgentSpawner):
                             client.V1Container(
                                 name="agent",
                                 image=image,
-                                image_pull_policy="Never",
+                                image_pull_policy="IfNotPresent",
                                 env=env_list,
+                                env_from=env_from,
                                 ports=[client.V1ContainerPort(container_port=8080)],
                                 resources=client.V1ResourceRequirements(
-                                    requests={"cpu": cfg.cpu_request, "memory": cfg.memory_request},
-                                    limits={"cpu": cfg.cpu_limit, "memory": cfg.memory_limit},
+                                    requests={
+                                        "cpu": cfg.cpu_request,
+                                        "memory": cfg.memory_request,
+                                    },
+                                    limits={
+                                        "cpu": cfg.cpu_limit,
+                                        "memory": cfg.memory_limit,
+                                    },
+                                ),
+                                security_context=client.V1SecurityContext(
+                                    run_as_non_root=True,
+                                    read_only_root_filesystem=True,
+                                    allow_privilege_escalation=False,
                                 ),
                                 volume_mounts=volume_mounts or None,
                             ),
@@ -208,7 +314,9 @@ class KubernetesSpawner(AgentSpawner):
             batch.create_namespaced_job(namespace=self._namespace, body=job)
         except Exception as exc:
             if getattr(exc, "status", None) == 409:
-                existing = batch.read_namespaced_job(name=job_name, namespace=self._namespace)
+                existing = batch.read_namespaced_job(
+                    name=job_name, namespace=self._namespace
+                )
                 existing_image = existing.spec.template.spec.containers[0].image
                 if existing_image != image:
                     raise RuntimeError(
@@ -236,6 +344,37 @@ class KubernetesSpawner(AgentSpawner):
 
         logger.info("Spawned K8s Job '%s' in namespace '%s'", job_name, self._namespace)
         return f"http://{job_name}.{self._namespace}.svc:8080"
+
+    async def _do_list_active(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[str]:
+        """List active K8s Jobs matching the given labels.
+
+        Args:
+            labels: Optional label selector to filter Jobs.
+
+        Returns:
+            List of agent names (without the "agent-" prefix).
+        """
+        try:
+            from kubernetes import client, config
+
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
+            batch = client.BatchV1Api()
+        except Exception as exc:
+            logger.warning("Cannot connect to K8s API for list_active: %s", exc)
+            return []
+
+        label_selector = ",".join(f"{k}={v}" for k, v in (labels or {}).items())
+        jobs = batch.list_namespaced_job(
+            namespace=self._namespace,
+            label_selector=label_selector,
+        )
+        return [job.metadata.name.removeprefix("agent-") for job in jobs.items]
 
     async def _do_destroy(self, agent_name: str) -> None:
         """Delete the K8s Job and Service."""

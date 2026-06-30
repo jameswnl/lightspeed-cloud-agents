@@ -10,7 +10,6 @@ import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import httpx
 from pydantic import BaseModel, Field
@@ -84,6 +83,8 @@ class AgentSpawner(ABC):
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
+        credential_secret_name: str | None = None,
+        mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -97,6 +98,10 @@ class AgentSpawner(ABC):
             skills_paths: Paths within skills image to copy.
             service_account: Override ServiceAccount for this pod.
             read_only: Run container with read-only filesystem (advisory mode).
+            credential_secret_name: K8s Secret to mount as volume and envFrom
+                for file-based credential providers (e.g. Vertex, Bedrock).
+            mcp_secret_mounts: List of (secret_name, key, mount_path) tuples
+                for MCP server Secret-backed auth headers.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -113,9 +118,17 @@ class AgentSpawner(ABC):
 
         try:
             endpoint = await self._do_spawn(
-                agent_name, image, env or {}, config, labels,
-                skills_image=skills_image, skills_paths=skills_paths,
-                service_account=service_account, read_only=read_only,
+                agent_name,
+                image,
+                env or {},
+                config,
+                labels,
+                skills_image=skills_image,
+                skills_paths=skills_paths,
+                service_account=service_account,
+                read_only=read_only,
+                credential_secret_name=credential_secret_name,
+                mcp_secret_mounts=mcp_secret_mounts,
             )
             return endpoint
         except Exception:
@@ -125,13 +138,18 @@ class AgentSpawner(ABC):
 
     @abstractmethod
     async def _do_spawn(
-        self, agent_name: str, image: str, env: dict[str, str],
+        self,
+        agent_name: str,
+        image: str,
+        env: dict[str, str],
         config: SpawnConfig | None = None,
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
+        credential_secret_name: str | None = None,
+        mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
     ) -> str:
         """Implementation-specific pod creation."""
 
@@ -151,8 +169,33 @@ class AgentSpawner(ABC):
     async def _do_destroy(self, agent_name: str) -> None:
         """Implementation-specific pod destruction."""
 
+    async def list_active(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[str]:
+        """List active spawned agent names matching the given labels.
+
+        Args:
+            labels: Optional label selector to filter results.
+
+        Returns:
+            List of agent names (without the "agent-" prefix) that are
+            currently active and match the given labels.
+        """
+        return await self._do_list_active(labels)
+
+    @abstractmethod
+    async def _do_list_active(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Implementation-specific listing of active agents."""
+
     async def wait_ready(
-        self, endpoint: str, timeout: float = 60.0, health_path: str = "/healthz",
+        self,
+        endpoint: str,
+        timeout: float = 60.0,
+        health_path: str = "/healthz",
     ) -> bool:
         """Wait for a spawned pod to be ready.
 

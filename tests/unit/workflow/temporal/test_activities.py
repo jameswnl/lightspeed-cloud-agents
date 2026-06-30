@@ -62,13 +62,20 @@ class TestRunSandboxStep:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        result = await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         assert result["status"] == "completed"
         assert result["output"]["summary"] == "diagnosed ok"
@@ -95,13 +102,20 @@ class TestRunSandboxStep:
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         with pytest.raises(RuntimeError, match="Infrastructure error"):
-            await run_sandbox_step({
-                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
-                "workflow_id": "wf-1",
-                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-                "sandbox_image": "sandbox:latest",
-                "context": {},
-            }, spawner=mock_spawner)
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "k",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
 
         mock_spawner.destroy.assert_called_once()
 
@@ -129,18 +143,24 @@ class TestRunSandboxStep:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        result = await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         assert result["status"] == "failed"
         assert result["error"] == "agent failed"
         mock_spawner.destroy.assert_called_once()
-
 
     @pytest.mark.asyncio
     async def test_context_includes_prior_steps(self, mocker: MockerFixture) -> None:
@@ -169,16 +189,28 @@ class TestRunSandboxStep:
             return_value={},
         )
 
-        await run_sandbox_step({
-            "step": {"name": "exec", "prompt": "fix", "output_key": "r2",
-                     "role": "execution", "execution_step": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {
-                "r1": {"status": "completed", "output": {"summary": "found issue"}},
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "exec",
+                    "prompt": "fix",
+                    "output_key": "r2",
+                    "role": "execution",
+                    "execution_step": "r1",
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {
+                    "r1": {"status": "completed", "output": {"summary": "found issue"}},
+                },
             },
-        }, spawner=mock_spawner)
+            spawner=mock_spawner,
+        )
 
         call_args = mock_build_ctx.call_args
         workflow_steps = call_args.kwargs.get("workflow_steps") or call_args[0][0]
@@ -193,19 +225,27 @@ class TestRunSandboxStep:
         mock_spawner.wait_ready.return_value = False
 
         with pytest.raises(RuntimeError, match="never became ready"):
-            await run_sandbox_step({
-                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
-                "workflow_id": "wf-1",
-                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-                "sandbox_image": "sandbox:latest",
-                "context": {},
-            }, spawner=mock_spawner)
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "k",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
 
         mock_spawner.destroy.assert_called_once()
 
-
     @pytest.mark.asyncio
-    async def test_permissions_service_account_passed(self, mocker: MockerFixture) -> None:
+    async def test_permissions_service_account_passed(
+        self, mocker: MockerFixture
+    ) -> None:
         """Permissions service_account is forwarded to spawner."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -225,21 +265,34 @@ class TestRunSandboxStep:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                     "permissions": {"service_account": "custom-sa"}},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "permissions": {"service_account": "custom-sa"},
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
         assert env_vars.get("LIGHTSPEED_SERVICE_ACCOUNT") == "custom-sa"
 
     @pytest.mark.asyncio
-    async def test_permissions_timeout_overrides_default(self, mocker: MockerFixture) -> None:
+    async def test_permissions_timeout_overrides_default(
+        self, mocker: MockerFixture
+    ) -> None:
         """Permissions timeout_seconds overrides default HTTP timeout."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -260,14 +313,25 @@ class TestRunSandboxStep:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                     "permissions": {"timeout_seconds": 120}},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "permissions": {"timeout_seconds": 120},
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         http_init_call = mock_http.call_args
         assert http_init_call[1].get("timeout") == 120.0
@@ -278,7 +342,8 @@ class TestNotificationActivity:
 
     @pytest.mark.asyncio
     async def test_notification_sends_with_correlation_id(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Notification includes correlation_id and calls notifier."""
         from agents.workflow.temporal_activities import send_approval_notification
@@ -289,12 +354,14 @@ class TestNotificationActivity:
         mock_notifier = mocker.AsyncMock()
         mock_notifier_cls.return_value = mock_notifier
 
-        await send_approval_notification({
-            "workflow_id": "wf-1",
-            "step_name": "approve",
-            "message": "Please approve",
-            "notifier_config": None,
-        })
+        await send_approval_notification(
+            {
+                "workflow_id": "wf-1",
+                "step_name": "approve",
+                "message": "Please approve",
+                "notifier_config": None,
+            }
+        )
 
         mock_notifier.notify.assert_called_once()
         call_kwargs = mock_notifier.notify.call_args[1]
@@ -302,7 +369,8 @@ class TestNotificationActivity:
 
     @pytest.mark.asyncio
     async def test_notification_failure_non_fatal(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Notification failure does not raise."""
         from agents.workflow.temporal_activities import send_approval_notification
@@ -314,12 +382,14 @@ class TestNotificationActivity:
         mock_notifier.notify.side_effect = RuntimeError("webhook failed")
         mock_notifier_cls.return_value = mock_notifier
 
-        result = await send_approval_notification({
-            "workflow_id": "wf-1",
-            "step_name": "approve",
-            "message": "Please approve",
-            "notifier_config": None,
-        })
+        result = await send_approval_notification(
+            {
+                "workflow_id": "wf-1",
+                "step_name": "approve",
+                "message": "Please approve",
+                "notifier_config": None,
+            }
+        )
 
         assert result["status"] == "notification_failed"
 
@@ -330,17 +400,20 @@ class TestBuildEscalation:
     @pytest.mark.asyncio
     async def test_packages_failed_steps(self) -> None:
         """Escalation packages failed step info."""
-        result = await build_escalation_activity({
-            "r1": {"status": "completed", "output": {"ok": True}},
-            "r2": {"status": "failed", "error": "timeout"},
-        })
+        result = await build_escalation_activity(
+            {
+                "r1": {"status": "completed", "output": {"ok": True}},
+                "r2": {"status": "failed", "error": "timeout"},
+            }
+        )
         assert result["status"] == "escalated"
         assert len(result["output"]["failed_steps"]) == 1
         assert result["output"]["failed_steps"][0]["step"] == "r2"
 
     @pytest.mark.asyncio
     async def test_escalation_delivery_failure_non_fatal(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Escalation packager failure is non-fatal; artifact still returned."""
         mock_packager_cls = mocker.patch(
@@ -350,9 +423,11 @@ class TestBuildEscalation:
         mock_packager.package.side_effect = RuntimeError("delivery failed")
         mock_packager_cls.return_value = mock_packager
 
-        result = await build_escalation_activity({
-            "r1": {"status": "failed", "error": "timeout"},
-        })
+        result = await build_escalation_activity(
+            {
+                "r1": {"status": "failed", "error": "timeout"},
+            }
+        )
 
         assert result["status"] == "escalated"
         assert result["output"]["failed_steps"][0]["step"] == "r1"
@@ -363,7 +438,9 @@ class TestNormalizeConfigRef:
 
     def test_hyphens_to_underscores(self) -> None:
         """Hyphens become underscores."""
-        assert _normalize_config_ref("slack-approval-channel") == "SLACK_APPROVAL_CHANNEL"
+        assert (
+            _normalize_config_ref("slack-approval-channel") == "SLACK_APPROVAL_CHANNEL"
+        )
 
     def test_already_uppercase(self) -> None:
         """Already uppercase passes through."""
@@ -379,12 +456,15 @@ class TestNotificationConfigResolution:
 
     @pytest.mark.asyncio
     async def test_slack_notifier_resolved_from_env(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Slack notifier resolves webhook URL from env var."""
         mocker.patch.dict(
             "os.environ",
-            {"NOTIFIER_SLACK_APPROVAL_CHANNEL_WEBHOOK_URL": "https://hooks.slack.com/test"},
+            {
+                "NOTIFIER_SLACK_APPROVAL_CHANNEL_WEBHOOK_URL": "https://hooks.slack.com/test"
+            },
         )
         mock_slack = mocker.patch(
             "agents.workflow.notifier.SlackNotifier",
@@ -392,18 +472,21 @@ class TestNotificationConfigResolution:
         mock_instance = mocker.AsyncMock()
         mock_slack.return_value = mock_instance
 
-        await send_approval_notification({
-            "workflow_id": "wf-1",
-            "step_name": "approve",
-            "message": "OK?",
-            "notifier_config": {"type": "slack", "config_ref": "approval-channel"},
-        })
+        await send_approval_notification(
+            {
+                "workflow_id": "wf-1",
+                "step_name": "approve",
+                "message": "OK?",
+                "notifier_config": {"type": "slack", "config_ref": "approval-channel"},
+            }
+        )
 
         mock_slack.assert_called_once_with(webhook_url="https://hooks.slack.com/test")
 
     @pytest.mark.asyncio
     async def test_webhook_notifier_resolved_from_env(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Webhook notifier resolves URL from env var."""
         mocker.patch.dict(
@@ -416,12 +499,14 @@ class TestNotificationConfigResolution:
         mock_instance = mocker.AsyncMock()
         mock_webhook.return_value = mock_instance
 
-        await send_approval_notification({
-            "workflow_id": "wf-1",
-            "step_name": "approve",
-            "message": "OK?",
-            "notifier_config": {"type": "webhook", "config_ref": "my-endpoint"},
-        })
+        await send_approval_notification(
+            {
+                "workflow_id": "wf-1",
+                "step_name": "approve",
+                "message": "OK?",
+                "notifier_config": {"type": "webhook", "config_ref": "my-endpoint"},
+            }
+        )
 
         mock_webhook.assert_called_once_with(url="https://example.com/notify")
 
@@ -450,14 +535,25 @@ class TestAdvisorySpawnerEnforcement:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "check", "output_key": "r1",
-                     "advisory": True},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "diag",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "advisory": True,
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         spawn_call = mock_spawner.spawn.call_args
         assert spawn_call[1].get("service_account") == "advisory-sa"
@@ -484,13 +580,20 @@ class TestAdvisorySpawnerEnforcement:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         spawn_call = mock_spawner.spawn.call_args
         assert spawn_call[1].get("read_only") is False
@@ -498,10 +601,13 @@ class TestAdvisorySpawnerEnforcement:
     @pytest.mark.asyncio
     async def test_deployment_env_vars_forwarded(self, mocker: MockerFixture) -> None:
         """Deployment env vars (LIGHTSPEED_PROVIDER_URL etc.) forwarded to sandbox."""
-        mocker.patch.dict("os.environ", {
-            "LIGHTSPEED_PROVIDER_URL": "https://api.openai.com/v1",
-            "LIGHTSPEED_MODEL_PROVIDER": "openai",
-        })
+        mocker.patch.dict(
+            "os.environ",
+            {
+                "LIGHTSPEED_PROVIDER_URL": "https://api.openai.com/v1",
+                "LIGHTSPEED_MODEL_PROVIDER": "openai",
+            },
+        )
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -520,13 +626,20 @@ class TestAdvisorySpawnerEnforcement:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
@@ -554,16 +667,391 @@ class TestAdvisorySpawnerEnforcement:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        await run_sandbox_step({
-            "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "skills_image": "skills:v1",
-            "skills_paths": ["/skills/diag"],
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "skills_image": "skills:v1",
+                "skills_paths": ["/skills/diag"],
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         spawn_call = mock_spawner.spawn.call_args
         assert spawn_call[1].get("skills_image") == "skills:v1"
         assert spawn_call[1].get("skills_paths") == ["/skills/diag"]
+
+
+class TestMCPInjection:
+    """Tests for MCP server config injection into sandbox env vars."""
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_set_as_env_var(self, mocker: MockerFixture) -> None:
+        """MCP server config serialized as LIGHTSPEED_MCP_SERVERS env var."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {
+                        "name": "sn",
+                        "url": "http://mcp.local/sse",
+                        "headers": {"X-Custom": "val"},
+                    }
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        import json
+
+        mcp_json = json.loads(env_vars.get("LIGHTSPEED_MCP_SERVERS", "[]"))
+        assert len(mcp_json) == 1
+        assert mcp_json[0]["name"] == "sn"
+        assert mcp_json[0]["url"] == "http://mcp.local/sse"
+        assert mcp_json[0]["headers"]["X-Custom"] == "val"
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_not_set_when_absent(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_MCP_SERVERS not set when no mcp_servers provided."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert "LIGHTSPEED_MCP_SERVERS" not in env_vars
+
+    @pytest.mark.asyncio
+    async def test_secret_headers_encoded_as_file_refs(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Secret headers encoded as file references in MCP env var."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {
+                        "name": "servicenow",
+                        "url": "http://mcp.local/sse",
+                        "secret_headers": {
+                            "Authorization": {
+                                "secret_name": "mcp-sn-token",
+                                "key": "bearer-token",
+                            },
+                        },
+                    }
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        import json
+
+        mcp_json = json.loads(env_vars["LIGHTSPEED_MCP_SERVERS"])
+        server = mcp_json[0]
+        assert server["headers"]["Authorization"] == {
+            "file": "/var/secrets/mcp/servicenow/bearer-token"
+        }
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_mounts_passed_to_spawner(
+        self, mocker: MockerFixture
+    ) -> None:
+        """MCP secret refs passed to spawner as mcp_secret_mounts."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {
+                        "name": "servicenow",
+                        "url": "http://mcp.local/sse",
+                        "secret_headers": {
+                            "Authorization": {
+                                "secret_name": "mcp-sn-token",
+                                "key": "bearer-token",
+                            },
+                        },
+                    }
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        mcp_mounts = spawn_call[1].get("mcp_secret_mounts")
+        assert mcp_mounts is not None
+        assert len(mcp_mounts) == 1
+        assert mcp_mounts[0] == (
+            "mcp-sn-token",
+            "bearer-token",
+            "/var/secrets/mcp/servicenow/",
+        )
+
+    @pytest.mark.asyncio
+    async def test_mcp_allowed_secrets_blocks_unlisted(
+        self, mocker: MockerFixture
+    ) -> None:
+        """MCP_ALLOWED_SECRETS rejects secrets not in the allowlist."""
+        mocker.patch.dict(
+            "os.environ",
+            {"MCP_ALLOWED_SECRETS": "allowed-secret"},
+        )
+        mock_spawner = mocker.AsyncMock()
+
+        with pytest.raises(ValueError, match="not in MCP_ALLOWED_SECRETS"):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "k",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                    "mcp_servers": [
+                        {
+                            "name": "sn",
+                            "url": "http://mcp.local/sse",
+                            "secret_headers": {
+                                "Authorization": {
+                                    "secret_name": "blocked-secret",
+                                    "key": "token",
+                                },
+                            },
+                        }
+                    ],
+                },
+                spawner=mock_spawner,
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_allowed_secrets_permits_listed(
+        self, mocker: MockerFixture
+    ) -> None:
+        """MCP_ALLOWED_SECRETS permits secrets in the allowlist."""
+        mocker.patch.dict(
+            "os.environ",
+            {"MCP_ALLOWED_SECRETS": "mcp-sn-token,other-secret"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {
+                        "name": "sn",
+                        "url": "http://mcp.local/sse",
+                        "secret_headers": {
+                            "Authorization": {
+                                "secret_name": "mcp-sn-token",
+                                "key": "bearer-token",
+                            },
+                        },
+                    }
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+
+
+class TestAuditEmission:
+    """Tests for audit event emission from activities."""
+
+    @pytest.mark.asyncio
+    async def test_sandbox_spawned_audit_event(self, mocker: MockerFixture) -> None:
+        """Successful sandbox step emits sandbox_spawned audit event."""
+        mock_emit = mocker.patch("agents.workflow.temporal_activities.emit_audit")
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                "workflow_id": "wf-audit-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_calls = [
+            c
+            for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "sandbox_spawned"
+        ]
+        assert len(spawn_calls) == 1
+        assert spawn_calls[0][1]["workflow_id"] == "wf-audit-1"
+
+        destroy_calls = [
+            c
+            for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "sandbox_destroyed"
+        ]
+        assert len(destroy_calls) == 1

@@ -40,5 +40,10 @@ networkPolicy:
     enabled: false
     llmCidrs: []
 
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
 rbac:
   create: true

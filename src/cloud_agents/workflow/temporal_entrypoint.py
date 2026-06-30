@@ -19,15 +19,18 @@ from temporalio.worker import Worker
 
 from agents.runtime.tracing import init_tracing
 from agents.workflow.definition_store import DefinitionStore
+from agents.workflow.structured_logging import configure_logging
 from agents.workflow.temporal_api import build_temporal_router
 from agents.workflow.temporal_worker import build_worker_config
 
 logger = logging.getLogger(__name__)
 
+
 def _get_tracing_interceptors() -> list:
     """Get Temporal tracing interceptors if OTel is available."""
     try:
         from temporalio.contrib.opentelemetry import TracingInterceptor
+
         return [TracingInterceptor()]
     except Exception:
         return []
@@ -70,17 +73,49 @@ def _create_spawner():
     """Create spawner based on environment config."""
     if SPAWNER_TYPE == "kubernetes":
         from agents.spawner.kubernetes_spawner import KubernetesSpawner
+
         namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
         service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
         logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
         return KubernetesSpawner(namespace=namespace, service_account=service_account)
     if SPAWNER_TYPE == "podman":
         from agents.spawner.podman_spawner import PodmanSpawner
+
         network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
         logger.info("Using PodmanSpawner (network=%s)", network)
         return PodmanSpawner(network=network)
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
+
+
+async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
+    """Destroy orphaned sandbox containers left from a previous crash.
+
+    On startup, scans for containers/Jobs with the "spawned-by=workflow-runner"
+    label and destroys them. This prevents resource leaks after unclean shutdowns.
+
+    Args:
+        spawner: The spawner instance, or None if no spawner is configured.
+    """
+    if spawner is None:
+        return
+
+    orphans = await spawner.list_active({"spawned-by": "workflow-runner"})
+    for name in orphans:
+        logger.warning("Destroying orphaned sandbox '%s'", name)
+        try:
+            await spawner.destroy(name)
+        except Exception as exc:
+            logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
+    if orphans:
+        logger.info("Cleaned up %d orphaned sandbox(es) on startup", len(orphans))
+        from agents.workflow.audit import emit_audit
+
+        emit_audit(
+            event_type="orphan_cleanup",
+            workflow_id="startup",
+            details={"count": len(orphans), "names": orphans},
+        )
 
 
 AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
@@ -93,6 +128,7 @@ def _get_auth_dependency():
     """
     try:
         from authentication import get_auth_dependency
+
         return get_auth_dependency()
     except Exception:
         if AUTH_REQUIRED:
@@ -117,6 +153,7 @@ def build_temporal_app(
     Returns:
         FastAPI application with lifespan-managed Temporal client and worker.
     """
+    configure_logging()
     init_tracing("workflow-runner")
 
     spawner = _create_spawner()
@@ -126,9 +163,13 @@ def build_temporal_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
+        await reconcile_orphaned_sandboxes(spawner)
         try:
             tls_config = _build_tls_config()
-            connect_kwargs: dict = {"target_host": temporal_url, "namespace": temporal_namespace}
+            connect_kwargs: dict = {
+                "target_host": temporal_url,
+                "namespace": temporal_namespace,
+            }
             if tls_config:
                 connect_kwargs["tls"] = tls_config
                 logger.info("Temporal TLS enabled")
@@ -136,7 +177,8 @@ def build_temporal_app(
             temporal_client_holder["client"] = client
             logger.info(
                 "Connected to Temporal at %s (namespace=%s)",
-                temporal_url, temporal_namespace,
+                temporal_url,
+                temporal_namespace,
             )
 
             async with Worker(
@@ -147,7 +189,9 @@ def build_temporal_app(
                 max_concurrent_activities=worker_config.max_concurrent_activities,
                 interceptors=_get_tracing_interceptors(),
             ):
-                logger.info("Temporal worker started on queue '%s'", worker_config.task_queue)
+                logger.info(
+                    "Temporal worker started on queue '%s'", worker_config.task_queue
+                )
                 yield
 
             logger.info("Temporal worker stopped")
@@ -155,7 +199,8 @@ def build_temporal_app(
             logger.warning(
                 "Cannot connect to Temporal at %s: %s. "
                 "App will serve healthz but workflows are unavailable.",
-                temporal_url, exc,
+                temporal_url,
+                exc,
             )
             yield
 
@@ -188,6 +233,7 @@ def build_temporal_app(
         if "client" in temporal_client_holder:
             return {"status": "ready"}
         from fastapi.responses import JSONResponse
+
         return JSONResponse({"status": "not_ready"}, status_code=503)
 
     @app.get("/metrics")
@@ -195,7 +241,10 @@ def build_temporal_app(
         """Prometheus metrics endpoint."""
         from fastapi.responses import PlainTextResponse
         from prometheus_client import generate_latest
-        return PlainTextResponse(generate_latest(), media_type="text/plain; charset=utf-8")
+
+        return PlainTextResponse(
+            generate_latest(), media_type="text/plain; charset=utf-8"
+        )
 
     return app
 

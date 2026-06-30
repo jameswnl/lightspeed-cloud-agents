@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException, status
@@ -45,7 +46,9 @@ class TestRunWorkflow:
     """Tests for POST /v1/workflows/run."""
 
     def test_start_workflow_returns_202(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Starting a workflow returns 202 with workflow_id."""
         response = client.post(
@@ -68,7 +71,9 @@ class TestRunWorkflow:
         assert "workflow_id" in response.json()
 
     def test_start_workflow_calls_temporal(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Starting a workflow calls Temporal client."""
         client.post(
@@ -89,12 +94,102 @@ class TestRunWorkflow:
         )
         mock_client.start_workflow.assert_called_once()
 
+    def test_duplicate_workflow_id_returns_409(
+        self,
+        client: TestClient,
+        mock_client: Any,
+    ) -> None:
+        """Duplicate workflow_id submission returns 409 Conflict."""
+        from temporalio.service import RPCError, RPCStatusCode
+
+        exc = RPCError(
+            message="Workflow execution already started",
+            status=RPCStatusCode.ALREADY_EXISTS,
+            raw_grpc_status=None,
+        )
+        mock_client.start_workflow = AsyncMock(side_effect=exc)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "key",
+                },
+            },
+        )
+        assert response.status_code == 409
+
+    def test_mcp_servers_propagated_to_workflow_input(
+        self,
+        client: TestClient,
+        mock_client: Any,
+    ) -> None:
+        """MCP servers from request are passed to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "mcp_servers": [{"name": "sn", "url": "http://mcp.local/sse"}],
+            },
+        )
+        assert response.status_code == 202
+        call_args = mock_client.start_workflow.call_args
+        workflow_input = call_args[0][1]  # second positional arg
+        assert workflow_input.mcp_servers is not None
+        assert len(workflow_input.mcp_servers) == 1
+
+    def test_caller_supplied_workflow_id_used(
+        self,
+        client: TestClient,
+        mock_client: Any,
+    ) -> None:
+        """Caller-supplied workflow_id is used instead of generated one."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "workflow_id": "wf-my-custom-id",
+            },
+        )
+        assert response.status_code == 202
+        assert response.json()["workflow_id"] == "wf-my-custom-id"
+
 
 class TestApproveWorkflow:
     """Tests for POST /v1/workflows/{id}/approve."""
 
     def test_approve_returns_200(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Sending approval returns 200."""
         response = client.post(
@@ -107,7 +202,9 @@ class TestApproveWorkflow:
         assert response.status_code == 200
 
     def test_approve_with_option_id(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Approval with selected_option_id passes through."""
         response = client.post(
@@ -127,7 +224,9 @@ class TestGetWorkflowStatus:
     """Tests for GET /v1/workflows/{id}."""
 
     def test_get_status_returns_200(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Query returns workflow status."""
         response = client.get("/v1/workflows/wf-test-1")
@@ -138,7 +237,9 @@ class TestCancelWorkflow:
     """Tests for POST /v1/workflows/{id}/cancel."""
 
     def test_cancel_returns_200(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Cancel returns 200."""
         response = client.post("/v1/workflows/wf-test-1/cancel")
@@ -172,18 +273,25 @@ class TestAdvisoryPropagation:
     """Tests for advisory flag propagation through the API."""
 
     def test_advisory_from_request(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Advisory flag from request is passed to WorkflowInput."""
         response = client.post(
             "/v1/workflows/run",
             json={
                 "definition": {
-                    "apiVersion": "v1", "kind": "AgentWorkflow",
-                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
                 },
-                "provider": {"name": "openai", "model": "gpt-4",
-                             "credentials_secret": "k"},
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
                 "advisory": True,
             },
         )
@@ -193,18 +301,25 @@ class TestAdvisoryPropagation:
         assert wf_input.advisory is True
 
     def test_advisory_defaults_false(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """Advisory defaults to False when not set."""
         response = client.post(
             "/v1/workflows/run",
             json={
                 "definition": {
-                    "apiVersion": "v1", "kind": "AgentWorkflow",
-                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
                 },
-                "provider": {"name": "openai", "model": "gpt-4",
-                             "credentials_secret": "k"},
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
             },
         )
         assert response.status_code == 202
@@ -230,12 +345,21 @@ class TestDefinitionManagement:
         response = test_client.post(
             "/v1/workflows/definitions",
             json={
-                "apiVersion": "v1", "kind": "AgentWorkflow",
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
                 "metadata": {"name": "my-wf"},
-                "spec": {"steps": [
-                    {"name": "s1", "type": "agent", "agent": "diag",
-                     "prompt": "test", "output_key": "r1", "spawn": "pre-deployed"},
-                ]},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "agent": "diag",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "spawn": "pre-deployed",
+                        },
+                    ]
+                },
             },
         )
         assert response.status_code == 201
@@ -255,12 +379,21 @@ class TestDefinitionManagement:
         test_client.post(
             "/v1/workflows/definitions",
             json={
-                "apiVersion": "v1", "kind": "AgentWorkflow",
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
                 "metadata": {"name": "fetch-wf"},
-                "spec": {"steps": [
-                    {"name": "s1", "type": "agent", "agent": "diag",
-                     "prompt": "test", "output_key": "r1", "spawn": "pre-deployed"},
-                ]},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "agent": "diag",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "spawn": "pre-deployed",
+                        },
+                    ]
+                },
             },
         )
 
@@ -287,18 +420,25 @@ class TestConfigPropagation:
     """Tests for notifier/escalation config propagation."""
 
     def test_notifier_config_propagated(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """notifier_config flows from request to WorkflowInput."""
         response = client.post(
             "/v1/workflows/run",
             json={
                 "definition": {
-                    "apiVersion": "v1", "kind": "AgentWorkflow",
-                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
                 },
-                "provider": {"name": "openai", "model": "gpt-4",
-                             "credentials_secret": "k"},
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
                 "notifier_config": {"type": "slack", "config_ref": "my-channel"},
             },
         )
@@ -307,33 +447,45 @@ class TestConfigPropagation:
         assert wf_input.notifier_config == {"type": "slack", "config_ref": "my-channel"}
 
     def test_escalation_config_propagated(
-        self, client: TestClient, mock_client: Any,
+        self,
+        client: TestClient,
+        mock_client: Any,
     ) -> None:
         """escalation_config flows from request to WorkflowInput."""
         response = client.post(
             "/v1/workflows/run",
             json={
                 "definition": {
-                    "apiVersion": "v1", "kind": "AgentWorkflow",
-                    "metadata": {"name": "t"}, "spec": {"steps": []},
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
                 },
-                "provider": {"name": "openai", "model": "gpt-4",
-                             "credentials_secret": "k"},
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
                 "escalation_config": {"type": "webhook", "config_ref": "ops-endpoint"},
             },
         )
         assert response.status_code == 202
         wf_input = mock_client.start_workflow.call_args[0][1]
-        assert wf_input.escalation_config == {"type": "webhook", "config_ref": "ops-endpoint"}
+        assert wf_input.escalation_config == {
+            "type": "webhook",
+            "config_ref": "ops-endpoint",
+        }
 
 
 class TestAuthEnforcement:
     """Tests that auth dependency is enforced when provided."""
 
     def test_unauthenticated_request_rejected(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Requests without auth are rejected when auth_dependency is set."""
+
         def reject_unauthenticated():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -345,7 +497,8 @@ class TestAuthEnforcement:
 
         app = FastAPI()
         router = build_temporal_router(
-            mock_temporal, auth_dependency=reject_unauthenticated,
+            mock_temporal,
+            auth_dependency=reject_unauthenticated,
         )
         app.include_router(router)
         client = TestClient(app, raise_server_exceptions=False)

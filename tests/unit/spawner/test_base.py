@@ -1,7 +1,5 @@
 """Unit tests for AgentSpawner base class."""
 
-import asyncio
-
 import pytest
 
 from agents.spawner.base import AgentSpawner
@@ -15,22 +13,32 @@ class MockSpawner(AgentSpawner):
         self.spawned = []
         self.destroyed = []
 
-    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
+    async def _do_spawn(
+        self, agent_name, image, env, config=None, labels=None, **kwargs
+    ):
         self.spawned.append(agent_name)
         return f"http://{agent_name}:8080"
 
     async def _do_destroy(self, agent_name):
         self.destroyed.append(agent_name)
 
+    async def _do_list_active(self, labels=None):
+        return list(self.spawned)
+
 
 class FailingSpawner(AgentSpawner):
     """Spawner that always fails."""
 
-    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
+    async def _do_spawn(
+        self, agent_name, image, env, config=None, labels=None, **kwargs
+    ):
         raise RuntimeError("Spawn failed")
 
     async def _do_destroy(self, agent_name):
         pass
+
+    async def _do_list_active(self, labels=None):
+        return []
 
 
 class TestAgentSpawner:
@@ -92,7 +100,8 @@ class TestAgentSpawner:
         """Test spawning with environment variables."""
         spawner = MockSpawner()
         endpoint = await spawner.spawn(
-            "test", "image:latest",
+            "test",
+            "image:latest",
             env={"OLLAMA_URL": "http://ollama:11434/v1"},
         )
         assert endpoint == "http://test:8080"

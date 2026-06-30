@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,6 +37,95 @@ class TestPodmanSpawnerInit:
         """Test that volume_mounts is empty by default."""
         spawner = PodmanSpawner()
         assert spawner._volume_mounts == {}
+
+
+class TestPodmanSpawnerMCPSecretMounts:
+    """Tests for MCP secret mount handling in PodmanSpawner."""
+
+    def test_do_spawn_accepts_mcp_secret_mounts_parameter(self) -> None:
+        """PodmanSpawner._do_spawn accepts the mcp_secret_mounts parameter."""
+        import inspect
+
+        sig = inspect.signature(PodmanSpawner._do_spawn)
+        assert (
+            "mcp_secret_mounts" in sig.parameters
+        ), "PodmanSpawner._do_spawn must accept mcp_secret_mounts parameter"
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_mounts_raises_on_podman(self) -> None:
+        """Podman spawner raises ValueError for secret-backed MCP headers."""
+        spawner = PodmanSpawner(network="test")
+        with pytest.raises(ValueError, match="not supported on Podman"):
+            await spawner._do_spawn(
+                "test-agent",
+                "image:latest",
+                {},
+                mcp_secret_mounts=[
+                    ("secret-name", "key", "/var/secrets/mcp/sn/key")
+                ],
+            )
+
+
+class TestPodmanSpawnerLabels:
+    """Tests for label injection in PodmanSpawner."""
+
+    @pytest.mark.asyncio
+    async def test_spawned_container_has_runner_label(self) -> None:
+        """Spawned container includes spawned-by=workflow-runner label."""
+        mock_container = MagicMock()
+        mock_container.reload.return_value = None
+        mock_container.ports = {"8080/tcp": [{"HostPort": "12345"}]}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.side_effect = Exception("not found")
+        mock_podman_client.containers.run.return_value = mock_container
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn(
+                "test-agent",
+                "image:latest",
+                {},
+                labels={"cloud-agents/workflow-id": "wf-1"},
+            )
+
+            run_call = mock_podman_client.containers.run.call_args
+            labels = run_call[1].get("labels", {})
+            assert labels.get("spawned-by") == "workflow-runner"
+            assert labels.get("cloud-agents/workflow-id") == "wf-1"
+
+    @pytest.mark.asyncio
+    async def test_spawned_container_has_runner_label_without_extra_labels(
+        self,
+    ) -> None:
+        """Spawned container includes spawned-by label even with no extra labels."""
+        mock_container = MagicMock()
+        mock_container.reload.return_value = None
+        mock_container.ports = {"8080/tcp": [{"HostPort": "12345"}]}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.side_effect = Exception("not found")
+        mock_podman_client.containers.run.return_value = mock_container
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn("test-agent", "image:latest", {})
+
+            run_call = mock_podman_client.containers.run.call_args
+            labels = run_call[1].get("labels", {})
+            assert labels.get("spawned-by") == "workflow-runner"
 
 
 class TestPodmanSpawnerDestroy:

@@ -23,6 +23,10 @@ spec:
           image: docker.io/library/agent-runtime:latest
           imagePullPolicy: Never
           command: ["python", "-m", "uvicorn", "agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 8080
           env:
@@ -43,6 +47,8 @@ spec:
                   key: OPENAI_API_KEY
                   optional: true
           volumeMounts:
+            - name: tmp-scratch
+              mountPath: /tmp
             - name: workflow-config
               mountPath: /app/workflow.yaml
               subPath: workflow.yaml
@@ -68,6 +74,9 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
+        - name: tmp-scratch
+          emptyDir:
+            medium: Memory
         - name: workflow-config
           configMap:
             name: workflow-runner-config

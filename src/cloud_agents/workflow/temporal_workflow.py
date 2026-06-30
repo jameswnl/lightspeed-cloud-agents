@@ -44,7 +44,10 @@ class AgentWorkflow:
 
     @workflow.signal
     async def approve(
-        self, step_name: str, decision: str, selected_option_id: Optional[str] = None,
+        self,
+        step_name: str,
+        decision: str,
+        selected_option_id: Optional[str] = None,
     ) -> None:
         """Receive an approval decision for a step."""
         self._approval_decisions[step_name] = {
@@ -87,7 +90,9 @@ class AgentWorkflow:
         return WorkflowOutput(steps=self._steps)
 
     async def _execute_step(
-        self, step: dict[str, Any], input: WorkflowInput,
+        self,
+        step: dict[str, Any],
+        input: WorkflowInput,
     ) -> Optional[StepResult]:
         """Execute a single step with condition evaluation."""
         step_name = step["name"]
@@ -117,7 +122,9 @@ class AgentWorkflow:
         return None
 
     async def _handle_approval(
-        self, step: dict[str, Any], input: WorkflowInput,
+        self,
+        step: dict[str, Any],
+        input: WorkflowInput,
     ) -> StepResult:
         """Handle a human-approval step with auto-approve check + signal."""
         step_name = step["name"]
@@ -127,7 +134,8 @@ class AgentWorkflow:
         policy_dict = input.approval_policy or {}
         policy = ApprovalPolicy(**policy_dict)
         step_spec = WorkflowStepSpec(
-            name=step_name, type=step["type"],
+            name=step_name,
+            type=step["type"],
             output_key=output_key,
             risk_level=step.get("risk_level"),
             message=step.get("message"),
@@ -148,12 +156,14 @@ class AgentWorkflow:
         try:
             await workflow.execute_activity(
                 "send_approval_notification",
-                args=[{
-                    "workflow_id": input.workflow_id,
-                    "step_name": step_name,
-                    "message": step.get("message", ""),
-                    "notifier_config": input.notifier_config,
-                }],
+                args=[
+                    {
+                        "workflow_id": input.workflow_id,
+                        "step_name": step_name,
+                        "message": step.get("message", ""),
+                        "notifier_config": input.notifier_config,
+                    }
+                ],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
@@ -188,7 +198,9 @@ class AgentWorkflow:
         return result
 
     async def _handle_agent_step(
-        self, step: dict[str, Any], input: WorkflowInput,
+        self,
+        step: dict[str, Any],
+        input: WorkflowInput,
         enforcer: Optional[AdvisoryEnforcer] = None,
     ) -> StepResult:
         """Handle an agent step by dispatching to the sandbox activity."""
@@ -211,15 +223,22 @@ class AgentWorkflow:
         try:
             result = await workflow.execute_activity(
                 "run_sandbox_step",
-                args=[{
-                    "step": resolved_step,
-                    "workflow_id": input.workflow_id,
-                    "provider": input.provider.model_dump(),
-                    "sandbox_image": input.sandbox_image,
-                    "skills_image": input.skills_image,
-                    "skills_paths": input.skills_paths,
-                    "context": {k: v.model_dump() for k, v in self._steps.items()},
-                }],
+                args=[
+                    {
+                        "step": resolved_step,
+                        "workflow_id": input.workflow_id,
+                        "provider": input.provider.model_dump(),
+                        "sandbox_image": input.sandbox_image,
+                        "skills_image": input.skills_image,
+                        "skills_paths": input.skills_paths,
+                        "mcp_servers": (
+                            [s.model_dump() for s in input.mcp_servers]
+                            if input.mcp_servers
+                            else None
+                        ),
+                        "context": {k: v.model_dump() for k, v in self._steps.items()},
+                    }
+                ],
                 start_to_close_timeout=timedelta(seconds=timeout_seconds),
                 retry_policy=RetryPolicy(maximum_attempts=max_retries + 1),
             )
@@ -246,11 +265,15 @@ class AgentWorkflow:
                 ],
                 start_to_close_timeout=timedelta(seconds=60),
             )
-            self._steps["escalation"] = StepResult(**escalation) if isinstance(escalation, dict) else escalation
+            self._steps["escalation"] = (
+                StepResult(**escalation) if isinstance(escalation, dict) else escalation
+            )
             return step_result
 
         self._steps[output_key] = step_result
-        event_type = "step.completed" if step_result.status == "completed" else "step.failed"
+        event_type = (
+            "step.completed" if step_result.status == "completed" else "step.failed"
+        )
         self._emit(event_type, step_name)
         return step_result
 
@@ -266,8 +289,10 @@ class AgentWorkflow:
             for k, v in self._steps.items()
         }
         return WorkflowState(
-            workflow_id="eval", workflow_name="eval",
-            created_at="", updated_at="",
+            workflow_id="eval",
+            workflow_name="eval",
+            created_at="",
+            updated_at="",
             steps=legacy_steps,
         )
 
@@ -294,8 +319,10 @@ class AgentWorkflow:
 
     def _emit(self, event_type: str, step_name: str) -> None:
         """Emit a workflow event."""
-        self._events.append(WorkflowEvent(
-            type=event_type,
-            step=step_name,
-            timestamp=workflow.now().isoformat(),
-        ))
+        self._events.append(
+            WorkflowEvent(
+                type=event_type,
+                step=step_name,
+                timestamp=workflow.now().isoformat(),
+            )
+        )

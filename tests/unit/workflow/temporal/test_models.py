@@ -18,7 +18,9 @@ class TestProviderConfig:
 
     def test_valid_provider(self) -> None:
         """Valid provider config parses correctly."""
-        cfg = ProviderConfig(name="openai", model="gpt-4", credentials_secret="openai-key")
+        cfg = ProviderConfig(
+            name="openai", model="gpt-4", credentials_secret="openai-key"
+        )
         assert cfg.name == "openai"
         assert cfg.model == "gpt-4"
 
@@ -57,7 +59,9 @@ class TestWorkflowInput:
         inp = WorkflowInput(
             definition={"steps": []},
             workflow_id="wf-1",
-            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
+            provider=ProviderConfig(
+                name="openai", model="gpt-4", credentials_secret="k"
+            ),
         )
         assert inp.workflow_id == "wf-1"
         assert inp.sandbox_image == "lightspeed-agentic-sandbox:latest"
@@ -69,7 +73,9 @@ class TestWorkflowInput:
             definition={"steps": [{"name": "s1"}]},
             input_prompt="check cluster",
             workflow_id="wf-2",
-            provider=ProviderConfig(name="claude", model="claude-4", credentials_secret="k"),
+            provider=ProviderConfig(
+                name="claude", model="claude-4", credentials_secret="k"
+            ),
             sandbox_image="custom:v1",
             skills_image="quay.io/skills:latest",
             skills_paths=["/skills/diag"],
@@ -88,9 +94,11 @@ class TestWorkflowOutput:
 
     def test_output_with_steps(self) -> None:
         """Output with completed steps."""
-        out = WorkflowOutput(steps={
-            "diagnosis": StepResult(status="completed", output={"summary": "ok"}),
-        })
+        out = WorkflowOutput(
+            steps={
+                "diagnosis": StepResult(status="completed", output={"summary": "ok"}),
+            }
+        )
         assert out.steps["diagnosis"].status == "completed"
 
 
@@ -101,7 +109,11 @@ class TestWorkflowStatus:
         """Status includes step results and events."""
         status = WorkflowStatus(
             steps={"s1": StepResult(status="completed")},
-            events=[WorkflowEvent(type="step.completed", step="s1", timestamp="2026-01-01T00:00:00Z")],
+            events=[
+                WorkflowEvent(
+                    type="step.completed", step="s1", timestamp="2026-01-01T00:00:00Z"
+                )
+            ],
         )
         assert len(status.events) == 1
         assert status.events[0].type == "step.completed"
@@ -115,8 +127,87 @@ class TestSandboxStepInput:
         inp = SandboxStepInput(
             step={"name": "diagnose", "type": "agent"},
             workflow_id="wf-1",
-            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
+            provider=ProviderConfig(
+                name="openai", model="gpt-4", credentials_secret="k"
+            ),
             sandbox_image="sandbox:latest",
         )
         assert inp.workflow_id == "wf-1"
         assert inp.context == {}
+
+
+class TestMCPModels:
+    """Tests for MCP server injection models."""
+
+    def test_mcp_server_config_basic(self) -> None:
+        """MCPServerConfig stores name and URL."""
+        from agents.workflow.temporal_models import MCPServerConfig
+
+        cfg = MCPServerConfig(name="sn", url="http://mcp.local/sse")
+        assert cfg.name == "sn"
+        assert cfg.url == "http://mcp.local/sse"
+        assert cfg.headers is None
+        assert cfg.secret_headers is None
+
+    def test_mcp_server_config_with_headers(self) -> None:
+        """MCPServerConfig stores plain text headers."""
+        from agents.workflow.temporal_models import MCPServerConfig
+
+        cfg = MCPServerConfig(
+            name="sn",
+            url="http://mcp.local/sse",
+            headers={"X-Custom": "val"},
+        )
+        assert cfg.headers == {"X-Custom": "val"}
+
+    def test_mcp_server_config_with_secret_headers(self) -> None:
+        """MCPServerConfig stores Secret-backed header references."""
+        from agents.workflow.temporal_models import MCPServerConfig, SecretHeaderRef
+
+        cfg = MCPServerConfig(
+            name="sn",
+            url="http://mcp.local/sse",
+            secret_headers={
+                "Authorization": SecretHeaderRef(
+                    secret_name="mcp-token", key="bearer-token"
+                ),
+            },
+        )
+        assert cfg.secret_headers["Authorization"].secret_name == "mcp-token"
+        assert cfg.secret_headers["Authorization"].key == "bearer-token"
+
+    def test_secret_header_ref_fields(self) -> None:
+        """SecretHeaderRef stores secret_name and key."""
+        from agents.workflow.temporal_models import SecretHeaderRef
+
+        ref = SecretHeaderRef(secret_name="my-secret", key="api-key")
+        assert ref.secret_name == "my-secret"
+        assert ref.key == "api-key"
+
+    def test_workflow_input_accepts_mcp_servers(self) -> None:
+        """WorkflowInput accepts an optional mcp_servers list."""
+        from agents.workflow.temporal_models import MCPServerConfig
+
+        wi = WorkflowInput(
+            definition={"spec": {"steps": []}},
+            workflow_id="wf-1",
+            provider=ProviderConfig(
+                name="openai", model="gpt-4", credentials_secret="k"
+            ),
+            mcp_servers=[
+                MCPServerConfig(name="sn", url="http://mcp.local/sse"),
+            ],
+        )
+        assert len(wi.mcp_servers) == 1
+        assert wi.mcp_servers[0].name == "sn"
+
+    def test_workflow_input_mcp_servers_defaults_none(self) -> None:
+        """WorkflowInput mcp_servers defaults to None."""
+        wi = WorkflowInput(
+            definition={"spec": {"steps": []}},
+            workflow_id="wf-1",
+            provider=ProviderConfig(
+                name="openai", model="gpt-4", credentials_secret="k"
+            ),
+        )
+        assert wi.mcp_servers is None

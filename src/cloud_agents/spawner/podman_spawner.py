@@ -43,15 +43,32 @@ class PodmanSpawner(AgentSpawner):
         self._volume_mounts = volume_mounts or {}
 
     async def _do_spawn(
-        self, agent_name: str, image: str, env: dict[str, str],
+        self,
+        agent_name: str,
+        image: str,
+        env: dict[str, str],
         config: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
+        credential_secret_name: str | None = None,
+        mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
     ) -> str:
         """Create a Podman container for the agent."""
+        if credential_secret_name:
+            logger.warning(
+                "K8s Secret volume mount not supported on Podman; "
+                "credential_secret_name '%s' will be ignored for '%s'",
+                credential_secret_name,
+                agent_name,
+            )
+        if mcp_secret_mounts:
+            raise ValueError(
+                f"Secret-based MCP headers are not supported on Podman. "
+                f"Agent '{agent_name}' requires K8s deployment for MCP secret headers."
+            )
         try:
             from podman import PodmanClient
         except ImportError as exc:
@@ -63,7 +80,10 @@ class PodmanSpawner(AgentSpawner):
             volumes: dict[str, Any] = {}
             logger.info("Advisory mode: omitting host mounts for '%s'", agent_name)
         else:
-            volumes = {host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()}
+            volumes = {
+                host: {"bind": ctr, "mode": "ro"}
+                for host, ctr in self._volume_mounts.items()
+            }
         skills_volume_name = None
 
         with PodmanClient() as client:
@@ -78,7 +98,9 @@ class PodmanSpawner(AgentSpawner):
                 client.containers.run(
                     skills_image,
                     command=["sh", "-c", copy_cmd],
-                    volumes={skills_volume_name: {"bind": "/skills-data", "mode": "rw"}},
+                    volumes={
+                        skills_volume_name: {"bind": "/skills-data", "mode": "rw"}
+                    },
                     remove=True,
                     detach=False,
                 )
@@ -86,7 +108,9 @@ class PodmanSpawner(AgentSpawner):
             try:
                 existing = client.containers.get(container_name)
                 if existing.status == "running":
-                    logger.info("Container '%s' already running (idempotent)", container_name)
+                    logger.info(
+                        "Container '%s' already running (idempotent)", container_name
+                    )
                     existing.reload()
                     port_bindings = existing.ports or {}
                     host_port = None
@@ -102,6 +126,10 @@ class PodmanSpawner(AgentSpawner):
             except Exception:
                 pass
 
+            container_labels = {"spawned-by": "workflow-runner"}
+            if labels:
+                container_labels.update(labels)
+
             run_kwargs: dict[str, Any] = {
                 "image": image,
                 "name": container_name,
@@ -110,12 +138,15 @@ class PodmanSpawner(AgentSpawner):
                 "network": self._network,
                 "volumes": volumes if volumes else {},
                 "ports": {"8080/tcp": None},
-                "labels": labels or {},
+                "labels": container_labels,
                 "remove": False,
             }
             if read_only:
                 run_kwargs["read_only"] = True
-                logger.info("Advisory mode: running '%s' with read-only filesystem", container_name)
+                logger.info(
+                    "Advisory mode: running '%s' with read-only filesystem",
+                    container_name,
+                )
 
             container = client.containers.run(**run_kwargs)
 
@@ -135,6 +166,28 @@ class PodmanSpawner(AgentSpawner):
         logger.info("Spawned Podman container '%s' at %s", container_name, endpoint)
         return endpoint
 
+    async def _do_list_active(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[str]:
+        """List active Podman containers matching the given labels.
+
+        Args:
+            labels: Optional label selector to filter containers.
+
+        Returns:
+            List of agent names (without the "agent-" prefix).
+        """
+        try:
+            from podman import PodmanClient
+        except ImportError:
+            return []
+
+        label_filters = [f"{k}={v}" for k, v in (labels or {}).items()]
+        with PodmanClient() as pc:
+            containers = pc.containers.list(filters={"label": label_filters})
+            return [c.name.removeprefix("agent-") for c in containers]
+
     async def _do_destroy(self, agent_name: str) -> None:
         """Stop and remove the Podman container."""
         try:
@@ -148,7 +201,9 @@ class PodmanSpawner(AgentSpawner):
                     container.remove()
                     logger.info("Destroyed Podman container '%s'", container_name)
                 except Exception as exc:
-                    logger.warning("Failed to destroy container '%s': %s", container_name, exc)
+                    logger.warning(
+                        "Failed to destroy container '%s': %s", container_name, exc
+                    )
                 try:
                     skills_vol = client.volumes.get(f"skills-{agent_name}")
                     skills_vol.remove()

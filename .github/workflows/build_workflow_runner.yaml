@@ -4,17 +4,31 @@ on:
   pull_request:
     paths:
       - 'deploy/workflow-runner/**'
+      - 'deploy/helm/cloud-agents-temporal/**'
       - 'src/agents/workflow/**'
+      - 'src/agents/spawner/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy/workflow-runner/**'
+      - 'deploy/helm/cloud-agents-temporal/**'
+      - 'src/agents/workflow/**'
+      - 'src/agents/spawner/**'
       - 'pyproject.toml'
       - 'uv.lock'
 
 env:
   IMAGE_NAME: workflow-runner
   LATEST_TAG: dev-latest
+  REGISTRY: quay.io/openshift-lightspeed
   CONTAINER_FILE: deploy/workflow-runner/Containerfile
 
 jobs:
   build-pr:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,3 +54,43 @@ jobs:
         run: |
           buildah images | grep '${{ env.IMAGE_NAME }}'
           echo '${{ steps.build_image.outputs.image }}'
+
+  build-and-push:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Install qemu and buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah qemu-user-static
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build image with Buildah
+        id: build_image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            latest
+            ${{ github.sha }}
+          containerfiles: |
+            ${{ env.CONTAINER_FILE }}
+          archs: amd64
+          oci: true
+      - name: Push to registry
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build_image.outputs.image }}
+          tags: ${{ steps.build_image.outputs.tags }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign image with cosign
+        run: |
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}

@@ -7,6 +7,7 @@ spawning sandbox pods, calling the LLM, building escalation packages.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from datetime import UTC
@@ -16,6 +17,7 @@ import httpx
 from temporalio import activity
 
 from agents.runtime.tracing import get_tracer
+from agents.workflow.audit import emit_audit
 from agents.workflow.escalation import LogPackager
 from agents.workflow.notifier import NullNotifier
 from agents.workflow.temporal_context import build_sandbox_context
@@ -33,6 +35,7 @@ def _normalize_config_ref(ref: str) -> str:
     e.g. 'slack-approval-channel' -> 'SLACK_APPROVAL_CHANNEL'
     """
     import re
+
     return re.sub(r"[^a-zA-Z0-9]", "_", ref).upper()
 
 
@@ -91,8 +94,10 @@ async def _run_sandbox_step_inner(
         "LIGHTSPEED_MODEL": provider["model"],
     }
     for deploy_var in (
-        "LIGHTSPEED_MODEL_PROVIDER", "LIGHTSPEED_PROVIDER_URL",
-        "LIGHTSPEED_PROVIDER_PROJECT", "LIGHTSPEED_PROVIDER_REGION",
+        "LIGHTSPEED_MODEL_PROVIDER",
+        "LIGHTSPEED_PROVIDER_URL",
+        "LIGHTSPEED_PROVIDER_PROJECT",
+        "LIGHTSPEED_PROVIDER_REGION",
         "LIGHTSPEED_PROVIDER_API_VERSION",
     ):
         if val := os.environ.get(deploy_var):
@@ -101,6 +106,46 @@ async def _run_sandbox_step_inner(
     cred_secret = provider.get("credentials_secret", "")
     if cred_secret and (cred_val := os.environ.get(cred_secret)):
         env_vars[cred_secret] = cred_val
+
+    # MCP server injection
+    mcp_secret_mounts: list[tuple[str, str, str]] = []
+    raw_mcp_servers = input.get("mcp_servers")
+    if raw_mcp_servers:
+        mcp_env_list = []
+        for server in raw_mcp_servers:
+            entry: dict[str, Any] = {
+                "name": server["name"],
+                "url": server["url"],
+                "headers": dict(server.get("headers") or {}),
+            }
+            secret_headers = server.get("secret_headers") or {}
+            for header_name, ref in secret_headers.items():
+                mount_path = f"/var/secrets/mcp/{server['name']}/"
+                file_path = f"/var/secrets/mcp/{server['name']}/{ref['key']}"
+                entry["headers"][header_name] = {"file": file_path}
+                mcp_secret_mounts.append((ref["secret_name"], ref["key"], mount_path))
+                emit_audit(
+                    event_type="mcp_secret_mounted",
+                    workflow_id=workflow_id,
+                    step_name=step_name,
+                    details={
+                        "secret_name": ref["secret_name"],
+                        "server": server["name"],
+                    },
+                )
+            mcp_env_list.append(entry)
+
+        # Validate MCP secrets against allowlist
+        allowed_secrets_raw = os.environ.get("MCP_ALLOWED_SECRETS", "")
+        if allowed_secrets_raw:
+            allowed = set(s.strip() for s in allowed_secrets_raw.split(","))
+            for mount in mcp_secret_mounts:
+                if mount[0] not in allowed:
+                    raise ValueError(
+                        f"MCP Secret '{mount[0]}' not in MCP_ALLOWED_SECRETS allowlist"
+                    )
+
+        env_vars["LIGHTSPEED_MCP_SERVERS"] = json.dumps(mcp_env_list)
 
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
@@ -112,6 +157,12 @@ async def _run_sandbox_step_inner(
         return {"status": "completed", "output": {"summary": f"executed-{step_name}"}}
 
     logger.info("Running sandbox step '%s' (pod=%s)", step_name, pod_name)
+    emit_audit(
+        event_type="sandbox_spawned",
+        workflow_id=workflow_id,
+        step_name=step_name,
+        details={"pod_name": pod_name, "image": sandbox_image},
+    )
     endpoint = None
     try:
         sa = permissions.get("service_account")
@@ -120,11 +171,16 @@ async def _run_sandbox_step_inner(
             sa = "advisory-sa"
 
         endpoint = await spawner.spawn(
-            pod_name, sandbox_image, env=env_vars, labels=labels,
+            pod_name,
+            sandbox_image,
+            env=env_vars,
+            labels=labels,
             skills_image=input.get("skills_image"),
             skills_paths=input.get("skills_paths"),
             service_account=sa,
             read_only=advisory,
+            credential_secret_name=provider.get("credentials_secret") or None,
+            mcp_secret_mounts=mcp_secret_mounts or None,
         )
         ready = await spawner.wait_ready(endpoint, health_path="/health")
         if not ready:
@@ -133,7 +189,11 @@ async def _run_sandbox_step_inner(
             )
 
         prior_steps = {
-            k: StepResult(status=v.get("status", "completed"), output=v.get("output"), error=v.get("error"))
+            k: StepResult(
+                status=v.get("status", "completed"),
+                output=v.get("output"),
+                error=v.get("error"),
+            )
             for k, v in input.get("context", {}).items()
         }
         context = build_sandbox_context(
@@ -152,7 +212,8 @@ async def _run_sandbox_step_inner(
 
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             response = await client.post(
-                f"{endpoint}/v1/agent/run", json=request_body,
+                f"{endpoint}/v1/agent/run",
+                json=request_body,
             )
 
         if response.status_code == 502:
@@ -184,6 +245,12 @@ async def _run_sandbox_step_inner(
         if endpoint and spawner:
             try:
                 await spawner.destroy(pod_name)
+                emit_audit(
+                    event_type="sandbox_destroyed",
+                    workflow_id=workflow_id,
+                    step_name=step_name,
+                    details={"pod_name": pod_name},
+                )
             except Exception:
                 logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
 
@@ -212,11 +279,13 @@ async def _send_notification_inner(input: dict[str, Any]) -> dict[str, Any]:
         notifier_type = config.get("type", "null")
         if notifier_type == "slack":
             from agents.workflow.notifier import SlackNotifier
+
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             webhook_url = os.environ.get(f"NOTIFIER_SLACK_{ref}_WEBHOOK_URL", "")
             notifier = SlackNotifier(webhook_url=webhook_url)
         elif notifier_type == "webhook":
             from agents.workflow.notifier import WebhookNotifier
+
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             url = os.environ.get(f"NOTIFIER_WEBHOOK_{ref}_URL", "")
             notifier = WebhookNotifier(url=url)
@@ -233,7 +302,9 @@ async def _send_notification_inner(input: dict[str, Any]) -> dict[str, Any]:
         return {"status": "notification_sent", "correlation_id": correlation_id}
     except Exception:
         logger.warning(
-            "Notification failed for %s (best-effort)", correlation_id, exc_info=True,
+            "Notification failed for %s (best-effort)",
+            correlation_id,
+            exc_info=True,
         )
         return {"status": "notification_failed", "correlation_id": correlation_id}
 
@@ -277,7 +348,10 @@ async def _build_escalation_inner(
         config_type = (escalation_config or {}).get("type", "log")
         if config_type == "webhook":
             from agents.workflow.escalation import WebhookPackager
-            ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
+
+            ref = _normalize_config_ref(
+                (escalation_config or {}).get("config_ref", "DEFAULT")
+            )
             url = os.environ.get(f"ESCALATION_WEBHOOK_{ref}_URL", "")
             packager = WebhookPackager(url=url)
         else:
@@ -286,6 +360,7 @@ async def _build_escalation_inner(
         from datetime import datetime
 
         from agents.workflow.escalation import EscalationPackage
+
         pkg = EscalationPackage(
             workflow_name=workflow_name,
             step_name=failed_steps[0]["step"] if failed_steps else "unknown",
@@ -294,6 +369,11 @@ async def _build_escalation_inner(
             workflow_snapshot=steps,
         )
         await packager.package(pkg)
+        emit_audit(
+            event_type="escalation_triggered",
+            workflow_id=workflow_name,
+            details={"failed_steps": failed_steps, "delivery": config_type},
+        )
     except Exception:
         logger.warning("Escalation delivery failed (best-effort)", exc_info=True)
 
