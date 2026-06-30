@@ -28,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      id-token: write
     steps:
       - name: Install qemu and buildah
         run: |
@@ -53,8 +51,35 @@ jobs:
         run: |
           buildah images | grep '${{ env.IMAGE_NAME }}'
 
+  push:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install buildah
+        run: |
+          sudo apt update
+          sudo apt install -y buildah qemu-user-static
+      - name: Build image
+        id: build_image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: |
+            latest
+            ${{ github.sha }}
+          containerfiles: |
+            ${{ env.CONTAINER_FILE }}
+          archs: amd64
+          oci: true
       - name: Push to registry
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ env.IMAGE_NAME }}
@@ -62,12 +87,8 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
-
       - name: Install cosign
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         uses: sigstore/cosign-installer@v3
-
       - name: Sign image with cosign
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         run: |
           cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}
