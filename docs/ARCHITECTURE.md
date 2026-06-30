@@ -38,7 +38,7 @@ Each agent step spawns a sandbox container with isolated runtime state, bounded 
 Diagnose → Propose → Gate → Execute → Verify. Structured output with risk levels. Approval gates pause workflows for human review.
 
 ### R5. Human-out-of-the-loop [G2, G4]
-When retries exhaust, escalation packages full context — diagnosis, steps taken, failure history. *(TODO: interactive CLI handoff to Claude Code / Goose with pre-loaded workflow context.)*
+When retries exhaust, escalation packages full context — diagnosis, steps taken, failure history. *(TODO: interactive CLI handoff — see [T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17))*
 
 ### R6. Retry with escalation [G2, G4]
 Each retry sees full failure history. Exhausted retries route to R4 (approval) or R5 (escalation handoff).
@@ -54,12 +54,12 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 | R9 | Runtime | Done | FastAPI + Temporal Worker + sandbox HTTP contract |
 | R10 | Deployment | Done | K8s Jobs, Podman containers, Helm chart |
 | R11 | Persistence | Done | Temporal Server provides durable execution and state |
-| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering not yet wired through sandbox contract *(TODO)* |
-| R13 | Access control | TODO | Per-user/team RBAC for who can trigger, approve, view workflows. Per-step tool scoping via PermissionScope model exists but not enforced end-to-end |
+| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering TODO ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) |
+| R13 | Access control | TODO | Per-user/team RBAC ([T7](gaps/gaps-implementation-plan.md#t7-per-userteam-rbac-r13)) |
 | R14 | Observability | Done | OTel tracing, Prometheus metrics, structured logging, health probes, audit events |
-| R15 | Triggers | Partial | API trigger done. Chatbot *(TODO)*, alert-based *(TODO)*, scheduled *(TODO — Temporal has native cron, needs API exposure)* |
-| R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions, enabling chatbot-driven workflow invocation |
-| R17 | Escalation | Partial | Context packaging + webhook/log delivery done. Interactive CLI handoff *(TODO)* |
+| R15 | Triggers | Partial | API trigger done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)), alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) TODO |
+| R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions ([T11](gaps/gaps-implementation-plan.md#t11-agents-as-tools-r16)) |
+| R17 | Escalation | Partial | Context packaging + delivery done. CLI handoff TODO ([T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17)) |
 
 ---
 
@@ -119,7 +119,7 @@ The architecture treats the runtime interface generically: the workflow engine s
 Temporal provides durable execution for workflow runs:
 
 - **Workflow state** — step results, approval decisions, and event history are stored as workflow state within Temporal, not in an external database.
-- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. *(TODO: explicit sandbox termination on timeout — currently best-effort cleanup.)*
+- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. *(TODO: explicit sandbox termination on timeout — see [T2](gaps/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation))*
 - **Approval signals** — human approval is implemented as a Temporal signal (`AgentWorkflow.approve`), with `wait_condition` blocking until the signal arrives or times out.
 - **Parallel execution** — steps sharing a `parallel_group` are dispatched via `asyncio.gather` within the workflow.
 - **Crash recovery** — content-hash pod naming for idempotent retries + startup orphan reconciliation for leaked containers.
@@ -150,12 +150,12 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **MCP secret allowlist** — `MCP_ALLOWED_SECRETS` restricts which secrets can be mounted; file-reference headers keep secrets out of env vars
 - **Resource limits** — `SpawnConfig` enforces CPU (max 4 cores) and memory (max 4Gi) bounds with Pydantic validators
 
-**TODO:**
-- **Per-step tool filtering** — `PermissionScope` model (`allowed_tools`/`denied_tools`) exists but is not yet forwarded through the sandbox HTTP contract
-- **Advisory mode tool filtering** — sandbox filesystem is set to read-only, but tool-level filtering is not yet enforced in the sandbox path
-- **Per-user RBAC** — who can trigger, approve, view workflows (R13)
-- **Dynamic RBAC from agent output** — per-proposal ServiceAccount + Roles based on agent-declared requirements
-- **Cleanup failure metrics** — `ls_sandbox_cleanup_failures_total` counter for observability of leaked containers
+**TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
+- Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
+- Advisory mode tool filtering (blocked on T1)
+- Per-user RBAC ([T7](gaps/gaps-implementation-plan.md#t7-per-userteam-rbac-r13))
+- Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
+- Cleanup failure metrics ([T3](gaps/gaps-implementation-plan.md#t3-cleanup-failure-metrics))
 
 ### Observability
 
@@ -209,7 +209,7 @@ Agents return structured output defined by `output_schema` in the workflow step.
 
 ## Retry with Context
 
-Failed steps retry with full failure history. Each attempt sees what was tried before and why it failed. Temporal's `RetryPolicy` controls the retry count, and the activity timeout enforces hard deadlines per attempt. After exhausting retries, the framework generates an **escalation handoff** — delivered via configurable channels (log, webhook). *(TODO: interactive CLI handoff for operator follow-up.)*
+Failed steps retry with full failure history. Each attempt sees what was tried before and why it failed. Temporal's `RetryPolicy` controls the retry count, and the activity timeout enforces hard deadlines per attempt. After exhausting retries, the framework generates an **escalation handoff** — delivered via configurable channels (log, webhook). *(TODO: interactive CLI handoff — see [T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17))*
 
 ## Phase History
 
