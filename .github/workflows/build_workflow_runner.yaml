@@ -54,7 +54,7 @@ jobs:
           buildah images | grep '${{ env.IMAGE_NAME }}'
 
       - name: Push to registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != ''
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ env.IMAGE_NAME }}
@@ -64,10 +64,10 @@ jobs:
           password: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Install cosign
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != ''
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         uses: sigstore/cosign-installer@v3
 
       - name: Sign image with cosign
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != ''
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.QUAY_USERNAME != '' }}
         run: |
           cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}
