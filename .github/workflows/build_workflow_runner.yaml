@@ -20,8 +20,8 @@ on:
       - 'uv.lock'
 
 env:
-  IMAGE_NAME: workflow-runner
-  REGISTRY: quay.io/openshift-lightspeed
+  IMAGE_NAME: lightspeed-cloud-agents
+  REGISTRY: quay.io/${{ github.repository_owner }}
   CONTAINER_FILE: deploy/workflow-runner/Containerfile
 
 jobs:
