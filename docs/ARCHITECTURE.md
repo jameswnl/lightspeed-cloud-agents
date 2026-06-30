@@ -115,11 +115,11 @@ The approval routing design supports pluggable channels (Slack, webhook, convers
 
 ### Workflow Runner
 
-The stateless orchestrator. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods.
+The stateless orchestrator. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
 
 - **Temporal AgentWorkflow** — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
 - **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls `POST /v1/agent/run`, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to Slack/webhook/null notifiers. `build_escalation_activity` packages failed workflow context for human handoff.
-- **DefinitionStore** — CRUD for workflow definitions with versioning. Definitions submitted via API, stored in-process. Runs bind to immutable snapshots.
+- **DefinitionStore** — CRUD for workflow definitions with versioning. Definitions submitted via API. When initialized with a shared persistence backend, definitions are stored as JSON in the workflow state table (visible across all runner replicas); otherwise falls back to process-local in-memory storage. Runs bind to immutable snapshots.
 - **Spawner** — `AgentSpawner` ABC with `KubernetesSpawner` and `PodmanSpawner` implementations. Handles `spawn()` → endpoint URL, `wait_ready()` → healthz polling, `destroy()` → cleanup, and `list_active()` → orphan detection.
 
 ### Sandbox Runtime (lightspeed-agentic-sandbox)
@@ -147,7 +147,9 @@ Temporal Server provides durable execution and replaces the previous PostgreSQL 
 - **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. No separate recovery poller needed.
 - **Approval signals** — human approval is implemented as a Temporal signal (`AgentWorkflow.approve`), with `wait_condition` blocking until the signal arrives or times out.
 - **Parallel execution** — steps sharing a `parallel_group` are dispatched via `asyncio.gather` within the workflow.
-- **Orphan reconciliation** — on startup, the runner scans for containers with the `spawned-by=workflow-runner` label and destroys them.
+- **Crash recovery** — two mechanisms handle runner restarts:
+  - **Content-hash pod naming** — `compute_pod_name()` derives deterministic pod names from `(workflow_id, step_name, attempt)`, making retries idempotent. If a retry spawns a pod with the same name as a previous attempt, the existing pod is reused or replaced cleanly.
+  - **Startup orphan reconciliation** — `reconcile_orphaned_sandboxes()` runs at worker startup, scans for containers with the `spawned-by=workflow-runner` label, and destroys them. This cleans up any sandbox pods left behind by a crashed runner before Temporal re-dispatches their activities.
 
 ### Security
 
@@ -208,6 +210,8 @@ spec:
 
 ## Agent Definition
 
+The agent runtime also supports standalone agent definitions (not part of workflow execution):
+
 ```yaml
 apiVersion: lightspeed.redhat.com/v1alpha1
 kind: AgentDefinition
@@ -234,6 +238,7 @@ spec:
 - **Tool filtering in advisory mode** — read-only classification removes write-capable tools when the workflow runs in advisory mode; sandbox filesystem set to read-only
 - **Auth middleware** — configurable auth dependency on all workflow endpoints; fails closed when AUTH_REQUIRED=true
 - **Approval RBAC** — designed for per-step approver scoping (backlog: channel plugins + identity integration)
+- **MCP secret injection** — MCP servers can reference secrets via file-reference mounts. The `MCP_ALLOWED_SECRETS` environment variable defines an allowlist of permitted secret names; any secret not in the allowlist is rejected at activity dispatch time
 - **TLS everywhere** — optional mutual TLS on Temporal gRPC; HTTPS between sandbox and LLM providers
 
 ### Structured Output

@@ -158,7 +158,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R1</span> <span class="req-name">Framework, not pre-built agents</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">Examples ship as examples. Framework provides runtime, executor, spawner, and observability. Teams provide agent.yaml, tools, and workflow definitions. One generic container image for all agent types.</div>
+  <div class="req-desc">Examples ship as examples. Framework provides Temporal workflow engine, spawner, and observability. Teams provide workflow definitions and skills. lightspeed-agentic-sandbox is the generic container image for all agent types.</div>
 </div>
 
 <div class="req-card">
@@ -218,12 +218,12 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R11</span> <span class="req-name">Persistence</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">Durable store with optimistic locking. Atomic reads/writes, pluggable backend.</div>
+  <div class="req-desc">Temporal Server provides durable workflow execution and state. Definition store supports in-memory or shared persistence backend.</div>
 </div>
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R12</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Secrets via K8s refs, bearer auth on all endpoints. Explicit risk_level, per-step permission scoping.</div>
+  <div class="req-desc">Secrets via K8s refs + credential volume mounts, bearer auth on all endpoints. TLS for Temporal gRPC. Explicit risk_level, per-step permission scoping. securityContext on pods. MCP secret allowlist. Structured audit trail.</div>
 </div>
 
 <div class="req-card">
@@ -233,7 +233,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R14</span> <span class="req-name">Observability</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">OTel tracing, Prometheus metrics, SSE streaming</div>
+  <div class="req-desc">OTel tracing (with Temporal TracingInterceptor), Prometheus metrics (ls_workflow_*), SSE streaming, structured JSON logging, audit events</div>
 </div>
 
 <div class="req-card">
@@ -268,22 +268,25 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">How are agents going to be defined? Custom YAML schema?</div>
-  <div class="faq-a">Custom YAML (<strong>apiVersion: lightspeed.redhat.com/v1alpha1, kind: AgentDefinition</strong>). Defines: system prompt, tools to load, output type, lifecycle (request-response or periodic-loop), resource limits. The schema is intentionally minimal &mdash; just enough to configure the generic runtime. No code generation, no framework lock-in.</div>
+  <div class="faq-a">Two levels:<br>
+    &bull; <strong>Workflow definitions</strong> (apiVersion: v1, kind: AgentWorkflow): multi-step workflows with conditions, approval gates, parallel groups. Each step runs in a lightspeed-agentic-sandbox container. This is the primary abstraction.<br>
+    &bull; <strong>Agent definitions</strong> (apiVersion: lightspeed.redhat.com/v1alpha1, kind: AgentDefinition): standalone agent config for the generic runtime (system prompt, tools, output type). Used for single-agent deployments outside workflows.</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
-  <div class="faq-a">Multiple layers:<br>
-    &bull; <strong>Workflow level</strong>: risk_level per step, approval gates, advisory mode (read-only tool filtering)<br>
+  <div class="faq-a">Multiple layers (all implemented):<br>
+    &bull; <strong>Workflow level</strong>: risk_level per step, approval gates, advisory mode (read-only filesystem + tool filtering)<br>
     &bull; <strong>Agent level</strong>: allowed_tools / denied_tools per step via PermissionScope<br>
-    &bull; <strong>Runtime level</strong>: hard timeouts, resource limits (CPU/memory), ephemeral container isolation<br>
-    &bull; <strong>Cluster level</strong>: K8s RBAC, NetworkPolicy, ServiceAccount scoping<br>
-    &bull; <strong>Future</strong>: RBAC for who can trigger/approve/view workflows (R12)</div>
+    &bull; <strong>Runtime level</strong>: hard timeouts, resource limits (CPU/memory), ephemeral container isolation, securityContext (non-root, read-only root fs)<br>
+    &bull; <strong>Cluster level</strong>: K8s RBAC, NetworkPolicy, ServiceAccount scoping, MCP secret allowlist<br>
+    &bull; <strong>Audit</strong>: structured audit events for workflow lifecycle, approval decisions, sandbox spawning, secret mounts<br>
+    &bull; <strong>Future</strong>: per-user RBAC for who can trigger/approve/view workflows</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Are these agents going to be available as a ready-made template?</div>
-  <div class="faq-a">Example agents ship as templates in <strong>examples/agents/</strong>: diagnostic, monitoring, deploy-readiness. Teams copy and modify. The framework itself is not a marketplace &mdash; it's a runtime. Template distribution (OCI artifacts, git-sync) is a backlog item.</div>
+  <div class="faq-a">Workflow definitions serve as templates. The diagnostic workflow in DEMO.md is a working example. Teams define their own workflow YAML with custom steps, prompts, and output schemas. Skills (domain knowledge packages) can be distributed as OCI images and mounted into sandbox containers. Template distribution via OCI artifacts is a backlog item.</div>
 </div>
 
 <div class="faq-card">
@@ -314,7 +317,7 @@ svg { width: 100%; height: auto; display: block; }
   <div class="faq-q">Does it support durable agents with long-running tasks?</div>
   <div class="faq-a">Yes, two modes:<br>
     &bull; <strong>Pre-deployed agents</strong> (spawn: pre-deployed): long-running services that persist across workflow executions. Called via HTTP, not spawned/destroyed per step. Suitable for agents that maintain state, connections, or caches.<br>
-    &bull; <strong>Temporal durable execution</strong> (proposed): workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). The agent step itself runs in an ephemeral container, but the workflow orchestration is durable.<br><br>
+    &bull; <strong>Temporal durable execution</strong> (implemented): workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). The agent step itself runs in an ephemeral container, but the workflow orchestration is durable. Crash recovery via content-hash pod naming + startup orphan reconciliation.<br><br>
     What's missing: agents that maintain conversational memory across multiple workflow invocations. That's a backlog item (agent state persistence / memory).</div>
 </div>
 
