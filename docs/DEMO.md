@@ -94,7 +94,7 @@ kind load docker-image lightspeed-agentic-sandbox:temporal --name cloud-agents
 
 # Deploy Temporal Server
 kubectl apply -f deploy/kind/temporal.yaml
-kubectl wait --for=condition=ready pod -l app=temporal --timeout=120s
+kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
 
 # Create the LLM API key Secret
 kubectl create secret generic llm-api-key \
@@ -115,8 +115,8 @@ curl -s http://localhost:8080/healthz
 
 ```bash
 helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
-  --set image.repository=quay.io/openshift-lightspeed/workflow-runner \
-  --set image.tag=latest \
+  --set workflowRunner.image.repository=quay.io/openshift-lightspeed/workflow-runner \
+  --set workflowRunner.image.tag=latest \
   --set temporal.url=temporal-server:7233 \
   --set spawner.type=kubernetes \
   --set spawner.namespace=default

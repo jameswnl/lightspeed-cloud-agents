@@ -46,7 +46,7 @@ Every workflow step spawns a fresh container. The container:
 
 This means a stuck LLM call can't block the workflow runner, a misbehaving agent can't crash the platform, and each step is isolated from every other step.
 
-Pre-deployed (long-running) agents are supported via `spawn: pre-deployed` for cases where startup latency matters more than isolation.
+All steps currently use ephemeral spawning. Pre-deployed (long-running) agents are a backlog item — the `spawn` field exists in the schema but is not yet implemented.
 
 ### Durable execution via Temporal
 
@@ -182,30 +182,32 @@ spec:
   steps:
     - name: diagnose
       type: agent
-      agent: diagnostic-agent
       prompt: "Check all hosts for issues."
       output_key: diagnosis
-      spawn: ephemeral
+      output_schema:
+        type: object
+        properties:
+          summary: { type: string }
+          issues_found: { type: integer }
+        required: [summary, issues_found]
 
     - name: approve
       type: human-approval
       message: "Review diagnosis and approve remediation."
       output_key: approval
+      risk_level: high
 
     - name: fix
       type: agent
-      agent: diagnostic-agent
       prompt: "Fix issues found: {{ steps.diagnosis.output.summary }}"
       output_key: fix
-      spawn: ephemeral
       condition: "steps.approval.output.approved == true"
+      timeout_seconds: 120
 
     - name: verify
       type: agent
-      agent: diagnostic-agent
       prompt: "Verify the cluster is healthy."
       output_key: verification
-      spawn: ephemeral
 ```
 
 ## Agent Definition
