@@ -183,10 +183,16 @@ class PodmanSpawner(AgentSpawner):
         except ImportError:
             return []
 
-        label_filters = [f"{k}={v}" for k, v in (labels or {}).items()]
         with PodmanClient() as pc:
-            containers = pc.containers.list(filters={"label": label_filters})
-            return [c.name.removeprefix("agent-") for c in containers]
+            all_filtered: list = []
+            for k, v in (labels or {}).items():
+                matches = pc.containers.list(filters={"label": f"{k}={v}"})
+                if not all_filtered:
+                    all_filtered = matches
+                else:
+                    match_ids = {c.id for c in matches}
+                    all_filtered = [c for c in all_filtered if c.id in match_ids]
+            return [c.name.removeprefix("agent-") for c in all_filtered]
 
     async def _do_destroy(self, agent_name: str) -> None:
         """Stop and remove the Podman container."""
