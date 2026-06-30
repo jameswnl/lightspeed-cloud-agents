@@ -1,6 +1,6 @@
 # Lightspeed Cloud Agents
 
-Cloud-based agent workflow platform. Deploys AI agents as ephemeral containers in Kubernetes or Podman, powered by Temporal.
+Agent workflow and harness platform. Deploys AI agents as ephemeral sandbox containers in Kubernetes or Podman, powered by Temporal.
 
 ## Quick Start
 
@@ -19,17 +19,31 @@ See [docs/DEMO.md](docs/DEMO.md) for full deployment guide with Podman and Kuber
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for goals, requirements, and design.
 
 ```
-Workflow Runner (FastAPI + Temporal Worker)
-    │ gRPC
-    ▼
-Temporal Server (durable execution)
-    │
-    ▼
-Spawner → Sandbox Pod (lightspeed-agentic-sandbox)
-    │ POST /v1/agent/run
-    ▼
-LLM Provider (OpenAI / Vertex / Bedrock)
+                    POST /v1/workflows/run
+                            │
+                            ▼
+                    ┌───────────────┐
+                    │ Workflow      │
+                    │ Runner        │
+                    │ (FastAPI +    │
+                    │  Temporal     │
+                    │  Worker)      │
+                    └───┬───────┬───┘
+                  gRPC  │       │  spawn/destroy
+                        ▼       ▼
+              ┌──────────┐  ┌──────────────┐
+              │ Temporal  │  │ Sandbox      │
+              │ Server    │  │ Container    │
+              │ (durable  │  │ (per step)   │
+              │  state)   │  │              │──── HTTPS ──── LLM Provider
+              └──────────┘  └──────────────┘
 ```
+
+## Key Docs
+
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements (with TODO status), design, components
+- [DEMO.md](docs/DEMO.md) — deployment guide (Podman / Kind / Helm) + workflow definition reference + diagnostic workflow example
+- [Implementation Plan](docs/gaps/gaps-implementation-plan.md) — all planned work (T1-T36)
