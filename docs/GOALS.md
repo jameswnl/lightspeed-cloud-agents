@@ -46,12 +46,12 @@ No in-memory state. Durable external store. Scales horizontally behind a load ba
 Consider reuse/adapt OLS's sandbox for agent isolation, combined with Temporal workflow engine for durable orchestration.
 
 ### R9. Runtime [G1]
-Pydantic AI + FastAPI + Temporal workflow (TBD).
+FastAPI + Temporal workflow engine + lightspeed-agentic-sandbox (OpenAI agents SDK).
 
 ### R10. Deployment [G5]
 - **Kubernetes**: K8s Jobs for ephemeral agents, Services for DNS discovery, ConfigMaps for config distribution, Secrets for sensitive env vars, RBAC via ServiceAccounts.
 - **Podman**: containers with volume mounts and port mapping, shared network for DNS, host-level access control.
-- **One generic container image** (`agent-runtime:latest`) for all agent types.
+- **One generic sandbox image** (`lightspeed-agentic-sandbox`) for all agent steps.
 
 ### R11. Persistence [G1]
 Durable store with optimistic locking. Atomic reads/writes, pluggable backend.

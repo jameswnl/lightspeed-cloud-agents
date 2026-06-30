@@ -30,10 +30,9 @@ The diagnostic and monitoring agents are **examples**, not the product. The fram
 - Observability (tracing, metrics, events)
 
 Product teams provide:
-- `agent.yaml` — instructions, tools, output type, lifecycle
-- Tool modules — Python functions the agent can call
-- Workflow definitions — submitted inline or stored and referenced by name
-- Optional skills directories — configured in `agent.yaml` and mounted into the runtime as needed
+- Workflow definitions (YAML) — steps, prompts, output schemas, conditions, approval gates
+- Skills OCI images (optional) — domain knowledge packages mounted at `/app/skills/`
+- MCP server config (optional) — external tool servers configured via the API request
 
 ### Ephemeral-by-default execution
 
@@ -205,27 +204,6 @@ spec:
       type: agent
       prompt: "Verify the cluster is healthy."
       output_key: verification
-```
-
-## Agent Definition
-
-The runtime also supports standalone agent definitions (not part of workflow execution):
-
-```yaml
-apiVersion: lightspeed.redhat.com/v1alpha1
-kind: AgentDefinition
-metadata:
-  name: diagnostic-agent
-spec:
-  instructions: |
-    You are a cluster diagnostic agent...
-  output_type: DiagnosticReport
-  tools:
-    module: diagnostic_tools
-    functions: [list_hosts, check_host, run_remediation]
-    read_only: [list_hosts, check_host]
-  lifecycle:
-    type: request-response
 ```
 
 ## Important Considerations

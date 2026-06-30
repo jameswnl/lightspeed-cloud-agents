@@ -42,7 +42,7 @@ Do NOT use these in examples or documentation. The test `test_example_definition
 
 - **At API submission**: `/run` endpoint validates definitions via `temporal_validation.py` (duplicate names, undefined step refs, missing fields). Returns 422 for invalid definitions.
 - **At definition store**: `/definitions` POST validates via `WorkflowDefinition.model_validate()` (full Pydantic validation).
-- **Example YAML files**: `tests/unit/agents/workflow/test_example_definitions.py` validates ALL workflow YAMLs in `examples/agents/definitions/` against the Pydantic model. Add new examples there and the test picks them up automatically.
+- **Example YAML files**: `tests/unit/agents/workflow/test_example_definitions.py` validates ALL workflow YAMLs in `examples/definitions/` against the Pydantic model. Add new examples there and the test picks them up automatically.
 - **DEMO.md inline YAML**: `tests/unit/agents/workflow/test_demo_yaml.py` extracts and validates the workflow YAML from DEMO.md. If you edit the DEMO example, this test catches schema errors.
 
 ## Security Guardrails
@@ -110,9 +110,9 @@ When updating documentation:
 
 ## Common Mistakes
 
-- Using `spawn: ephemeral` or `agent: diagnostic-agent` in YAML examples — these fields are dead
-- Referencing `pydantic-ai` in the workflow context — the sandbox uses OpenAI agents SDK
-- Claiming `PermissionScope` (allowed_tools/denied_tools) works in the workflow path — it only works in the generic agent runtime
+- Using `spawn: ephemeral` or `agent: some-agent` in YAML examples — these fields are dead
+- Referencing `pydantic-ai` in the workflow context — pydantic-ai is not used in this repo; the sandbox uses OpenAI agents SDK
+- Claiming `PermissionScope` (allowed_tools/denied_tools) works in the workflow path — it is defined in the model but not enforced through the sandbox HTTP contract
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`
 - Podman `list_active` filter as a list instead of string — silently returns empty

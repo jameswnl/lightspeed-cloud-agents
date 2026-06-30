@@ -16,10 +16,9 @@ Unscheduled items deferred from completed phases. Pick based on priority and tea
 
 ## Core Engine
 
-- **pydantic-ai replaces Llama Stack** — core conversation engine swap. All new code already uses pydantic-ai.
-- **Agents/workflows as tools** — registered agents and workflows become pydantic-ai tools the LLM calls autonomously during /query conversations.
+- **Agents/workflows as tools** — registered agents and workflows become LLM tools that can be called autonomously during /query conversations.
 - **Conversational approval** — when a workflow hits an approval gate, the LLM surfaces it to the user in natural language; user approves/rejects in the conversation flow.
-- **Async callback dispatch** — ephemeral pods POST results to trusted runner ingest API instead of synchronous RemoteAgentClient.run(). *(partially designed in Phase 6, not implemented)*
+- **Async callback dispatch** — ephemeral pods POST results to trusted runner ingest API instead of synchronous HTTP request/response. *(partially designed in Phase 6, not implemented)*
 
 ## Workflow Features
 

@@ -226,10 +226,9 @@ See `BACKLOG.md` for the full itemized list. Key additions beyond what's already
 
 `docs/design/cloud-agents/ARCHITECTURE.md` still describes the **pre-Temporal architecture**:
 - References `WorkflowExecutor`, `StepDispatcher`, `RecoveryPoller` (deleted in PoC2)
-- Shows `pydantic-ai Agent` in pods (now OpenAI agents SDK in sandbox)
-- Shows `agent-runtime:latest` with ConfigMap mounts (now `lightspeed-agentic-sandbox` with env vars)
 - Shows PostgreSQL as persistence layer (now Temporal Server)
 - ASCII diagram is completely outdated
+- **Partially resolved**: `pydantic-ai Agent` and `agent-runtime:latest` references have been removed; Agent Definition section deleted
 
 Needs a full rewrite to reflect:
 - Temporal AgentWorkflow + activities
