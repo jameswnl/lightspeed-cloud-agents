@@ -3,9 +3,9 @@ name: Temporal E2E tests
 on:
   pull_request:
     paths:
-      - 'src/agents/workflow/**'
-      - 'tests/e2e/temporal/**'
-      - 'tests/integration/temporal/**'
+      - 'src/cloud_agents/workflow/**'
+      - 'tests/e2e/**'
+      - 'tests/integration/**'
 
 jobs:
   temporal-e2e:
@@ -46,13 +46,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install uv
-        run: pip install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
 
       - name: Install dependencies
         run: uv sync --group dev
@@ -75,9 +75,9 @@ jobs:
           done
 
       - name: Run integration tests
-        run: uv run pytest tests/integration/temporal/ -v
+        run: uv run pytest tests/integration/ -v
 
       - name: Run E2E tests
         env:
           TEMPORAL_E2E_URL: localhost:7233
-        run: uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v
+        run: uv run pytest tests/e2e/test_temporal_e2e.py -v
