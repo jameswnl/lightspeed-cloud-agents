@@ -137,13 +137,13 @@ svg { width: 100%; height: auto; display: block; }
   </div>
   <div class="goal-card" id="goal-G4">
     <div class="goal-id">G4</div>
-    <div class="goal-title">Seamless Human-Agent Handoff</div>
-    <div class="goal-desc">When automation reaches its limit, users continue in an AI CLI with full workflow context.</div>
+    <div class="goal-title">Human Follow-up with Preserved Context</div>
+    <div class="goal-desc">When automation reaches its limit, the framework packages workflow context for review, escalation, and operator follow-up.</div>
   </div>
   <div class="goal-card" id="goal-G5">
     <div class="goal-id">G5</div>
-    <div class="goal-title">Dual Deployment: Kubernetes + Podman</div>
-    <div class="goal-desc">Same agents run on both. Both are production targets.</div>
+    <div class="goal-title">Kubernetes and Podman Deployment Targets</div>
+    <div class="goal-desc">The same workflow model runs on both, with deployment-specific security and operational controls.</div>
   </div>
 </div>
 </div>
@@ -158,7 +158,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R1</span> <span class="req-name">Framework, not pre-built agents</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">Examples ship as examples. Framework provides Temporal workflow engine, spawner, and observability. Teams provide workflow definitions and skills. lightspeed-agentic-sandbox is the generic container image for all agent types.</div>
+  <div class="req-desc">Examples ship as examples. Framework provides the workflow engine, spawner, and observability. Teams provide workflow definitions, skills OCI images (optional), and MCP server config (optional).</div>
 </div>
 
 <div class="req-card">
@@ -168,7 +168,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Fresh container per step. Only configured tools loaded. Hard timeouts. Destroyed after execution. Untrusted pods never receive secrets beyond their LLM API token and scoped credentials.</div>
+  <div class="req-desc">Each agent step spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. human-approval steps do not spawn containers.</div>
 </div>
 
 <div class="req-card">
@@ -178,7 +178,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history, tools, cluster state. User picks up in an interactive AI CLI session and continues investigating where the agent left off.</div>
+  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history. <em>(TODO: interactive CLI handoff to Claude Code / Goose with pre-loaded workflow context.)</em></div>
 </div>
 
 <div class="req-card">
@@ -203,12 +203,12 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Execution engine</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Temporal workflow engine for durable orchestration. lightspeed-agentic-sandbox for ephemeral agent containers with OpenAI agents SDK.</div>
+  <div class="req-desc">Temporal workflow engine + sandbox containers behind an HTTP contract.</div>
 </div>
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R9</span> <span class="req-name">Runtime</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">OpenAI agents SDK (in sandbox) + FastAPI + Temporal workflow engine</div>
+  <div class="req-desc">FastAPI + Temporal Worker + sandbox HTTP contract</div>
 </div>
 
 <div class="req-card">
@@ -228,7 +228,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R13</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc"><em>(Future)</em> RBAC for workflows: who can trigger, approve, view. Per-step tool scoping via PermissionScope (allowed_tools / denied_tools) is implemented. Per-user/team RBAC is a backlog item.</div>
+  <div class="req-desc"><em>(TODO)</em> Per-user/team RBAC for who can trigger, approve, view workflows. Per-step tool scoping via PermissionScope model exists but is not yet enforced end-to-end through the sandbox contract.</div>
 </div>
 
 <div class="req-card">
@@ -248,7 +248,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R17</span> <span class="req-name">Escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">Context packaging: workflow state, failure history, tools, cluster context &rarr; CLI handoff</div>
+  <div class="req-desc">Context packaging + webhook/log delivery done. <em>(TODO: interactive CLI handoff for operator follow-up.)</em></div>
 </div>
 
 </div>
@@ -309,7 +309,7 @@ svg { width: 100%; height: auto; display: block; }
   <div class="faq-a">
     <table class="faq-table">
       <tr><th>Component</th><th>Build vs Reuse</th><th>Status</th></tr>
-      <tr><td>Workflow orchestration</td><td>Reuse: Temporal SDK</td><td>Implemented</td></tr>
+      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK</td><td>Implemented</td></tr>
       <tr><td>Spawner (K8s/Podman)</td><td>Build: ~200 lines each</td><td>Implemented</td></tr>
       <tr><td>Definition store</td><td>Build: CRUD + validation, ~100 lines</td><td>Implemented</td></tr>
       <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Implemented</td></tr>
@@ -324,7 +324,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Does it support durable agents with long-running tasks?</div>
-  <div class="faq-a">Yes. <strong>Temporal durable execution</strong> handles long-running work: workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). Each agent step runs in an ephemeral sandbox container, but the workflow orchestration is durable. Crash recovery uses content-hash pod naming for idempotent retries and startup orphan reconciliation for leaked containers.<br><br>
+  <div class="faq-a">Yes. <strong>Temporal durable execution</strong> handles long-running work: workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). Each agent step runs in an ephemeral sandbox container, but the workflow execution is durable. Crash recovery uses content-hash pod naming for idempotent retries and startup orphan reconciliation for leaked containers.<br><br>
     What's missing: agents that maintain conversational memory across multiple workflow invocations. That's a backlog item (agent state persistence / memory).</div>
 </div>
 
