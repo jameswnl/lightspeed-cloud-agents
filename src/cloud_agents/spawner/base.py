@@ -36,7 +36,7 @@ class SecretKeyRef(BaseModel):
 class SpawnConfig(BaseModel):
     """Per-step resource configuration for ephemeral pods.
 
-    Validation bounds prevent resource abuse. AgentDefinition.spec.resources
+    Validation bounds prevent resource abuse. workflow step configuration
     sets the maximum envelope; SpawnConfig may only narrow within it.
 
     Attributes:

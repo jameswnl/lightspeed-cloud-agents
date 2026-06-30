@@ -1,7 +1,0 @@
-# Agent endpoint registry for cloud agents deployment
-# Mounted at /app/registry.yaml in agent pods
-agents:
-  - name: diagnostic-agent
-    endpoint: http://diagnostic-agent:8080
-  - name: monitoring-agent
-    endpoint: http://monitoring-agent:8080

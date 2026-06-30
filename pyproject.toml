@@ -15,7 +15,6 @@ dependencies = [
     "pyyaml>=6.0",
     "uvicorn>=0.32.0",
     "starlette>=0.41.0",
-    "pydantic-ai>=1.99.0",
 ]
 
 [project.optional-dependencies]
