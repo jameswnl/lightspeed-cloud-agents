@@ -1,4 +1,4 @@
-name: Temporal E2E tests
+name: Integration tests (Temporal)
 
 on:
   workflow_dispatch:
@@ -6,16 +6,14 @@ on:
     branches: [main]
     paths:
       - 'src/cloud_agents/workflow/**'
-      - 'tests/e2e/**'
       - 'tests/integration/**'
   pull_request:
     paths:
       - 'src/cloud_agents/workflow/**'
-      - 'tests/e2e/**'
       - 'tests/integration/**'
 
 jobs:
-  temporal-e2e:
+  integration:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -82,9 +80,6 @@ jobs:
           done
 
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -v
-
-      - name: Run E2E tests
         env:
           TEMPORAL_E2E_URL: localhost:7233
-        run: uv run pytest tests/e2e/test_temporal_e2e.py -v
+        run: uv run pytest tests/integration/ -v
