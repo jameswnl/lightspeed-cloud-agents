@@ -2,7 +2,7 @@
 
 import pytest
 
-from agents.workflow.temporal_models import (
+from cloud_agents.workflow.temporal_models import (
     ProviderConfig,
     SandboxStepInput,
     StepResult,
@@ -141,7 +141,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_basic(self) -> None:
         """MCPServerConfig stores name and URL."""
-        from agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.temporal_models import MCPServerConfig
 
         cfg = MCPServerConfig(name="sn", url="http://mcp.local/sse")
         assert cfg.name == "sn"
@@ -151,7 +151,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_with_headers(self) -> None:
         """MCPServerConfig stores plain text headers."""
-        from agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.temporal_models import MCPServerConfig
 
         cfg = MCPServerConfig(
             name="sn",
@@ -162,7 +162,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_with_secret_headers(self) -> None:
         """MCPServerConfig stores Secret-backed header references."""
-        from agents.workflow.temporal_models import MCPServerConfig, SecretHeaderRef
+        from cloud_agents.workflow.temporal_models import MCPServerConfig, SecretHeaderRef
 
         cfg = MCPServerConfig(
             name="sn",
@@ -178,7 +178,7 @@ class TestMCPModels:
 
     def test_secret_header_ref_fields(self) -> None:
         """SecretHeaderRef stores secret_name and key."""
-        from agents.workflow.temporal_models import SecretHeaderRef
+        from cloud_agents.workflow.temporal_models import SecretHeaderRef
 
         ref = SecretHeaderRef(secret_name="my-secret", key="api-key")
         assert ref.secret_name == "my-secret"
@@ -186,7 +186,7 @@ class TestMCPModels:
 
     def test_workflow_input_accepts_mcp_servers(self) -> None:
         """WorkflowInput accepts an optional mcp_servers list."""
-        from agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.temporal_models import MCPServerConfig
 
         wi = WorkflowInput(
             definition={"spec": {"steps": []}},

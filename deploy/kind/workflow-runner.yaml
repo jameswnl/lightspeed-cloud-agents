@@ -22,7 +22,7 @@ spec:
         - name: workflow-runner
           image: docker.io/library/agent-runtime:latest
           imagePullPolicy: Never
-          command: ["python", "-m", "uvicorn", "agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["python", "-m", "uvicorn", "cloud_agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
           securityContext:
             runAsNonRoot: true
             readOnlyRootFilesystem: true

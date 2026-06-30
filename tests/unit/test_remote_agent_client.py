@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
-from agents.models import AgentRunResponse, RunState, RunStatus
-from agents.remote_agent_client import RemoteAgentClient
+from cloud_agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
+from cloud_agents.models import AgentRunResponse, RunState, RunStatus
+from cloud_agents.remote_agent_client import RemoteAgentClient
 
 MOCK_SUCCESS_RESPONSE = {
     "output": {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agents.workflow.definition import (
+from cloud_agents.workflow.definition import (
     WorkflowStepSpec,
 )
 

@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agents.runtime.auth import BearerAuthMiddleware
+from cloud_agents.runtime.auth import BearerAuthMiddleware
 
 
 def _make_app(token: str = "test-token") -> FastAPI:

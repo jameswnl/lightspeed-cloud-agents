@@ -67,7 +67,7 @@ services:
     ports:
       - "8080:8080"
     command: >
-      uvicorn agents.workflow.temporal_entrypoint:app
+      uvicorn cloud_agents.workflow.temporal_entrypoint:app
       --host 0.0.0.0 --port 8080
 
 volumes:

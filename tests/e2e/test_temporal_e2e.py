@@ -26,13 +26,13 @@ import pytest
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agents.workflow.temporal_activities import (
+from cloud_agents.workflow.temporal_activities import (
     build_escalation_activity,
     run_sandbox_step,
     send_approval_notification,
 )
-from agents.workflow.temporal_models import ProviderConfig, WorkflowInput
-from agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.temporal_models import ProviderConfig, WorkflowInput
+from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
 TEMPORAL_URL = os.environ.get("TEMPORAL_E2E_URL", "localhost:7233")
 ALL_ACTIVITIES = [

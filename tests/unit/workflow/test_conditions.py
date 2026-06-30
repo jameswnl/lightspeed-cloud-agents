@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents.workflow.conditions import evaluate_condition
-from agents.workflow.state import StepResult, WorkflowState
+from cloud_agents.workflow.conditions import evaluate_condition
+from cloud_agents.workflow.state import StepResult, WorkflowState
 
 
 def _make_state(**step_data: dict) -> WorkflowState:

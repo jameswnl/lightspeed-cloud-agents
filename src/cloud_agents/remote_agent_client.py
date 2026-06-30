@@ -9,9 +9,9 @@ from typing import Any, Optional
 
 import httpx
 
-from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
-from agents.models import AgentRunResponse, RunState, RunStatus
-from agents.runtime.tracing import inject_traceparent
+from cloud_agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
+from cloud_agents.models import AgentRunResponse, RunState, RunStatus
+from cloud_agents.runtime.tracing import inject_traceparent
 
 
 class RemoteAgentClient:

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.workflow.escalation import (
+from cloud_agents.workflow.escalation import (
     EscalationPackage,
     JiraPackager,
     LogPackager,
@@ -62,7 +62,7 @@ class TestWebhookPackager:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -79,7 +79,7 @@ class TestWebhookPackager:
     @pytest.mark.asyncio
     async def test_failure_does_not_raise(self) -> None:
         """Test that webhook failures are logged, not raised."""
-        with patch("agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("down"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -99,7 +99,7 @@ class TestJiraPackager:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)

@@ -2,7 +2,7 @@
 
 import pytest
 
-from agents.registry import AgentRegistry
+from cloud_agents.registry import AgentRegistry
 
 
 class TestAgentRegistry:

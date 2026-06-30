@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from agents.models import AgentRunResponse, RunStatus
-from agents.runtime.run_store import RunStore
+from cloud_agents.models import AgentRunResponse, RunStatus
+from cloud_agents.runtime.run_store import RunStore
 
 
 @pytest.fixture(name="store")

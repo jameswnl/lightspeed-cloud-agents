@@ -24,7 +24,7 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture(scope="module")
 def spawner():
     """Create a PodmanSpawner for the test session."""
-    from agents.spawner.podman_spawner import PodmanSpawner
+    from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
     os.system(
         "podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1"

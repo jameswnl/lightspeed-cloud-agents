@@ -30,7 +30,7 @@ async def main() -> None:
     """Run the Podman ephemeral spawning E2E test."""
     from podman import PodmanClient
 
-    from agents.spawner.podman_spawner import PodmanSpawner
+    from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
     image = "localhost/agent-runtime:latest"
     agent_yaml = os.path.join(

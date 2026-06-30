@@ -10,7 +10,7 @@ import importlib
 from collections.abc import Callable
 from typing import Any
 
-from agents.definition import ToolsSpec
+from cloud_agents.definition import ToolsSpec
 
 
 class ToolLoadError(Exception):

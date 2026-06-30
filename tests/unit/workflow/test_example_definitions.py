@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agents.workflow.definition import WorkflowDefinition
-from agents.workflow.temporal_validation import validate_definition
+from cloud_agents.workflow.definition import WorkflowDefinition
+from cloud_agents.workflow.temporal_validation import validate_definition
 
-EXAMPLES_DIR = Path(__file__).parents[4] / "examples" / "agents" / "definitions"
+EXAMPLES_DIR = Path(__file__).parents[3] / "examples" / "definitions"
 
 
 def _workflow_yamls() -> list[Path]:

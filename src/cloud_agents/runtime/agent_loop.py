@@ -12,9 +12,9 @@ import time
 from collections.abc import Callable
 from typing import Any, Optional
 
-from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
-from agents.models import AgentRunRequest
-from agents.remote_agent_client import RemoteAgentClient
+from cloud_agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
+from cloud_agents.models import AgentRunRequest
+from cloud_agents.remote_agent_client import RemoteAgentClient
 
 logger = logging.getLogger(__name__)
 

@@ -19,13 +19,13 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI
 
-from agents.definition import AgentDefinition
-from agents.registry import AgentRegistry
-from agents.remote_agent_client import RemoteAgentClient
-from agents.runtime.generic_runner import create_generic_runner
-from agents.runtime.model_factory import get_model, reset_model
-from agents.runtime.server import create_app
-from agents.runtime.tracing import init_tracing
+from cloud_agents.definition import AgentDefinition
+from cloud_agents.registry import AgentRegistry
+from cloud_agents.remote_agent_client import RemoteAgentClient
+from cloud_agents.runtime.generic_runner import create_generic_runner
+from cloud_agents.runtime.model_factory import get_model, reset_model
+from cloud_agents.runtime.server import create_app
+from cloud_agents.runtime.tracing import init_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -134,13 +134,13 @@ def build_app(
 
 def _attach_loop(
     app: FastAPI,
-    spec: "agents.definition.AgentSpec",
+    spec: "cloud_agents.definition.AgentSpec",
     runner: object,
     registry: AgentRegistry,
     agent_name: str,
 ) -> None:
     """Attach a periodic agent loop to the FastAPI app lifespan."""
-    from agents.runtime.agent_loop import AgentLoop
+    from cloud_agents.runtime.agent_loop import AgentLoop
 
     dispatch_endpoint = registry.get_endpoint(spec.lifecycle.dispatch_to)
     dispatch_client = RemoteAgentClient(dispatch_endpoint)

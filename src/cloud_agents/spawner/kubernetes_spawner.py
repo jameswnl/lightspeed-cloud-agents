@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agents.spawner.base import AgentSpawner
+from cloud_agents.spawner.base import AgentSpawner
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class KubernetesSpawner(AgentSpawner):
 
         Returns the Service endpoint URL.
         """
-        from agents.spawner.base import SpawnConfig
+        from cloud_agents.spawner.base import SpawnConfig
 
         cfg = config_override or SpawnConfig()
 

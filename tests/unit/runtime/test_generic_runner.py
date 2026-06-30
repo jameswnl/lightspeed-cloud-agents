@@ -10,9 +10,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
-from agents.models import AgentRunRequest, DiagnosticReport
-from agents.runtime.generic_runner import create_generic_runner
+from cloud_agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
+from cloud_agents.models import AgentRunRequest, DiagnosticReport
+from cloud_agents.runtime.generic_runner import create_generic_runner
 from examples.agents.diagnostic.cluster_state import init_scenario
 
 

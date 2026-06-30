@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from agents.workflow.definition import WorkflowStepSpec
+from cloud_agents.workflow.definition import WorkflowStepSpec
 
 logger = logging.getLogger(__name__)
 

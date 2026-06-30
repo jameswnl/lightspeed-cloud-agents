@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents.spawner.kubernetes_spawner import KubernetesSpawner
-from agents.spawner.podman_spawner import PodmanSpawner
+from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
+from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
 
 class TestKubernetesListActive:

@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from agents.runtime.metrics import (
+from cloud_agents.runtime.metrics import (
     ls_agent_tool_calls_total,
     ls_agent_tool_duration_seconds,
 )

@@ -28,7 +28,7 @@ async def main() -> None:
     """Run Phase 7 security E2E tests."""
     import httpx
 
-    from agents.spawner.podman_spawner import PodmanSpawner
+    from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
     image = "localhost/agent-runtime:latest"
     agent_yaml = os.path.abspath(
@@ -145,8 +145,8 @@ async def main() -> None:
 
     # --- Test 3: risk_level fail-closed ---
     print("--- Test 3: risk_level fail-closed behavior ---")
-    from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
-    from agents.workflow.definition import WorkflowStepSpec
+    from cloud_agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
+    from cloud_agents.workflow.definition import WorkflowStepSpec
 
     # Step with no risk_level → should default to high
     step_no_risk = WorkflowStepSpec(

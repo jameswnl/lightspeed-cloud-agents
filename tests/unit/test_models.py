@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from agents.models import (
+from cloud_agents.models import (
     AgentRunRequest,
     AgentRunResponse,
     DiagnosticReport,

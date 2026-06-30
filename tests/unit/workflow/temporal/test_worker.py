@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agents.workflow.temporal_worker import build_worker_config
+from cloud_agents.workflow.temporal_worker import build_worker_config
 
 
 class TestWorkerConfig:

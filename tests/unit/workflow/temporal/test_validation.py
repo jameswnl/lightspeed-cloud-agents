@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agents.workflow.temporal_validation import validate_definition
+from cloud_agents.workflow.temporal_validation import validate_definition
 
 
 class TestDefinitionValidation:

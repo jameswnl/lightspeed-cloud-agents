@@ -13,12 +13,12 @@ from typing import Any
 
 from pydantic_ai import Agent
 
-from agents.definition import AgentSpec
-from agents.models import AgentRunRequest, AgentRunResponse
-from agents.runtime.mcp_loader import load_mcp_servers
-from agents.runtime.output_types import resolve_output_type
-from agents.runtime.tool_instrumentation import instrument_tool
-from agents.runtime.tool_loader import load_tools
+from cloud_agents.definition import AgentSpec
+from cloud_agents.models import AgentRunRequest, AgentRunResponse
+from cloud_agents.runtime.mcp_loader import load_mcp_servers
+from cloud_agents.runtime.output_types import resolve_output_type
+from cloud_agents.runtime.tool_instrumentation import instrument_tool
+from cloud_agents.runtime.tool_loader import load_tools
 
 
 def _load_skills(spec: AgentSpec) -> list:
@@ -136,7 +136,7 @@ def create_generic_runner(
         if is_advisory and advisory_agent:
             active_agent = advisory_agent
         elif needs_permission_filter:
-            from agents.workflow.permissions import PermissionScope
+            from cloud_agents.workflow.permissions import PermissionScope
 
             scope = PermissionScope(allowed_tools=ctx_allowed, denied_tools=ctx_denied)
             effective = set(scope.effective_tools([n for n, _ in all_tools]))

@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from agents.definition import MCPAuthSpec, MCPServerSpec
-from agents.runtime.mcp_loader import load_mcp_servers, resolve_mcp_headers
+from cloud_agents.definition import MCPAuthSpec, MCPServerSpec
+from cloud_agents.runtime.mcp_loader import load_mcp_servers, resolve_mcp_headers
 
 
 class TestResolveHeaders:

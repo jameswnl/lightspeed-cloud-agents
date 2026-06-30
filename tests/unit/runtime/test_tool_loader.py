@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents.definition import ToolsSpec
-from agents.runtime.tool_loader import ToolLoadError, load_tools
+from cloud_agents.definition import ToolsSpec
+from cloud_agents.runtime.tool_loader import ToolLoadError, load_tools
 
 
 class TestLoadTools:

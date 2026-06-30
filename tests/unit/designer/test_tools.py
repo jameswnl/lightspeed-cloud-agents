@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agents.designer.tools import create_designer_tools
-from agents.registry import AgentRegistry
+from cloud_agents.designer.tools import create_designer_tools
+from cloud_agents.registry import AgentRegistry
 
 
 def _mock_registry() -> AgentRegistry:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pytest_mock import MockerFixture
 
-from agents.workflow.temporal_entrypoint import build_temporal_app
+from cloud_agents.workflow.temporal_entrypoint import build_temporal_app
 
 
 class TestTemporalEntrypoint:
@@ -32,7 +32,7 @@ class TestTemporalEntrypoint:
     def test_tracing_initialized_on_build(self, mocker: MockerFixture) -> None:
         """build_temporal_app calls init_tracing."""
         mock_init = mocker.patch(
-            "agents.workflow.temporal_entrypoint.init_tracing",
+            "cloud_agents.workflow.temporal_entrypoint.init_tracing",
         )
         build_temporal_app(temporal_url="localhost:7233")
         mock_init.assert_called_once_with("workflow-runner")
@@ -54,7 +54,7 @@ class TestTemporalEntrypoint:
             },
         )
         mocker.patch("builtins.open", mocker.mock_open(read_data=b"cert-data"))
-        from agents.workflow.temporal_entrypoint import _build_tls_config
+        from cloud_agents.workflow.temporal_entrypoint import _build_tls_config
 
         tls = _build_tls_config()
         assert tls is not None
@@ -62,7 +62,7 @@ class TestTemporalEntrypoint:
     def test_no_tls_by_default(self, mocker: MockerFixture) -> None:
         """TLS is disabled by default."""
         mocker.patch.dict("os.environ", {}, clear=False)
-        from agents.workflow.temporal_entrypoint import _build_tls_config
+        from cloud_agents.workflow.temporal_entrypoint import _build_tls_config
 
         tls = _build_tls_config()
         assert tls is None
@@ -90,7 +90,7 @@ class TestTemporalEntrypoint:
 
     def test_worker_has_tracing_interceptor(self) -> None:
         """_get_tracing_interceptors returns a list."""
-        from agents.workflow.temporal_entrypoint import _get_tracing_interceptors
+        from cloud_agents.workflow.temporal_entrypoint import _get_tracing_interceptors
 
         interceptors = _get_tracing_interceptors()
         assert isinstance(interceptors, list)

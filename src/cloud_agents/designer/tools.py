@@ -10,8 +10,8 @@ from typing import Any
 
 import yaml
 
-from agents.registry import AgentRegistry
-from agents.workflow.definition import WorkflowDefinition
+from cloud_agents.registry import AgentRegistry
+from cloud_agents.workflow.definition import WorkflowDefinition
 
 
 def create_designer_tools(registry: AgentRegistry) -> dict[str, Any]:

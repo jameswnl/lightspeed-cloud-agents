@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch
 
-from agents.runtime.model_factory import get_model, reset_model
+from cloud_agents.runtime.model_factory import get_model, reset_model
 
 
 class TestGetModel:

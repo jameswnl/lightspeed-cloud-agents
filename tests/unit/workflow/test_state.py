@@ -1,6 +1,6 @@
 """Unit tests for WorkflowState model."""
 
-from agents.workflow.state import StepResult, WorkflowState
+from cloud_agents.workflow.state import StepResult, WorkflowState
 
 
 class TestStepResult:

@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents.workflow.interpolation import interpolate, resolve_path
-from agents.workflow.state import StepResult, WorkflowState
+from cloud_agents.workflow.interpolation import interpolate, resolve_path
+from cloud_agents.workflow.state import StepResult, WorkflowState
 
 
 def _make_state(**step_outputs: dict) -> WorkflowState:

@@ -16,14 +16,14 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
-    from agents.workflow.advisory import AdvisoryEnforcer
-    from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
-    from agents.workflow.conditions import evaluate_condition
-    from agents.workflow.definition import WorkflowStepSpec
-    from agents.workflow.interpolation import interpolate
-    from agents.workflow.state import StepResult as LegacyStepResult
-    from agents.workflow.state import WorkflowState
-    from agents.workflow.temporal_models import (
+    from cloud_agents.workflow.advisory import AdvisoryEnforcer
+    from cloud_agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
+    from cloud_agents.workflow.conditions import evaluate_condition
+    from cloud_agents.workflow.definition import WorkflowStepSpec
+    from cloud_agents.workflow.interpolation import interpolate
+    from cloud_agents.workflow.state import StepResult as LegacyStepResult
+    from cloud_agents.workflow.state import WorkflowState
+    from cloud_agents.workflow.temporal_models import (
         StepResult,
         WorkflowEvent,
         WorkflowInput,

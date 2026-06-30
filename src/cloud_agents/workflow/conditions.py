@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agents.workflow.state import WorkflowState
+from cloud_agents.workflow.state import WorkflowState
 
 CONDITION_PATTERN = re.compile(
     r"steps\.(\w+)\.(status|approved|output\.(\w+))\s*(==|!=)?\s*(.*)$"

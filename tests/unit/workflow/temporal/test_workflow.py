@@ -11,16 +11,16 @@ import pytest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from agents.workflow.temporal_activities import (
+from cloud_agents.workflow.temporal_activities import (
     build_escalation_activity,
     run_sandbox_step,
 )
-from agents.workflow.temporal_models import (
+from cloud_agents.workflow.temporal_models import (
     ProviderConfig,
     WorkflowInput,
     WorkflowStatus,
 )
-from agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
 
 def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowInput:

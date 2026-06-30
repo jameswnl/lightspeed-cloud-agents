@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from agents.spawner.base import AgentSpawner, SpawnConfig
+from cloud_agents.spawner.base import AgentSpawner, SpawnConfig
 
 
 class MockSpawner(AgentSpawner):

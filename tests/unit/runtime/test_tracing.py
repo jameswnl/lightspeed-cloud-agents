@@ -13,8 +13,8 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
-import agents.runtime.tracing as tracing_module
-from agents.runtime.tracing import (
+import cloud_agents.runtime.tracing as tracing_module
+from cloud_agents.runtime.tracing import (
     extract_traceparent,
     get_tracer,
     init_tracing,

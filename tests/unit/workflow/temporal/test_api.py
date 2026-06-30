@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-from agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.temporal_api import build_temporal_router
 
 
 @pytest.fixture
@@ -189,7 +189,7 @@ class TestRunWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Starting a workflow emits workflow_started audit event."""
-        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/run",
             json={
@@ -239,7 +239,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Approval emits step_approved audit event."""
-        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "approved"},
@@ -258,7 +258,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Denial emits step_denied audit event."""
-        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "denied"},
@@ -321,7 +321,7 @@ class TestDefinitionRoutes:
 
     def test_get_definitions_returns_list(self, mocker: MockerFixture) -> None:
         """GET /definitions returns a list, not workflow status."""
-        from agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
@@ -401,7 +401,7 @@ class TestDefinitionManagement:
 
     def test_post_definition(self, mocker: MockerFixture) -> None:
         """POST /definitions creates a definition."""
-        from agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -435,7 +435,7 @@ class TestDefinitionManagement:
 
     def test_get_definition_by_name(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns a stored definition."""
-        from agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -471,7 +471,7 @@ class TestDefinitionManagement:
 
     def test_get_definition_not_found(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns 404 for unknown name."""
-        from agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()

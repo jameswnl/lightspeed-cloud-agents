@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from agents.runtime.generic_entrypoint import build_app, load_definition, load_registry
+from cloud_agents.runtime.generic_entrypoint import build_app, load_definition, load_registry
 
 MINIMAL_AGENT_YAML = {
     "apiVersion": "lightspeed.redhat.com/v1alpha1",

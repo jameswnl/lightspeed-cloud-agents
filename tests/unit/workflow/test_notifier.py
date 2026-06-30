@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.workflow.notifier import NullNotifier, SlackNotifier, WebhookNotifier
+from cloud_agents.workflow.notifier import NullNotifier, SlackNotifier, WebhookNotifier
 
 
 class TestNullNotifier:
@@ -28,7 +28,7 @@ class TestSlackNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud_agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -51,7 +51,7 @@ class TestSlackNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud_agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -67,7 +67,7 @@ class TestSlackNotifier:
     @pytest.mark.asyncio
     async def test_failure_does_not_raise(self) -> None:
         """Test that Slack failures are logged, not raised."""
-        with patch("agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud_agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("network error"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -87,7 +87,7 @@ class TestWebhookNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud_agents.workflow.notifier.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)

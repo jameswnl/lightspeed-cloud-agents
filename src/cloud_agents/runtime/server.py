@@ -18,12 +18,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import generate_latest
 
-from agents.models import AgentRunRequest, AgentRunResponse, RunState
-from agents.runtime.auth import BearerAuthMiddleware, get_api_token
-from agents.runtime.correlation import validate_correlation_id
-from agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
-from agents.runtime.run_store import RunStore
-from agents.runtime.tracing import extract_traceparent, get_tracer, set_span_error
+from cloud_agents.models import AgentRunRequest, AgentRunResponse, RunState
+from cloud_agents.runtime.auth import BearerAuthMiddleware, get_api_token
+from cloud_agents.runtime.correlation import validate_correlation_id
+from cloud_agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
+from cloud_agents.runtime.run_store import RunStore
+from cloud_agents.runtime.tracing import extract_traceparent, get_tracer, set_span_error
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def create_app(
         Configured FastAPI application.
     """
     app = FastAPI(title=f"Agent: {agent_name}")
-    from agents.runtime.auth import TokenReviewAuthMiddleware, get_auth_mode
+    from cloud_agents.runtime.auth import TokenReviewAuthMiddleware, get_auth_mode
 
     auth_mode = get_auth_mode()
     if auth_mode == "sa_token":
@@ -122,7 +122,7 @@ def create_app(
             )
         return response
 
-    _tracer = get_tracer("agents.runtime.server")
+    _tracer = get_tracer("cloud_agents.runtime.server")
 
     async def _handle_sync_run(
         body: AgentRunRequest, correlation_id: str, trace_ctx: Any = None

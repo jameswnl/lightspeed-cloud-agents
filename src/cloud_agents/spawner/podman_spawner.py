@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agents.spawner.base import AgentSpawner
+from cloud_agents.spawner.base import AgentSpawner
 
 logger = logging.getLogger(__name__)
 

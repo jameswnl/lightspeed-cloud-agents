@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from agents.models import AgentRunRequest, AgentRunResponse
-from agents.runtime.server import create_app
+from cloud_agents.models import AgentRunRequest, AgentRunResponse
+from cloud_agents.runtime.server import create_app
 
 
 @pytest.fixture(name="mock_agent_runner")
@@ -143,7 +143,7 @@ class TestRunEndpoint:
                 error="Model not found",
             )
 
-        from agents.runtime.metrics import ls_agent_runs_total
+        from cloud_agents.runtime.metrics import ls_agent_runs_total
 
         before_success = ls_agent_runs_total.labels(
             agent_name="sync-fail-test", status="success"

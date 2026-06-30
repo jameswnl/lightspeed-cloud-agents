@@ -17,11 +17,11 @@ from fastapi import FastAPI
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agents.runtime.tracing import init_tracing
-from agents.workflow.definition_store import DefinitionStore
-from agents.workflow.structured_logging import configure_logging
-from agents.workflow.temporal_api import build_temporal_router
-from agents.workflow.temporal_worker import build_worker_config
+from cloud_agents.runtime.tracing import init_tracing
+from cloud_agents.workflow.definition_store import DefinitionStore
+from cloud_agents.workflow.structured_logging import configure_logging
+from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.temporal_worker import build_worker_config
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +72,14 @@ SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 def _create_spawner():
     """Create spawner based on environment config."""
     if SPAWNER_TYPE == "kubernetes":
-        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 
         namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
         service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
         logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
         return KubernetesSpawner(namespace=namespace, service_account=service_account)
     if SPAWNER_TYPE == "podman":
-        from agents.spawner.podman_spawner import PodmanSpawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
         network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
         logger.info("Using PodmanSpawner (network=%s)", network)
@@ -109,7 +109,7 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
     if orphans:
         logger.info("Cleaned up %d orphaned sandbox(es) on startup", len(orphans))
-        from agents.workflow.audit import emit_audit
+        from cloud_agents.workflow.audit import emit_audit
 
         emit_audit(
             event_type="orphan_cleanup",
@@ -122,22 +122,34 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
 
 def _get_auth_dependency():
-    """Load auth dependency from the stack configuration.
+    """Build auth middleware from environment configuration.
 
-    Returns None in dev/test mode. Fails closed when AUTH_REQUIRED=true.
+    Returns None when AUTH_REQUIRED=false. Fails closed when true.
     """
-    try:
-        from authentication import get_auth_dependency
-
-        return get_auth_dependency()
-    except Exception:
-        if AUTH_REQUIRED:
-            raise RuntimeError(
-                "AUTH_REQUIRED=true but auth dependency failed to initialize. "
-                "Refusing to start with unauthenticated workflow endpoints."
-            )
-        logger.warning("Auth dependency not available — endpoints unauthenticated")
+    if not AUTH_REQUIRED:
+        logger.info("AUTH_REQUIRED=false — endpoints unauthenticated")
         return None
+
+    from cloud_agents.runtime.auth import (
+        BearerAuthMiddleware,
+        TokenReviewAuthMiddleware,
+        get_api_token,
+        get_auth_mode,
+    )
+
+    mode = get_auth_mode()
+    token = get_api_token()
+    if not token:
+        raise RuntimeError(
+            "AUTH_REQUIRED=true but AGENT_API_TOKEN is not set. "
+            "Refusing to start with unauthenticated workflow endpoints."
+        )
+
+    if mode == "sa_token":
+        logger.info("Using TokenReview auth middleware")
+        return TokenReviewAuthMiddleware
+    logger.info("Using Bearer auth middleware")
+    return BearerAuthMiddleware
 
 
 def build_temporal_app(

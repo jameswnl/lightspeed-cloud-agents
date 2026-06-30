@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents.spawner.base import SecretKeyRef
-from agents.spawner.kubernetes_spawner import KubernetesSpawner
+from cloud_agents.spawner.base import SecretKeyRef
+from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 
 
 @pytest.fixture
@@ -15,10 +15,10 @@ def mock_k8s():
     """Mock the kubernetes client module."""
     with (
         patch(
-            "agents.spawner.kubernetes_spawner.KubernetesSpawner._do_spawn"
+            "cloud_agents.spawner.kubernetes_spawner.KubernetesSpawner._do_spawn"
         ) as mock_spawn,
         patch(
-            "agents.spawner.kubernetes_spawner.KubernetesSpawner._do_destroy"
+            "cloud_agents.spawner.kubernetes_spawner.KubernetesSpawner._do_destroy"
         ) as mock_destroy,
     ):
         yield mock_spawn, mock_destroy

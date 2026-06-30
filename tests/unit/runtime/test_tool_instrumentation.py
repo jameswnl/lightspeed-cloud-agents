@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from prometheus_client import REGISTRY
 
-from agents.runtime.tool_instrumentation import instrument_tool
+from cloud_agents.runtime.tool_instrumentation import instrument_tool
 
 
 def _get_metric(name: str, labels: dict) -> float | None:

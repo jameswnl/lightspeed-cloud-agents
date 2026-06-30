@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agents.workflow.temporal_context import build_sandbox_context
-from agents.workflow.temporal_models import StepResult
+from cloud_agents.workflow.temporal_context import build_sandbox_context
+from cloud_agents.workflow.temporal_models import StepResult
 
 
 class TestContextBuilding:

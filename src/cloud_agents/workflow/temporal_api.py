@@ -16,15 +16,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from temporalio.client import Client
 
-from agents.workflow.audit import emit_audit
-from agents.workflow.definition_store import DefinitionStore
-from agents.workflow.temporal_models import (
+from cloud_agents.workflow.audit import emit_audit
+from cloud_agents.workflow.definition_store import DefinitionStore
+from cloud_agents.workflow.temporal_models import (
     MCPServerConfig,
     ProviderConfig,
     WorkflowInput,
 )
-from agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
-from agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
+from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def build_temporal_router(
                 detail="Provider configuration is required",
             )
 
-        from agents.workflow.temporal_validation import validate_definition
+        from cloud_agents.workflow.temporal_validation import validate_definition
 
         validation_errors = validate_definition(definition)
         if validation_errors:
@@ -184,7 +184,7 @@ def build_temporal_router(
         @router.post("/definitions", status_code=status.HTTP_201_CREATED)
         async def submit_definition(body: dict[str, Any]) -> dict[str, Any]:
             """Submit a workflow definition to the store."""
-            from agents.workflow.definition import WorkflowDefinition
+            from cloud_agents.workflow.definition import WorkflowDefinition
 
             defn = WorkflowDefinition.model_validate(body)
             stored = await definition_store.save(defn)

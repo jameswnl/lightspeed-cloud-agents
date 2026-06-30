@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Cloud Agents Framework is an **agent/workflow orchestration platform** built into lightspeed-stack. It enables product teams to create, deploy, and manage AI agents and multi-step workflows as server-side services in customer clusters.
+The Cloud Agents Framework is an **agent/workflow orchestration platform**. It enables product teams to create, deploy, and manage AI agents and multi-step workflows as server-side services.
 
-The framework uses **Temporal** for durable workflow execution and **lightspeed-agentic-sandbox** for isolated agent execution. Each workflow step runs in a disposable sandbox container using the **OpenAI agents SDK** — no framework code changes required to add new agent types.
+The framework uses **Temporal** for durable workflow execution and ephemeral **sandbox containers** for isolated agent execution. Each workflow step spawns a disposable container that calls an LLM via the `POST /v1/agent/run` contract — any sandbox image implementing this API works as an agent step. No framework code changes required to add new agent types.
 
 ## Goals & Objectives
 

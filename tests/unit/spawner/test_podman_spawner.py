@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents.spawner.podman_spawner import PodmanSpawner
+from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
 
 class TestPodmanSpawnerInit:

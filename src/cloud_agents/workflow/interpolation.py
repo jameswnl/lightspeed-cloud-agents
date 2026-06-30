@@ -12,7 +12,7 @@ import json
 import re
 from typing import Any
 
-from agents.workflow.state import WorkflowState
+from cloud_agents.workflow.state import WorkflowState
 
 TEMPLATE_PATTERN = re.compile(
     r"\{\{\s*steps\.(\w+)\.output\.([\w]+(?:\[\d+\])?(?:\.[\w]+(?:\[\d+\])?)*)\s*\}\}"

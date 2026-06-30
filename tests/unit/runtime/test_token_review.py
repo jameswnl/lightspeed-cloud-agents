@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agents.runtime.auth import TokenReviewAuthMiddleware, get_auth_mode
+from cloud_agents.runtime.auth import TokenReviewAuthMiddleware, get_auth_mode
 
 
 def _make_app_with_token_review() -> TestClient:
@@ -105,7 +105,7 @@ class TestGetRunnerAuthToken:
         """In shared_secret mode, returns AGENT_API_TOKEN."""
         import os
 
-        from agents.runtime.auth import get_runner_auth_token
+        from cloud_agents.runtime.auth import get_runner_auth_token
 
         with patch.dict(
             os.environ, {"AUTH_MODE": "shared_secret", "AGENT_API_TOKEN": "shared-tok"}
@@ -116,7 +116,7 @@ class TestGetRunnerAuthToken:
         """In shared_secret mode with no token, returns None."""
         import os
 
-        from agents.runtime.auth import get_runner_auth_token
+        from cloud_agents.runtime.auth import get_runner_auth_token
 
         with patch.dict(os.environ, {"AUTH_MODE": "shared_secret"}, clear=True):
             assert get_runner_auth_token() is None
@@ -126,7 +126,7 @@ class TestGetRunnerAuthToken:
         import os
         import tempfile
 
-        from agents.runtime.auth import get_runner_auth_token
+        from cloud_agents.runtime.auth import get_runner_auth_token
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".token", delete=False) as f:
             f.write("projected-runner-token")
@@ -135,9 +135,9 @@ class TestGetRunnerAuthToken:
         try:
             with (
                 patch.dict(os.environ, {"AUTH_MODE": "sa_token"}),
-                patch("agents.runtime.auth.SA_TOKEN_PATH", tmp_path),
+                patch("cloud_agents.runtime.auth.SA_TOKEN_PATH", tmp_path),
             ):
-                import agents.runtime.auth as auth_mod
+                import cloud_agents.runtime.auth as auth_mod
 
                 original_path = auth_mod.SA_TOKEN_PATH
                 auth_mod.SA_TOKEN_PATH = tmp_path
@@ -153,7 +153,7 @@ class TestGetRunnerAuthToken:
         """In sa_token mode with missing file, returns None."""
         import os
 
-        from agents.runtime.auth import get_runner_auth_token
+        from cloud_agents.runtime.auth import get_runner_auth_token
 
         with patch.dict(os.environ, {"AUTH_MODE": "sa_token"}):
             assert get_runner_auth_token() is None

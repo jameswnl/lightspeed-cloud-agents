@@ -45,7 +45,7 @@ class TestPodmanGuardrails:
     @pytest.fixture
     def spawner(self):
         """Create a PodmanSpawner with test network."""
-        from agents.spawner.podman_spawner import PodmanSpawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
         os.system(
             "podman network exists cloud-agents 2>/dev/null "
@@ -74,7 +74,7 @@ class TestPodmanGuardrails:
     @pytest.mark.asyncio
     async def test_concurrency_cap_enforced(self, spawner) -> None:
         """Concurrency cap prevents spawning beyond MAX_SPAWNED_PODS."""
-        from agents.spawner.podman_spawner import PodmanSpawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
         capped_spawner = PodmanSpawner(network="cloud-agents", max_pods=1)
         names = []
@@ -98,7 +98,7 @@ class TestPodmanGuardrails:
         """Orphan reconciliation finds and destroys containers with runner label."""
         from podman import PodmanClient
 
-        from agents.workflow.temporal_entrypoint import reconcile_orphaned_sandboxes
+        from cloud_agents.workflow.temporal_entrypoint import reconcile_orphaned_sandboxes
 
         name = "guardrail-orphan-test"
         await spawner.spawn(
@@ -110,7 +110,7 @@ class TestPodmanGuardrails:
             container = client.containers.get(f"agent-{name}")
             assert container.status == "running"
 
-        from agents.spawner.podman_spawner import PodmanSpawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
         fresh_spawner = PodmanSpawner(network="cloud-agents")
         await reconcile_orphaned_sandboxes(fresh_spawner)
 
@@ -150,7 +150,7 @@ class TestKindGuardrails:
     @pytest.fixture
     def spawner(self):
         """Create a KubernetesSpawner."""
-        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
         return KubernetesSpawner(namespace="default", service_account="default")
 
     @pytest.mark.asyncio

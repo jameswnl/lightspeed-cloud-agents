@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agents.workflow.definition import WorkflowDefinition
-from agents.workflow.temporal_validation import validate_definition
+from cloud_agents.workflow.definition import WorkflowDefinition
+from cloud_agents.workflow.temporal_validation import validate_definition
 
-DEMO_PATH = Path(__file__).parents[4] / "docs" / "design" / "cloud-agents" / "DEMO.md"
+DEMO_PATH = Path(__file__).parents[3] / "docs" / "DEMO.md"
 
 
 def _extract_workflow_yaml_from_demo() -> str | None:
@@ -67,7 +67,7 @@ class TestDemoYaml:
 
     def test_demo_yaml_matches_example_file(self, demo_yaml: dict) -> None:
         """DEMO.md YAML matches the standalone example file."""
-        example_path = Path(__file__).parents[4] / "examples" / "agents" / "definitions" / "diagnostic-workflow.yaml"
+        example_path = Path(__file__).parents[3] / "examples" / "definitions" / "diagnostic-workflow.yaml"
         if not example_path.exists():
             pytest.skip("diagnostic-workflow.yaml example file not found")
         with open(example_path) as f:

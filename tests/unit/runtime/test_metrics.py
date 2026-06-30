@@ -2,7 +2,7 @@
 
 from prometheus_client import REGISTRY
 
-from agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
+from cloud_agents.runtime.metrics import ls_agent_run_duration_seconds, ls_agent_runs_total
 
 
 class TestAgentMetrics:

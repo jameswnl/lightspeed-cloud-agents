@@ -19,11 +19,11 @@ class TestActivityTracing:
         mock_cm = mocker.MagicMock()
         mock_tracer.start_as_current_span.return_value = mock_cm
         mocker.patch(
-            "agents.workflow.temporal_activities._tracer",
+            "cloud_agents.workflow.temporal_activities._tracer",
             mock_tracer,
         )
 
-        from agents.workflow.temporal_activities import run_sandbox_step
+        from cloud_agents.workflow.temporal_activities import run_sandbox_step
 
         await run_sandbox_step(
             {
@@ -55,14 +55,14 @@ class TestActivityTracing:
         mock_cm = mocker.MagicMock()
         mock_tracer.start_as_current_span.return_value = mock_cm
         mocker.patch(
-            "agents.workflow.temporal_activities._tracer",
+            "cloud_agents.workflow.temporal_activities._tracer",
             mock_tracer,
         )
         mocker.patch(
-            "agents.workflow.temporal_activities.NullNotifier",
+            "cloud_agents.workflow.temporal_activities.NullNotifier",
         ).return_value = mocker.AsyncMock()
 
-        from agents.workflow.temporal_activities import send_approval_notification
+        from cloud_agents.workflow.temporal_activities import send_approval_notification
 
         await send_approval_notification(
             {
@@ -92,11 +92,11 @@ class TestActivityTracing:
         mock_cm = mocker.MagicMock()
         mock_tracer.start_as_current_span.return_value = mock_cm
         mocker.patch(
-            "agents.workflow.temporal_activities._tracer",
+            "cloud_agents.workflow.temporal_activities._tracer",
             mock_tracer,
         )
 
-        from agents.workflow.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.temporal_activities import build_escalation_activity
 
         await build_escalation_activity(
             {"r1": {"status": "failed", "error": "timeout"}},

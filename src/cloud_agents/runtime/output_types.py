@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 import logging
 
-from agents.models import DiagnosticReport, MonitoringResult
+from cloud_agents.models import DiagnosticReport, MonitoringResult
 
 logger = logging.getLogger(__name__)
 

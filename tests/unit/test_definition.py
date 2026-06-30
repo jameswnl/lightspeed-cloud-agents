@@ -4,7 +4,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from agents.definition import (
+from cloud_agents.definition import (
     AgentDefinition,
     LifecycleSpec,
     ToolsSpec,

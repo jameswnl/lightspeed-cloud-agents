@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from agents.workflow.definition import WorkflowDefinition
+from cloud_agents.workflow.definition import WorkflowDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class DefinitionStore:
         if self._persistence:
             from datetime import datetime
 
-            from agents.workflow.state import WorkflowState
+            from cloud_agents.workflow.state import WorkflowState
 
             now = datetime.now(UTC).isoformat()
             state = WorkflowState(
@@ -196,7 +196,7 @@ class DefinitionStore:
         if self._persistence:
             from datetime import datetime
 
-            from agents.workflow.state import WorkflowState
+            from cloud_agents.workflow.state import WorkflowState
 
             now = datetime.now(UTC).isoformat()
             state = WorkflowState(

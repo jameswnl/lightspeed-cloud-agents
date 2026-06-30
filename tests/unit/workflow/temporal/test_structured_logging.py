@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agents.workflow.structured_logging import configure_logging
+from cloud_agents.workflow.structured_logging import configure_logging
 
 
 class TestStructuredLogging:

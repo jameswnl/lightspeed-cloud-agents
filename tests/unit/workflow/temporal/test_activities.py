@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pytest_mock import MockerFixture
 
-from agents.workflow.temporal_activities import (
+from cloud_agents.workflow.temporal_activities import (
     _normalize_config_ref,
     build_escalation_activity,
     compute_pod_name,
@@ -53,7 +53,7 @@ class TestRunSandboxStep:
         }
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -92,7 +92,7 @@ class TestRunSandboxStep:
         mock_response.status_code = 502
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -134,7 +134,7 @@ class TestRunSandboxStep:
         }
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -174,7 +174,7 @@ class TestRunSandboxStep:
         mock_response.json.return_value = {"success": True, "output": {"ok": True}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_client_instance = mocker.MagicMock(
             post=mocker.AsyncMock(return_value=mock_response),
@@ -185,7 +185,7 @@ class TestRunSandboxStep:
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         mock_build_ctx = mocker.patch(
-            "agents.workflow.temporal_activities.build_sandbox_context",
+            "cloud_agents.workflow.temporal_activities.build_sandbox_context",
             return_value={},
         )
 
@@ -256,7 +256,7 @@ class TestRunSandboxStep:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -303,7 +303,7 @@ class TestRunSandboxStep:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_client_instance = mocker.MagicMock(
             post=mocker.AsyncMock(return_value=mock_response),
@@ -346,10 +346,10 @@ class TestNotificationActivity:
         mocker: MockerFixture,
     ) -> None:
         """Notification includes correlation_id and calls notifier."""
-        from agents.workflow.temporal_activities import send_approval_notification
+        from cloud_agents.workflow.temporal_activities import send_approval_notification
 
         mock_notifier_cls = mocker.patch(
-            "agents.workflow.temporal_activities.NullNotifier",
+            "cloud_agents.workflow.temporal_activities.NullNotifier",
         )
         mock_notifier = mocker.AsyncMock()
         mock_notifier_cls.return_value = mock_notifier
@@ -373,10 +373,10 @@ class TestNotificationActivity:
         mocker: MockerFixture,
     ) -> None:
         """Notification failure does not raise."""
-        from agents.workflow.temporal_activities import send_approval_notification
+        from cloud_agents.workflow.temporal_activities import send_approval_notification
 
         mock_notifier_cls = mocker.patch(
-            "agents.workflow.temporal_activities.NullNotifier",
+            "cloud_agents.workflow.temporal_activities.NullNotifier",
         )
         mock_notifier = mocker.AsyncMock()
         mock_notifier.notify.side_effect = RuntimeError("webhook failed")
@@ -417,7 +417,7 @@ class TestBuildEscalation:
     ) -> None:
         """Escalation packager failure is non-fatal; artifact still returned."""
         mock_packager_cls = mocker.patch(
-            "agents.workflow.temporal_activities.LogPackager",
+            "cloud_agents.workflow.temporal_activities.LogPackager",
         )
         mock_packager = mocker.AsyncMock()
         mock_packager.package.side_effect = RuntimeError("delivery failed")
@@ -467,7 +467,7 @@ class TestNotificationConfigResolution:
             },
         )
         mock_slack = mocker.patch(
-            "agents.workflow.notifier.SlackNotifier",
+            "cloud_agents.workflow.notifier.SlackNotifier",
         )
         mock_instance = mocker.AsyncMock()
         mock_slack.return_value = mock_instance
@@ -494,7 +494,7 @@ class TestNotificationConfigResolution:
             {"NOTIFIER_WEBHOOK_MY_ENDPOINT_URL": "https://example.com/notify"},
         )
         mock_webhook = mocker.patch(
-            "agents.workflow.notifier.WebhookNotifier",
+            "cloud_agents.workflow.notifier.WebhookNotifier",
         )
         mock_instance = mocker.AsyncMock()
         mock_webhook.return_value = mock_instance
@@ -526,7 +526,7 @@ class TestAdvisorySpawnerEnforcement:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -571,7 +571,7 @@ class TestAdvisorySpawnerEnforcement:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -617,7 +617,7 @@ class TestAdvisorySpawnerEnforcement:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -658,7 +658,7 @@ class TestAdvisorySpawnerEnforcement:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -704,7 +704,7 @@ class TestMCPInjection:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -757,7 +757,7 @@ class TestMCPInjection:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -799,7 +799,7 @@ class TestMCPInjection:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -859,7 +859,7 @@ class TestMCPInjection:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -962,7 +962,7 @@ class TestMCPInjection:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -1016,7 +1016,7 @@ class TestOutputSchemaForwarding:
         mock_response.json.return_value = {"success": True, "output": {"severity": "high"}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_client_instance = mocker.MagicMock(
             post=mocker.AsyncMock(return_value=mock_response),
@@ -1056,7 +1056,7 @@ class TestAuditEmission:
     @pytest.mark.asyncio
     async def test_sandbox_spawned_audit_event(self, mocker: MockerFixture) -> None:
         """Successful sandbox step emits sandbox_spawned audit event."""
-        mock_emit = mocker.patch("agents.workflow.temporal_activities.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_activities.emit_audit")
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -1066,7 +1066,7 @@ class TestAuditEmission:
         mock_response.json.return_value = {"success": True, "output": {}}
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(

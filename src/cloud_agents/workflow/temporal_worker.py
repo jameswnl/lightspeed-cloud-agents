@@ -12,12 +12,12 @@ from typing import Any, Optional
 
 from temporalio import activity
 
-from agents.workflow.temporal_activities import (
+from cloud_agents.workflow.temporal_activities import (
     build_escalation_activity,
     run_sandbox_step,
     send_approval_notification,
 )
-from agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 

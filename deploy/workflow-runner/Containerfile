@@ -18,7 +18,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock LICENSE README.md ./
+COPY pyproject.toml uv.lock README.md ./
 
 RUN uv sync --no-dev --no-install-project
 
@@ -44,4 +44,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 EXPOSE 8080
 
-CMD ["python", "-m", "uvicorn", "agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "uvicorn", "cloud_agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]

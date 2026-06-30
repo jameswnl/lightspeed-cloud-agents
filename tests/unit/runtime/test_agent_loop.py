@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agents.exceptions import AgentUnavailableError
-from agents.models import AgentRunResponse
-from agents.runtime.agent_loop import AgentLoop
+from cloud_agents.exceptions import AgentUnavailableError
+from cloud_agents.models import AgentRunResponse
+from cloud_agents.runtime.agent_loop import AgentLoop
 
 
 def _make_response(

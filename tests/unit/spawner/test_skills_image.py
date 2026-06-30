@@ -40,7 +40,7 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1ServiceSpec = lambda **kw: type("ServiceSpec", (), kw)()
         mock_k8s_client.V1ServicePort = lambda **kw: type("ServicePort", (), kw)()
 
-        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 
         spawner = KubernetesSpawner(namespace="test")
 
@@ -90,7 +90,7 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1ServiceSpec = lambda **kw: type("ServiceSpec", (), kw)()
         mock_k8s_client.V1ServicePort = lambda **kw: type("ServicePort", (), kw)()
 
-        from agents.spawner.kubernetes_spawner import KubernetesSpawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 
         spawner = KubernetesSpawner(namespace="test")
 

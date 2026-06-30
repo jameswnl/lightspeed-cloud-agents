@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agents.remote_agent_client import RemoteAgentClient
-from agents.spawner.base import SecretKeyRef
-from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
-from agents.workflow.definition import WorkflowStepSpec
+from cloud_agents.remote_agent_client import RemoteAgentClient
+from cloud_agents.spawner.base import SecretKeyRef
+from cloud_agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
+from cloud_agents.workflow.definition import WorkflowStepSpec
 
 
 class TestSecretKeyRef:
@@ -64,7 +64,7 @@ class TestRemoteAgentClientAuth:
             "success": True,
         }
 
-        with patch("agents.remote_agent_client.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.remote_agent_client.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
             mock_http.post = AsyncMock(return_value=mock_response)
             mock_http.__aenter__ = AsyncMock(return_value=mock_http)
@@ -95,7 +95,7 @@ class TestRemoteAgentClientAuth:
             "success": True,
         }
 
-        with patch("agents.remote_agent_client.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.remote_agent_client.httpx.AsyncClient") as mock_cls:
             mock_http = AsyncMock()
             mock_http.post = AsyncMock(return_value=mock_response)
             mock_http.__aenter__ = AsyncMock(return_value=mock_http)

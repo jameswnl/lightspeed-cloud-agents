@@ -2,7 +2,7 @@
 
 import uuid
 
-from agents.runtime.correlation import validate_correlation_id
+from cloud_agents.runtime.correlation import validate_correlation_id
 
 
 class TestValidateCorrelationId:

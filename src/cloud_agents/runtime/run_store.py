@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Optional
 
-from agents.models import AgentRunResponse, RunState, RunStatus
+from cloud_agents.models import AgentRunResponse, RunState, RunStatus
 
 
 class RunStore:

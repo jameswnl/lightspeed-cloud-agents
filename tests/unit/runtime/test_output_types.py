@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents.models import DiagnosticReport, MonitoringResult
-from agents.runtime.output_types import resolve_output_type
+from cloud_agents.models import DiagnosticReport, MonitoringResult
+from cloud_agents.runtime.output_types import resolve_output_type
 
 
 class TestResolveOutputType:
@@ -30,14 +30,14 @@ class TestResolveOutputType:
         """Test loading custom type from a module via importlib."""
         result = resolve_output_type(
             "DiagnosticReport",
-            module_name="agents.models",
+            module_name="cloud_agents.models",
         )
         assert result is DiagnosticReport
 
     def test_importlib_fallback_unknown_class_raises(self) -> None:
         """Test that unknown class in a valid module raises ValueError."""
         with pytest.raises(ValueError, match="Unknown output_type"):
-            resolve_output_type("NonexistentClass", module_name="agents.models")
+            resolve_output_type("NonexistentClass", module_name="cloud_agents.models")
 
     def test_importlib_fallback_bad_module_raises(self) -> None:
         """Test that invalid module raises ValueError."""

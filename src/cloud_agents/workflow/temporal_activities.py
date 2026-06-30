@@ -16,14 +16,14 @@ from typing import Any, Optional
 import httpx
 from temporalio import activity
 
-from agents.runtime.tracing import get_tracer
-from agents.workflow.audit import emit_audit
-from agents.workflow.escalation import LogPackager
-from agents.workflow.notifier import NullNotifier
-from agents.workflow.temporal_context import build_sandbox_context
-from agents.workflow.temporal_models import StepResult
+from cloud_agents.runtime.tracing import get_tracer
+from cloud_agents.workflow.audit import emit_audit
+from cloud_agents.workflow.escalation import LogPackager
+from cloud_agents.workflow.notifier import NullNotifier
+from cloud_agents.workflow.temporal_context import build_sandbox_context
+from cloud_agents.workflow.temporal_models import StepResult
 
-_tracer = get_tracer("agents.workflow.temporal_activities")
+_tracer = get_tracer("cloud_agents.workflow.temporal_activities")
 
 logger = logging.getLogger(__name__)
 
@@ -278,13 +278,13 @@ async def _send_notification_inner(input: dict[str, Any]) -> dict[str, Any]:
         config = input.get("notifier_config") or {}
         notifier_type = config.get("type", "null")
         if notifier_type == "slack":
-            from agents.workflow.notifier import SlackNotifier
+            from cloud_agents.workflow.notifier import SlackNotifier
 
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             webhook_url = os.environ.get(f"NOTIFIER_SLACK_{ref}_WEBHOOK_URL", "")
             notifier = SlackNotifier(webhook_url=webhook_url)
         elif notifier_type == "webhook":
-            from agents.workflow.notifier import WebhookNotifier
+            from cloud_agents.workflow.notifier import WebhookNotifier
 
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             url = os.environ.get(f"NOTIFIER_WEBHOOK_{ref}_URL", "")
@@ -347,7 +347,7 @@ async def _build_escalation_inner(
     try:
         config_type = (escalation_config or {}).get("type", "log")
         if config_type == "webhook":
-            from agents.workflow.escalation import WebhookPackager
+            from cloud_agents.workflow.escalation import WebhookPackager
 
             ref = _normalize_config_ref(
                 (escalation_config or {}).get("config_ref", "DEFAULT")
@@ -359,7 +359,7 @@ async def _build_escalation_inner(
 
         from datetime import datetime
 
-        from agents.workflow.escalation import EscalationPackage
+        from cloud_agents.workflow.escalation import EscalationPackage
 
         pkg = EscalationPackage(
             workflow_name=workflow_name,

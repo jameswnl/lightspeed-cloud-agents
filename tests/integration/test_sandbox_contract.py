@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
-from agents.workflow.temporal_activities import run_sandbox_step
+from cloud_agents.workflow.temporal_activities import run_sandbox_step
 
 
 class TestSandboxRequestContract:
@@ -38,7 +38,7 @@ class TestSandboxRequestContract:
             return resp
 
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient",
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_client = mocker.MagicMock(post=mocker.AsyncMock(side_effect=capture_post))
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
@@ -93,7 +93,7 @@ class TestSandboxResponseContract:
             "output": {"summary": "all good", "actions": []},
         }
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient"
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -137,7 +137,7 @@ class TestSandboxResponseContract:
             "error": "LLM returned empty response",
         }
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient"
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
@@ -177,7 +177,7 @@ class TestSandboxResponseContract:
         mock_response = mocker.MagicMock()
         mock_response.status_code = 502
         mock_http = mocker.patch(
-            "agents.workflow.temporal_activities.httpx.AsyncClient"
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(

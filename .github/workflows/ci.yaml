@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Run unit tests
+        run: |
+          uv run pytest tests/unit/workflow/ tests/unit/spawner/ \
+            tests/unit/test_definition.py tests/unit/test_models.py \
+            tests/unit/test_registry.py \
+            -q --tb=short
+      - name: Validate example YAML definitions
+        run: uv run pytest tests/unit/workflow/test_example_definitions.py -v
+      - name: Validate DEMO.md YAML
+        run: uv run pytest tests/unit/workflow/test_demo_yaml.py -v
