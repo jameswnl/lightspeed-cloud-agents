@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from temporalio.client import Client
 
+from agents.workflow.audit import emit_audit
 from agents.workflow.definition_store import DefinitionStore
 from agents.workflow.temporal_models import (
     MCPServerConfig,
@@ -157,6 +158,16 @@ def build_temporal_router(
                 ) from exc
             raise
 
+        emit_audit(
+            event_type="workflow_started",
+            workflow_id=workflow_id,
+            details={
+                "definition_name": definition.get("metadata", {}).get("name", ""),
+                "provider": provider.name,
+                "advisory": advisory,
+            },
+        )
+
         return {"workflow_id": workflow_id}
 
     if definition_store:
@@ -201,6 +212,13 @@ def build_temporal_router(
         await handle.signal(
             AgentWorkflow.approve,
             args=[request.step_name, request.decision, request.selected_option_id],
+        )
+        event_type = "step_approved" if request.decision == "approved" else "step_denied"
+        emit_audit(
+            event_type=event_type,
+            workflow_id=workflow_id,
+            step_name=request.step_name,
+            details={"decision": request.decision, "selected_option_id": request.selected_option_id},
         )
         return {"status": "signal_sent"}
 

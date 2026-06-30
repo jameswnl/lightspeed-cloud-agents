@@ -182,6 +182,37 @@ class TestRunWorkflow:
         assert response.status_code == 202
         assert response.json()["workflow_id"] == "wf-my-custom-id"
 
+    def test_workflow_started_audit_event_emitted(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Starting a workflow emits workflow_started audit event."""
+        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "diag"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+            },
+        )
+        started_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "workflow_started"
+        ]
+        assert len(started_calls) == 1
+        assert started_calls[0][1]["details"]["definition_name"] == "diag"
+
 
 class TestApproveWorkflow:
     """Tests for POST /v1/workflows/{id}/approve."""
@@ -200,6 +231,43 @@ class TestApproveWorkflow:
             },
         )
         assert response.status_code == 200
+
+    def test_approval_emits_audit_event(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Approval emits step_approved audit event."""
+        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        client.post(
+            "/v1/workflows/wf-test-1/approve",
+            json={"step_name": "approve-step", "decision": "approved"},
+        )
+        approved_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "step_approved"
+        ]
+        assert len(approved_calls) == 1
+        assert approved_calls[0][1]["step_name"] == "approve-step"
+
+    def test_denial_emits_audit_event(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Denial emits step_denied audit event."""
+        mock_emit = mocker.patch("agents.workflow.temporal_api.emit_audit")
+        client.post(
+            "/v1/workflows/wf-test-1/approve",
+            json={"step_name": "approve-step", "decision": "denied"},
+        )
+        denied_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "step_denied"
+        ]
+        assert len(denied_calls) == 1
 
     def test_approve_with_option_id(
         self,
