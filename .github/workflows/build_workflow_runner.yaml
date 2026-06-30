@@ -1,6 +1,7 @@
 name: Build workflow-runner image
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'deploy/workflow-runner/**'
