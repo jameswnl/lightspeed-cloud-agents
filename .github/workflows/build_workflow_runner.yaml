@@ -21,7 +21,7 @@ on:
 
 env:
   IMAGE_NAME: lightspeed-cloud-agents
-  REGISTRY: quay.io/${{ github.repository_owner }}
+  REGISTRY: quay.io/jameswong
   CONTAINER_FILE: deploy/workflow-runner/Containerfile
 
 jobs:
