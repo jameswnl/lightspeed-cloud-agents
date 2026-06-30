@@ -1,6 +1,13 @@
 name: Temporal E2E tests
 
 on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/cloud_agents/workflow/**'
+      - 'tests/e2e/**'
+      - 'tests/integration/**'
   pull_request:
     paths:
       - 'src/cloud_agents/workflow/**'
