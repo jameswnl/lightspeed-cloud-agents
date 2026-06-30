@@ -1,10 +1,12 @@
-# Ephemeral Execution Gaps — Implementation Plan
+# Gaps — Implementation Plan
 
-**Date**: 2026-06-30
-**Source**: `docs/gaps/ephemeral-execution-gaps.md` (reviewer gap analysis)
-**Scope**: Three implementation-worthy gaps from the ephemeral execution review. Remaining gaps (retry freshness, blast radius claims) are doc-only — already addressed in ARCHITECTURE.md rewrite.
+Consolidated plan for implementation-worthy gaps identified by architecture reviews. Doc-only gaps are tracked in the review files and addressed in ARCHITECTURE.md directly.
 
-## T1: Forward PermissionScope to sandbox contract (Gaps 3, 5)
+---
+
+## Ephemeral Execution (source: `ephemeral-execution-gaps.md`)
+
+### T1: Forward PermissionScope to sandbox contract (Gaps 3, 5)
 
 **Problem**: `allowed_tools` / `denied_tools` from `WorkflowStepSpec.permissions` are never passed to the sandbox. The model exists in `permissions.py`, enforcement exists in `generic_runner.py`, but the Temporal workflow path doesn't wire them through. Per-step tool scoping is a paper promise.
 
@@ -30,7 +32,7 @@
 
 **Effort**: 1 day (activity side) + TBD (sandbox side)
 
-## T2: Explicit sandbox termination on timeout/cancellation (Gap 4)
+### T2: Explicit sandbox termination on timeout/cancellation (Gap 4)
 
 **Problem**: When a Temporal activity times out or is cancelled, the `finally` block attempts cleanup. But if the worker crashes between the timeout and the `finally`, the container leaks. There's no explicit cancellation signal to the spawned container — it just gets orphaned until startup reconciliation.
 
@@ -50,7 +52,7 @@
 
 **Effort**: 1 day
 
-## T3: Cleanup failure metrics (Gap 6)
+### T3: Cleanup failure metrics (Gap 6)
 
 **Problem**: A failed `spawner.destroy()` only logs a warning. There's no metric, so leaked containers are invisible in dashboards until someone checks logs or orphan reconciliation runs.
 
@@ -70,7 +72,7 @@
 
 **Effort**: Half day
 
-## Dependencies
+### Dependencies
 
 ```
 T1 (permissions) — independent, but sandbox-side enforcement depends on upstream
@@ -80,7 +82,7 @@ T3 (cleanup metrics) — independent
 
 All three are independent and can be parallelized.
 
-## Decision points before implementation
+### Decision points before implementation
 
 1. **T1**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`? If not, is this a lightspeed-cloud-agents task or an upstream sandbox task?
 2. **T2**: Is Temporal heartbeat sufficient, or do we need an explicit container kill signal (e.g. `spawner.terminate()` that sends SIGTERM before destroy)?
