@@ -6,22 +6,18 @@ This guide covers:
 1. **Deploying the cloud agents platform** (Temporal + workflow runner) on Podman or Kubernetes
 2. **Running a diagnostic workflow** that uses an LLM to diagnose cluster issues
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Cloud Agents System                          │
-│                                                                 │
-│  ┌──────────────┐    gRPC    ┌──────────────────┐               │
-│  │ Workflow      │ ────────→ │ Temporal Server   │               │
-│  │ Runner        │           │ (orchestration)   │               │
-│  │               │           └──────────────────┘               │
-│  │ POST /v1/     │                                              │
-│  │ workflows/run │    spawn    ┌──────────────────┐   HTTPS     │
-│  │               │ ──────────→ │ Sandbox Pod      │ ──────────→ │
-│  │               │             │ (ephemeral)      │             │
-│  │               │    destroy  │ POST /v1/agent/  │   LLM       │
-│  │               │ ←────────── │ run              │   Provider  │
-│  └──────────────┘             └──────────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    subgraph cluster["Cloud Agents System"]
+        WR["Workflow Runner<br/><i>POST /v1/workflows/run</i>"]
+        TS["Temporal Server"]
+        SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
+    end
+    LLM["LLM Provider"]
+
+    WR -- "gRPC" --> TS
+    WR -- "spawn / destroy" --> SB
+    SB -- "HTTPS" --> LLM
 ```
 
 ## Prerequisites

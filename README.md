@@ -21,25 +21,12 @@ See [docs/DEMO.md](docs/DEMO.md) for full deployment guide with Podman and Kuber
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for goals, requirements, and design.
 
-```
-                    POST /v1/workflows/run
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │ Workflow      │
-                    │ Runner        │
-                    │ (FastAPI +    │
-                    │  Temporal     │
-                    │  Worker)      │
-                    └───┬───────┬───┘
-                  gRPC  │       │  spawn/destroy
-                        ▼       ▼
-              ┌──────────┐  ┌──────────────┐
-              │ Temporal  │  │ Sandbox      │
-              │ Server    │  │ Container    │
-              │ (durable  │  │ (per step)   │
-              │  state)   │  │              │──── HTTPS ──── LLM Provider
-              └──────────┘  └──────────────┘
+```mermaid
+graph TD
+    API["POST /v1/workflows/run"] --> WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
+    WR -- "gRPC" --> TS["Temporal Server<br/><i>durable state</i>"]
+    WR -- "spawn / destroy" --> SB["Sandbox Container<br/><i>per step</i>"]
+    SB -- "HTTPS" --> LLM["LLM Provider"]
 ```
 
 ## Key Docs
