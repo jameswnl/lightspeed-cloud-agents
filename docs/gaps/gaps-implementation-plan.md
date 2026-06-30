@@ -120,28 +120,20 @@ All three are independent and can be parallelized.
 
 **Effort**: Half day
 
-### T6: Decide on runtime convergence (Gap 4)
+### T6: Runtime convergence — RESOLVED
 
-**Problem**: The repo contains two runtime paths — the workflow sandbox contract (`/v1/agent/run`) and the generic agent runtime (`/v1/run` with `agent.yaml` + `tools.py`). The doc implies a unified abstraction but the code has two implementations with different contracts.
+**Decision**: Option 3 (remove). Generic runtime was PoC1 legacy — removed entirely. The sandbox `/v1/agent/run` is the only runtime contract. No convergence needed.
 
-**This is a decision, not a task.** Options:
+### ~~T4: Unify runtime HTTP contract~~ — CLOSED
 
-1. **Converge**: Generic runtime adopts `/v1/agent/run` contract. The generic runtime becomes a compatible sandbox image. One contract, two implementations.
-2. **Separate**: Generic runtime is a standalone deployment mode, not part of the workflow path. Document the distinction. Two contracts, two purposes.
-3. **Remove**: Generic runtime is legacy from PoC1. Remove it from this repo. The sandbox is the only runtime.
-
-T4 (contract unification) implements option 1. If option 2 or 3 is chosen, T4 changes scope.
+No longer needed. The generic runtime was removed. Only one contract exists: `POST /v1/agent/run`.
 
 ### Dependencies
 
 ```
-T4 (contract) — blocked on T6 decision (which runtime model?)
-T5 (doc inputs) — independent
-T6 (decision) — must be made before T4
+T5 (doc inputs) — independent, ready to implement
 ```
 
 ### Decision points before implementation
 
-4. **T6**: Which runtime model? Converge, separate, or remove the generic runtime?
-5. **T4**: If converging, should the generic runtime adopt the sandbox contract fully (including outputSchema, systemPrompt), or just add a compatibility route?
-6. **T5**: Should the config table be exhaustive (every env var) or just the core ones?
+4. **T5**: Should the config table be exhaustive (every env var) or just the core ones?
