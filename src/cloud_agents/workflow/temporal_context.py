@@ -39,7 +39,11 @@ def build_sandbox_context(
 
     if approval_key := current_step.get("approval_step"):
         analysis_key = current_step.get("analysis_step")
-        if approval_key in workflow_steps and analysis_key and analysis_key in workflow_steps:
+        if (
+            approval_key in workflow_steps
+            and analysis_key
+            and analysis_key in workflow_steps
+        ):
             approval_output = workflow_steps[approval_key].output or {}
             analysis_output = workflow_steps[analysis_key].output or {}
             selected_id = approval_output.get("selected_option_id")

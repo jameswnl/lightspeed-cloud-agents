@@ -54,7 +54,9 @@ def setup_cluster() -> None:
     if CLUSTER in existing.split("\n"):
         print(f"[OK] Cluster '{CLUSTER}' already exists")
     else:
-        run(f"kind create cluster --name {CLUSTER} --config {REPO_ROOT}/deploy/kind/kind-config.yaml")
+        run(
+            f"kind create cluster --name {CLUSTER} --config {REPO_ROOT}/deploy/kind/kind-config.yaml"
+        )
         print(f"[OK] Cluster '{CLUSTER}' created")
 
     run(f"podman tag localhost/agent-runtime:latest {IMAGE}", check=False)
@@ -74,7 +76,10 @@ def deploy_postgres() -> None:
     kubectl(f"apply -f {REPO_ROOT}/deploy/kind/postgres.yaml")
 
     for _ in range(30):
-        ready = kubectl("get pods -l app=postgres -o jsonpath='{.items[0].status.conditions[?(@.type==\"Ready\")].status}'", check=False)
+        ready = kubectl(
+            "get pods -l app=postgres -o jsonpath='{.items[0].status.conditions[?(@.type==\"Ready\")].status}'",
+            check=False,
+        )
         if "True" in ready:
             print("[OK] PostgreSQL ready")
             return
@@ -88,14 +93,18 @@ def deploy_workflow_runner(replicas: int = 2) -> None:
     print()
     print(f"--- Deploy: workflow runner ({replicas} replicas) ---")
 
-    kubectl(f"create secret generic agent-auth "
-            f"--from-literal=token=e2e-test-token "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create secret generic agent-auth "
+        f"--from-literal=token=e2e-test-token "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
-    kubectl(f"create configmap diag-config "
-            f"--from-file=agent.yaml={REPO_ROOT}/examples/agents/definitions/diagnostic-agent.yaml "
-            f"--from-file=registry.yaml={REPO_ROOT}/examples/agents/registry.yaml "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create configmap diag-config "
+        f"--from-file=agent.yaml={REPO_ROOT}/examples/agents/definitions/diagnostic-agent.yaml "
+        f"--from-file=registry.yaml={REPO_ROOT}/examples/agents/registry.yaml "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
     manifest = f"""
 apiVersion: apps/v1
@@ -142,7 +151,10 @@ spec:
     run(f"echo '{manifest}' | kubectl --context {CONTEXT} apply -f -")
 
     for _ in range(30):
-        ready = kubectl("get pods -l app=workflow-runner -o jsonpath='{range .items[*]}{.status.conditions[?(@.type==\"Ready\")].status}{\" \"}{end}'", check=False)
+        ready = kubectl(
+            'get pods -l app=workflow-runner -o jsonpath=\'{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{" "}{end}\'',
+            check=False,
+        )
         true_count = ready.count("True")
         if true_count >= replicas:
             print(f"[OK] {replicas} workflow-runner replicas ready")
@@ -154,8 +166,11 @@ spec:
 
 def get_runner_url() -> str:
     """Get the workflow runner URL via port-forward."""
-    run(f"kubectl --context {CONTEXT} port-forward svc/workflow-runner 18080:8080 &",
-        check=False, capture=False)
+    run(
+        f"kubectl --context {CONTEXT} port-forward svc/workflow-runner 18080:8080 &",
+        check=False,
+        capture=False,
+    )
     time.sleep(2)
     return "http://localhost:18080"
 
@@ -186,12 +201,14 @@ def test_ingest_endpoint(url: str) -> None:
 
     req = urllib.request.Request(
         f"{url}/v1/workflows/nonexistent/steps/r1/result",
-        data=json.dumps({
-            "status": "completed",
-            "output": {},
-            "completed_at": "2026-01-01T00:00:00Z",
-            "attempt": 1,
-        }).encode(),
+        data=json.dumps(
+            {
+                "status": "completed",
+                "output": {},
+                "completed_at": "2026-01-01T00:00:00Z",
+                "attempt": 1,
+            }
+        ).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer e2e-test-token",
@@ -216,12 +233,14 @@ def test_ingest_auth_required(url: str) -> None:
 
     req = urllib.request.Request(
         f"{url}/v1/workflows/wf-1/steps/r1/result",
-        data=json.dumps({
-            "status": "completed",
-            "output": {},
-            "completed_at": "2026-01-01T00:00:00Z",
-            "attempt": 1,
-        }).encode(),
+        data=json.dumps(
+            {
+                "status": "completed",
+                "output": {},
+                "completed_at": "2026-01-01T00:00:00Z",
+                "attempt": 1,
+            }
+        ).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -239,7 +258,9 @@ def test_visibility_labels() -> None:
     print()
     print("--- Test: visibility labels ---")
     jobs = kubectl("get jobs -l cloud-agents/workflow-id -o name", check=False)
-    print(f"[INFO] Jobs with workflow labels: {jobs or '(none yet — labels verified in code)'}")
+    print(
+        f"[INFO] Jobs with workflow labels: {jobs or '(none yet — labels verified in code)'}"
+    )
     print("[PASS] Label selector query works")
 
 

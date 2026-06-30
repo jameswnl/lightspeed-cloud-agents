@@ -102,7 +102,8 @@ class TokenReviewAuthMiddleware(BaseHTTPMiddleware):
             auth_api = client.AuthenticationV1Api()
             review = client.V1TokenReview(
                 spec=client.V1TokenReviewSpec(
-                    token=token, audiences=[self.AUDIENCE],
+                    token=token,
+                    audiences=[self.AUDIENCE],
                 ),
             )
             result = auth_api.create_token_review(review)

@@ -1,6 +1,5 @@
 """Unit tests for bearer auth middleware."""
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -87,7 +86,9 @@ class TestProtectedPaths:
     def test_get_run_with_valid_token(self) -> None:
         """Test /v1/runs/{id} succeeds with valid token."""
         client = TestClient(_make_app())
-        resp = client.get("/v1/runs/abc", headers={"Authorization": "Bearer test-token"})
+        resp = client.get(
+            "/v1/runs/abc", headers={"Authorization": "Bearer test-token"}
+        )
         assert resp.status_code == 200
 
 

@@ -33,8 +33,10 @@ class TestWorkflowState:
     def test_default_status(self) -> None:
         """Test default workflow status."""
         s = WorkflowState(
-            workflow_id="w1", workflow_name="test",
-            created_at="2026-01-01", updated_at="2026-01-01",
+            workflow_id="w1",
+            workflow_name="test",
+            created_at="2026-01-01",
+            updated_at="2026-01-01",
         )
         assert s.status == "running"
         assert s.steps == {}
@@ -42,8 +44,10 @@ class TestWorkflowState:
     def test_with_steps(self) -> None:
         """Test workflow with step results."""
         s = WorkflowState(
-            workflow_id="w1", workflow_name="test",
-            created_at="2026-01-01", updated_at="2026-01-01",
+            workflow_id="w1",
+            workflow_name="test",
+            created_at="2026-01-01",
+            updated_at="2026-01-01",
             current_step="step2",
             steps={"step1": StepResult(step_name="step1", status="completed")},
         )

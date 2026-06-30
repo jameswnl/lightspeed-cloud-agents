@@ -12,8 +12,10 @@ def _make_state(**step_data: dict) -> WorkflowState:
     for name, data in step_data.items():
         steps[name] = StepResult(step_name=name, **data)
     return WorkflowState(
-        workflow_id="w1", workflow_name="test",
-        created_at="2026-01-01", updated_at="2026-01-01",
+        workflow_id="w1",
+        workflow_name="test",
+        created_at="2026-01-01",
+        updated_at="2026-01-01",
         steps=steps,
     )
 
@@ -33,17 +35,23 @@ class TestEvaluateCondition:
 
     def test_approved_true(self) -> None:
         """Test approved == true."""
-        state = _make_state(approve={"status": "completed", "output": {"approved": True}})
+        state = _make_state(
+            approve={"status": "completed", "output": {"approved": True}}
+        )
         assert evaluate_condition("steps.approve.approved == true", state) is True
 
     def test_approved_false(self) -> None:
         """Test approved == false."""
-        state = _make_state(approve={"status": "completed", "output": {"approved": False}})
+        state = _make_state(
+            approve={"status": "completed", "output": {"approved": False}}
+        )
         assert evaluate_condition("steps.approve.approved == true", state) is False
 
     def test_output_field_truthy(self) -> None:
         """Test truthy check on output field."""
-        state = _make_state(diag={"status": "completed", "output": {"issues": ["a", "b"]}})
+        state = _make_state(
+            diag={"status": "completed", "output": {"issues": ["a", "b"]}}
+        )
         assert evaluate_condition("steps.diag.output.issues", state) is True
 
     def test_output_field_falsy(self) -> None:
@@ -53,8 +61,13 @@ class TestEvaluateCondition:
 
     def test_output_boolean_equals(self) -> None:
         """Test output.cluster_healthy == true."""
-        state = _make_state(exec={"status": "completed", "output": {"cluster_healthy": True}})
-        assert evaluate_condition("steps.exec.output.cluster_healthy == true", state) is True
+        state = _make_state(
+            exec={"status": "completed", "output": {"cluster_healthy": True}}
+        )
+        assert (
+            evaluate_condition("steps.exec.output.cluster_healthy == true", state)
+            is True
+        )
 
     def test_and_combinator(self) -> None:
         """Test 'and' combines two conditions."""
@@ -62,9 +75,12 @@ class TestEvaluateCondition:
             a={"status": "completed", "output": {"approved": True}},
             b={"status": "completed", "output": {"healthy": True}},
         )
-        assert evaluate_condition(
-            "steps.a.approved == true and steps.b.output.healthy == true", state
-        ) is True
+        assert (
+            evaluate_condition(
+                "steps.a.approved == true and steps.b.output.healthy == true", state
+            )
+            is True
+        )
 
     def test_or_combinator(self) -> None:
         """Test 'or' combines two conditions."""
@@ -72,9 +88,12 @@ class TestEvaluateCondition:
             a={"status": "failed"},
             b={"status": "completed"},
         )
-        assert evaluate_condition(
-            "steps.a.status == completed or steps.b.status == completed", state
-        ) is True
+        assert (
+            evaluate_condition(
+                "steps.a.status == completed or steps.b.status == completed", state
+            )
+            is True
+        )
 
     def test_missing_step_returns_false(self) -> None:
         """Test that referencing a missing step returns false."""
@@ -89,10 +108,13 @@ class TestEvaluateCondition:
             c={"status": "completed"},
         )
         # A is false, B and C are both true → A or (B and C) = true
-        assert evaluate_condition(
-            "steps.a.status == completed or steps.b.status == completed and steps.c.status == completed",
-            state,
-        ) is True
+        assert (
+            evaluate_condition(
+                "steps.a.status == completed or steps.b.status == completed and steps.c.status == completed",
+                state,
+            )
+            is True
+        )
 
     def test_unparseable_raises(self) -> None:
         """Test that an unparseable condition raises ValueError."""

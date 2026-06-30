@@ -51,7 +51,9 @@ def setup_cluster() -> None:
     if CLUSTER in existing.split("\n"):
         print(f"[OK] Cluster '{CLUSTER}' already exists")
     else:
-        run(f"kind create cluster --name {CLUSTER} --config {REPO_ROOT}/deploy/kind/kind-config.yaml")
+        run(
+            f"kind create cluster --name {CLUSTER} --config {REPO_ROOT}/deploy/kind/kind-config.yaml"
+        )
         print(f"[OK] Cluster '{CLUSTER}' created")
 
     run(f"podman tag localhost/agent-runtime:latest {IMAGE}", check=False)
@@ -65,22 +67,30 @@ def deploy_agent_with_secret() -> None:
     print()
     print("--- Deploy: agent with Secret + auth token ---")
 
-    kubectl(f"create secret generic llm-api-key "
-            f"--from-literal=OPENAI_API_KEY={os.environ.get('OPENAI_API_KEY', 'dummy')} "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create secret generic llm-api-key "
+        f"--from-literal=OPENAI_API_KEY={os.environ.get('OPENAI_API_KEY', 'dummy')} "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
-    kubectl(f"create secret generic agent-auth "
-            f"--from-literal=token=e2e-test-token-456 "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create secret generic agent-auth "
+        f"--from-literal=token=e2e-test-token-456 "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
-    kubectl(f"create configmap diag-config "
-            f"--from-file=agent.yaml={REPO_ROOT}/examples/agents/definitions/diagnostic-agent.yaml "
-            f"--from-file=registry.yaml={REPO_ROOT}/examples/agents/registry.yaml "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create configmap diag-config "
+        f"--from-file=agent.yaml={REPO_ROOT}/examples/agents/definitions/diagnostic-agent.yaml "
+        f"--from-file=registry.yaml={REPO_ROOT}/examples/agents/registry.yaml "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
-    kubectl(f"create configmap diag-tools "
-            f"--from-file=diagnostic_tools.py={REPO_ROOT}/examples/agents/tools/diagnostic_tools.py "
-            f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -")
+    kubectl(
+        f"create configmap diag-tools "
+        f"--from-file=diagnostic_tools.py={REPO_ROOT}/examples/agents/tools/diagnostic_tools.py "
+        f"--dry-run=client -o yaml | kubectl --context {CONTEXT} apply -f -"
+    )
 
     manifest = f"""
 apiVersion: apps/v1
@@ -161,6 +171,7 @@ spec:
       targetPort: 8080
 """
     import tempfile
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write(manifest)
         f.flush()
@@ -176,7 +187,11 @@ def test_secret_not_in_describe() -> None:
     print()
     print("--- Test 1: API key not visible in kubectl describe ---")
     desc = kubectl("describe deployment/diag-auth-test")
-    if "secretKeyRef" in desc.lower() or "SecretKeyRef" in desc or "llm-api-key" in desc:
+    if (
+        "secretKeyRef" in desc.lower()
+        or "SecretKeyRef" in desc
+        or "llm-api-key" in desc
+    ):
         print("[OK] Pod spec references Secret, not plain value")
     else:
         print("[WARN] Could not confirm secretKeyRef in describe output")
@@ -194,9 +209,11 @@ def test_bearer_auth_k8s() -> None:
 
     # Port-forward in background
     import subprocess as sp
+
     pf = sp.Popen(
         f"kubectl --context {CONTEXT} port-forward svc/diag-auth-test 9191:8080".split(),
-        stdout=sp.DEVNULL, stderr=sp.DEVNULL,
+        stdout=sp.DEVNULL,
+        stderr=sp.DEVNULL,
     )
     time.sleep(3)
 
@@ -205,10 +222,12 @@ def test_bearer_auth_k8s() -> None:
 
         # Unauthenticated → 401
         try:
-            req = urllib.request.Request("http://localhost:9191/v1/run",
+            req = urllib.request.Request(
+                "http://localhost:9191/v1/run",
                 data=json.dumps({"prompt": "test"}).encode(),
                 headers={"Content-Type": "application/json"},
-                method="POST")
+                method="POST",
+            )
             urllib.request.urlopen(req)
             print("[WARN] Expected 401 but got 200 — auth may not be active")
         except urllib.error.HTTPError as e:
@@ -224,19 +243,23 @@ def test_bearer_auth_k8s() -> None:
             print("[OK] /healthz → 200 (exempt from auth)")
 
         # Authenticated run
-        req = urllib.request.Request("http://localhost:9191/v1/run",
+        req = urllib.request.Request(
+            "http://localhost:9191/v1/run",
             data=json.dumps({"prompt": "list hosts"}).encode(),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": "Bearer e2e-test-token-456",
             },
-            method="POST")
+            method="POST",
+        )
         resp = urllib.request.urlopen(req, timeout=120)
         body = json.loads(resp.read())
         if body.get("success"):
             print(f"[OK] Authenticated call → success, agent={body.get('agent_name')}")
         else:
-            print(f"[WARN] Authenticated call returned success=False: {body.get('error', '')[:100]}")
+            print(
+                f"[WARN] Authenticated call returned success=False: {body.get('error', '')[:100]}"
+            )
 
     finally:
         pf.terminate()

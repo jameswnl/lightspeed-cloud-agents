@@ -13,7 +13,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from agents.runtime.metrics import ls_agent_tool_calls_total, ls_agent_tool_duration_seconds
+from agents.runtime.metrics import (
+    ls_agent_tool_calls_total,
+    ls_agent_tool_duration_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,20 +25,27 @@ def _record_call(agent_name: str, tool_name: str, status: str) -> None:
     """Safely increment the tool call counter."""
     try:
         ls_agent_tool_calls_total.labels(
-            agent_name=agent_name, tool_name=tool_name, status=status,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            status=status,
         ).inc()
     except (AttributeError, TypeError, ValueError):
-        logger.warning("Failed to record tool call metric for %s/%s", agent_name, tool_name)
+        logger.warning(
+            "Failed to record tool call metric for %s/%s", agent_name, tool_name
+        )
 
 
 def _record_duration(agent_name: str, tool_name: str, elapsed: float) -> None:
     """Safely observe tool call duration."""
     try:
         ls_agent_tool_duration_seconds.labels(
-            agent_name=agent_name, tool_name=tool_name,
+            agent_name=agent_name,
+            tool_name=tool_name,
         ).observe(elapsed)
     except (AttributeError, TypeError, ValueError):
-        logger.warning("Failed to record tool duration metric for %s/%s", agent_name, tool_name)
+        logger.warning(
+            "Failed to record tool duration metric for %s/%s", agent_name, tool_name
+        )
 
 
 def instrument_tool(

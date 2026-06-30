@@ -1,19 +1,22 @@
 """Unit tests for policy-driven auto-approval."""
 
-import pytest
-
 from agents.workflow.auto_approve import (
     ApprovalPolicy,
-    StepRiskClassification,
     classify_step_risk,
 )
 from agents.workflow.definition import WorkflowStepSpec
 
 
-def _make_step(name: str, type: str = "agent", prompt: str = "", risk_level: str | None = None) -> WorkflowStepSpec:
+def _make_step(
+    name: str, type: str = "agent", prompt: str = "", risk_level: str | None = None
+) -> WorkflowStepSpec:
     return WorkflowStepSpec(
-        name=name, type=type, prompt=prompt, output_key=f"{name}_result",
-        spawn="pre-deployed", risk_level=risk_level,
+        name=name,
+        type=type,
+        prompt=prompt,
+        output_key=f"{name}_result",
+        spawn="pre-deployed",
+        risk_level=risk_level,
     )
 
 

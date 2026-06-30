@@ -11,9 +11,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.definition import AgentSpec, LifecycleSpec, ToolsSpec
-from examples.agents.diagnostic.cluster_state import init_scenario
 from agents.models import AgentRunRequest, DiagnosticReport
 from agents.runtime.generic_runner import create_generic_runner
+from examples.agents.diagnostic.cluster_state import init_scenario
 
 
 @pytest.fixture(autouse=True)
@@ -53,11 +53,16 @@ class TestCreateGenericRunner:
     @pytest.mark.asyncio
     async def test_success_path(self) -> None:
         """Test that the runner produces a successful AgentRunResponse."""
+
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             if not _has_tool_returns(messages):
-                return ModelResponse(parts=[
-                    ToolCallPart(tool_name="list_hosts", args="{}", tool_call_id="c1"),
-                ])
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            tool_name="list_hosts", args="{}", tool_call_id="c1"
+                        ),
+                    ]
+                )
             report = DiagnosticReport(
                 summary="All good",
                 issues_found=[],
@@ -79,6 +84,7 @@ class TestCreateGenericRunner:
     @pytest.mark.asyncio
     async def test_error_path(self) -> None:
         """Test that the runner handles agent errors gracefully."""
+
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             raise RuntimeError("LLM exploded")
 
@@ -99,7 +105,10 @@ class TestCreateGenericRunner:
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             tool_names_seen.extend(t.name for t in info.function_tools)
             report = DiagnosticReport(
-                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+                summary="ok",
+                issues_found=[],
+                actions_taken=[],
+                cluster_healthy=True,
             )
             return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
 
@@ -113,6 +122,7 @@ class TestCreateGenericRunner:
     @pytest.mark.asyncio
     async def test_str_output_type(self) -> None:
         """Test that str output type works for simple agents."""
+
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             return ModelResponse(parts=[TextPart(content="Hello world")])
 
@@ -131,7 +141,10 @@ class TestCreateGenericRunner:
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             tool_names_seen.extend(t.name for t in info.function_tools)
             report = DiagnosticReport(
-                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+                summary="ok",
+                issues_found=[],
+                actions_taken=[],
+                cluster_healthy=True,
             )
             return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
 
@@ -164,7 +177,10 @@ class TestCreateGenericRunner:
         def mock_llm(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             tool_names_seen.extend(t.name for t in info.function_tools)
             report = DiagnosticReport(
-                summary="ok", issues_found=[], actions_taken=[], cluster_healthy=True,
+                summary="ok",
+                issues_found=[],
+                actions_taken=[],
+                cluster_healthy=True,
             )
             return ModelResponse(parts=[TextPart(content=report.model_dump_json())])
 

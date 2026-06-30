@@ -50,7 +50,8 @@ def create_app(
         Configured FastAPI application.
     """
     app = FastAPI(title=f"Agent: {agent_name}")
-    from agents.runtime.auth import get_auth_mode, TokenReviewAuthMiddleware
+    from agents.runtime.auth import TokenReviewAuthMiddleware, get_auth_mode
+
     auth_mode = get_auth_mode()
     if auth_mode == "sa_token":
         app.add_middleware(TokenReviewAuthMiddleware)
@@ -145,15 +146,23 @@ def create_app(
                 )
                 duration = time.monotonic() - start_time
                 if result.success:
-                    ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
+                    ls_agent_runs_total.labels(
+                        agent_name=agent_name, status="success"
+                    ).inc()
                     span.set_attribute("agent.run.status", "success")
                 else:
-                    ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
+                    ls_agent_runs_total.labels(
+                        agent_name=agent_name, status="error"
+                    ).inc()
                     span.set_attribute("agent.run.status", "error")
-                ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
+                ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(
+                    duration
+                )
                 return result
             except asyncio.TimeoutError as exc:
-                ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
+                ls_agent_runs_total.labels(
+                    agent_name=agent_name, status="timeout"
+                ).inc()
                 set_span_error(span, exc)
                 raise HTTPException(
                     status_code=500,
@@ -185,7 +194,8 @@ def create_app(
                 extra={"agent_name": agent_name, "correlation_id": correlation_id},
             )
             span = _tracer.start_span(
-                f"agent.run.async.{agent_name}", context=trace_ctx,
+                f"agent.run.async.{agent_name}",
+                context=trace_ctx,
             )
             span.set_attribute("agent.name", agent_name)
             span.set_attribute("correlation.id", correlation_id)
@@ -197,14 +207,22 @@ def create_app(
                 )
                 duration = time.monotonic() - start_time
                 if result.success:
-                    ls_agent_runs_total.labels(agent_name=agent_name, status="success").inc()
-                    ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(duration)
+                    ls_agent_runs_total.labels(
+                        agent_name=agent_name, status="success"
+                    ).inc()
+                    ls_agent_run_duration_seconds.labels(agent_name=agent_name).observe(
+                        duration
+                    )
                     await store.complete_run(run_id, result)
                 else:
-                    ls_agent_runs_total.labels(agent_name=agent_name, status="error").inc()
+                    ls_agent_runs_total.labels(
+                        agent_name=agent_name, status="error"
+                    ).inc()
                     await store.fail_run(run_id, result)
             except asyncio.TimeoutError as exc:
-                ls_agent_runs_total.labels(agent_name=agent_name, status="timeout").inc()
+                ls_agent_runs_total.labels(
+                    agent_name=agent_name, status="timeout"
+                ).inc()
                 set_span_error(span, exc)
                 error_response = AgentRunResponse(
                     output={},

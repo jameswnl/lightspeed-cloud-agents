@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any
 
 from agents.models import DiagnosticReport, MonitoringResult
 
@@ -47,7 +46,9 @@ def resolve_output_type(name: str, module_name: str | None = None) -> type:
             if cls is not None and isinstance(cls, type):
                 return cls
         except ImportError:
-            logger.warning("Could not import module '%s' for output type '%s'", module_name, name)
+            logger.warning(
+                "Could not import module '%s' for output type '%s'", module_name, name
+            )
 
     raise ValueError(
         f"Unknown output_type '{name}'. "

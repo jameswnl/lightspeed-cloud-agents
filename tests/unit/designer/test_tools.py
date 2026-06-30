@@ -8,10 +8,12 @@ from agents.registry import AgentRegistry
 
 def _mock_registry() -> AgentRegistry:
     """Create a test registry."""
-    return AgentRegistry({
-        "diagnostic-agent": "http://diag:8080",
-        "monitoring-agent": "http://mon:8080",
-    })
+    return AgentRegistry(
+        {
+            "diagnostic-agent": "http://diag:8080",
+            "monitoring-agent": "http://mon:8080",
+        }
+    )
 
 
 class TestDesignerTools:

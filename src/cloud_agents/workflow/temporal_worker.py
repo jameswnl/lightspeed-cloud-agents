@@ -37,9 +37,11 @@ class WorkerConfig:
 
 def _bind_sandbox_activity(spawner: Any):
     """Create a bound sandbox activity with the spawner injected."""
+
     @activity.defn(name="run_sandbox_step")
     async def bound_run_sandbox_step(input: dict[str, Any]) -> dict[str, Any]:
         return await run_sandbox_step(input, spawner=spawner)
+
     return bound_run_sandbox_step
 
 
@@ -67,5 +69,9 @@ def build_worker_config(
         task_queue=task_queue,
         max_concurrent_activities=max_concurrent_activities,
         workflows=[AgentWorkflow],
-        activities=[sandbox_activity, build_escalation_activity, send_approval_notification],
+        activities=[
+            sandbox_activity,
+            build_escalation_activity,
+            send_approval_notification,
+        ],
     )

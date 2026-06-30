@@ -8,7 +8,7 @@ via immutable snapshots.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -32,9 +32,7 @@ class StoredDefinition(BaseModel):
     name: str
     version: int = 1
     definition: WorkflowDefinition
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     active: bool = True
 
 
@@ -73,7 +71,8 @@ class DefinitionStore:
         if self._persistence:
             states = await self._persistence.list_active()
             existing_versions = [
-                s for s in states
+                s
+                for s in states
                 if s.workflow_name == f"definition:{name}" and s.definition_snapshot
             ]
             version = len(existing_versions) + 1
@@ -89,15 +88,18 @@ class DefinitionStore:
         self._definitions[name] = stored
 
         if self._persistence:
+            from datetime import datetime
+
             from agents.workflow.state import WorkflowState
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).isoformat()
+
+            now = datetime.now(UTC).isoformat()
             state = WorkflowState(
                 workflow_id=f"def:{name}:v{version}",
                 workflow_name=f"definition:{name}",
                 status="completed",
                 definition_snapshot=stored.model_dump(mode="json"),
-                created_at=now, updated_at=now,
+                created_at=now,
+                updated_at=now,
             )
             await self._persistence.save(state)
 
@@ -118,7 +120,8 @@ class DefinitionStore:
         if self._persistence:
             states = await self._persistence.list_active()
             candidates = [
-                s for s in states
+                s
+                for s in states
                 if s.workflow_name == f"definition:{name}" and s.definition_snapshot
             ]
             if candidates:
@@ -157,7 +160,11 @@ class DefinitionStore:
             states = await self._persistence.list_active()
             defs_by_name: dict[str, StoredDefinition] = {}
             for s in states:
-                if s.workflow_name and s.workflow_name.startswith("definition:") and s.definition_snapshot:
+                if (
+                    s.workflow_name
+                    and s.workflow_name.startswith("definition:")
+                    and s.definition_snapshot
+                ):
                     try:
                         sd = StoredDefinition.model_validate(s.definition_snapshot)
                         if sd.active:
@@ -187,15 +194,18 @@ class DefinitionStore:
         self._definitions[name] = stored
 
         if self._persistence:
+            from datetime import datetime
+
             from agents.workflow.state import WorkflowState
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).isoformat()
+
+            now = datetime.now(UTC).isoformat()
             state = WorkflowState(
                 workflow_id=f"def:{name}:v{stored.version}",
                 workflow_name=f"definition:{name}",
                 status="completed",
                 definition_snapshot=stored.model_dump(mode="json"),
-                created_at=now, updated_at=now,
+                created_at=now,
+                updated_at=now,
             )
             await self._persistence.save(state)
 

@@ -4,19 +4,32 @@ from __future__ import annotations
 
 import pytest
 
-from agents.workflow.definition import WorkflowDefinition, WorkflowSpec, WorkflowStepSpec
+from agents.workflow.definition import (
+    WorkflowDefinition,
+    WorkflowSpec,
+    WorkflowStepSpec,
+)
 from agents.workflow.definition_store import DefinitionStore
 
 
 def _make_defn(name: str = "test-wf") -> WorkflowDefinition:
     """Create a test workflow definition."""
     return WorkflowDefinition(
-        apiVersion="v1", kind="AgentWorkflow",
+        apiVersion="v1",
+        kind="AgentWorkflow",
         metadata={"name": name},
-        spec=WorkflowSpec(steps=[
-            WorkflowStepSpec(name="s1", type="agent", agent="diag",
-                             prompt="test", output_key="r1", spawn="pre-deployed"),
-        ]),
+        spec=WorkflowSpec(
+            steps=[
+                WorkflowStepSpec(
+                    name="s1",
+                    type="agent",
+                    agent="diag",
+                    prompt="test",
+                    output_key="r1",
+                    spawn="pre-deployed",
+                ),
+            ]
+        ),
     )
 
 

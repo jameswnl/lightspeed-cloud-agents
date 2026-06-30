@@ -34,7 +34,9 @@ def resolve_mcp_headers(spec: MCPServerSpec) -> dict[str, str]:
     auth = spec.auth
     if auth.type == "env_var":
         if not auth.env_var:
-            raise ValueError(f"MCP server '{spec.name}': env_var auth requires env_var field")
+            raise ValueError(
+                f"MCP server '{spec.name}': env_var auth requires env_var field"
+            )
         token = os.environ.get(auth.env_var)
         if not token:
             raise ValueError(
@@ -45,7 +47,9 @@ def resolve_mcp_headers(spec: MCPServerSpec) -> dict[str, str]:
 
     if auth.type == "header_value":
         if not auth.header_value:
-            raise ValueError(f"MCP server '{spec.name}': header_value auth requires header_value field")
+            raise ValueError(
+                f"MCP server '{spec.name}': header_value auth requires header_value field"
+            )
         logger.warning(
             "MCP server '%s': using inline header_value auth — dev/test only. "
             "Use env_var auth in production.",

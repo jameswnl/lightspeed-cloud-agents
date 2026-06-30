@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Optional
 
 from agents.models import AgentRunResponse, RunState, RunStatus
@@ -42,7 +42,7 @@ class RunStore:
         state = RunState(
             run_id=run_id,
             status=RunStatus.RUNNING,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         async with self._lock:
             self._cleanup_expired()
@@ -67,9 +67,7 @@ class RunStore:
                 return None
             return entry[0]
 
-    async def complete_run(
-        self, run_id: str, result: AgentRunResponse
-    ) -> None:
+    async def complete_run(self, run_id: str, result: AgentRunResponse) -> None:
         """Mark a run as completed with the given result.
 
         Args:
@@ -89,9 +87,7 @@ class RunStore:
             )
             self._runs[run_id] = (updated, time.monotonic())
 
-    async def fail_run(
-        self, run_id: str, result: AgentRunResponse
-    ) -> None:
+    async def fail_run(self, run_id: str, result: AgentRunResponse) -> None:
         """Mark a run as failed with the given error response.
 
         Args:

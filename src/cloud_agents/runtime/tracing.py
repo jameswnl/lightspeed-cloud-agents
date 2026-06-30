@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Optional
 
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace import Span, StatusCode, Tracer
-from opentelemetry.trace.propagation import get_current_span
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +39,10 @@ def init_tracing(service_name: str) -> None:
         _initialized = True
         return
 
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
@@ -51,7 +50,11 @@ def init_tracing(service_name: str) -> None:
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
-    logger.info("OpenTelemetry tracing initialized: service=%s, endpoint=%s", service_name, endpoint)
+    logger.info(
+        "OpenTelemetry tracing initialized: service=%s, endpoint=%s",
+        service_name,
+        endpoint,
+    )
     _initialized = True
 
 
@@ -77,6 +80,7 @@ def extract_traceparent(headers: dict[str, str]) -> Optional[Context]:
         Extracted context, or None if no trace context found.
     """
     from opentelemetry.propagate import extract
+
     ctx = extract(headers)
     return ctx
 
@@ -91,6 +95,7 @@ def inject_traceparent(headers: dict[str, str]) -> dict[str, str]:
         Updated headers dict with traceparent/tracestate.
     """
     from opentelemetry.propagate import inject
+
     inject(headers)
     return headers
 

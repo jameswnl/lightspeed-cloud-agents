@@ -23,6 +23,7 @@ class TestInstrumentTool:
 
     def test_successful_call_records_counter(self) -> None:
         """Test that a successful tool call increments the success counter."""
+
         def my_tool(host: str) -> str:
             return f"checked {host}"
 
@@ -32,12 +33,17 @@ class TestInstrumentTool:
         assert result == "checked web-02"
         count = _get_metric(
             "ls_agent_tool_calls",
-            {"agent_name": "test-agent-1", "tool_name": "check_host", "status": "success"},
+            {
+                "agent_name": "test-agent-1",
+                "tool_name": "check_host",
+                "status": "success",
+            },
         )
         assert count is not None and count >= 1.0
 
     def test_successful_call_records_duration(self) -> None:
         """Test that a successful tool call observes duration histogram."""
+
         def my_tool() -> str:
             return "done"
 
@@ -52,6 +58,7 @@ class TestInstrumentTool:
 
     def test_failed_call_records_error_counter(self) -> None:
         """Test that a failed tool call records error status counter."""
+
         def failing_tool() -> str:
             raise RuntimeError("disk full")
 
@@ -62,12 +69,17 @@ class TestInstrumentTool:
 
         count = _get_metric(
             "ls_agent_tool_calls",
-            {"agent_name": "test-agent-3", "tool_name": "check_disk", "status": "error"},
+            {
+                "agent_name": "test-agent-3",
+                "tool_name": "check_disk",
+                "status": "error",
+            },
         )
         assert count is not None and count >= 1.0
 
     def test_preserves_function_name(self) -> None:
         """Test that the wrapped function preserves the original name."""
+
         def list_hosts() -> list[str]:
             """List all hosts."""
             return ["web-01", "web-02"]
@@ -78,6 +90,7 @@ class TestInstrumentTool:
 
     def test_passes_args_and_kwargs(self) -> None:
         """Test that args and kwargs are forwarded correctly."""
+
         def run_remediation(host: str, action: str, reason: str = "auto") -> dict:
             return {"host": host, "action": action, "reason": reason}
 
@@ -93,6 +106,7 @@ class TestInstrumentToolAsync:
     @pytest.mark.asyncio
     async def test_async_tool_success_records_counter(self) -> None:
         """Test that async tools record success counter."""
+
         async def async_check(host: str) -> str:
             return f"async checked {host}"
 
@@ -102,13 +116,18 @@ class TestInstrumentToolAsync:
         assert result == "async checked web-01"
         count = _get_metric(
             "ls_agent_tool_calls",
-            {"agent_name": "test-agent-6", "tool_name": "async_check", "status": "success"},
+            {
+                "agent_name": "test-agent-6",
+                "tool_name": "async_check",
+                "status": "success",
+            },
         )
         assert count is not None and count >= 1.0
 
     @pytest.mark.asyncio
     async def test_async_tool_failure_records_error(self) -> None:
         """Test that async tool failures record error counter."""
+
         async def async_fail() -> str:
             raise ValueError("bad input")
 
@@ -119,6 +138,10 @@ class TestInstrumentToolAsync:
 
         count = _get_metric(
             "ls_agent_tool_calls",
-            {"agent_name": "test-agent-7", "tool_name": "async_fail", "status": "error"},
+            {
+                "agent_name": "test-agent-7",
+                "tool_name": "async_fail",
+                "status": "error",
+            },
         )
         assert count is not None and count >= 1.0

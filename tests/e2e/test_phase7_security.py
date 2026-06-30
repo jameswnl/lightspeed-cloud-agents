@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -28,17 +27,24 @@ REPO_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 async def main() -> None:
     """Run Phase 7 security E2E tests."""
     import httpx
+
     from agents.spawner.podman_spawner import PodmanSpawner
 
     image = "localhost/agent-runtime:latest"
-    agent_yaml = os.path.abspath(os.path.join(REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml"))
-    tools_py = os.path.abspath(os.path.join(REPO_ROOT, "examples/agents/tools/diagnostic_tools.py"))
+    agent_yaml = os.path.abspath(
+        os.path.join(REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml")
+    )
+    tools_py = os.path.abspath(
+        os.path.join(REPO_ROOT, "examples/agents/tools/diagnostic_tools.py")
+    )
 
     print("=== Phase 7 Security E2E Tests ===")
     print()
 
     # Ensure network
-    os.system("podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1")
+    os.system(
+        "podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1"
+    )
 
     # --- Test 1: Bearer auth blocks unauthenticated calls ---
     print("--- Test 1: Bearer auth on agent endpoints ---")
@@ -74,7 +80,9 @@ async def main() -> None:
             if resp.status_code == 401:
                 print("[OK] Unauthenticated call rejected (401)")
             else:
-                print(f"[WARN] Expected 401, got {resp.status_code} — auth middleware may not be active")
+                print(
+                    f"[WARN] Expected 401, got {resp.status_code} — auth middleware may not be active"
+                )
 
             # Authenticated call should succeed
             resp = await http.post(
@@ -84,9 +92,13 @@ async def main() -> None:
             )
             if resp.status_code == 200:
                 body = resp.json()
-                print(f"[OK] Authenticated call succeeded: success={body.get('success')}")
+                print(
+                    f"[OK] Authenticated call succeeded: success={body.get('success')}"
+                )
             else:
-                print(f"[FAIL] Authenticated call failed: {resp.status_code} {resp.text[:200]}")
+                print(
+                    f"[FAIL] Authenticated call failed: {resp.status_code} {resp.text[:200]}"
+                )
 
             # Healthz should be exempt from auth
             resp = await http.get(f"{endpoint}/healthz")
@@ -138,30 +150,45 @@ async def main() -> None:
 
     # Step with no risk_level → should default to high
     step_no_risk = WorkflowStepSpec(
-        name="unknown-step", type="agent", prompt="do something",
-        output_key="r", spawn="pre-deployed",
+        name="unknown-step",
+        type="agent",
+        prompt="do something",
+        output_key="r",
+        spawn="pre-deployed",
     )
     result = classify_step_risk(step_no_risk, ApprovalPolicy())
     if result.risk_level == "high" and not result.auto_approved:
         print("[OK] No risk_level → high risk, manual approval required")
     else:
-        print(f"[FAIL] Expected high risk, got {result.risk_level}, auto_approved={result.auto_approved}")
+        print(
+            f"[FAIL] Expected high risk, got {result.risk_level}, auto_approved={result.auto_approved}"
+        )
 
     # Step with explicit low → should auto-approve
     step_low = WorkflowStepSpec(
-        name="check-hosts", type="agent", prompt="check hosts",
-        output_key="r", spawn="pre-deployed", risk_level="low",
+        name="check-hosts",
+        type="agent",
+        prompt="check hosts",
+        output_key="r",
+        spawn="pre-deployed",
+        risk_level="low",
     )
     result_low = classify_step_risk(step_low, ApprovalPolicy())
     if result_low.risk_level == "low" and result_low.auto_approved:
         print("[OK] Explicit risk_level=low → auto-approved")
     else:
-        print(f"[FAIL] Expected low/auto-approved, got {result_low.risk_level}/{result_low.auto_approved}")
+        print(
+            f"[FAIL] Expected low/auto-approved, got {result_low.risk_level}/{result_low.auto_approved}"
+        )
 
     # Misleading name with explicit critical → should be critical
     step_misleading = WorkflowStepSpec(
-        name="safe-check", type="agent", prompt="check",
-        output_key="r", spawn="pre-deployed", risk_level="critical",
+        name="safe-check",
+        type="agent",
+        prompt="check",
+        output_key="r",
+        spawn="pre-deployed",
+        risk_level="critical",
     )
     result_mis = classify_step_risk(step_misleading, ApprovalPolicy())
     if result_mis.risk_level == "critical":

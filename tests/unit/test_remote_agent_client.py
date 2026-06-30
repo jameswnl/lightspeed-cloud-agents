@@ -1,16 +1,21 @@
 """Unit tests for RemoteAgentClient."""
 
-import pytest
-import httpx
 from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
 
 from agents.exceptions import AgentError, AgentTimeoutError, AgentUnavailableError
 from agents.models import AgentRunResponse, RunState, RunStatus
 from agents.remote_agent_client import RemoteAgentClient
 
-
 MOCK_SUCCESS_RESPONSE = {
-    "output": {"summary": "Fixed", "issues_found": ["x"], "actions_taken": [], "cluster_healthy": True},
+    "output": {
+        "summary": "Fixed",
+        "issues_found": ["x"],
+        "actions_taken": [],
+        "cluster_healthy": True,
+    },
     "output_type": "DiagnosticReport",
     "schema_version": "v1",
     "usage": {"input_tokens": 100, "output_tokens": 200},
@@ -28,7 +33,10 @@ class TestRemoteAgentClientRun:
         """Test successful agent call returns AgentRunResponse."""
         mock_response = httpx.Response(200, json=MOCK_SUCCESS_RESPONSE)
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ):
             client = RemoteAgentClient("http://agent:8080")
             result = await client.run("Check hosts")
@@ -43,7 +51,10 @@ class TestRemoteAgentClientRun:
         """Test that context is passed through in the request."""
         mock_response = httpx.Response(200, json=MOCK_SUCCESS_RESPONSE)
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ) as mock_post:
             client = RemoteAgentClient("http://agent:8080")
             await client.run("Check hosts", context={"correlation_id": "abc"})
@@ -86,7 +97,10 @@ class TestRemoteAgentClientRun:
             json={"detail": "Agent run failed: RuntimeError: LLM down"},
         )
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ):
             client = RemoteAgentClient("http://agent:8080")
             with pytest.raises(AgentError, match="500"):
@@ -97,7 +111,10 @@ class TestRemoteAgentClientRun:
         """Test that a malformed JSON response raises AgentError."""
         mock_response = httpx.Response(200, text="not json")
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ):
             client = RemoteAgentClient("http://agent:8080")
             with pytest.raises(AgentError, match="response"):
@@ -117,7 +134,10 @@ class TestRemoteAgentClientRun:
         }
         mock_response = httpx.Response(200, json=error_response)
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ):
             client = RemoteAgentClient("http://agent:8080")
             with pytest.raises(AgentError, match="Model not found"):
@@ -170,7 +190,10 @@ class TestRemoteAgentClientAsync:
             202, json={"run_id": "run-abc", "status": "running"}
         )
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ):
             client = RemoteAgentClient("http://agent:8080")
             run_id = await client.run_async("Check hosts")
@@ -207,7 +230,10 @@ class TestRemoteAgentClientAsync:
             202, json={"run_id": "run-abc", "status": "running"}
         )
         with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
         ) as mock_post:
             client = RemoteAgentClient("http://agent:8080", auth_token="secret-tok")
             await client.run_async("Check hosts")
@@ -220,7 +246,8 @@ class TestRemoteAgentClientAsync:
     async def test_poll_run_sends_auth_header(self) -> None:
         """Test that poll_run sends the bearer token."""
         state_data = RunState(
-            run_id="run-abc", status=RunStatus.RUNNING,
+            run_id="run-abc",
+            status=RunStatus.RUNNING,
             created_at="2026-06-17T14:00:00+00:00",
         )
         mock_response = httpx.Response(200, json=state_data.model_dump(mode="json"))

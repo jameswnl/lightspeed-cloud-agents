@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
+import pytest
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider, ReadableSpan
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 import agents.runtime.tracing as tracing_module
 from agents.runtime.tracing import (
     extract_traceparent,
     get_tracer,
-    inject_traceparent,
     init_tracing,
+    inject_traceparent,
     set_span_error,
 )
 

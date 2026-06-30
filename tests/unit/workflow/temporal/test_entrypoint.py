@@ -13,6 +13,7 @@ class TestTemporalEntrypoint:
     def test_returns_fastapi_app(self) -> None:
         """build_temporal_app returns a FastAPI application."""
         from fastapi import FastAPI
+
         app = build_temporal_app(temporal_url="localhost:7233")
         assert isinstance(app, FastAPI)
 
@@ -44,13 +45,17 @@ class TestTemporalEntrypoint:
 
     def test_tls_config_read_from_env(self, mocker: MockerFixture) -> None:
         """TLS config is built when TEMPORAL_TLS_ENABLED=true."""
-        mocker.patch.dict("os.environ", {
-            "TEMPORAL_TLS_ENABLED": "true",
-            "TEMPORAL_TLS_CERT_PATH": "/certs/client.pem",
-            "TEMPORAL_TLS_KEY_PATH": "/certs/client.key",
-        })
+        mocker.patch.dict(
+            "os.environ",
+            {
+                "TEMPORAL_TLS_ENABLED": "true",
+                "TEMPORAL_TLS_CERT_PATH": "/certs/client.pem",
+                "TEMPORAL_TLS_KEY_PATH": "/certs/client.key",
+            },
+        )
         mocker.patch("builtins.open", mocker.mock_open(read_data=b"cert-data"))
         from agents.workflow.temporal_entrypoint import _build_tls_config
+
         tls = _build_tls_config()
         assert tls is not None
 
@@ -58,6 +63,7 @@ class TestTemporalEntrypoint:
         """TLS is disabled by default."""
         mocker.patch.dict("os.environ", {}, clear=False)
         from agents.workflow.temporal_entrypoint import _build_tls_config
+
         tls = _build_tls_config()
         assert tls is None
 
@@ -76,6 +82,7 @@ class TestTemporalEntrypoint:
     def test_livez_returns_200(self) -> None:
         """GET /livez returns 200 when process is alive."""
         from fastapi.testclient import TestClient
+
         app = build_temporal_app(temporal_url="localhost:7233")
         client = TestClient(app)
         response = client.get("/livez")
@@ -84,12 +91,14 @@ class TestTemporalEntrypoint:
     def test_worker_has_tracing_interceptor(self) -> None:
         """_get_tracing_interceptors returns a list."""
         from agents.workflow.temporal_entrypoint import _get_tracing_interceptors
+
         interceptors = _get_tracing_interceptors()
         assert isinstance(interceptors, list)
 
     def test_metrics_returns_prometheus_format(self) -> None:
         """GET /metrics returns Prometheus exposition format."""
         from fastapi.testclient import TestClient
+
         app = build_temporal_app(temporal_url="localhost:7233")
         client = TestClient(app)
         response = client.get("/metrics")

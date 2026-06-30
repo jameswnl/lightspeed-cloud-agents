@@ -1,8 +1,9 @@
 """Unit tests for the agent runtime HTTP server."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock
 
 from agents.models import AgentRunRequest, AgentRunResponse
 from agents.runtime.server import create_app
@@ -13,7 +14,12 @@ def mock_agent_runner_fixture() -> AsyncMock:
     """Create a mock agent runner that returns a valid AgentRunResponse."""
     runner = AsyncMock()
     runner.return_value = AgentRunResponse(
-        output={"summary": "All clear", "issues_found": [], "actions_taken": [], "cluster_healthy": True},
+        output={
+            "summary": "All clear",
+            "issues_found": [],
+            "actions_taken": [],
+            "cluster_healthy": True,
+        },
         output_type="DiagnosticReport",
         schema_version="v1",
         usage={"input_tokens": 100, "output_tokens": 200},
@@ -81,9 +87,7 @@ class TestRunEndpoint:
         assert isinstance(request_arg, AgentRunRequest)
         assert request_arg.context["correlation_id"] == "test-123"
 
-    def test_run_with_empty_prompt_returns_422(
-        self, app_client: TestClient
-    ) -> None:
+    def test_run_with_empty_prompt_returns_422(self, app_client: TestClient) -> None:
         """Test that /v1/run rejects an empty prompt."""
         resp = app_client.post(
             "/v1/run",
@@ -91,9 +95,7 @@ class TestRunEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_run_with_missing_prompt_returns_422(
-        self, app_client: TestClient
-    ) -> None:
+    def test_run_with_missing_prompt_returns_422(self, app_client: TestClient) -> None:
         """Test that /v1/run rejects a request with no prompt field."""
         resp = app_client.post(
             "/v1/run",
@@ -101,9 +103,7 @@ class TestRunEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_run_agent_failure_returns_500(
-        self, mock_agent_runner: AsyncMock
-    ) -> None:
+    def test_run_agent_failure_returns_500(self, mock_agent_runner: AsyncMock) -> None:
         """Test that /v1/run returns 500 when the agent raises an exception."""
         mock_agent_runner.side_effect = RuntimeError("LLM connection failed")
         app = create_app(agent_runner=mock_agent_runner, agent_name="test-agent")
@@ -132,15 +132,19 @@ class TestRunEndpoint:
 
     def test_sync_run_success_false_counts_as_error(self) -> None:
         """Regression: sync /v1/run with success=False must not count as success metric."""
+
         async def failing_runner(req: AgentRunRequest) -> AgentRunResponse:
             return AgentRunResponse(
-                output={}, output_type="error",
+                output={},
+                output_type="error",
                 usage={"input_tokens": 0, "output_tokens": 0},
-                agent_name="test-agent", success=False,
+                agent_name="test-agent",
+                success=False,
                 error="Model not found",
             )
 
         from agents.runtime.metrics import ls_agent_runs_total
+
         before_success = ls_agent_runs_total.labels(
             agent_name="sync-fail-test", status="success"
         )._value.get()
@@ -165,16 +169,18 @@ class TestRunEndpoint:
             agent_name="sync-fail-test", status="error"
         )._value.get()
 
-        assert after_success == before_success, "success metric should NOT increment for success=False"
-        assert after_error == before_error + 1, "error metric should increment for success=False"
+        assert (
+            after_success == before_success
+        ), "success metric should NOT increment for success=False"
+        assert (
+            after_error == before_error + 1
+        ), "error metric should increment for success=False"
 
 
 class TestAsyncRun:
     """Tests for the async /v1/run mode with Prefer: respond-async."""
 
-    def test_async_submit_returns_202(
-        self, app_client: TestClient
-    ) -> None:
+    def test_async_submit_returns_202(self, app_client: TestClient) -> None:
         """Test that Prefer: respond-async returns 202 with run_id."""
         resp = app_client.post(
             "/v1/run",
@@ -186,9 +192,7 @@ class TestAsyncRun:
         assert "run_id" in body
         assert body["status"] == "running"
 
-    def test_sync_mode_without_prefer_header(
-        self, app_client: TestClient
-    ) -> None:
+    def test_sync_mode_without_prefer_header(self, app_client: TestClient) -> None:
         """Test that without Prefer header, behavior is sync (200)."""
         resp = app_client.post(
             "/v1/run",
@@ -197,9 +201,7 @@ class TestAsyncRun:
         assert resp.status_code == 200
         assert "success" in resp.json()
 
-    def test_poll_running_run(
-        self, app_client: TestClient
-    ) -> None:
+    def test_poll_running_run(self, app_client: TestClient) -> None:
         """Test polling a running run returns status."""
         submit = app_client.post(
             "/v1/run",
@@ -213,18 +215,15 @@ class TestAsyncRun:
         assert body["run_id"] == run_id
         assert body["status"] in ("running", "completed")
 
-    def test_poll_unknown_run_returns_404(
-        self, app_client: TestClient
-    ) -> None:
+    def test_poll_unknown_run_returns_404(self, app_client: TestClient) -> None:
         """Test polling a nonexistent run returns 404."""
         resp = app_client.get("/v1/runs/nonexistent-id")
         assert resp.status_code == 404
 
-    def test_poll_completed_run_has_result(
-        self, app_client: TestClient
-    ) -> None:
+    def test_poll_completed_run_has_result(self, app_client: TestClient) -> None:
         """Test that a completed run returns the result when polled."""
         import time
+
         submit = app_client.post(
             "/v1/run",
             json={"prompt": "Check hosts"},
@@ -245,19 +244,16 @@ class TestAsyncRun:
 class TestLivez:
     """Tests for the /livez liveness endpoint."""
 
-    def test_livez_returns_200_when_healthy(
-        self, app_client: TestClient
-    ) -> None:
+    def test_livez_returns_200_when_healthy(self, app_client: TestClient) -> None:
         """Test that /livez returns 200 by default."""
         resp = app_client.get("/livez")
         assert resp.status_code == 200
         assert resp.json()["status"] == "alive"
 
-    def test_livez_returns_503_when_stale(
-        self, mock_agent_runner: AsyncMock
-    ) -> None:
+    def test_livez_returns_503_when_stale(self, mock_agent_runner: AsyncMock) -> None:
         """Test that /livez returns 503 when heartbeat is stale."""
         import time
+
         app = create_app(
             agent_runner=mock_agent_runner,
             agent_name="test-agent",
@@ -273,9 +269,7 @@ class TestLivez:
 class TestRunTimeout:
     """Tests for run timeout enforcement."""
 
-    def test_run_within_timeout_succeeds(
-        self, mock_agent_runner: AsyncMock
-    ) -> None:
+    def test_run_within_timeout_succeeds(self, mock_agent_runner: AsyncMock) -> None:
         """Test that a fast run completes normally."""
         app = create_app(
             agent_runner=mock_agent_runner,
@@ -293,8 +287,11 @@ class TestRunTimeout:
         async def slow_runner(req: AgentRunRequest) -> AgentRunResponse:
             await asyncio.sleep(10)
             return AgentRunResponse(
-                output={}, output_type="test",
-                usage={}, agent_name="test", success=True,
+                output={},
+                output_type="test",
+                usage={},
+                agent_name="test",
+                success=True,
             )
 
         app = create_app(
@@ -334,9 +331,7 @@ class TestCorrelationId:
         )
         assert resp.headers["x-correlation-id"] == "my-request-123"
 
-    def test_invalid_correlation_id_replaced(
-        self, app_client: TestClient
-    ) -> None:
+    def test_invalid_correlation_id_replaced(self, app_client: TestClient) -> None:
         """Test that an invalid correlation ID is replaced with a UUID."""
         resp = app_client.post(
             "/v1/run",
@@ -348,15 +343,14 @@ class TestCorrelationId:
         cid = resp.headers["x-correlation-id"]
         assert cid != "invalid;chars<>"
         import uuid
+
         uuid.UUID(cid)
 
 
 class TestMetricsEndpoint:
     """Tests for the /metrics endpoint."""
 
-    def test_metrics_returns_prometheus_format(
-        self, app_client: TestClient
-    ) -> None:
+    def test_metrics_returns_prometheus_format(self, app_client: TestClient) -> None:
         """Test that /metrics returns Prometheus text format."""
         app_client.post("/v1/run", json={"prompt": "Check hosts"})
         resp = app_client.get("/metrics")

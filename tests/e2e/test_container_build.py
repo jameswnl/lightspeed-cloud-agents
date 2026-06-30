@@ -13,7 +13,6 @@ Run:
 
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 
@@ -28,7 +27,9 @@ def built_image():
     """Build the workflow-runner image."""
     result = subprocess.run(
         ["podman", "build", "-f", CONTAINERFILE, "-t", IMAGE_NAME, "."],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if result.returncode != 0:
         pytest.fail(f"Image build failed:\n{result.stderr}")
@@ -46,9 +47,18 @@ def running_container(built_image):
     )
 
     result = subprocess.run(
-        ["podman", "run", "-d", "--name", container_name,
-         "-p", "18080:8080", built_image],
-        capture_output=True, text=True,
+        [
+            "podman",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "-p",
+            "18080:8080",
+            built_image,
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         pytest.fail(f"Container start failed:\n{result.stderr}")
@@ -71,6 +81,7 @@ def test_image_builds(built_image):
 def test_healthz_responds(running_container):
     """Container responds on /healthz."""
     import httpx
+
     response = httpx.get(f"{running_container}/healthz", timeout=5)
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -80,7 +91,8 @@ def test_runs_as_non_root(built_image):
     """Container runs as non-root user."""
     result = subprocess.run(
         ["podman", "run", "--rm", built_image, "id", "-u"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     uid = result.stdout.strip()
     assert uid == "1001", f"Expected UID 1001, got {uid}"

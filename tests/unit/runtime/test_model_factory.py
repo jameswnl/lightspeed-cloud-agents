@@ -3,8 +3,6 @@
 import os
 from unittest.mock import patch
 
-import pytest
-
 from agents.runtime.model_factory import get_model, reset_model
 
 

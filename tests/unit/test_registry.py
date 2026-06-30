@@ -10,9 +10,7 @@ class TestAgentRegistry:
 
     def test_get_endpoint_known_agent(self) -> None:
         """Test lookup returns correct endpoint URL."""
-        registry = AgentRegistry(
-            {"diagnostic-agent": "http://diag:8080"}
-        )
+        registry = AgentRegistry({"diagnostic-agent": "http://diag:8080"})
         assert registry.get_endpoint("diagnostic-agent") == "http://diag:8080"
 
     def test_get_endpoint_unknown_agent(self) -> None:

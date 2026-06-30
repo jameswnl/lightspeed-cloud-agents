@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock
 
+import pytest
+
 from agents.remote_agent_client import RemoteAgentClient
-from agents.spawner.base import SecretKeyRef, SpawnConfig
+from agents.spawner.base import SecretKeyRef
 from agents.workflow.auto_approve import ApprovalPolicy, classify_step_risk
 from agents.workflow.definition import WorkflowStepSpec
-from agents.workflow.state import StepResult, WorkflowState
 
 
 class TestSecretKeyRef:
@@ -24,7 +24,9 @@ class TestSecretKeyRef:
     def test_used_in_spawner_config(self) -> None:
         """Test that SecretKeyRef can be used in spawner configuration."""
         refs = {
-            "OPENAI_API_KEY": SecretKeyRef(secret_name="llm-api-key", key="OPENAI_API_KEY"),
+            "OPENAI_API_KEY": SecretKeyRef(
+                secret_name="llm-api-key", key="OPENAI_API_KEY"
+            ),
             "AGENT_API_TOKEN": SecretKeyRef(secret_name="agent-token", key="token"),
         }
         assert len(refs) == 2
@@ -47,8 +49,7 @@ class TestRemoteAgentClientAuth:
     @pytest.mark.asyncio
     async def test_auth_header_sent(self) -> None:
         """Test that Bearer header is sent when auth_token is set."""
-        import httpx
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         client = RemoteAgentClient("http://agent:8080", auth_token="test-bearer")
 
@@ -79,8 +80,7 @@ class TestRemoteAgentClientAuth:
     @pytest.mark.asyncio
     async def test_no_auth_header_without_token(self) -> None:
         """Test that no Authorization header is sent without auth_token."""
-        import httpx
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         client = RemoteAgentClient("http://agent:8080")
 
@@ -115,8 +115,12 @@ class TestExplicitRiskLevel:
     def test_explicit_low_used(self) -> None:
         """Test explicit risk_level is used directly."""
         step = WorkflowStepSpec(
-            name="check", type="agent", prompt="check", output_key="r",
-            spawn="pre-deployed", risk_level="low",
+            name="check",
+            type="agent",
+            prompt="check",
+            output_key="r",
+            spawn="pre-deployed",
+            risk_level="low",
         )
         result = classify_step_risk(step, ApprovalPolicy())
         assert result.risk_level == "low"
@@ -124,7 +128,10 @@ class TestExplicitRiskLevel:
     def test_missing_risk_defaults_high(self) -> None:
         """Test fail-closed: no risk_level → high risk."""
         step = WorkflowStepSpec(
-            name="anything", type="agent", prompt="do stuff", output_key="r",
+            name="anything",
+            type="agent",
+            prompt="do stuff",
+            output_key="r",
             spawn="pre-deployed",
         )
         result = classify_step_risk(step, ApprovalPolicy())
@@ -134,8 +141,12 @@ class TestExplicitRiskLevel:
     def test_explicit_overrides_misleading_name(self) -> None:
         """Test explicit risk_level overrides step name that suggests otherwise."""
         step = WorkflowStepSpec(
-            name="safe-looking-delete", type="agent", prompt="delete everything",
-            output_key="r", spawn="pre-deployed", risk_level="low",
+            name="safe-looking-delete",
+            type="agent",
+            prompt="delete everything",
+            output_key="r",
+            spawn="pre-deployed",
+            risk_level="low",
         )
         result = classify_step_risk(step, ApprovalPolicy())
         assert result.risk_level == "low"

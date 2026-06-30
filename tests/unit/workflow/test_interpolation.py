@@ -12,8 +12,10 @@ def _make_state(**step_outputs: dict) -> WorkflowState:
     for name, output in step_outputs.items():
         steps[name] = StepResult(step_name=name, status="completed", output=output)
     return WorkflowState(
-        workflow_id="w1", workflow_name="test",
-        created_at="2026-01-01", updated_at="2026-01-01",
+        workflow_id="w1",
+        workflow_name="test",
+        created_at="2026-01-01",
+        updated_at="2026-01-01",
         steps=steps,
     )
 
@@ -71,9 +73,7 @@ class TestInterpolate:
             s1={"a": "hello"},
             s2={"b": "world"},
         )
-        result = interpolate(
-            "{{ steps.s1.output.a }} {{ steps.s2.output.b }}", state
-        )
+        result = interpolate("{{ steps.s1.output.a }} {{ steps.s2.output.b }}", state)
         assert '<data>"hello"</data>' in result
         assert '<data>"world"</data>' in result
 
@@ -105,7 +105,12 @@ class TestResolvePath:
 
     def test_nested_array_access(self) -> None:
         """Test resolving nested object inside array."""
-        data = {"actions": [{"host": "web-01", "result": "ok"}, {"host": "web-02", "result": "fail"}]}
+        data = {
+            "actions": [
+                {"host": "web-01", "result": "ok"},
+                {"host": "web-02", "result": "fail"},
+            ]
+        }
         assert resolve_path(data, "actions[0].host") == "web-01"
         assert resolve_path(data, "actions[1].result") == "fail"
 
@@ -157,12 +162,14 @@ class TestNestedInterpolation:
 
     def test_array_object_access(self) -> None:
         """Test interpolating field from array element."""
-        state = _make_state(diagnose={
-            "actions": [
-                {"host": "web-01", "action": "restart"},
-                {"host": "web-02", "action": "rollback"},
-            ]
-        })
+        state = _make_state(
+            diagnose={
+                "actions": [
+                    {"host": "web-01", "action": "restart"},
+                    {"host": "web-02", "action": "rollback"},
+                ]
+            }
+        )
         result = interpolate("{{ steps.diagnose.output.actions[1].host }}", state)
         assert result == '<data>"web-02"</data>'
 

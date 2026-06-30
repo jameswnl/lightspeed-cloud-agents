@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from agents.workflow.escalation import (
     EscalationPackage,
@@ -19,7 +20,10 @@ def _make_package() -> EscalationPackage:
     return build_escalation_package(
         workflow_name="diagnose-fix",
         step_name="fix-hosts",
-        escalation_data={"failure_history": [{"error": "timeout"}], "recommendation": "manual fix"},
+        escalation_data={
+            "failure_history": [{"error": "timeout"}],
+            "recommendation": "manual fix",
+        },
         workflow_snapshot={"diagnosis": {"summary": "3 hosts down"}},
         correlation_id="corr-123",
     )

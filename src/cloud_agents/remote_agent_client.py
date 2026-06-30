@@ -22,7 +22,9 @@ class RemoteAgentClient:
         timeout: Request timeout in seconds.
     """
 
-    def __init__(self, endpoint: str, timeout: float = 600.0, auth_token: Optional[str] = None) -> None:
+    def __init__(
+        self, endpoint: str, timeout: float = 600.0, auth_token: Optional[str] = None
+    ) -> None:
         """Initialize the client.
 
         Args:
@@ -63,9 +65,7 @@ class RemoteAgentClient:
             headers["Authorization"] = f"Bearer {self._auth_token}"
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout)
-            ) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout)) as client:
                 response = await client.post(
                     f"{self.endpoint}/v1/run",
                     json=body,
@@ -99,9 +99,7 @@ class RemoteAgentClient:
             ) from exc
 
         if not result.success:
-            raise AgentError(
-                f"Agent '{result.agent_name}' run failed: {result.error}"
-            )
+            raise AgentError(f"Agent '{result.agent_name}' run failed: {result.error}")
 
         return result
 
@@ -133,9 +131,7 @@ class RemoteAgentClient:
             async_headers["Authorization"] = f"Bearer {self._auth_token}"
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0)
-            ) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                 response = await client.post(
                     f"{self.endpoint}/v1/run",
                     json=body,
@@ -176,9 +172,7 @@ class RemoteAgentClient:
             poll_headers["Authorization"] = f"Bearer {self._auth_token}"
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0)
-            ) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
                 response = await client.get(
                     f"{self.endpoint}/v1/runs/{run_id}",
                     headers=poll_headers or None,
@@ -235,9 +229,7 @@ class RemoteAgentClient:
                 raise AgentError(f"Run {run_id} failed: {error}")
             await asyncio.sleep(poll_interval)
 
-        raise AgentTimeoutError(
-            f"Run {run_id} did not complete within {self.timeout}s"
-        )
+        raise AgentTimeoutError(f"Run {run_id} did not complete within {self.timeout}s")
 
     async def healthz(self) -> bool:
         """Check if the agent pod is ready.

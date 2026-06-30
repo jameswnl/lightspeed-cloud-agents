@@ -1,11 +1,10 @@
 """Unit tests for RunStore."""
 
 import asyncio
-from unittest.mock import patch
 
 import pytest
 
-from agents.models import AgentRunResponse, RunState, RunStatus
+from agents.models import AgentRunResponse, RunStatus
 from agents.runtime.run_store import RunStore
 
 

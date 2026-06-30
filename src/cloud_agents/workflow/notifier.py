@@ -94,7 +94,9 @@ class SlackNotifier:
                 resp.raise_for_status()
             logger.info("Slack notification sent for step '%s'", step_name)
         except Exception as exc:
-            logger.warning("Slack notification failed for step '%s': %s", step_name, exc)
+            logger.warning(
+                "Slack notification failed for step '%s': %s", step_name, exc
+            )
 
 
 class WebhookNotifier:
@@ -133,4 +135,6 @@ class WebhookNotifier:
                 resp.raise_for_status()
             logger.info("Webhook notification sent for step '%s'", step_name)
         except Exception as exc:
-            logger.warning("Webhook notification failed for step '%s': %s", step_name, exc)
+            logger.warning(
+                "Webhook notification failed for step '%s': %s", step_name, exc
+            )

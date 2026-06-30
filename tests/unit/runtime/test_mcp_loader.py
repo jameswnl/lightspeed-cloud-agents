@@ -21,7 +21,8 @@ class TestResolveHeaders:
     def test_env_var_auth(self) -> None:
         """Test env_var auth resolves from environment."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(type="env_var", env_var="MCP_TOKEN"),
         )
         with patch.dict("os.environ", {"MCP_TOKEN": "secret123"}):
@@ -31,7 +32,8 @@ class TestResolveHeaders:
     def test_env_var_missing_raises(self) -> None:
         """Test that missing env var raises ValueError."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(type="env_var", env_var="MISSING_VAR"),
         )
         with patch.dict("os.environ", {}, clear=True):
@@ -41,7 +43,8 @@ class TestResolveHeaders:
     def test_env_var_no_field_raises(self) -> None:
         """Test that env_var type without env_var field raises."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(type="env_var"),
         )
         with pytest.raises(ValueError, match="requires env_var"):
@@ -50,7 +53,8 @@ class TestResolveHeaders:
     def test_header_value_auth(self) -> None:
         """Test inline header_value auth."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(type="header_value", header_value="tok123"),
         )
         headers = resolve_mcp_headers(spec)
@@ -59,7 +63,8 @@ class TestResolveHeaders:
     def test_header_value_no_field_raises(self) -> None:
         """Test that header_value type without value raises."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(type="header_value"),
         )
         with pytest.raises(ValueError, match="requires header_value"):
@@ -68,10 +73,13 @@ class TestResolveHeaders:
     def test_custom_header_name_and_prefix(self) -> None:
         """Test custom header name and prefix."""
         spec = MCPServerSpec(
-            name="test", url="http://mcp:8080",
+            name="test",
+            url="http://mcp:8080",
             auth=MCPAuthSpec(
-                type="env_var", env_var="API_KEY",
-                header_name="X-API-Key", header_prefix="",
+                type="env_var",
+                env_var="API_KEY",
+                header_name="X-API-Key",
+                header_prefix="",
             ),
         )
         with patch.dict("os.environ", {"API_KEY": "mykey"}):

@@ -34,7 +34,9 @@ def get_model(
     """
     global _model
     if _model is None:
-        _base_url = base_url or os.environ.get("OLLAMA_URL", "http://localhost:11434/v1")
+        _base_url = base_url or os.environ.get(
+            "OLLAMA_URL", "http://localhost:11434/v1"
+        )
         _model_name = model_name or os.environ.get("AGENT_MODEL", "qwen3.6:latest")
         _api_key = api_key or os.environ.get("OPENAI_API_KEY", "not-needed")
         provider = LlamaStackProvider(base_url=_base_url, api_key=_api_key)

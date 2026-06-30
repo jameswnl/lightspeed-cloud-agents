@@ -8,7 +8,6 @@ import yaml
 
 from agents.runtime.generic_entrypoint import build_app, load_definition, load_registry
 
-
 MINIMAL_AGENT_YAML = {
     "apiVersion": "lightspeed.redhat.com/v1alpha1",
     "kind": "AgentDefinition",
@@ -76,6 +75,7 @@ class TestBuildApp:
     def test_builds_request_response_app(self) -> None:
         """Test building a request-response app from YAML."""
         from examples.agents.diagnostic.cluster_state import init_scenario
+
         init_scenario("healthy")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:

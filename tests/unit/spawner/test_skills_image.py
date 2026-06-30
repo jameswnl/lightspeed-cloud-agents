@@ -11,7 +11,8 @@ class TestKubernetesSpawnerSkills:
 
     @pytest.mark.asyncio
     async def test_skills_image_adds_init_container(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """Skills image adds an init container and shared volume."""
         mock_k8s_client = mocker.patch("kubernetes.client")
@@ -29,7 +30,9 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1Container = lambda **kw: type("Container", (), kw)()
         mock_k8s_client.V1ContainerPort = lambda **kw: type("Port", (), kw)()
         mock_k8s_client.V1EnvVar = lambda **kw: type("EnvVar", (), kw)()
-        mock_k8s_client.V1ResourceRequirements = lambda **kw: type("Resources", (), kw)()
+        mock_k8s_client.V1ResourceRequirements = lambda **kw: type(
+            "Resources", (), kw
+        )()
         mock_k8s_client.V1Volume = lambda **kw: type("Volume", (), kw)()
         mock_k8s_client.V1VolumeMount = lambda **kw: type("VolumeMount", (), kw)()
         mock_k8s_client.V1EmptyDirVolumeSource = lambda **kw: type("EmptyDir", (), kw)()
@@ -38,10 +41,13 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1ServicePort = lambda **kw: type("ServicePort", (), kw)()
 
         from agents.spawner.kubernetes_spawner import KubernetesSpawner
+
         spawner = KubernetesSpawner(namespace="test")
 
         await spawner._do_spawn(
-            "test-agent", "sandbox:latest", {},
+            "test-agent",
+            "sandbox:latest",
+            {},
             skills_image="skills:v1",
             skills_paths=["/skills/diag"],
         )
@@ -56,7 +62,8 @@ class TestKubernetesSpawnerSkills:
 
     @pytest.mark.asyncio
     async def test_no_skills_no_init_container(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """No skills image means no init container."""
         mock_k8s_client = mocker.patch("kubernetes.client")
@@ -74,7 +81,9 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1Container = lambda **kw: type("Container", (), kw)()
         mock_k8s_client.V1ContainerPort = lambda **kw: type("Port", (), kw)()
         mock_k8s_client.V1EnvVar = lambda **kw: type("EnvVar", (), kw)()
-        mock_k8s_client.V1ResourceRequirements = lambda **kw: type("Resources", (), kw)()
+        mock_k8s_client.V1ResourceRequirements = lambda **kw: type(
+            "Resources", (), kw
+        )()
         mock_k8s_client.V1Volume = lambda **kw: type("Volume", (), kw)()
         mock_k8s_client.V1VolumeMount = lambda **kw: type("VolumeMount", (), kw)()
         mock_k8s_client.V1Service = lambda **kw: type("Service", (), kw)()
@@ -82,6 +91,7 @@ class TestKubernetesSpawnerSkills:
         mock_k8s_client.V1ServicePort = lambda **kw: type("ServicePort", (), kw)()
 
         from agents.spawner.kubernetes_spawner import KubernetesSpawner
+
         spawner = KubernetesSpawner(namespace="test")
 
         await spawner._do_spawn("test-agent", "sandbox:latest", {})

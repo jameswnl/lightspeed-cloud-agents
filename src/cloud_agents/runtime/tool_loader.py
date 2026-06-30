@@ -44,8 +44,6 @@ def load_tools(spec: ToolsSpec) -> list[tuple[str, Callable[..., Any]]]:
                 f"Function '{fn_name}' not found in module '{spec.module}'"
             )
         if not callable(fn):
-            raise ToolLoadError(
-                f"'{fn_name}' in '{spec.module}' is not callable"
-            )
+            raise ToolLoadError(f"'{fn_name}' in '{spec.module}' is not callable")
         tools.append((fn_name, fn))
     return tools

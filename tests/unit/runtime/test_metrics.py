@@ -13,9 +13,7 @@ class TestAgentMetrics:
         before = ls_agent_runs_total.labels(
             agent_name="test", status="success"
         )._value.get()
-        ls_agent_runs_total.labels(
-            agent_name="test", status="success"
-        ).inc()
+        ls_agent_runs_total.labels(agent_name="test", status="success").inc()
         after = ls_agent_runs_total.labels(
             agent_name="test", status="success"
         )._value.get()

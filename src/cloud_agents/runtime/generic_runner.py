@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent
-
-from pathlib import Path
 
 from agents.definition import AgentSpec
 from agents.models import AgentRunRequest, AgentRunResponse
@@ -43,6 +42,7 @@ def _load_skills(spec: AgentSpec) -> list:
             f"{spec.skills.directories}. Fix the paths or remove the skills section."
         )
     return [SkillsCapability(directories=valid_dirs)]
+
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,8 @@ def create_generic_runner(
         elif advisory_mode and not read_only_tools:
             logger.warning(
                 "Advisory mode requested but no read_only tools classified for %s. "
-                "All tools remain available.", agent_name,
+                "All tools remain available.",
+                agent_name,
             )
 
         for fn_name, fn in tools_to_register:
@@ -106,6 +107,7 @@ def create_generic_runner(
 
         if spec.output_validator:
             import importlib
+
             val_mod = importlib.import_module(spec.output_validator.module)
             val_fn = getattr(val_mod, spec.output_validator.function)
             agent.output_validator(val_fn)
@@ -135,6 +137,7 @@ def create_generic_runner(
             active_agent = advisory_agent
         elif needs_permission_filter:
             from agents.workflow.permissions import PermissionScope
+
             scope = PermissionScope(allowed_tools=ctx_allowed, denied_tools=ctx_denied)
             effective = set(scope.effective_tools([n for n, _ in all_tools]))
             filtered_tools = [(n, f) for n, f in all_tools if n in effective]
@@ -143,7 +146,9 @@ def create_generic_runner(
                 logger.info("PermissionScope: removed tools: %s", removed)
             mcp_svrs = mcp_servers if mcp_servers else None
             perm_agent: Agent[None, Any] = Agent(
-                model, output_type=output_type, retries=spec.retries,
+                model,
+                output_type=output_type,
+                retries=spec.retries,
                 defer_model_check=spec.defer_model_check,
                 instructions=spec.instructions,
                 capabilities=capabilities or None,

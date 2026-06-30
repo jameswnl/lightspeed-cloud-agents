@@ -6,13 +6,9 @@ from pydantic import ValidationError
 
 from agents.definition import (
     AgentDefinition,
-    AgentSpec,
     LifecycleSpec,
-    OutputValidatorSpec,
-    SkillsSpec,
     ToolsSpec,
 )
-
 
 MINIMAL_YAML = """
 apiVersion: lightspeed.redhat.com/v1alpha1

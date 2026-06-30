@@ -13,14 +13,20 @@ class TestStepSpecNewFields:
     def test_runtime_default_is_sandbox(self) -> None:
         """Default runtime is sandbox."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
         )
         assert step.runtime == "sandbox"
 
     def test_runtime_generic(self) -> None:
         """Generic runtime is accepted."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
             runtime="generic",
         )
         assert step.runtime == "generic"
@@ -29,7 +35,10 @@ class TestStepSpecNewFields:
         """Role field accepts valid values."""
         for role in ("analysis", "execution", "verification"):
             step = WorkflowStepSpec(
-                name="s1", type="agent", output_key="r1", prompt="check",
+                name="s1",
+                type="agent",
+                output_key="r1",
+                prompt="check",
                 role=role,
             )
             assert step.role == role
@@ -37,14 +46,20 @@ class TestStepSpecNewFields:
     def test_role_default_none(self) -> None:
         """Role defaults to None."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
         )
         assert step.role is None
 
     def test_instructions_field(self) -> None:
         """Inline instructions field."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
             instructions="You are a K8s diagnostic agent.",
         )
         assert step.instructions == "You are a K8s diagnostic agent."
@@ -53,7 +68,10 @@ class TestStepSpecNewFields:
         """Output schema for structured agent responses."""
         schema = {"type": "object", "properties": {"fix": {"type": "string"}}}
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
             output_schema=schema,
         )
         assert step.output_schema == schema
@@ -61,7 +79,10 @@ class TestStepSpecNewFields:
     def test_target_namespaces_field(self) -> None:
         """Target namespaces for sandbox scope."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
             target_namespaces=["production", "staging"],
         )
         assert step.target_namespaces == ["production", "staging"]
@@ -69,7 +90,10 @@ class TestStepSpecNewFields:
     def test_service_account_field(self) -> None:
         """Per-step service account for RBAC."""
         step = WorkflowStepSpec(
-            name="s1", type="agent", output_key="r1", prompt="check",
+            name="s1",
+            type="agent",
+            output_key="r1",
+            prompt="check",
             service_account="diag-sa",
         )
         assert step.service_account == "diag-sa"

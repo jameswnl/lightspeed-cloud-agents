@@ -43,7 +43,9 @@ class TestCheckAndDispatch:
     @pytest.mark.asyncio
     async def test_critical_alert_dispatches(self) -> None:
         """Test that critical alerts trigger dispatch."""
-        alerts = [{"host": "web-02", "metric": "cpu", "value": "92%", "severity": "critical"}]
+        alerts = [
+            {"host": "web-02", "metric": "cpu", "value": "92%", "severity": "critical"}
+        ]
         runner = AsyncMock(return_value=_make_response(False, alerts))
         dispatch = AsyncMock()
         dispatch.run_async = AsyncMock(return_value="run-123")
@@ -66,14 +68,18 @@ class TestCheckAndDispatch:
     @pytest.mark.asyncio
     async def test_on_dispatch_success_callback(self) -> None:
         """Test that the post-dispatch callback is invoked."""
-        alerts = [{"host": "web-02", "metric": "cpu", "value": "92%", "severity": "critical"}]
+        alerts = [
+            {"host": "web-02", "metric": "cpu", "value": "92%", "severity": "critical"}
+        ]
         runner = AsyncMock(return_value=_make_response(False, alerts))
         dispatch = AsyncMock()
         dispatch.run_async = AsyncMock(return_value="run-456")
         callback = MagicMock()
         loop = AgentLoop(
-            agent_runner=runner, dispatch_client=dispatch,
-            interval=0, on_dispatch_success=callback,
+            agent_runner=runner,
+            dispatch_client=dispatch,
+            interval=0,
+            on_dispatch_success=callback,
         )
         await loop._check_and_dispatch()
         callback.assert_called_once_with(alerts)
@@ -107,5 +113,7 @@ class TestLifecycle:
     @pytest.mark.asyncio
     async def test_stop_without_start(self) -> None:
         """Test that stopping without starting doesn't crash."""
-        loop = AgentLoop(agent_runner=AsyncMock(), dispatch_client=AsyncMock(), interval=0)
+        loop = AgentLoop(
+            agent_runner=AsyncMock(), dispatch_client=AsyncMock(), interval=0
+        )
         await loop.stop()

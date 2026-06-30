@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Optional, Protocol
 
 import httpx
@@ -76,12 +76,15 @@ class WebhookPackager:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
-                    self.url, json=pkg.model_dump(mode="json"),
+                    self.url,
+                    json=pkg.model_dump(mode="json"),
                 )
                 resp.raise_for_status()
             logger.info("Escalation sent to webhook for step '%s'", pkg.step_name)
         except Exception as exc:
-            logger.warning("Escalation webhook failed for step '%s': %s", pkg.step_name, exc)
+            logger.warning(
+                "Escalation webhook failed for step '%s': %s", pkg.step_name, exc
+            )
 
 
 class JiraPackager:
@@ -123,9 +126,15 @@ class JiraPackager:
                     headers=headers,
                 )
                 resp.raise_for_status()
-            logger.info("Jira issue created for escalation: %s/%s", pkg.workflow_name, pkg.step_name)
+            logger.info(
+                "Jira issue created for escalation: %s/%s",
+                pkg.workflow_name,
+                pkg.step_name,
+            )
         except Exception as exc:
-            logger.warning("Jira escalation failed for step '%s': %s", pkg.step_name, exc)
+            logger.warning(
+                "Jira escalation failed for step '%s': %s", pkg.step_name, exc
+            )
 
 
 def build_escalation_package(
@@ -151,7 +160,7 @@ def build_escalation_package(
         workflow_name=workflow_name,
         step_name=step_name,
         correlation_id=correlation_id,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         escalation=escalation_data,
         workflow_snapshot=workflow_snapshot,
     )

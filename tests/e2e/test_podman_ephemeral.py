@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -32,10 +31,11 @@ async def main() -> None:
     from podman import PodmanClient
 
     from agents.spawner.podman_spawner import PodmanSpawner
-    from agents.spawner.base import SpawnConfig
 
     image = "localhost/agent-runtime:latest"
-    agent_yaml = os.path.join(REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml")
+    agent_yaml = os.path.join(
+        REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml"
+    )
     tools_py = os.path.join(REPO_ROOT, "examples/agents/tools/diagnostic_tools.py")
 
     print("=== Podman Ephemeral Spawn E2E Test ===")
@@ -51,7 +51,9 @@ async def main() -> None:
             return
 
     # Ensure network exists
-    os.system("podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1")
+    os.system(
+        "podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1"
+    )
 
     spawner = PodmanSpawner(
         network="cloud-agents",
@@ -96,13 +98,14 @@ async def main() -> None:
     if ready:
         print(f"[OK] Agent is ready at {endpoint}")
     else:
-        print(f"[FAIL] Agent did not become ready")
+        print("[FAIL] Agent did not become ready")
         await spawner.destroy(agent_name)
         return
 
     print()
     print("--- Step 3: Call agent via HTTP ---")
     import httpx
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as http:
             resp = await http.get(f"{endpoint}/healthz")
@@ -117,7 +120,9 @@ async def main() -> None:
             print(f"[OK] Agent name: {result.get('agent_name')}")
             print(f"[OK] Output type: {result.get('output_type')}")
             if result.get("output"):
-                print(f"[OK] cluster_healthy: {result['output'].get('cluster_healthy')}")
+                print(
+                    f"[OK] cluster_healthy: {result['output'].get('cluster_healthy')}"
+                )
     except Exception as exc:
         print(f"[FAIL] HTTP call failed: {exc}")
 

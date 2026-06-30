@@ -25,12 +25,21 @@ pytestmark = pytest.mark.e2e
 def spawner():
     """Create a PodmanSpawner for the test session."""
     from agents.spawner.podman_spawner import PodmanSpawner
-    os.system("podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1")
+
+    os.system(
+        "podman network exists cloud-agents 2>/dev/null || podman network create cloud-agents >/dev/null 2>&1"
+    )
     return PodmanSpawner(
         network="cloud-agents",
         volume_mounts={
-            os.path.abspath(os.path.join(REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml")): "/app/agent.yaml",
-            os.path.abspath(os.path.join(REPO_ROOT, "examples/agents/tools/diagnostic_tools.py")): "/app/tools/diagnostic_tools.py",
+            os.path.abspath(
+                os.path.join(
+                    REPO_ROOT, "examples/agents/definitions/diagnostic-agent.yaml"
+                )
+            ): "/app/agent.yaml",
+            os.path.abspath(
+                os.path.join(REPO_ROOT, "examples/agents/tools/diagnostic_tools.py")
+            ): "/app/tools/diagnostic_tools.py",
         },
     )
 
@@ -53,9 +62,7 @@ def agent_endpoint(spawner, agent_env):
     endpoint = loop.run_until_complete(
         spawner.spawn("pytest-auth", "localhost/agent-runtime:latest", agent_env)
     )
-    ready = loop.run_until_complete(
-        spawner.wait_ready(endpoint, timeout=60.0)
-    )
+    ready = loop.run_until_complete(spawner.wait_ready(endpoint, timeout=60.0))
     assert ready, f"Agent did not become ready at {endpoint}"
     yield endpoint
     loop.run_until_complete(spawner.destroy("pytest-auth"))
@@ -68,6 +75,7 @@ class TestBearerAuth:
     def test_unauthenticated_rejected(self, agent_endpoint) -> None:
         """Test that unauthenticated calls get 401."""
         import httpx
+
         resp = httpx.post(
             f"{agent_endpoint}/v1/run",
             json={"prompt": "test"},
@@ -78,6 +86,7 @@ class TestBearerAuth:
     def test_authenticated_accepted(self, agent_endpoint) -> None:
         """Test that authenticated calls are accepted (not 401)."""
         import httpx
+
         resp = httpx.post(
             f"{agent_endpoint}/v1/run",
             json={"prompt": "list all hosts"},
@@ -89,6 +98,7 @@ class TestBearerAuth:
     def test_healthz_exempt(self, agent_endpoint) -> None:
         """Test that healthz is exempt from auth."""
         import httpx
+
         resp = httpx.get(f"{agent_endpoint}/healthz", timeout=10.0)
         assert resp.status_code == 200
         assert resp.json()["status"] == "ready"
@@ -96,6 +106,7 @@ class TestBearerAuth:
     def test_wrong_token_rejected(self, agent_endpoint) -> None:
         """Test that wrong token gets 401."""
         import httpx
+
         resp = httpx.post(
             f"{agent_endpoint}/v1/run",
             json={"prompt": "test"},

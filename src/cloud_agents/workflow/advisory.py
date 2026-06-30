@@ -82,7 +82,8 @@ class AdvisoryEnforcer:
         if removed:
             logger.info(
                 "Advisory mode: removed %d write-capable tools: %s",
-                len(removed), removed,
+                len(removed),
+                removed,
             )
         return filtered
 

@@ -34,7 +34,9 @@ def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowI
         },
         input_prompt=input_prompt,
         workflow_id="wf-test-1",
-        provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="test-key"),
+        provider=ProviderConfig(
+            name="openai", model="gpt-4", credentials_secret="test-key"
+        ),
     )
 
 
@@ -45,8 +47,6 @@ async def env():
         yield env
 
 
-
-
 class TestSequentialWorkflow:
     """Tests for sequential step execution."""
 
@@ -54,17 +54,29 @@ class TestSequentialWorkflow:
     async def test_two_steps_complete_in_order(self, env: WorkflowEnvironment) -> None:
         """Two agent steps run sequentially and both complete."""
         steps = [
-            {"name": "step1", "type": "agent", "output_key": "r1",
-             "prompt": "diagnose", "runtime": "sandbox", "spawn": "ephemeral"},
-            {"name": "step2", "type": "agent", "output_key": "r2",
-             "prompt": "fix", "runtime": "sandbox", "spawn": "ephemeral"},
+            {
+                "name": "step1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "diagnose",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+            },
+            {
+                "name": "step2",
+                "type": "agent",
+                "output_key": "r2",
+                "prompt": "fix",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
-
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -84,18 +96,30 @@ class TestConditionEvaluation:
     async def test_false_condition_skips_step(self, env: WorkflowEnvironment) -> None:
         """Step with false condition is skipped."""
         steps = [
-            {"name": "step1", "type": "agent", "output_key": "r1",
-             "prompt": "check", "runtime": "sandbox", "spawn": "ephemeral"},
-            {"name": "step2", "type": "agent", "output_key": "r2",
-             "prompt": "fix", "runtime": "sandbox", "spawn": "ephemeral",
-             "condition": "steps.r1.output.needs_fix == true"},
+            {
+                "name": "step1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "check",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+            },
+            {
+                "name": "step2",
+                "type": "agent",
+                "output_key": "r2",
+                "prompt": "fix",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+                "condition": "steps.r1.output.needs_fix == true",
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
-
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -115,18 +139,30 @@ class TestConditionFailClosed:
     async def test_invalid_condition_skips_step(self, env: WorkflowEnvironment) -> None:
         """Unparseable condition skips the step instead of running it."""
         steps = [
-            {"name": "step1", "type": "agent", "output_key": "r1",
-             "prompt": "check", "runtime": "sandbox", "spawn": "ephemeral"},
-            {"name": "step2", "type": "agent", "output_key": "r2",
-             "prompt": "fix", "runtime": "sandbox", "spawn": "ephemeral",
-             "condition": "this is not a valid condition expression"},
+            {
+                "name": "step1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "check",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+            },
+            {
+                "name": "step2",
+                "type": "agent",
+                "output_key": "r2",
+                "prompt": "fix",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+                "condition": "this is not a valid condition expression",
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
-
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -146,19 +182,31 @@ class TestParallelGroup:
     async def test_parallel_steps_run(self, env: WorkflowEnvironment) -> None:
         """Steps in the same parallel_group run concurrently."""
         steps = [
-            {"name": "a", "type": "agent", "output_key": "ra",
-             "prompt": "check-a", "runtime": "sandbox", "spawn": "ephemeral",
-             "parallel_group": "diag"},
-            {"name": "b", "type": "agent", "output_key": "rb",
-             "prompt": "check-b", "runtime": "sandbox", "spawn": "ephemeral",
-             "parallel_group": "diag"},
+            {
+                "name": "a",
+                "type": "agent",
+                "output_key": "ra",
+                "prompt": "check-a",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+                "parallel_group": "diag",
+            },
+            {
+                "name": "b",
+                "type": "agent",
+                "output_key": "rb",
+                "prompt": "check-b",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+                "parallel_group": "diag",
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
-
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -175,19 +223,25 @@ class TestApprovalFlow:
     """Tests for human approval via signals."""
 
     @pytest.mark.asyncio
-    async def test_approval_signal_resumes_workflow(self, env: WorkflowEnvironment) -> None:
+    async def test_approval_signal_resumes_workflow(
+        self, env: WorkflowEnvironment
+    ) -> None:
         """Sending an approve signal unblocks a paused workflow."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "timeout_seconds": 86400},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "timeout_seconds": 86400,
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
-
         ):
             handle = await env.client.start_workflow(
                 AgentWorkflow.run,
@@ -196,26 +250,34 @@ class TestApprovalFlow:
                 task_queue="test-q",
             )
 
-            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
+            await handle.signal(
+                AgentWorkflow.approve, args=["approve", "approved", None]
+            )
             result = await handle.result()
 
         assert result.steps["approval"].status == "completed"
         assert result.steps["approval"].output["approved"] is True
 
     @pytest.mark.asyncio
-    async def test_approval_timeout_produces_denied(self, env: WorkflowEnvironment) -> None:
+    async def test_approval_timeout_produces_denied(
+        self, env: WorkflowEnvironment
+    ) -> None:
         """No signal within timeout produces denied status."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "timeout_seconds": 2,
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
-
         ):
             result = await env.client.execute_workflow(
                 AgentWorkflow.run,
@@ -235,15 +297,19 @@ class TestQueryStatus:
     async def test_query_returns_current_status(self, env: WorkflowEnvironment) -> None:
         """Query returns step results and events."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval"},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+            },
         ]
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
-
         ):
             handle = await env.client.start_workflow(
                 AgentWorkflow.run,
@@ -256,7 +322,9 @@ class TestQueryStatus:
             assert isinstance(status, WorkflowStatus)
             assert len(status.events) > 0
 
-            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
+            await handle.signal(
+                AgentWorkflow.approve, args=["approve", "approved", None]
+            )
             await handle.result()
 
 
@@ -267,21 +335,28 @@ class TestAdvisoryMode:
     async def test_advisory_skips_approval(self, env: WorkflowEnvironment) -> None:
         """Advisory mode auto-completes approval steps."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "timeout_seconds": 2,
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.advisory = True
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-adv-1", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-adv-1",
+                task_queue="test-q",
             )
 
         assert result.steps["approval"].status == "completed"
@@ -291,20 +366,29 @@ class TestAdvisoryMode:
     async def test_advisory_annotates_prompt(self, env: WorkflowEnvironment) -> None:
         """Advisory mode annotates agent step prompts."""
         steps = [
-            {"name": "diag", "type": "agent", "output_key": "r1",
-             "prompt": "diagnose issue", "runtime": "sandbox", "spawn": "ephemeral"},
+            {
+                "name": "diag",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "diagnose issue",
+                "runtime": "sandbox",
+                "spawn": "ephemeral",
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.advisory = True
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[run_sandbox_step, build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-adv-2", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-adv-2",
+                task_queue="test-q",
             )
 
         assert result.steps["r1"].status == "completed"
@@ -314,21 +398,28 @@ class TestAdvisoryMode:
     async def test_non_advisory_unchanged(self, env: WorkflowEnvironment) -> None:
         """Non-advisory workflow behaves normally."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "timeout_seconds": 2,
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.advisory = False
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-adv-3", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-adv-3",
+                task_queue="test-q",
             )
 
         assert result.steps["approval"].status == "denied"
@@ -341,21 +432,29 @@ class TestAutoApproval:
     async def test_low_risk_auto_approves(self, env: WorkflowEnvironment) -> None:
         """Low-risk approval step completes without a signal."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "risk_level": "low", "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "risk_level": "low",
+                "timeout_seconds": 2,
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-auto-1", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-auto-1",
+                task_queue="test-q",
             )
 
         assert result.steps["approval"].status == "completed"
@@ -366,45 +465,62 @@ class TestAutoApproval:
     async def test_high_risk_waits_for_signal(self, env: WorkflowEnvironment) -> None:
         """High-risk approval step still requires human signal."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "risk_level": "high", "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "risk_level": "high",
+                "timeout_seconds": 2,
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-auto-2", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-auto-2",
+                task_queue="test-q",
             )
 
         assert result.steps["approval"].status == "denied"
         assert result.steps["approval"].output["reason"] == "timeout"
 
     @pytest.mark.asyncio
-    async def test_no_risk_level_defaults_to_manual(self, env: WorkflowEnvironment) -> None:
+    async def test_no_risk_level_defaults_to_manual(
+        self, env: WorkflowEnvironment
+    ) -> None:
         """Step without risk_level defaults to manual approval."""
         steps = [
-            {"name": "approve", "type": "human-approval",
-             "message": "OK?", "output_key": "approval",
-             "timeout_seconds": 2},
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "message": "OK?",
+                "output_key": "approval",
+                "timeout_seconds": 2,
+            },
         ]
         wf_input = _make_input(steps)
         wf_input.approval_policy = {"auto_approve_risk_levels": ["low"]}
 
         async with Worker(
-            env.client, task_queue="test-q",
+            env.client,
+            task_queue="test-q",
             workflows=[AgentWorkflow],
             activities=[build_escalation_activity],
         ):
             result = await env.client.execute_workflow(
-                AgentWorkflow.run, wf_input,
-                id="wf-auto-3", task_queue="test-q",
+                AgentWorkflow.run,
+                wf_input,
+                id="wf-auto-3",
+                task_queue="test-q",
             )
 
         assert result.steps["approval"].status == "denied"

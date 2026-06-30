@@ -112,8 +112,10 @@ class TestDiagnosticReport:
             issues_found=["web-02: app crashed"],
             actions_taken=[
                 RemediationAction(
-                    host="web-02", action="restart_service:app",
-                    result="Restarted", success=True,
+                    host="web-02",
+                    action="restart_service:app",
+                    result="Restarted",
+                    success=True,
                 )
             ],
             required_permissions=["pods/exec", "deployments/update"],
@@ -146,16 +148,22 @@ class TestDiagnosticReport:
         """Test that invalid confidence level is rejected."""
         with pytest.raises(ValidationError):
             DiagnosticReport(
-                summary="ok", confidence="very_high",
-                issues_found=[], actions_taken=[], cluster_healthy=True,
+                summary="ok",
+                confidence="very_high",
+                issues_found=[],
+                actions_taken=[],
+                cluster_healthy=True,
             )
 
     def test_invalid_risk_level_rejected(self) -> None:
         """Test that invalid risk level is rejected."""
         with pytest.raises(ValidationError):
             DiagnosticReport(
-                summary="ok", risk_level="extreme",
-                issues_found=[], actions_taken=[], cluster_healthy=True,
+                summary="ok",
+                risk_level="extreme",
+                issues_found=[],
+                actions_taken=[],
+                cluster_healthy=True,
             )
 
     def test_report_with_remaining_issues(self) -> None:
@@ -267,9 +275,7 @@ class TestAgentRunResponse:
             summary="Roundtrip test",
             issues_found=["x"],
             actions_taken=[
-                RemediationAction(
-                    host="h1", action="a", result="r", success=True
-                )
+                RemediationAction(host="h1", action="a", result="r", success=True)
             ],
             cluster_healthy=True,
         )
@@ -317,8 +323,12 @@ class TestMonitoringAlert:
         """Test that all valid severity levels are accepted."""
         for sev in ("low", "medium", "high", "critical"):
             alert = MonitoringAlert(
-                host="h", metric="m", value="v",
-                severity=sev, context="c", recommended_action="a",
+                host="h",
+                metric="m",
+                value="v",
+                severity=sev,
+                context="c",
+                recommended_action="a",
             )
             assert alert.severity == sev
 
@@ -335,8 +345,11 @@ class TestMonitoringResult:
     def test_with_alerts(self) -> None:
         """Test monitoring result with alerts."""
         alert = MonitoringAlert(
-            host="web-02", metric="cpu", value="92%",
-            severity="critical", context="spike",
+            host="web-02",
+            metric="cpu",
+            value="92%",
+            severity="critical",
+            context="spike",
             recommended_action="investigate",
         )
         result = MonitoringResult(
@@ -358,8 +371,11 @@ class TestMonitoringResult:
     def test_json_round_trip(self) -> None:
         """Test serialization with nested alerts."""
         alert = MonitoringAlert(
-            host="db-01", metric="disk", value="95%",
-            severity="high", context="disk full",
+            host="db-01",
+            metric="disk",
+            value="95%",
+            severity="high",
+            context="disk full",
             recommended_action="cleanup",
         )
         result = MonitoringResult(
