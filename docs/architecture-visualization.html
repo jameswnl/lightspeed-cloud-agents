@@ -298,9 +298,10 @@ svg { width: 100%; height: auto; display: block; }
 <div class="faq-card">
   <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
   <div class="faq-a">Yes &mdash; no SDK needed. Three paths, from easiest to most flexible:<br>
-    &bull; <strong>Workflow YAML + skills</strong> (easiest): Teams write a workflow definition with prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image and mounted at /app/skills/. No code required.<br>
-    &bull; <strong>Workflow YAML + MCP servers</strong>: Teams configure external tool servers (ServiceNow, Jira, PagerDuty) via <code>mcp_servers</code> in the workflow config. The sandbox calls the MCP servers as tools during execution. No code changes to the sandbox image.<br>
-    &bull; <strong>Custom container image</strong> (most flexible): Teams bring their own container image implementing <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Any image exposing this endpoint works as a workflow step. Use this when you need a completely different agent framework or runtime.</div>
+    &bull; <strong>Workflow YAML + skills</strong> (easiest): Teams write a workflow definition with per-step prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image. The skills image is specified at deployment time via the API request (<code>skills_image</code>), not in the YAML itself. No code required.<br>
+    &bull; <strong>+ MCP servers</strong> (external tools): Teams configure external tool servers (ServiceNow, Jira, PagerDuty) via <code>mcp_servers</code> on the API request. The sandbox calls MCP servers as tools during execution. No code changes to the sandbox image. MCP config is deployment-time, not in the YAML definition.<br>
+    &bull; <strong>Custom container image</strong> (most flexible): Teams bring their own container image implementing <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Specified via <code>sandbox_image</code> on the API request. Any image exposing this endpoint works as a workflow step.<br><br>
+    In all paths, the workflow YAML defines <em>what</em> (steps, prompts, output schemas, conditions, approval gates). The API request provides <em>how</em> (which provider, which sandbox image, which skills image, which MCP servers).</div>
 </div>
 
 <div class="faq-card">
