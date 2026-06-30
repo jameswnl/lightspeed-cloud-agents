@@ -6,28 +6,34 @@ spec:
   steps:
     - name: diagnose
       type: agent
-      agent: diagnostic-agent
       prompt: "Check all hosts for issues. Report what you find."
       output_key: diagnosis
-      spawn: pre-deployed
+      output_schema:
+        type: object
+        properties:
+          summary:
+            type: string
+          issues_found:
+            type: integer
+        required: [summary, issues_found]
+      timeout_seconds: 120
 
     - name: approve-fix
       type: human-approval
       message: "Review the diagnosis and approve remediation."
       output_key: approval
+      risk_level: high
 
     - name: fix
       type: agent
-      agent: diagnostic-agent
-      prompt: "Fix all issues found in the diagnosis."
+      prompt: "Fix all issues found: {{ steps.diagnosis.output.summary }}"
       output_key: fix
-      spawn: pre-deployed
       condition: "steps.approval.output.approved == true"
+      timeout_seconds: 180
 
     - name: verify
       type: agent
-      agent: monitoring-agent
       prompt: "Verify the cluster is healthy after remediation."
       output_key: verification
-      spawn: pre-deployed
       condition: "steps.fix.status == completed"
+      timeout_seconds: 120

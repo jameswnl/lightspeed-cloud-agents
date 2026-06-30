@@ -117,6 +117,15 @@ def build_temporal_router(
                 detail="Provider configuration is required",
             )
 
+        from agents.workflow.temporal_validation import validate_definition
+
+        validation_errors = validate_definition(definition)
+        if validation_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": validation_errors},
+            )
+
         if request.advisory is not None:
             advisory = request.advisory
         elif request.workflow_name and definition_store:

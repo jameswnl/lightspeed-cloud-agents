@@ -58,7 +58,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -83,7 +83,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -116,7 +116,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -140,7 +140,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -169,7 +169,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -197,7 +197,7 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "diag"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -353,7 +353,7 @@ class TestAdvisoryPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -381,7 +381,7 @@ class TestAdvisoryPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -500,7 +500,7 @@ class TestConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -527,7 +527,7 @@ class TestConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -561,7 +561,7 @@ class TestDeploymentConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",
@@ -590,7 +590,7 @@ class TestDeploymentConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": []},
+                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
                 },
                 "provider": {
                     "name": "openai",

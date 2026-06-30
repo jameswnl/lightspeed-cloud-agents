@@ -6,7 +6,16 @@ spec:
   steps:
     - name: diagnose
       type: agent
-      agent: diagnostic-agent
       prompt: "Check all hosts. Report what you find."
       output_key: diagnosis
-      spawn: ephemeral
+      output_schema:
+        type: object
+        properties:
+          summary:
+            type: string
+          issues_found:
+            type: integer
+          cluster_healthy:
+            type: boolean
+        required: [summary, issues_found, cluster_healthy]
+      timeout_seconds: 120

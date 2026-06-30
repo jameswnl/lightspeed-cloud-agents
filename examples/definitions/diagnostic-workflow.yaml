@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: diagnose-production
+spec:
+  steps:
+    - name: diagnose
+      type: agent
+      output_key: diagnosis
+      prompt: >
+        Kubernetes cluster issue: api-backend deployment has 0/2 pods ready
+        due to ErrImagePull (image nonexistent-registry.io/api-server:v2.broken
+        does not exist). web-frontend is healthy (3/3 Running).
+        Diagnose and recommend fix.
+      output_schema:
+        type: object
+        properties:
+          health_status:
+            type: string
+          root_cause:
+            type: string
+          fix:
+            type: string
+          severity:
+            type: string
+            enum: [low, medium, high, critical]
+        required: [health_status, root_cause, fix, severity]
+      timeout_seconds: 60
+
+    - name: approve
+      type: human-approval
+      output_key: approval
+      message: Approve the recommended fix?
+      risk_level: low
+      timeout_seconds: 10
