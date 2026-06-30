@@ -275,13 +275,19 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
-  <div class="faq-a">Multiple layers (all implemented):<br>
-    &bull; <strong>Workflow level</strong>: risk_level per step, approval gates, advisory mode (read-only filesystem + tool filtering)<br>
-    &bull; <strong>Agent level</strong>: allowed_tools / denied_tools per step via PermissionScope<br>
-    &bull; <strong>Runtime level</strong>: hard timeouts, resource limits (CPU/memory), ephemeral container isolation, securityContext (non-root, read-only root fs)<br>
-    &bull; <strong>Cluster level</strong>: K8s RBAC, NetworkPolicy, ServiceAccount scoping, MCP secret allowlist<br>
-    &bull; <strong>Audit</strong>: structured audit events for workflow lifecycle, approval decisions, sandbox spawning, secret mounts<br>
-    &bull; <strong>Future</strong>: per-user RBAC for who can trigger/approve/view workflows</div>
+  <div class="faq-a"><strong>Implemented:</strong><br>
+    &bull; <strong>Workflow level</strong>: risk_level per step (missing defaults to "high" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
+    &bull; <strong>Execution level</strong>: hard timeouts per step, resource limits (CPU/memory via SpawnConfig), ephemeral container isolation (fresh per step, destroyed after), concurrency cap (MAX_SPAWNED_PODS)<br>
+    &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, TLS for Temporal gRPC<br>
+    &bull; <strong>Cluster level</strong>: K8s RBAC (scoped Roles per spawner), NetworkPolicy (egress to Temporal + sandbox + LLM only), credential Secrets via volume mount (never in pod spec)<br>
+    &bull; <strong>MCP</strong>: secret allowlist (MCP_ALLOWED_SECRETS), file-reference headers (secrets never inlined in env vars)<br>
+    &bull; <strong>Audit</strong>: structured audit events for workflow start, approval decisions, sandbox spawn/destroy, secret mounts, escalation, orphan cleanup<br><br>
+    <strong>Future / not yet in workflow path:</strong><br>
+    &bull; Per-step tool filtering (allowed_tools / denied_tools via PermissionScope) &mdash; model exists, enforced in generic agent runtime but not yet passed through the sandbox /v1/agent/run contract<br>
+    &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet in sandbox path<br>
+    &bull; Per-user RBAC for who can trigger/approve/view workflows<br>
+    &bull; Dynamic RBAC from agent output (per-proposal ServiceAccount + Roles)<br>
+    &bull; Tool origin validation allowlist</div>
 </div>
 
 <div class="faq-card">
