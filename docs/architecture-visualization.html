@@ -595,5 +595,12 @@ if(sessionStorage.getItem('unlocked')==='1'){
   document.getElementById('main-content').style.display='block';
 }
 </script>
+<div style="text-align:center; padding:20px 0 10px; color:#484f58; font-size:11px;">
+  Last updated: <span id="build-date"></span>
+</div>
+<script>
+// Set from git commit date at build time; falls back to page load time
+document.getElementById('build-date').textContent = document.lastModified;
+</script>
 </body>
 </html>
