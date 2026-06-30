@@ -168,7 +168,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Fresh container per step. Only configured tools loaded. Hard timeouts. Destroyed after execution. Untrusted pods never receive secrets beyond their API token. Pre-deployed option for latency-sensitive steps.</div>
+  <div class="req-desc">Fresh container per step. Only configured tools loaded. Hard timeouts. Destroyed after execution. Untrusted pods never receive secrets beyond their LLM API token and scoped credentials.</div>
 </div>
 
 <div class="req-card">
@@ -188,7 +188,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
-  <div class="req-desc">No in-memory state. Durable external store. Scales horizontally behind a load balancer. Replica crashes don't lose workflows.</div>
+  <div class="req-desc">Workflow state lives in Temporal Server, not in the runner process. Scales horizontally behind a load balancer. Replica crashes don't lose workflows.</div>
 </div>
 
 </div>
@@ -228,7 +228,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R13</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">RBAC for workflows: who can trigger, approve, view. RBAC for tools: which tools each agent/user can invoke. Scoped by team, role, or namespace.</div>
+  <div class="req-desc"><em>(Future)</em> RBAC for workflows: who can trigger, approve, view. Per-step tool scoping via PermissionScope (allowed_tools / denied_tools) is implemented. Per-user/team RBAC is a backlog item.</div>
 </div>
 
 <div class="req-card">
@@ -238,12 +238,12 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R15</span> <span class="req-name">Triggers</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc">Chatbot, alerts, API, scheduled events</div>
+  <div class="req-desc">API trigger (POST /v1/workflows/run) is implemented. Chatbot, alert, and schedule triggers are future work.</div>
 </div>
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R16</span> <span class="req-name">Agents-as-tools</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc">Registry auto-generates tools from definitions</div>
+  <div class="req-desc"><em>(Backlog)</em> Registry auto-generates LLM tools from workflow/agent definitions, enabling chatbot-driven workflow invocation.</div>
 </div>
 
 <div class="req-card">
@@ -263,7 +263,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">What is the schema of the workflow definition (workflow.yaml)? Is it standardized?</div>
-  <div class="faq-a">Custom YAML schema (<strong>apiVersion: v1, kind: AgentWorkflow</strong>). Not an industry standard &mdash; there isn't one for agentic workflows yet. The schema defines steps with type (agent/human-approval), conditions, retry, parallel groups, risk level, and spawn mode. It's a Pydantic model so validation is strict and errors are clear. We should evaluate alignment with emerging standards (e.g. A2A protocol) as they mature.</div>
+  <div class="faq-a">Custom YAML schema (<strong>apiVersion: v1, kind: AgentWorkflow</strong>). Not an industry standard &mdash; there isn't one for agentic workflows yet. The schema defines steps with type (agent/human-approval), conditions, retry, parallel groups, risk level, output schema, and timeout. Validated at submission time via <code>temporal_validation.py</code> (duplicate names, undefined step refs, missing fields). We should evaluate alignment with emerging standards (e.g. A2A protocol) as they mature.</div>
 </div>
 
 <div class="faq-card">
@@ -291,24 +291,23 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
-  <div class="faq-a">Both paths:<br>
-    &bull; <strong>YAML + tools</strong>: Define agent via YAML, bring Python/bash/CLI tools. Framework runs them in the generic runtime. No SDK needed.<br>
-    &bull; <strong>Standardized API</strong>: Any service exposing a POST /v1/agent/run HTTP endpoint (query + context in, structured output out) can be called as an agent. No framework dependency. This aligns with the direction of A2A/OpenAI-compatible APIs.</div>
+  <div class="faq-a">Standardized API &mdash; no SDK needed. The workflow runner calls sandbox pods via <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Any container exposing this endpoint works as an agent step. The default sandbox image (<strong>lightspeed-agentic-sandbox</strong>) uses the OpenAI agents SDK with Shell, Filesystem, and Skills capabilities, but teams can bring their own image as long as it implements the /v1/agent/run contract.</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Which components need to be built from scratch vs reused from open source?</div>
   <div class="faq-a">
     <table class="faq-table">
-      <tr><th>Component</th><th>Build vs Reuse</th></tr>
-      <tr><td>Workflow runner / executor</td><td>Reuse: Temporal (implemented)</td></tr>
-      <tr><td>Spawner (K8s/Podman)</td><td>Build: domain-specific, ~200 lines each</td></tr>
-      <tr><td>Agent &amp; Workflow Registry</td><td>Build: definition CRUD store, ~150 lines</td></tr>
-      <tr><td>Agent runtime (sandbox image)</td><td>Reuse: lightspeed-agentic-sandbox (OpenAI agents SDK)</td></tr>
-      <tr><td>Persistence / state</td><td>Reuse: Temporal Server (durable execution)</td></tr>
-      <tr><td>Auth middleware</td><td>Build: ~100 lines, standard pattern</td></tr>
-      <tr><td>Observability</td><td>Reuse: OpenTelemetry, Prometheus</td></tr>
-      <tr><td>Approval routing</td><td>Partial build: Slack/webhook notifiers, ~100 lines</td></tr>
+      <tr><th>Component</th><th>Build vs Reuse</th><th>Status</th></tr>
+      <tr><td>Workflow orchestration</td><td>Reuse: Temporal SDK</td><td>Implemented</td></tr>
+      <tr><td>Spawner (K8s/Podman)</td><td>Build: ~200 lines each</td><td>Implemented</td></tr>
+      <tr><td>Definition store</td><td>Build: CRUD + validation, ~100 lines</td><td>Implemented</td></tr>
+      <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Implemented</td></tr>
+      <tr><td>Durable state</td><td>Reuse: Temporal Server</td><td>Implemented</td></tr>
+      <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Implemented</td></tr>
+      <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Implemented</td></tr>
+      <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Implemented</td></tr>
+      <tr><td>Agents-as-tools</td><td>Build: registry &rarr; LLM tool generation</td><td>Backlog</td></tr>
     </table>
   </div>
 </div>
