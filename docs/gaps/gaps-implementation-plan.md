@@ -87,3 +87,61 @@ All three are independent and can be parallelized.
 1. **T1**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`? If not, is this a lightspeed-cloud-agents task or an upstream sandbox task?
 2. **T2**: Is Temporal heartbeat sufficient, or do we need an explicit container kill signal (e.g. `spawner.terminate()` that sends SIGTERM before destroy)?
 3. **T3**: Should cleanup failure trigger an alert, or just a metric? (Metric first, alerting rule later.)
+
+---
+
+## Sandbox Runtime (source: `sandbox-runtime-gaps.md`)
+
+### T4: Unify runtime HTTP contract (Gap 1)
+
+**Problem**: The workflow path calls `POST /v1/agent/run` with `{query, context, systemPrompt, outputSchema}`. The in-repo generic runtime serves `POST /v1/run` with `{prompt, context}`. Two different routes, two different request schemas, no contract test to catch drift.
+
+**What to build**:
+1. Choose one canonical contract. The sandbox path (`/v1/agent/run`) is the production contract used by the Temporal workflow engine. The generic runtime (`/v1/run`) is an older path used for standalone agent deployments.
+2. Add a `/v1/agent/run` route to the generic runtime that accepts the same request shape as the sandbox (`query`, `context`, `systemPrompt`, `outputSchema`). Map `query` → `prompt` internally. Keep `/v1/run` as a backward-compatible alias.
+3. Add a contract test that validates both the workflow activity's request body and the generic runtime's accepted schema against a shared contract definition.
+
+**Files**:
+- `src/cloud_agents/runtime/server.py` — add `/v1/agent/run` route
+- `src/cloud_agents/models.py` — add `AgentRunRequestV2` model matching sandbox contract (query, context, systemPrompt, outputSchema)
+- `tests/unit/` — contract test asserting workflow activity and runtime accept same fields
+
+**Effort**: 1-2 days
+
+### T5: Document runtime input completeness (Gaps 2, 3, 5)
+
+**Problem**: The ARCHITECTURE.md Sandbox Runtime section only mentions provider, model, credentials, and skills. It omits MCP server config, additional provider env vars (`LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, etc.), and the `credentials_secret` description says "API key" when it can be broader credential material.
+
+**What to build**: Doc-only. Update the Sandbox Runtime section in ARCHITECTURE.md:
+- Add MCP server injection (`LIGHTSPEED_MCP_SERVERS` env var) to the config table
+- Add deployment-specific provider env vars to the table
+- Change "API key" to "provider credentials"
+- Scope the section explicitly to the workflow-spawned sandbox path
+
+**Effort**: Half day
+
+### T6: Decide on runtime convergence (Gap 4)
+
+**Problem**: The repo contains two runtime paths — the workflow sandbox contract (`/v1/agent/run`) and the generic agent runtime (`/v1/run` with `agent.yaml` + `tools.py`). The doc implies a unified abstraction but the code has two implementations with different contracts.
+
+**This is a decision, not a task.** Options:
+
+1. **Converge**: Generic runtime adopts `/v1/agent/run` contract. The generic runtime becomes a compatible sandbox image. One contract, two implementations.
+2. **Separate**: Generic runtime is a standalone deployment mode, not part of the workflow path. Document the distinction. Two contracts, two purposes.
+3. **Remove**: Generic runtime is legacy from PoC1. Remove it from this repo. The sandbox is the only runtime.
+
+T4 (contract unification) implements option 1. If option 2 or 3 is chosen, T4 changes scope.
+
+### Dependencies
+
+```
+T4 (contract) — blocked on T6 decision (which runtime model?)
+T5 (doc inputs) — independent
+T6 (decision) — must be made before T4
+```
+
+### Decision points before implementation
+
+4. **T6**: Which runtime model? Converge, separate, or remove the generic runtime?
+5. **T4**: If converging, should the generic runtime adopt the sandbox contract fully (including outputSchema, systemPrompt), or just add a compatibility route?
+6. **T5**: Should the config table be exhaustive (every env var) or just the core ones?
