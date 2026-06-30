@@ -1,6 +1,6 @@
 # Lightspeed Cloud Agents
 
-Cloud-based agent workflow orchestration platform. Deploys AI agents as ephemeral containers in Kubernetes or Podman, orchestrated by Temporal.
+Cloud-based agent workflow platform. Deploys AI agents as ephemeral containers in Kubernetes or Podman, powered by Temporal.
 
 ## Quick Start
 

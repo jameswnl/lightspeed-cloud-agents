@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Cloud Agents uses **Temporal** for workflow orchestration and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (WorkflowExecutor, StepDispatcher, RecoveryPoller, pydantic-ai agents, PostgreSQL persistence) — it was deleted in PoC2.
+Cloud Agents uses **Temporal** for workflow execution and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (WorkflowExecutor, StepDispatcher, RecoveryPoller, pydantic-ai agents, PostgreSQL persistence) — it was deleted in PoC2.
 
 ### Key components
 

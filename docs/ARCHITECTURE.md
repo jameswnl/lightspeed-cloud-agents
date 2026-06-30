@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Cloud Agents Framework is an **agent and workflow orchestration platform**. It enables product teams to define, deploy, and operate AI agents and multi-step workflows as server-side services.
+The Cloud Agents Framework is an **agent workflow and harness platform**. It enables product teams to define, deploy, and operate AI agents and multi-step workflows as server-side services.
 
-The framework uses **Temporal** for durable workflow execution and isolated runtime containers for step execution. Each workflow step runs in a spawned runtime behind an HTTP contract, which lets compatible runtime images participate in workflow execution without changing the orchestration engine.
+The framework uses **Temporal** for durable workflow execution and isolated runtime containers for step execution. Each workflow step runs in a spawned runtime behind an HTTP contract, which lets compatible runtime images participate in workflow execution without changing the engine.
 
 ## Goals
 
@@ -21,7 +21,7 @@ Agents and workflows are reusable building blocks. A chatbot invokes workflows a
 When automation reaches its limit, the framework packages workflow context for review, escalation, and operator follow-up — including handoff to interactive AI CLI sessions.
 
 ### G5. Kubernetes and Podman Deployment Targets
-The same orchestration model runs on both, with deployment-specific security and operational controls.
+The same workflow model runs on both, with deployment-specific security and operational controls.
 
 ## Design Principles
 
@@ -92,7 +92,7 @@ graph TD
 
 ### Workflow Runner
 
-The stateless orchestrator. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
+The stateless workflow engine. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
 
 - **Temporal AgentWorkflow** — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
 - **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls the runtime HTTP interface, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to pluggable notifiers. `build_escalation_activity` packages failed workflow context for follow-up.
