@@ -1001,6 +1001,55 @@ class TestMCPInjection:
         assert result["status"] == "completed"
 
 
+class TestOutputSchemaForwarding:
+    """Tests that output_schema is passed to the sandbox."""
+
+    @pytest.mark.asyncio
+    async def test_output_schema_sent_to_sandbox(self, mocker: MockerFixture) -> None:
+        """output_schema from step config is included in sandbox POST body."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {"severity": "high"}}
+
+        mock_http = mocker.patch(
+            "agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        schema = {
+            "type": "object",
+            "properties": {"severity": {"type": "string"}},
+            "required": ["severity"],
+        }
+
+        await run_sandbox_step({
+            "step": {
+                "name": "diag",
+                "prompt": "diagnose",
+                "output_key": "r1",
+                "output_schema": schema,
+            },
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }, spawner=mock_spawner)
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert body["outputSchema"] == schema
+
+
 class TestAuditEmission:
     """Tests for audit event emission from activities."""
 

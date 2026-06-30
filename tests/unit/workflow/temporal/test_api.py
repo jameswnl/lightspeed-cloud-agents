@@ -545,6 +545,66 @@ class TestConfigPropagation:
         }
 
 
+class TestDeploymentConfigPropagation:
+    """Tests for skills_image and sandbox_image propagation."""
+
+    def test_skills_image_propagated(
+        self,
+        client: TestClient,
+        mock_client: Any,
+    ) -> None:
+        """skills_image flows from request to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "skills_image": "quay.io/team/diagnostic-skills:v1",
+                "skills_paths": ["/skills/diag"],
+            },
+        )
+        assert response.status_code == 202
+        wf_input = mock_client.start_workflow.call_args[0][1]
+        assert wf_input.skills_image == "quay.io/team/diagnostic-skills:v1"
+        assert wf_input.skills_paths == ["/skills/diag"]
+
+    def test_custom_sandbox_image_propagated(
+        self,
+        client: TestClient,
+        mock_client: Any,
+    ) -> None:
+        """Custom sandbox_image flows from request to WorkflowInput."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "t"},
+                    "spec": {"steps": []},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "quay.io/team/custom-agent:v2",
+            },
+        )
+        assert response.status_code == 202
+        wf_input = mock_client.start_workflow.call_args[0][1]
+        assert wf_input.sandbox_image == "quay.io/team/custom-agent:v2"
+
+
 class TestAuthEnforcement:
     """Tests that auth dependency is enforced when provided."""
 
