@@ -124,6 +124,62 @@ helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
 
 ---
 
+## Workflow Definition Reference
+
+### What you provide
+
+1. **A workflow definition** (YAML) — steps, prompts, output schemas, conditions, approval gates
+2. **A sandbox image** — container implementing `POST /v1/agent/run` (default: lightspeed-agentic-sandbox)
+3. **Skills** (optional) — domain knowledge packages as OCI images mounted at `/app/skills/`
+4. **MCP servers** (optional) — external tool servers configured via the API request
+
+### Step types
+
+| Type | Purpose |
+|------|---------|
+| `agent` | Spawns a sandbox container, sends prompt + context, collects structured output |
+| `human-approval` | Pauses workflow, sends notification, waits for approval signal or timeout |
+
+### Step fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique step identifier |
+| `type` | Yes | `agent` or `human-approval` |
+| `output_key` | Yes | Key for this step's result in workflow state |
+| `prompt` | For agent | Prompt template (supports `{{ steps.X.output.Y }}` interpolation) |
+| `output_schema` | No | JSON Schema for structured output |
+| `timeout_seconds` | No | Max seconds for this step (default: 600 for agent, 86400 for approval) |
+| `condition` | No | Skip step if expression evaluates to false |
+| `risk_level` | No | `low`, `medium`, `high`, `critical` — used by auto-approve policy |
+| `message` | For approval | Human-readable approval request message |
+| `max_retries` | No | Number of retry attempts (default: 1) |
+| `parallel_group` | No | Steps sharing the same group run concurrently |
+
+### API request fields
+
+The workflow YAML defines *what* (steps, prompts, schemas). The API request provides *how*:
+
+| Field | Description |
+|-------|-------------|
+| `provider` | LLM provider, model, credentials |
+| `sandbox_image` | Container image for agent steps |
+| `skills_image` / `skills_paths` | Optional skills OCI image |
+| `mcp_servers` | Optional MCP server configs |
+| `approval_policy` | Auto-approve rules by risk level |
+| `workflow_id` | Optional caller-supplied idempotency key |
+
+### Example definitions
+
+See `examples/definitions/` for working workflow YAMLs:
+- `diagnostic-workflow.yaml` — diagnose + approve (used in Part 3 below)
+- `diagnose-fix-workflow.yaml` — diagnose → approve → fix → verify
+- `ephemeral-diagnose-workflow.yaml` — single diagnostic step
+
+These are validated by CI against the Pydantic schema — any new example added to that directory is automatically tested.
+
+---
+
 ## Part 3: Diagnostic Workflow
 
 This workflow uses an LLM to diagnose a broken Kubernetes deployment. It works on both Podman and Kubernetes.
