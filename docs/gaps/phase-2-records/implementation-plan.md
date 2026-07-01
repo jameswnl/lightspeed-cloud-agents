@@ -80,14 +80,14 @@ spec:
             summary: "Workflow runner is down"
 ```
 
-**Alert coverage** (matches parent roadmap T17 scope):
+**Alert coverage** (covers all currently available metrics):
 - Step failure rate → `WorkflowStepFailureRateHigh`
 - Sandbox cleanup failures → `SandboxCleanupFailure`
 - Orphaned pods → `SandboxOrphanDetected`
 - Temporal worker health → `WorkflowRunnerNotReady` (readyz probe = Temporal connectivity)
 - Runner down → `WorkflowRunnerDown`
 
-Note: LLM provider error alerting depends on T19 circuit breaker metrics. A `CircuitBreakerOpen` alert can be added once T19 is implemented.
+**Cross-task dependency**: The parent roadmap's LLM provider error alert is completed jointly by T17 + T19. T19 adds circuit breaker metrics (`CircuitBreakerOpen`); T17 adds the corresponding alert rule after T19 lands. Neither task alone closes the parent scope.
 
 **`deploy/helm/values.yaml`** — add:
 ```yaml
