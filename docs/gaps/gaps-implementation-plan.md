@@ -9,8 +9,8 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | Phase | Focus | Tasks |
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1, T3, T22, T36 |
-| **Phase 2** | Production hardening | T2, T7, T17, T19, T21, T24 |
-| **Phase 3** | Strategic / longer-term | T8, T11, T13, T14, T15, T23 |
+| **Phase 2** | Production hardening | T7, T17, T19, T21, T24 |
+| **Phase 3** | Strategic / longer-term | T2, T8, T11, T13, T14, T15, T23 |
 | **Phase 4** | Backlog | T5, T9, T12, T16, T18, T20, T25-T35 |
 
 ---
@@ -36,7 +36,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
 
-### T2: Explicit sandbox termination on timeout/cancellation [Phase 2]
+### T2: Explicit sandbox termination on timeout/cancellation [Phase 3]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
@@ -56,10 +56,12 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Is Temporal heartbeat sufficient, or do we need `spawner.terminate()` (SIGTERM before destroy)?
 
+**Note**: T36 (async streaming) may change the sync HTTP model this task builds on. If T36 is implemented first, T2's heartbeat design should adapt to the streaming architecture. Both tasks add metrics to `temporal_metrics.py` — coordinate with T3.
+
 ### T3: Cleanup failure metrics [Phase 1]
 
 **Status**: Open
-**ARCHITECTURE.md ref**: Security TODO — cleanup failure metrics
+**ARCHITECTURE.md ref**: Observability — cleanup failure metrics
 
 **Problem**: Failed `spawner.destroy()` only logs a warning. Leaked containers invisible in dashboards.
 
@@ -73,22 +75,14 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Sandbox Runtime (source: `sandbox-runtime-gaps.md`)
 
-### T4: Unify runtime HTTP contract — CLOSED
-
-Generic runtime removed. Only one contract exists: `POST /v1/agent/run`.
-
 ### T5: Document runtime input completeness [Phase 4]
 
-**Status**: Open
+**Status**: Nearly done — `LIGHTSPEED_SERVICE_ACCOUNT` missing from config table
 **ARCHITECTURE.md ref**: Sandbox Runtime config table
 
-**What to build**: Doc-only. ARCHITECTURE.md Sandbox Runtime section already updated with MCP and provider env vars. Verify completeness.
+**What to build**: Add `LIGHTSPEED_SERVICE_ACCOUNT` to the config table. Verify no other env vars are missing.
 
-**Effort**: Half day
-
-### T6: Runtime convergence — RESOLVED
-
-Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
+**Effort**: 15 minutes
 
 ---
 
@@ -128,10 +122,6 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 **Effort**: 2-3 weeks
 
-### ~~T10: Tool origin validation allowlist~~ — REMOVED
-
-PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the deleted generic runtime. The Temporal workflow path does not load tool modules — tools are built into the sandbox image or provided via MCP servers.
-
 ---
 
 ## Triggers & Composition (R15, R16)
@@ -145,7 +135,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 **What to build**: Registry auto-generates LLM tool definitions from workflow definitions. Chatbot agent calls `start_diagnostic_workflow(cluster, issue)` as a tool.
 
-**Effort**: 2-3 weeks. Depends on chatbot integration (T12).
+**Effort**: 2-3 weeks. T12 (chatbot trigger) depends on this — not the other way around.
 
 ### T12: Chatbot trigger (R15) [Phase 4]
 
@@ -325,13 +315,9 @@ Schema migration + state compatibility for definition updates.
 
 ### T27: Resumable SSE streaming [Phase 4]
 
-**Status**: Open
+**Status**: Open. Depends on T36 (progress streaming enriches what's streamed; T27 adds reconnection).
 
 Persisted event replay via `Last-Event-ID`.
-
-### ~~T28: Async callback dispatch~~ — REMOVED
-
-PoC1 leftover. Described ephemeral pods POSTing results back to a runner ingest API. In the Temporal architecture, the activity calls the sandbox synchronously via HTTP and collects the result directly. No callback mechanism needed.
 
 ---
 
@@ -378,3 +364,23 @@ Image signing attestation and software bill of materials.
 **Status**: Open (from kubeclaw comparison)
 
 Thin CRD-to-executor bridge for kubectl/GitOps workflows.
+
+---
+
+## Closed / Removed
+
+### T4: Unify runtime HTTP contract — CLOSED
+
+Generic runtime removed. Only one contract exists: `POST /v1/agent/run`.
+
+### T6: Runtime convergence — RESOLVED
+
+Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
+
+### T10: Tool origin validation allowlist — REMOVED
+
+PoC1 leftover. The Temporal workflow path does not load tool modules — tools are built into the sandbox image or provided via MCP servers.
+
+### T28: Async callback dispatch — REMOVED
+
+PoC1 leftover. In the Temporal architecture, the activity calls the sandbox synchronously via HTTP. No callback mechanism needed.

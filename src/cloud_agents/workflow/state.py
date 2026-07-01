@@ -35,24 +35,6 @@ class StepResult(BaseModel):
     completed_at: Optional[str] = None
 
 
-class StepResultPayload(BaseModel):
-    """Payload for the result-ingest endpoint.
-
-    Attributes:
-        status: Step outcome.
-        output: Agent output data.
-        error: Error message on failure.
-        completed_at: ISO timestamp of completion.
-        attempt: Which attempt this callback is for.
-    """
-
-    status: Literal["completed", "failed"]
-    output: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
-    completed_at: str
-    attempt: int
-
-
 class WorkflowState(BaseModel):
     """Full state of a workflow execution.
 
