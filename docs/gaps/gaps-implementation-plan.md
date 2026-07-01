@@ -88,7 +88,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Security & Access Control
 
-### T7: Per-user/team RBAC (R13) [Phase 2]
+### T7: Per-user/team RBAC (R13) [Phase 2] — DONE
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R13 — TODO
@@ -287,7 +287,7 @@ If not set, progress streaming is disabled (opt-in).
 
 ## Operational Readiness
 
-### T17: Prometheus alerting rules [Phase 2]
+### T17: Prometheus alerting rules [Phase 2] — DONE
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -303,7 +303,7 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 1 day
 
-### T19: Circuit breaker for LLM provider [Phase 2]
+### T19: Circuit breaker for LLM provider [Phase 2] — DONE
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -319,7 +319,7 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 2-3 days
 
-### T21: Template interpolation sanitization [Phase 2]
+### T21: Template interpolation sanitization [Phase 2] — DONE
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -343,7 +343,7 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 2-3 days
 
-### T24: Pod disruption budgets [Phase 2]
+### T24: Pod disruption budgets [Phase 2] — DONE
 
 **Status**: Open (from productization-roadmap.md P1)
 
