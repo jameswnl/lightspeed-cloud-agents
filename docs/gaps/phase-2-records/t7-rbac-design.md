@@ -60,12 +60,31 @@ class CallerIdentity(BaseModel):
 
 ```python
 async def get_caller_identity(request: Request) -> CallerIdentity:
-    """FastAPI dependency to extract caller identity from request state."""
+    """FastAPI dependency to extract caller identity from request state.
+
+    Fails closed when authorization is enabled but no identity is present.
+    The "anonymous" identity is only produced by explicit shared-secret auth,
+    never as a fallback for missing request state.
+    """
     identity = getattr(request.state, "caller_identity", None)
-    if identity is None:
-        return CallerIdentity(username="anonymous", auth_mode="shared_secret")
-    return identity
+    if identity is not None:
+        return identity
+
+    # No identity attached — check if this is expected
+    authz_mode = os.environ.get("WORKFLOW_AUTHZ", "none")
+    if authz_mode != "none":
+        # Authorization enabled but no authenticated identity — fail closed
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization is enabled but no caller identity was extracted. "
+            "Ensure authentication is configured correctly.",
+        )
+
+    # Authorization disabled — anonymous is acceptable
+    return CallerIdentity(username="anonymous", auth_mode="shared_secret")
 ```
+
+**Fail-closed rule**: When `WORKFLOW_AUTHZ` is set to anything other than `none`, a missing identity is an error, not a fallback. This prevents accidental anonymous access when auth middleware fails or `AUTH_REQUIRED=false` is misconfigured alongside authz.
 
 ### Layer 1b: Persisted Authorization Context
 
@@ -99,7 +118,16 @@ decision = await authz.authorize(
 )
 ```
 
-**Namespace derivation**: For K8s SA token mode, namespace comes from the ServiceAccount's namespace in the TokenReview response. For Podman/shared secret, namespace is None (no namespace scoping).
+**Namespace derivation**: For K8s SA token mode, namespace is **parsed from** the authenticated ServiceAccount username, which follows the format `system:serviceaccount:{namespace}:{name}`. If the username is not in this format, namespace is None (not a ServiceAccount identity). For Podman/shared secret, namespace is always None (no namespace scoping).
+
+```python
+def _parse_namespace_from_sa_username(username: str) -> str | None:
+    """Extract namespace from K8s ServiceAccount username format."""
+    parts = username.split(":")
+    if len(parts) == 4 and parts[0] == "system" and parts[1] == "serviceaccount":
+        return parts[2]
+    return None
+```
 
 ### Layer 2: Authorization (new)
 
@@ -108,11 +136,14 @@ A new `WorkflowAuthorizer` that checks whether the authenticated identity is all
 ```python
 class WorkflowAction(str, Enum):
     """Actions that can be authorized on workflow resources."""
-    TRIGGER = "trigger"      # Start a workflow
-    APPROVE = "approve"      # Approve/deny a step
-    VIEW = "view"            # View workflow status/events
-    CANCEL = "cancel"        # Cancel a workflow
-    MANAGE_DEFS = "manage"   # Submit/modify definitions
+    # Workflow run actions
+    TRIGGER = "trigger"        # Start a workflow run
+    APPROVE = "approve"        # Approve/deny a step
+    VIEW = "view"              # View workflow run status/events
+    CANCEL = "cancel"          # Cancel a workflow run
+    # Definition actions
+    VIEW_DEFS = "view_defs"    # List/read workflow definitions
+    MANAGE_DEFS = "manage_defs"  # Create/update/delete definitions
 ```
 
 ```python
@@ -359,6 +390,27 @@ def build_temporal_router(
         if not decision.allowed:
             raise HTTPException(403, decision.reason)
         # ... start workflow
+
+    # Definition endpoints — also authorized
+    @router.get("/definitions", ...)
+    async def list_definitions(caller: CallerIdentity = Depends(get_caller_identity)):
+        decision = await authz.authorize(
+            caller, WorkflowAction.VIEW_DEFS,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason)
+        # ... list definitions
+
+    @router.post("/definitions", ...)
+    async def submit_definition(body: dict, caller: CallerIdentity = Depends(get_caller_identity)):
+        decision = await authz.authorize(
+            caller, WorkflowAction.MANAGE_DEFS,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason)
+        # ... save definition
 ```
 
 ### Configuration
