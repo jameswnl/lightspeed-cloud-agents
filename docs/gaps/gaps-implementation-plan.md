@@ -12,6 +12,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7, T17, T19, T21, T24 |
 | **Phase 3** | Strategic / longer-term | T2, T8, T11, T13, T14, T15, T23 |
 | **Phase 4** | Backlog | T5, T9, T12, T16, T18, T20, T25-T35 |
+| **Unphased** | Security & governance (needs prioritization) | T37-T43 |
 
 ---
 
@@ -418,6 +419,102 @@ Image signing attestation and software bill of materials.
 **Status**: Open (from kubeclaw comparison)
 
 Thin CRD-to-executor bridge for kubectl/GitOps workflows.
+
+---
+
+## Security & Governance Hardening
+
+### T37: Secret redaction in logs and error responses [Unphased]
+
+**Status**: Open
+
+**Problem**: `credentials_secret` value is injected as a plain env var on sandbox pods. If a sandbox error response includes environment details or the activity logs the full env dict, secrets leak into logs or API responses. Audit events include `secret_name` but the activity doesn't redact credential values from error paths.
+
+**What to build**:
+- Redact known secret env var values from error responses before returning to callers
+- Redact secret values from log messages in the activity (never log `env_vars` dict raw)
+- Add a test that triggers an error path and asserts no secret values appear in the response or logs
+
+**Effort**: 1 day
+
+### T38: Request body size limits [Unphased]
+
+**Status**: Open
+
+**Problem**: `POST /v1/workflows/run` accepts arbitrarily large definition/prompt payloads. A malicious or misconfigured client could submit a multi-MB definition to exhaust memory or Temporal payload limits.
+
+**What to build**:
+- FastAPI request body size limit (configurable via `MAX_REQUEST_BODY_BYTES`, default 1MB)
+- Return 413 Payload Too Large when exceeded
+- Add test that verifies oversized payload is rejected
+
+**Effort**: Half day
+
+### T39: Sandbox network egress enforcement by default [Unphased]
+
+**Status**: Open
+
+**Problem**: Sandbox containers can make outbound requests to any endpoint, not just the LLM provider. NetworkPolicy exists in Helm but is opt-in (`networkPolicy.egress.enabled: false`). A compromised or malicious agent could exfiltrate data to arbitrary hosts.
+
+**What to build**:
+- Change Helm default to `networkPolicy.egress.enabled: true`
+- Require explicit `llmCidrs` configuration for LLM provider access
+- Document the egress policy in DEMO.md and rbac.md
+- Add a note that Podman deployments need host firewall rules for equivalent protection
+
+**Effort**: Half day (Helm change + docs)
+
+### T40: Prompt injection guardrails [Unphased]
+
+**Status**: Open
+
+**Problem**: Workflow definitions are submitted as arbitrary dicts. Pydantic validates schema but doesn't restrict prompt/instruction content. A malicious prompt could instruct the LLM to exfiltrate data, ignore safety guidelines, or produce harmful output. This is especially relevant when non-admin users can trigger workflows (post-RBAC).
+
+**What to build**:
+- Design decision needed: input-side filtering (reject suspicious prompts) vs output-side filtering (scan agent output) vs both
+- Consider integration with existing guardrail frameworks (pydantic-ai-shields, llm-guard)
+- At minimum: log a warning when prompts contain known injection patterns (e.g., "ignore previous instructions", "system prompt override")
+
+**Effort**: TBD — needs design discussion. Logging-only detection is 1-2 days; full guardrail integration is 1-2 weeks.
+
+### T41: Audit log integrity [Unphased]
+
+**Status**: Open
+
+**Problem**: Audit events go to stdout/stderr via structured logging. No signed audit trail, no tamper-evident log chain, no guaranteed delivery. An operator with log access could modify audit records.
+
+**What to build**:
+- Append audit events to a dedicated audit log file (separate from application logs)
+- Add HMAC signatures or hash chain for tamper detection
+- Optionally: forward audit events to an external audit service (webhook)
+
+**Effort**: 1-2 days for file-based audit log; 1 week for signed/chained logs
+
+### T42: Token rotation and expiry for bearer auth [Unphased]
+
+**Status**: Open
+
+**Problem**: Bearer tokens are static (`AGENT_API_TOKEN` env var). No rotation mechanism, no expiry. A leaked token grants permanent access until the env var is manually changed and the runner restarted.
+
+**What to build**:
+- Support multiple valid tokens (`AGENT_API_TOKENS` comma-separated) for rotation
+- Optional token expiry checking (if tokens include a timestamp or JWT-like structure)
+- Log when a token is rejected to help operators detect leaked token usage
+
+**Effort**: 1 day for multi-token support; 1 week for JWT-based expiry
+
+### T43: Workflow definition content policy [Unphased]
+
+**Status**: Open
+
+**Problem**: RBAC controls who can submit definitions, but not what definitions contain. A user with `manage_defs` permission could submit a definition with instructions that bypass organizational policies (e.g., "ignore safety guidelines", "access all namespaces").
+
+**What to build**:
+- Definition content policy: configurable rules that validate definition content at submission time
+- Examples: max prompt length, blocked instruction patterns, required output_schema fields, namespace restrictions
+- Policy violations return 422 with details
+
+**Effort**: 1-2 days for basic content rules; 1 week for configurable policy engine
 
 ---
 
