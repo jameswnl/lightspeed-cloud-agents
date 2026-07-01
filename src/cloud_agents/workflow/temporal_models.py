@@ -10,6 +10,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from cloud_agents.workflow.authorization import WorkflowAuthzContext
+
 
 class SecretHeaderRef(BaseModel):
     """Reference to a K8s Secret key for an MCP auth header.
@@ -93,6 +95,7 @@ class WorkflowInput(BaseModel):
         skills_image: Optional OCI image for skills.
         skills_paths: Optional subdirectory paths in skills image.
         mcp_servers: Optional MCP servers to inject into sandbox pods.
+        authz_context: Authorization context captured at trigger time.
     """
 
     definition: dict[str, Any]
@@ -107,6 +110,7 @@ class WorkflowInput(BaseModel):
     notifier_config: Optional[dict[str, Any]] = None
     escalation_config: Optional[dict[str, Any]] = None
     mcp_servers: Optional[list[MCPServerConfig]] = None
+    authz_context: Optional[WorkflowAuthzContext] = None
 
 
 class WorkflowOutput(BaseModel):

@@ -60,6 +60,7 @@ class ApproveRequest(BaseModel):
 def build_temporal_router(
     temporal_client: Client,
     auth_dependency: Optional[Any] = None,
+    authorizer: Optional[Any] = None,
     definition_store: Optional[DefinitionStore] = None,
 ) -> APIRouter:
     """Build FastAPI router with Temporal workflow endpoints.
@@ -68,11 +69,22 @@ def build_temporal_router(
         temporal_client: Connected Temporal client instance.
         auth_dependency: Optional FastAPI auth dependency. All endpoints
             require authentication when provided.
+        authorizer: Optional WorkflowAuthorizer for fine-grained access
+            control. Defaults to NoopAuthorizer (permit all).
         definition_store: Optional store for workflow-name resolution.
 
     Returns:
         APIRouter with workflow endpoints.
     """
+    from cloud_agents.workflow.authorization import (
+        NoopAuthorizer,
+        WorkflowAction,
+        WorkflowResource,
+        get_caller_identity,
+    )
+
+    authz = authorizer or NoopAuthorizer()
+
     dependencies = [Depends(auth_dependency)] if auth_dependency else []
     router = APIRouter(
         prefix="/v1/workflows",
@@ -81,8 +93,19 @@ def build_temporal_router(
     )
 
     @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
-    async def run_workflow(request: RunWorkflowRequest) -> dict[str, str]:
+    async def run_workflow(
+        request: RunWorkflowRequest,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, str]:
         """Start a new workflow execution."""
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.TRIGGER,
+            WorkflowResource(workflow_name=request.workflow_name),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         definition = request.definition
 
         if request.workflow_name and not definition:
@@ -135,6 +158,19 @@ def build_temporal_router(
             advisory = False
 
         workflow_id = request.workflow_id or f"wf-{uuid.uuid4().hex[:12]}"
+
+        from cloud_agents.workflow.authorization import (
+            WorkflowAuthzContext,
+            parse_namespace_from_sa_username,
+        )
+
+        authz_ctx = WorkflowAuthzContext(
+            owner_username=caller.username,
+            owner_groups=caller.groups,
+            workflow_name=definition.get("metadata", {}).get("name", ""),
+            namespace=parse_namespace_from_sa_username(caller.username),
+        )
+
         workflow_input = WorkflowInput(
             definition=definition,
             input_prompt=request.input_prompt,
@@ -148,6 +184,7 @@ def build_temporal_router(
             approval_policy=request.approval_policy,
             notifier_config=request.notifier_config,
             escalation_config=request.escalation_config,
+            authz_context=authz_ctx,
         )
 
         try:
@@ -182,8 +219,17 @@ def build_temporal_router(
     if definition_store:
 
         @router.post("/definitions", status_code=status.HTTP_201_CREATED)
-        async def submit_definition(body: dict[str, Any]) -> dict[str, Any]:
+        async def submit_definition(
+            body: dict[str, Any],
+            caller=Depends(get_caller_identity),
+        ) -> dict[str, Any]:
             """Submit a workflow definition to the store."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.MANAGE_DEFS, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
             from cloud_agents.workflow.definition import WorkflowDefinition
 
             defn = WorkflowDefinition.model_validate(body)
@@ -191,14 +237,31 @@ def build_temporal_router(
             return {"name": stored.name, "version": stored.version}
 
         @router.get("/definitions")
-        async def list_definitions() -> list[dict[str, Any]]:
+        async def list_definitions(
+            caller=Depends(get_caller_identity),
+        ) -> list[dict[str, Any]]:
             """List all active workflow definitions."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.VIEW_DEFS, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
             defs = await definition_store.list_all()
             return [{"name": d.name, "version": d.version} for d in defs]
 
         @router.get("/definitions/{name}")
-        async def get_definition(name: str) -> dict[str, Any]:
+        async def get_definition(
+            name: str,
+            caller=Depends(get_caller_identity),
+        ) -> dict[str, Any]:
             """Get a workflow definition by name."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.VIEW_DEFS, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
             stored = await definition_store.get(name)
             if not stored:
                 raise HTTPException(
@@ -215,25 +278,61 @@ def build_temporal_router(
     async def approve_workflow(
         workflow_id: str,
         request: ApproveRequest,
+        caller=Depends(get_caller_identity),
     ) -> dict[str, str]:
         """Send an approval signal to a running workflow."""
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.APPROVE,
+            WorkflowResource(workflow_id=workflow_id, step=request.step_name),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         handle = temporal_client.get_workflow_handle(workflow_id)
         await handle.signal(
             AgentWorkflow.approve,
             args=[request.step_name, request.decision, request.selected_option_id],
         )
+
+        from datetime import UTC, datetime
+
+        from cloud_agents.workflow.authorization import ApproverInfo
+
+        approver = ApproverInfo(
+            username=caller.username,
+            uid=caller.uid,
+            approved_at=datetime.now(tz=UTC).isoformat(),
+        )
+
         event_type = "step_approved" if request.decision == "approved" else "step_denied"
         emit_audit(
             event_type=event_type,
             workflow_id=workflow_id,
             step_name=request.step_name,
-            details={"decision": request.decision, "selected_option_id": request.selected_option_id},
+            actor=caller.username,
+            details={
+                "decision": request.decision,
+                "selected_option_id": request.selected_option_id,
+                "approver": approver.model_dump(),
+            },
         )
         return {"status": "signal_sent"}
 
     @router.get("/{workflow_id}")
-    async def get_workflow_status(workflow_id: str) -> dict[str, Any]:
+    async def get_workflow_status(
+        workflow_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, Any]:
         """Query the current workflow status."""
+        view_decision = await authz.authorize(
+            caller,
+            WorkflowAction.VIEW,
+            WorkflowResource(workflow_id=workflow_id),
+        )
+        if not view_decision.allowed:
+            raise HTTPException(status_code=403, detail=view_decision.reason)
+
         handle = temporal_client.get_workflow_handle(workflow_id)
         status_result = await handle.query(AgentWorkflow.get_status)
         if hasattr(status_result, "model_dump"):
@@ -241,8 +340,19 @@ def build_temporal_router(
         return {"steps": {}, "events": []}
 
     @router.get("/{workflow_id}/events")
-    async def get_workflow_events(workflow_id: str) -> StreamingResponse:
+    async def get_workflow_events(
+        workflow_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> StreamingResponse:
         """Stream workflow events via SSE, polling status every second."""
+        events_decision = await authz.authorize(
+            caller,
+            WorkflowAction.VIEW,
+            WorkflowResource(workflow_id=workflow_id),
+        )
+        if not events_decision.allowed:
+            raise HTTPException(status_code=403, detail=events_decision.reason)
+
         handle = temporal_client.get_workflow_handle(workflow_id)
         seen_count = 0
 
@@ -282,8 +392,19 @@ def build_temporal_router(
         )
 
     @router.post("/{workflow_id}/cancel")
-    async def cancel_workflow(workflow_id: str) -> dict[str, str]:
+    async def cancel_workflow(
+        workflow_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, str]:
         """Cancel a running workflow."""
+        cancel_decision = await authz.authorize(
+            caller,
+            WorkflowAction.CANCEL,
+            WorkflowResource(workflow_id=workflow_id),
+        )
+        if not cancel_decision.allowed:
+            raise HTTPException(status_code=403, detail=cancel_decision.reason)
+
         handle = temporal_client.get_workflow_handle(workflow_id)
         await handle.cancel()
         return {"status": "cancelled"}

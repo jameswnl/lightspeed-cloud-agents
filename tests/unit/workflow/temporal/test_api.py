@@ -635,3 +635,250 @@ class TestAuthEnforcement:
         assert client.post("/v1/workflows/wf-1/approve", json={}).status_code == 401
         assert client.get("/v1/workflows/wf-1").status_code == 401
         assert client.post("/v1/workflows/wf-1/cancel").status_code == 401
+
+
+# -- Helpers for authorization tests -------------------------------------------
+
+VALID_RUN_PAYLOAD: dict[str, Any] = {
+    "definition": {
+        "apiVersion": "v1",
+        "kind": "AgentWorkflow",
+        "metadata": {"name": "test-wf"},
+        "spec": {
+            "steps": [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "output_key": "r1",
+                    "prompt": "test",
+                }
+            ]
+        },
+    },
+    "provider": {
+        "name": "openai",
+        "model": "gpt-4",
+        "credentials_secret": "key",
+    },
+}
+
+
+def _make_deny_all_authorizer():
+    """Create an authorizer that denies all requests."""
+    from cloud_agents.workflow.authorization import (
+        AuthzDecision,
+        CallerIdentity,
+        WorkflowAction,
+        WorkflowAuthorizer,
+        WorkflowResource,
+    )
+
+    class DenyAllAuthorizer(WorkflowAuthorizer):
+        """Authorizer that denies all actions for testing."""
+
+        async def authorize(
+            self,
+            identity: CallerIdentity,
+            action: WorkflowAction,
+            resource: WorkflowResource,
+        ) -> AuthzDecision:
+            """Deny all actions."""
+            return AuthzDecision(allowed=False, reason="denied by test")
+
+    return DenyAllAuthorizer()
+
+
+def _build_deny_app(mock_temporal: Any, definition_store=None) -> FastAPI:
+    """Build a FastAPI app with a deny-all authorizer."""
+    app = FastAPI()
+    router = build_temporal_router(
+        mock_temporal,
+        authorizer=_make_deny_all_authorizer(),
+        definition_store=definition_store,
+    )
+    app.include_router(router)
+    return app
+
+
+class TestAuthorizationWiring:
+    """Tests for authorization checks wired into all API endpoints."""
+
+    def test_unauthorized_trigger_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Trigger with deny-all authorizer returns 403."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+
+        app = _build_deny_app(mock_temporal)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 403
+        assert "denied by test" in response.json()["detail"]
+
+    def test_authorized_trigger_succeeds(
+        self,
+        mock_client: Any,
+    ) -> None:
+        """Trigger with NoopAuthorizer (default) succeeds -- backward compatible."""
+        app = FastAPI()
+        router = build_temporal_router(mock_client)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 202
+        assert "workflow_id" in response.json()
+
+    def test_unauthorized_approve_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Approve with deny-all authorizer returns 403."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = _build_deny_app(mock_temporal)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/workflows/wf-test-1/approve",
+            json={"step_name": "s1", "decision": "approved"},
+        )
+        assert response.status_code == 403
+        assert "denied by test" in response.json()["detail"]
+
+    def test_unauthorized_view_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /{workflow_id} with deny-all authorizer returns 403."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = _build_deny_app(mock_temporal)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.get("/v1/workflows/wf-test-1")
+        assert response.status_code == 403
+
+    def test_unauthorized_cancel_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /{workflow_id}/cancel with deny-all authorizer returns 403."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = _build_deny_app(mock_temporal)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/wf-test-1/cancel")
+        assert response.status_code == 403
+
+    def test_unauthorized_definitions_get_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /definitions with deny-all authorizer returns 403."""
+        from cloud_agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = DefinitionStore()
+
+        app = _build_deny_app(mock_temporal, definition_store=store)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.get("/v1/workflows/definitions")
+        assert response.status_code == 403
+
+    def test_unauthorized_definitions_post_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /definitions with deny-all authorizer returns 403."""
+        from cloud_agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = DefinitionStore()
+
+        app = _build_deny_app(mock_temporal, definition_store=store)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "test"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "agent": "diag",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "spawn": "pre-deployed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert response.status_code == 403
+
+    def test_authz_context_captured_at_trigger(
+        self,
+        mock_client: Any,
+    ) -> None:
+        """WorkflowInput includes authz_context with owner identity."""
+        app = FastAPI()
+        router = build_temporal_router(mock_client)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 202
+
+        call_args = mock_client.start_workflow.call_args
+        wf_input = call_args[0][1]  # second positional arg
+        assert wf_input.authz_context is not None
+        assert wf_input.authz_context.owner_username == "anonymous"
+        assert wf_input.authz_context.workflow_name == "test-wf"
+
+    def test_approver_identity_in_audit(
+        self,
+        mocker: MockerFixture,
+        mock_client: Any,
+    ) -> None:
+        """Approval emits audit event with approver identity."""
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+
+        app = FastAPI()
+        router = build_temporal_router(mock_client)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        test_client.post(
+            "/v1/workflows/wf-test-1/approve",
+            json={"step_name": "approve-step", "decision": "approved"},
+        )
+
+        approved_calls = [
+            c
+            for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "step_approved"
+        ]
+        assert len(approved_calls) == 1
+        details = approved_calls[0][1]["details"]
+        assert "approver" in details
+        approver = details["approver"]
+        assert approver["username"] == "anonymous"
+        assert "approved_at" in approver
