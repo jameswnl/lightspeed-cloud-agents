@@ -8,11 +8,24 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 | Phase | Focus | Tasks |
 |-------|-------|-------|
-| **Phase 1** | High value, enables other work | T1, T3, T22, T36 |
-| **Phase 2** | Production hardening | T7, T17, T19, T21, T24 |
-| **Phase 3** | Strategic / longer-term | T2, T8, T11, T13, T14, T15, T23 |
-| **Phase 4** | Backlog | T5, T9, T12, T16, T18, T20, T25-T35 |
-| **Unphased** | Security & governance (needs prioritization) | T37-T43 |
+| **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
+| **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
+| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43 |
+| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23 |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36 |
+| **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
+
+### Immediate actions (before Phase 3a)
+1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
+2. **Add advisory tool enforcement for T1** — runner-side response validation as interim while waiting on sandbox upstream
+
+### Phase 3/4 prerequisites (design before building)
+3. **Auth evolution design doc** — unified design for T8, T36, T42 before any are implemented
+4. **Sandbox team alignment on T36 contract** — longest lead-time cross-team dependency
+5. **T11 scope narrowing** — solve sync/async for one workflow before auto-generation
+6. **T15 scope narrowing** — "generate launch command" (days) not "launch session" (weeks)
+7. **T2/T36 ordering** — resolve before implementing either
+8. **T8/T9: accept K8s-only** — no Podman equivalent for SA identity/dynamic RBAC
 
 ---
 
@@ -37,7 +50,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
 
-### T2: Explicit sandbox termination on timeout/cancellation [Phase 3]
+### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
@@ -57,7 +70,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Is Temporal heartbeat sufficient, or do we need `spawner.terminate()` (SIGTERM before destroy)?
 
-**Note**: T36 (async streaming) may change the sync HTTP model this task builds on. If T36 is implemented first, T2's heartbeat design should adapt to the streaming architecture. Both tasks add metrics to `temporal_metrics.py` — coordinate with T3.
+**⚠ ORDERING CONFLICT with T36**: T36 may change the sync HTTP model this task builds on. Resolve ordering before implementing either. If T36 ships first, T2's heartbeat design should adapt to the streaming side channel.
 
 ### T3: Cleanup failure metrics [Phase 1] — DONE
 
@@ -103,7 +116,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Effort**: 1-2 weeks
 
-### T8: Per-sandbox identity binding [Phase 3]
+### T8: Per-sandbox identity binding [Phase 4]
 
 **Status**: Open
 
@@ -111,9 +124,16 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **What to build**: Generate scoped ServiceAccounts per sandbox spawn; verify identity matches the specific sandbox when results are returned.
 
-**Effort**: 1-2 weeks
+**Effort**: 3-4 weeks (revised up from 1-2 weeks)
 
-### T9: Dynamic RBAC from agent output [Phase 4]
+**⚠ BLOCKER RISKS**:
+- K8s SA lifecycle: 2 extra creates + 2 extra deletes per step; multiplies with parallel workflows
+- Cleanup on failure: SA + RoleBinding orphaned if Job creation fails. Current orphan reconciliation only finds Jobs, not RBAC resources — needs extension.
+- Token propagation timing: projected SA tokens need pod running before token available
+- **K8s-only**: No Podman equivalent — accept feature divergence
+- **Prerequisite**: Auth evolution design doc (shared with T36, T42)
+
+### T9: Dynamic RBAC from agent output [Phase 5]
 
 **Status**: Open (from operator comparison Gap 4)
 
@@ -121,13 +141,21 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **What to build**: After analysis step, read `rbac` field from output, create per-proposal Roles/RoleBindings, clean up on completion.
 
-**Effort**: 2-3 weeks
+**Effort**: 4-6 weeks (revised up from 2-3 weeks)
+
+**⚠ BLOCKER RISKS**:
+- Requires controller-like lifecycle management without K8s controller machinery
+- Runner needs elevated RBAC (create Roles/RoleBindings) — expands security surface
+- Cleanup depends on `finally` blocks which have known reliability issues
+- Sandbox response schema has no `rbac` field yet
+- **K8s-only**: No Podman equivalent
+- **Prerequisite**: T8 (per-sandbox identity) should be done first
 
 ---
 
 ## Triggers & Composition (R15, R16)
 
-### T11: Agents-as-tools (R16) [Phase 3]
+### T11: Agents-as-tools (R16) [Phase 4]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R16 — TODO
@@ -136,9 +164,15 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **What to build**: Registry auto-generates LLM tool definitions from workflow definitions. Chatbot agent calls `start_diagnostic_workflow(cluster, issue)` as a tool.
 
-**Effort**: 2-3 weeks. T12 (chatbot trigger) depends on this — not the other way around.
+**Effort**: 4-6 weeks (revised up from 2-3 weeks)
 
-### T12: Chatbot trigger (R15) [Phase 4]
+**⚠ BLOCKER RISKS**:
+- **Sync/async impedance mismatch**: LLM tool calls expect synchronous responses. Temporal workflows are async (approvals, retries, minutes-long). Options: block (ties up LLM context), poll (breaks tool patterns), restrict to fast auto-approved workflows only. None solved yet.
+- **Schema translation**: WorkflowInput has 13 fields — which become tool parameters? Mapping is non-obvious and different per workflow.
+- **No consumer without T12**: T12 depends on T11, but T11 needs T12 to be useful. T12 depends on LCS integration (external team).
+- **Scope recommendation**: Start with manually-registered tools for one specific workflow, not auto-generation. Solve the async pattern first.
+
+### T12: Chatbot trigger (R15) [Phase 5]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -149,7 +183,9 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Effort**: TBD — depends on LCS integration scope
 
-### T13: Alert trigger (R15) [Phase 3]
+**⚠ DOUBLE-BLOCKED**: Depends on T11 (itself a blocker with sync/async unsolved) AND on LCS integration (external team, unknown scope). Don't plan until T11 is complete and LCS integration surface is documented.
+
+### T13: Alert trigger (R15) [Phase 3b]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -160,7 +196,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Effort**: 1 week
 
-### T14: Schedule trigger (R15) [Phase 3]
+### T14: Schedule trigger (R15) [Phase 3b]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -175,16 +211,18 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Escalation & Handoff (R17)
 
-### T15: Interactive CLI handoff (R5, R17) [Phase 3]
+### T15: Interactive CLI handoff (R5, R17) [Phase 4]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R17 — TODO; Design Principle R5 — TODO
 
 **Problem**: Escalation packages context but doesn't hand off to an interactive CLI session.
 
-**What to build**: Escalation package → Claude Code / Goose session with pre-loaded workflow context (diagnosis, steps taken, failure history, tools, cluster state).
+**What to build**: Start with "generate a launch command with pre-loaded context" — a serialized context package that a human can load into Claude Code or Goose. NOT launching an interactive session programmatically (that's weeks with security implications).
 
-**Effort**: 1-2 weeks
+**Effort**: 2-3 days for launch command generation; 3-4 weeks for interactive session (deferred)
+
+**Scope recommendation**: Phase 1 of T15 = context serialization + launch command. Phase 2 = interactive session lifecycle. Ship the useful part first.
 
 ### T16: Conversational approval [Phase 4]
 
@@ -200,7 +238,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Agent Progress Streaming
 
-### T36: Stream agent work-in-progress to callers [Phase 1]
+### T36: Stream agent work-in-progress to callers [Phase 4]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Observability; Sandbox Runtime
@@ -336,7 +374,7 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 1 day
 
-### T23: Rate limiting [Phase 3]
+### T23: Rate limiting [Phase 3b]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -356,11 +394,13 @@ If not set, progress streaming is disabled (opt-in).
 
 ## Workflow Features (from BACKLOG.md)
 
-### T25: Nested workflows [Phase 4]
+### T25: Nested workflows [Phase 5]
 
 **Status**: Open
 
 Workflow-to-workflow composition (recursive execution).
+
+**⚠ HIDDEN COMPLEXITY**: Temporal supports child workflows, but Cloud Agents routes everything through `run_sandbox_step`. Nested workflow either bypasses sandbox (new step type needed) or creates circular dependency (sandbox calls back to runner API). Resource exhaustion risk: 3-step nesting 3-step = 6+ pods, `MAX_SPAWNED_PODS` is global with no per-workflow budget. Approval propagation undefined: if nested workflow hits approval gate, does parent block?
 
 ### T26: Workflow versioning and rollback [Phase 4]
 
@@ -414,17 +454,19 @@ Image signing attestation and software bill of materials.
 
 2-replica workflow runner deployment with Temporal. Test: start workflow on replica A, kill replica A, verify Temporal re-dispatches activities to replica B and workflow completes.
 
-### T35: CRD-based K8s operator [Phase 4]
+### T35: CRD-based K8s operator [Phase 5]
 
 **Status**: Open (from kubeclaw comparison)
 
-Thin CRD-to-executor bridge for kubectl/GitOps workflows.
+**Effort**: 6-8 weeks (revised up — "thin bridge" is an iceberg)
+
+**⚠ MASSIVELY UNDERESTIMATED**: The existing agentic operator has 15+ type files, reconcilers, finalizers, owner references, CEL validation, and e2e tests. A "bridge" still needs CRD types (Go structs, deepcopy, generated manifests), reconciler, status sync (Temporal state → CRD status), cleanup via finalizers, and RBAC mapping. Consider whether the existing `lightspeed-agentic-operator` could be refactored to call the Cloud Agents API instead of reimplementing.
 
 ---
 
 ## Security & Governance Hardening
 
-### T37: Secret redaction in logs and error responses [Unphased]
+### T37: Secret redaction in logs and error responses [Phase 3a]
 
 **Status**: Open
 
@@ -433,11 +475,12 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 **What to build**:
 - Redact known secret env var values from error responses before returning to callers
 - Redact secret values from log messages in the activity (never log `env_vars` dict raw)
+- Track which env vars contain secrets through spawner into activity error handler
 - Add a test that triggers an error path and asserts no secret values appear in the response or logs
 
-**Effort**: 1 day
+**Effort**: 2-3 days (revised up from 1 day — secret tracking through spawner is non-trivial)
 
-### T38: Request body size limits [Unphased]
+### T38: Request body size limits [Phase 3a]
 
 **Status**: Open
 
@@ -450,7 +493,7 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 
 **Effort**: Half day
 
-### T39: Sandbox network egress enforcement by default [Unphased]
+### T39: Sandbox network egress enforcement by default [Phase 3a]
 
 **Status**: Open
 
@@ -464,7 +507,7 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 
 **Effort**: Half day (Helm change + docs)
 
-### T40: Prompt injection guardrails [Unphased]
+### T40: Prompt injection guardrails [Phase 5]
 
 **Status**: Open
 
@@ -477,7 +520,7 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 
 **Effort**: TBD — needs design discussion. Logging-only detection is 1-2 days; full guardrail integration is 1-2 weeks.
 
-### T41: Audit log integrity [Unphased]
+### T41: Audit log integrity [Phase 5]
 
 **Status**: Open
 
@@ -490,7 +533,7 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 
 **Effort**: 1-2 days for file-based audit log; 1 week for signed/chained logs
 
-### T42: Token rotation and expiry for bearer auth [Unphased]
+### T42: Token rotation and expiry for bearer auth [Phase 3a]
 
 **Status**: Open
 
@@ -503,7 +546,7 @@ Thin CRD-to-executor bridge for kubectl/GitOps workflows.
 
 **Effort**: 1 day for multi-token support; 1 week for JWT-based expiry
 
-### T43: Workflow definition content policy [Unphased]
+### T43: Workflow definition content policy [Phase 3a]
 
 **Status**: Open
 
