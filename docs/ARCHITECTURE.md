@@ -55,7 +55,7 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 | R10 | Deployment | Done | K8s Jobs, Podman containers, Helm chart |
 | R11 | Persistence | Done | Temporal Server provides durable execution and state |
 | R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering TODO ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) |
-| R13 | Access control | TODO | Per-user/team RBAC ([T7](gaps/gaps-implementation-plan.md#t7-per-userteam-rbac-r13)) |
+| R13 | Access control | Done | Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). See [rbac.md](rbac.md) |
 | R14 | Observability | Done | OTel tracing, Prometheus metrics, structured logging, health probes, audit events |
 | R15 | Triggers | Partial | API trigger done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)), alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) TODO |
 | R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions ([T11](gaps/gaps-implementation-plan.md#t11-agents-as-tools-r16)) |
@@ -153,7 +153,7 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 **TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
 - Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
 - Advisory mode tool filtering (blocked on T1)
-- Per-user RBAC ([T7](gaps/gaps-implementation-plan.md#t7-per-userteam-rbac-r13))
+- Per-user RBAC — implemented via PolicyFileAuthorizer. K8s SAR backend deferred. See [rbac.md](rbac.md)
 - Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
 - Cleanup failure metrics ([T3](gaps/gaps-implementation-plan.md#t3-cleanup-failure-metrics))
 
