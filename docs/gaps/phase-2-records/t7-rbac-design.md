@@ -188,7 +188,7 @@ Authorization rules defined in a YAML policy file, loaded at startup. Works on b
 # workflow-policy.yaml
 rules:
   - identity: "team:sre"
-    actions: [trigger, approve, cancel, view, manage]
+    actions: [trigger, approve, cancel, view, manage_defs, view_defs]
     workflows: ["*"]
 
   - identity: "team:developers"
@@ -209,7 +209,7 @@ defaults:
   # Actions allowed for any authenticated user
   allow: [view]
   # Actions that require explicit rule match
-  deny_unless_matched: [trigger, approve, cancel, manage]
+  deny_unless_matched: [trigger, approve, cancel, manage_defs]
 ```
 
 ```python
