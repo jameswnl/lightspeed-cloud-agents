@@ -211,3 +211,22 @@ class TestMCPModels:
             ),
         )
         assert wi.mcp_servers is None
+
+
+class TestProviderConfigModelProvider:
+    """Tests for model_provider field on ProviderConfig."""
+
+    def test_accepts_model_provider(self) -> None:
+        """ProviderConfig accepts optional model_provider field."""
+        cfg = ProviderConfig(
+            name="openai",
+            model="gpt-4",
+            credentials_secret="k",
+            model_provider="anthropic",
+        )
+        assert cfg.model_provider == "anthropic"
+
+    def test_defaults_none(self) -> None:
+        """model_provider defaults to None when not provided."""
+        cfg = ProviderConfig(name="openai", model="gpt-4", credentials_secret="k")
+        assert cfg.model_provider is None

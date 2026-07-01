@@ -32,3 +32,14 @@ ls_workflow_step_duration_seconds = Histogram(
     ["step_name"],
     buckets=(1, 5, 10, 30, 60, 120, 300, 600),
 )
+
+ls_sandbox_cleanup_failures_total = Counter(
+    "ls_sandbox_cleanup_failures_total",
+    "Number of sandbox containers that failed to be destroyed",
+    ["step_name"],
+)
+
+ls_sandbox_orphans_cleaned_total = Counter(
+    "ls_sandbox_orphans_cleaned_total",
+    "Number of orphaned sandbox containers cleaned up on startup",
+)

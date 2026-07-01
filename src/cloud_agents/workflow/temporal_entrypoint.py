@@ -110,7 +110,9 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
     if orphans:
         logger.info("Cleaned up %d orphaned sandbox(es) on startup", len(orphans))
         from cloud_agents.workflow.audit import emit_audit
+        from cloud_agents.workflow.temporal_metrics import ls_sandbox_orphans_cleaned_total
 
+        ls_sandbox_orphans_cleaned_total.inc(len(orphans))
         emit_audit(
             event_type="orphan_cleanup",
             workflow_id="startup",

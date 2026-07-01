@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pytest_mock import MockerFixture
 
@@ -1048,6 +1050,449 @@ class TestOutputSchemaForwarding:
         post_call = mock_client_instance.post.call_args
         body = post_call[1]["json"]
         assert body["outputSchema"] == schema
+
+
+class TestModelProviderDerivation:
+    """Tests for per-workflow model_provider derivation."""
+
+    @pytest.mark.asyncio
+    async def test_model_provider_from_provider_config(
+        self, mocker: MockerFixture
+    ) -> None:
+        """model_provider in ProviderConfig sets LIGHTSPEED_MODEL_PROVIDER env var on pod."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                    "model_provider": "anthropic",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_model_provider_fallback_to_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No model_provider in config falls back to os.environ LIGHTSPEED_MODEL_PROVIDER."""
+        mocker.patch.dict(
+            "os.environ",
+            {"LIGHTSPEED_MODEL_PROVIDER": "openai"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "openai"
+
+    @pytest.mark.asyncio
+    async def test_model_provider_overrides_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """model_provider in config overrides os.environ value."""
+        mocker.patch.dict(
+            "os.environ",
+            {"LIGHTSPEED_MODEL_PROVIDER": "openai"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                    "model_provider": "anthropic",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_no_model_provider_anywhere(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No model_provider in config or env means not in env_vars."""
+        mocker.patch.dict(
+            "os.environ",
+            {},
+            clear=False,
+        )
+        # Ensure LIGHTSPEED_MODEL_PROVIDER is not in env
+        os.environ.pop("LIGHTSPEED_MODEL_PROVIDER", None)
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert "LIGHTSPEED_MODEL_PROVIDER" not in env_vars
+
+
+class TestPermissionScopeForwarding:
+    """Tests that allowed_tools/denied_tools are forwarded to sandbox POST body."""
+
+    @pytest.mark.asyncio
+    async def test_allowed_tools_forwarded_to_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """allowed_tools in step permissions -> allowedTools in sandbox POST body."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "permissions": {
+                        "allowed_tools": ["list_hosts", "check_host"],
+                    },
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert body["allowedTools"] == ["list_hosts", "check_host"]
+
+    @pytest.mark.asyncio
+    async def test_denied_tools_forwarded_to_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """denied_tools in step permissions -> deniedTools in sandbox POST body."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "permissions": {
+                        "denied_tools": ["run_remediation"],
+                    },
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert body["deniedTools"] == ["run_remediation"]
+
+    @pytest.mark.asyncio
+    async def test_both_allowed_and_denied_forwarded(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Both fields forwarded when both present."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "permissions": {
+                        "allowed_tools": ["list_hosts"],
+                        "denied_tools": ["run_remediation"],
+                    },
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert body["allowedTools"] == ["list_hosts"]
+        assert body["deniedTools"] == ["run_remediation"]
+
+    @pytest.mark.asyncio
+    async def test_no_permissions_no_tool_fields(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No permissions -> no allowedTools/deniedTools in body."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert "allowedTools" not in body
+        assert "deniedTools" not in body
+
+    @pytest.mark.asyncio
+    async def test_permissions_without_tools_no_tool_fields(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Permissions with only service_account -> no tool fields in body."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "s1",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "permissions": {"service_account": "sa"},
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        post_call = mock_client_instance.post.call_args
+        body = post_call[1]["json"]
+        assert "allowedTools" not in body
+        assert "deniedTools" not in body
 
 
 class TestAuditEmission:

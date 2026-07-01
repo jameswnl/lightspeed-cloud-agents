@@ -93,8 +93,11 @@ async def _run_sandbox_step_inner(
         "LIGHTSPEED_PROVIDER": provider["name"],
         "LIGHTSPEED_MODEL": provider["model"],
     }
+    if model_provider := provider.get("model_provider"):
+        env_vars["LIGHTSPEED_MODEL_PROVIDER"] = model_provider
+    elif val := os.environ.get("LIGHTSPEED_MODEL_PROVIDER"):
+        env_vars["LIGHTSPEED_MODEL_PROVIDER"] = val
     for deploy_var in (
-        "LIGHTSPEED_MODEL_PROVIDER",
         "LIGHTSPEED_PROVIDER_URL",
         "LIGHTSPEED_PROVIDER_PROJECT",
         "LIGHTSPEED_PROVIDER_REGION",
@@ -209,6 +212,10 @@ async def _run_sandbox_step_inner(
             request_body["systemPrompt"] = instructions
         if output_schema := step.get("output_schema"):
             request_body["outputSchema"] = output_schema
+        if permissions.get("allowed_tools"):
+            request_body["allowedTools"] = permissions["allowed_tools"]
+        if permissions.get("denied_tools"):
+            request_body["deniedTools"] = permissions["denied_tools"]
 
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             response = await client.post(
@@ -253,6 +260,8 @@ async def _run_sandbox_step_inner(
                 )
             except Exception:
                 logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
+                from cloud_agents.workflow.temporal_metrics import ls_sandbox_cleanup_failures_total
+                ls_sandbox_cleanup_failures_total.labels(step_name=step_name).inc()
 
 
 @activity.defn

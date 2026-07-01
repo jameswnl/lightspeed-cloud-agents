@@ -46,11 +46,13 @@ class ProviderConfig(BaseModel):
         name: Provider identifier (claude, openai, gemini).
         model: Model name or ID.
         credentials_secret: K8s Secret name or Podman env var name.
+        model_provider: Optional model provider override for the sandbox pod.
     """
 
     name: Literal["claude", "openai", "gemini"]
     model: str
     credentials_secret: str
+    model_provider: str | None = None
 
 
 class SkillsConfig(BaseModel):
