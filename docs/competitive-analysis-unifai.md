@@ -98,6 +98,30 @@ plan:
     node: final_answer_node
 ```
 
+## Combined lightspeed-stack + cloud-agents vs UnifAI
+
+lightspeed-cloud-agents is not a standalone product — it augments **lightspeed-stack**, which already provides:
+- **RAG pipeline** — knowledge ingestion, conversation cache, retrieval
+- **Conversational API** — `/query` and `/streaming_query` endpoints
+- **LLM provider abstraction** — multi-provider support (OpenAI, Vertex, Bedrock, local models)
+- **Authentication** — K8s, JWK, RHSSO, noop strategies
+- **Quota management** — token usage tracking, rate limiting
+- **A2A protocol support** — agent-to-agent communication
+
+Together, the stack covers the same functional surface as UnifAI:
+
+| Capability | UnifAI (monolith) | lightspeed-stack + cloud-agents (modular) |
+|-----------|-------------------|------------------------------------------|
+| RAG pipeline | Built-in (Qdrant + Celery) | lightspeed-stack (pluggable backends) |
+| Conversational API | Flask endpoints | lightspeed-stack /query |
+| Agent workflows | Multi-Agent System | cloud-agents (Temporal) |
+| Approval gates | None | cloud-agents (first-class) |
+| Auth/SSO | Keycloak | lightspeed-stack (K8s, JWK, RHSSO) |
+| LLM providers | OpenAI, Gemini | lightspeed-stack (OpenAI, Vertex, Bedrock, local) |
+| Deployment | K8s only (5 services) | K8s + Podman (modular — deploy what you need) |
+
+The key difference: UnifAI is a monolith where everything is coupled. lightspeed-stack is modular — teams that don't need cloud agents don't install it. Teams that don't need RAG skip that module. This is an architectural advantage for large organizations with varied needs.
+
 ## What UnifAI Lacks (Our Strengths)
 
 1. **No explicit approval gates** — workplan has pending steps but no pause/signal/approve mechanism. No approval identity capture or audit trail.
@@ -109,8 +133,8 @@ plan:
 
 ## Strategic Takeaways
 
-### 1. Don't compete on breadth
-UnifAI is a platform (UI + RAG + collaboration + admin). We're a workflow engine. Trying to match their feature breadth would take 6+ months and still be behind.
+### 1. We already match on breadth (via lightspeed-stack)
+UnifAI bundles everything in one monolith. lightspeed-stack + cloud-agents covers the same surface modularly: RAG, conversational API, auth, LLM providers (stack) + workflow engine, approval gates, ephemeral execution (cloud-agents). The modular approach is an advantage — teams deploy only what they need.
 
 ### 2. Double down on differentiators
 - **Approval gates + governance** — our human-in-the-loop story is stronger
@@ -129,4 +153,4 @@ UnifAI is a platform (UI + RAG + collaboration + admin). We're a workflow engine
 
 **UnifAI**: Enterprise platform for building and running multi-agent AI workflows with visual UI, built-in RAG, and team collaboration.
 
-Different products for different buyers. We sell to platform/security teams who need governed agent execution. They sell to AI teams who need a complete agent development platform.
+Similar scope, different architecture. lightspeed-stack + cloud-agents is modular (deploy what you need); UnifAI is monolithic (deploy everything). Both target enterprise AI teams. Our edge: governance (approval gates, audit trail, ephemeral isolation), deployment flexibility (K8s + Podman), and modular adoption. Their edge: visual UI, real-time streaming, team collaboration features.
