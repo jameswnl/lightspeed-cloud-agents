@@ -2,6 +2,7 @@
 
 **Tasks**: T1, T3, T22, T36
 **Focus**: High value, enables other work
+**Reviewed by**: `implementation-plan-review-round-1.md` — 5 findings addressed below
 
 ---
 
@@ -50,7 +51,9 @@ TestPermissionScopeForwarding:
    - Assert request_body does NOT contain allowedTools or deniedTools
 ```
 
-**What this does NOT test**: Whether the sandbox actually enforces the tool filtering. That's a sandbox-side concern (upstream). This tests that the workflow engine forwards the configuration correctly.
+**Scope**: Phase 1 delivers runner-side forwarding only. This is a prerequisite for per-step tool scoping, NOT the complete security gap closure. The sandbox must also consume and enforce `allowedTools`/`deniedTools` — that is a separate upstream task. The parent implementation plan (T1) should remain open until end-to-end enforcement is verified.
+
+**What Phase 1 does NOT deliver**: Sandbox-side tool filtering enforcement. A denied tool will appear in the request body but may still be callable by the agent until the sandbox implements enforcement.
 
 ### Effort: Half day
 
@@ -213,116 +216,189 @@ TestModelProviderDerivation:
 
 Add a side-channel streaming path so callers can see agent LLM tokens, tool calls, and intermediate results during step execution — not just workflow-level events.
 
-### Design decision needed first
+### Design decisions
 
-**Which side channel?** Options:
+**Side channel**: Option A (direct callback from sandbox to runner). The sandbox POSTs progress events to a callback URL. Simplest, no extra infra.
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **A: Direct SSE from sandbox to runner** | Simple, no infra. Sandbox opens an SSE connection to runner's progress endpoint. | Requires sandbox → runner network path (exists in both K8s and Podman). Sandbox needs to know runner URL. |
-| **B: Redis pubsub** | Decoupled. Runner subscribes to `workflow:{id}:progress`. | Requires Redis deployment. |
-| **C: Activity-side polling** | Activity polls sandbox's progress endpoint and forwards to a shared store. | Adds latency, defeats purpose of streaming. |
+**Statelessness scope**: Phase 1 uses an in-memory `ProgressStore` in the runner process. This means:
+- Progress streaming only works with a single runner replica
+- Runner restart drops in-flight progress events
+- SSE clients must connect to the same replica that spawned the sandbox
 
-**Recommendation**: Option A (direct SSE). The sandbox already has network access to the runner (same network/namespace). The activity passes a `progressUrl` in the request body. The sandbox POSTs progress events there. The runner's SSE endpoint reads from an in-memory buffer keyed by workflow_id.
+This is explicitly a **single-runner stepping stone**. Multi-replica streaming (via Redis or external event store) is deferred to a future phase. The plan must not claim multi-replica support.
 
-### Code changes (Option A)
+**Callback addressing**: The runner's callback base URL is configured via `WORKFLOW_RUNNER_CALLBACK_URL` env var. The activity derives per-step progress endpoints from it:
+- K8s: `http://workflow-runner.{namespace}.svc:8080` (Service DNS)
+- Podman: `http://workflow-runner:8080` (container DNS on shared network)
+- Dev: `http://localhost:8080`
 
-**`src/cloud_agents/workflow/temporal_api.py`** — add progress ingestion endpoint:
-```python
-@router.post("/{workflow_id}/progress")
-async def ingest_progress(workflow_id: str, event: dict):
-    """Receive progress events from sandbox containers."""
-    progress_store.append(workflow_id, event)
-```
+If `WORKFLOW_RUNNER_CALLBACK_URL` is not set, progress streaming is disabled (no `progressUrl` in request body). This makes it opt-in.
+
+**Callback authentication**: Each sandbox spawn generates a per-step callback token (random UUID). The token is:
+1. Passed to the sandbox in the request body as `progressToken`
+2. Required as `Authorization: Bearer {token}` on progress callback POSTs
+3. Validated by the progress ingestion endpoint — reject missing/invalid tokens
+
+**Event identity**: Progress events are keyed by `(workflow_id, step_name, attempt)`, not just `workflow_id`. This handles parallel steps and retries correctly. Cleanup happens per-key when the activity completes (success or failure).
+
+### Code changes
 
 **`src/cloud_agents/workflow/progress_store.py`** (new) — in-memory buffer:
 ```python
 class ProgressStore:
-    """In-memory buffer for agent progress events, keyed by workflow_id."""
-    def append(self, workflow_id: str, event: dict): ...
-    def read_since(self, workflow_id: str, cursor: int) -> list[dict]: ...
-    def cleanup(self, workflow_id: str): ...
+    """In-memory buffer for agent progress events.
+    
+    Keyed by (workflow_id, step_name, attempt). Single-replica only in Phase 1.
+    """
+    def append(self, workflow_id: str, step_name: str, attempt: int, event: dict): ...
+    def read_since(self, workflow_id: str, step_name: str | None, cursor: int) -> list[dict]: ...
+    def cleanup(self, workflow_id: str, step_name: str, attempt: int): ...
+    def register_token(self, workflow_id: str, step_name: str, token: str): ...
+    def validate_token(self, workflow_id: str, step_name: str, token: str) -> bool: ...
 ```
 
-**`src/cloud_agents/workflow/temporal_activities.py`** — pass progress URL to sandbox:
+**`src/cloud_agents/workflow/temporal_api.py`** — add authenticated progress ingestion:
 ```python
-request_body["progressUrl"] = f"http://{runner_host}:{runner_port}/v1/workflows/{workflow_id}/progress"
+@router.post("/{workflow_id}/steps/{step_name}/progress")
+async def ingest_progress(workflow_id: str, step_name: str, request: Request, event: dict):
+    """Receive progress events from sandbox containers."""
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if not progress_store.validate_token(workflow_id, step_name, token):
+        raise HTTPException(status_code=403, detail="Invalid progress token")
+    progress_store.append(workflow_id, step_name, attempt=event.get("attempt", 1), event=event)
 ```
 
-**`src/cloud_agents/workflow/temporal_api.py`** — enrich SSE endpoint to include progress events:
+**`src/cloud_agents/workflow/temporal_activities.py`** — generate token, build callback URL, pass to sandbox:
+```python
+callback_base = os.environ.get("WORKFLOW_RUNNER_CALLBACK_URL")
+if callback_base:
+    import uuid
+    progress_token = str(uuid.uuid4())
+    progress_store.register_token(workflow_id, step_name, progress_token)
+    request_body["progressUrl"] = f"{callback_base}/v1/workflows/{workflow_id}/steps/{step_name}/progress"
+    request_body["progressToken"] = progress_token
+```
+
+**`src/cloud_agents/workflow/temporal_api.py`** — enrich SSE endpoint:
 ```python
 # existing workflow events + progress events interleaved
-progress_events = progress_store.read_since(workflow_id, progress_cursor)
+progress_events = progress_store.read_since(workflow_id, step_name=None, cursor=progress_cursor)
 for event in progress_events:
     yield f"data: {json.dumps(event)}\n\n"
 ```
 
 ### Tests
 
-**Unit tests**:
+**Unit tests — ProgressStore**:
 
 ```
 TestProgressStore:
 
-1. test_append_and_read
-   - Append 3 events for workflow "wf-1"
-   - read_since("wf-1", 0) returns all 3
-   - read_since("wf-1", 2) returns only the 3rd
+1. test_append_and_read_by_step
+   - Append 3 events for ("wf-1", "diagnose", 1)
+   - read_since("wf-1", "diagnose", 0) returns all 3
+   - read_since("wf-1", "diagnose", 2) returns only the 3rd
 
-2. test_read_empty
-   - read_since("wf-nonexistent", 0) returns []
+2. test_read_all_steps
+   - Append to ("wf-1", "diagnose", 1) and ("wf-1", "fix", 1)
+   - read_since("wf-1", step_name=None, 0) returns events from both steps
 
-3. test_cleanup
-   - Append events, cleanup("wf-1")
-   - read_since returns []
+3. test_read_empty
+   - read_since("wf-nonexistent", None, 0) returns []
 
-4. test_multiple_workflows_isolated
-   - Append to "wf-1" and "wf-2"
+4. test_cleanup_per_step
+   - Append to ("wf-1", "diagnose", 1) and ("wf-1", "fix", 1)
+   - cleanup("wf-1", "diagnose", 1)
+   - read_since for "diagnose" returns []
+   - read_since for "fix" still returns its events
+
+5. test_parallel_steps_isolated
+   - Append to ("wf-1", "step-a", 1) and ("wf-1", "step-b", 1) concurrently
    - Each read_since returns only its own events
+
+6. test_retry_attempts_isolated
+   - Append to ("wf-1", "diagnose", 1) and ("wf-1", "diagnose", 2)
+   - read_since with step_name="diagnose" returns events from both attempts in order
 ```
+
+**Unit tests — Token auth**:
+
+```
+TestProgressTokenAuth:
+
+7. test_register_and_validate_token
+   - register_token("wf-1", "diagnose", "tok-abc")
+   - validate_token("wf-1", "diagnose", "tok-abc") → True
+
+8. test_invalid_token_rejected
+   - register_token("wf-1", "diagnose", "tok-abc")
+   - validate_token("wf-1", "diagnose", "wrong-token") → False
+
+9. test_missing_token_rejected
+   - No token registered
+   - validate_token("wf-1", "diagnose", "any") → False
+
+10. test_token_scoped_to_step
+    - register_token("wf-1", "diagnose", "tok-abc")
+    - validate_token("wf-1", "fix", "tok-abc") → False (different step)
+```
+
+**Unit tests — Progress ingestion endpoint**:
 
 ```
 TestProgressIngestion:
 
-5. test_progress_endpoint_accepts_events
-   - POST /v1/workflows/wf-1/progress with {"type": "tool_call", "name": "list_hosts"}
-   - Assert 200
-   - Assert event stored in progress_store
+11. test_valid_token_accepted
+    - Register token, POST to /v1/workflows/wf-1/steps/diagnose/progress with Bearer token
+    - Assert 200, event stored
 
-6. test_progress_endpoint_rejects_unknown_workflow
-   - (Decision: should it? Or accept any workflow_id since sandbox is trusted?)
+12. test_invalid_token_returns_403
+    - POST with wrong Bearer token → 403
+
+13. test_missing_auth_header_returns_403
+    - POST without Authorization header → 403
 ```
+
+**Unit tests — SSE enrichment**:
 
 ```
 TestSSEWithProgress:
 
-7. test_sse_includes_progress_events
-   - Store progress events for "wf-1"
-   - GET /v1/workflows/wf-1/events
-   - Assert SSE stream includes both workflow events AND progress events
+14. test_sse_includes_progress_events
+    - Store progress events for "wf-1"
+    - GET /v1/workflows/wf-1/events
+    - Assert SSE stream includes both workflow events AND progress events
 
-8. test_sse_without_progress_only_workflow_events
-   - No progress events stored
-   - GET /v1/workflows/wf-1/events
-   - Assert SSE stream has only workflow events (backward compatible)
+15. test_sse_without_progress_backward_compatible
+    - No progress events stored
+    - Assert SSE stream has only workflow events
 ```
+
+**Unit tests — Callback URL forwarding**:
 
 ```
 TestProgressUrlForwarding:
 
-9. test_progress_url_included_in_sandbox_request
-   - Call run_sandbox_step
-   - Assert request_body sent to sandbox includes progressUrl field
+16. test_progress_url_included_when_callback_configured
+    - Set WORKFLOW_RUNNER_CALLBACK_URL="http://runner:8080"
+    - Call run_sandbox_step
+    - Assert request_body includes progressUrl and progressToken
 
-10. test_progress_url_not_included_when_no_runner_host
-    - (Decision: is progressUrl always set, or opt-in?)
+17. test_no_callback_url_no_progress_fields
+    - WORKFLOW_RUNNER_CALLBACK_URL not set
+    - Call run_sandbox_step
+    - Assert request_body does NOT contain progressUrl or progressToken
+
+18. test_progress_token_is_unique_per_step
+    - Call run_sandbox_step twice for different steps
+    - Assert progressToken values are different
 ```
 
-**Integration tests** (with real Temporal):
+**Integration test** (with real Temporal):
 
 ```
-11. test_progress_events_flow_through_sse
-    - Start workflow with stub spawner that posts progress events to runner
+19. test_progress_events_flow_end_to_end
+    - Start workflow with stub spawner that spawns, then POSTs progress events to the callback URL
     - Subscribe to SSE endpoint
     - Assert progress events appear in SSE stream alongside step events
 ```
