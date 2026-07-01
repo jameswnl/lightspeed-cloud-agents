@@ -119,3 +119,29 @@ class TestOrphanCleanupMetrics:
 
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after == before
+
+    @pytest.mark.asyncio
+    async def test_partial_destroy_failure_counts_only_successes(self, mocker: MockerFixture) -> None:
+        """Only successfully destroyed orphans are counted in the metric."""
+        from cloud_agents.workflow.temporal_entrypoint import reconcile_orphaned_sandboxes
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.list_active.return_value = ["orphan-ok", "orphan-fail", "orphan-ok2"]
+
+        call_count = 0
+
+        async def destroy_side_effect(name: str) -> None:
+            nonlocal call_count
+            call_count += 1
+            if name == "orphan-fail":
+                raise RuntimeError("destroy failed")
+
+        mock_spawner.destroy.side_effect = destroy_side_effect
+
+        before = _get_counter_value("ls_sandbox_orphans_cleaned")
+
+        await reconcile_orphaned_sandboxes(mock_spawner)
+
+        after = _get_counter_value("ls_sandbox_orphans_cleaned")
+        assert after >= before + 2  # 2 succeeded, 1 failed
+        assert after < before + 3   # NOT 3 — the failed one shouldn't count

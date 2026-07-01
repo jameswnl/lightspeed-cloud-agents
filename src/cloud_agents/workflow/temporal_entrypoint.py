@@ -101,22 +101,26 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
         return
 
     orphans = await spawner.list_active({"spawned-by": "workflow-runner"})
+    cleaned = 0
+    failed_names = []
     for name in orphans:
         logger.warning("Destroying orphaned sandbox '%s'", name)
         try:
             await spawner.destroy(name)
+            cleaned += 1
         except Exception as exc:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
+            failed_names.append(name)
     if orphans:
-        logger.info("Cleaned up %d orphaned sandbox(es) on startup", len(orphans))
+        logger.info("Cleaned up %d/%d orphaned sandbox(es) on startup", cleaned, len(orphans))
         from cloud_agents.workflow.audit import emit_audit
         from cloud_agents.workflow.temporal_metrics import ls_sandbox_orphans_cleaned_total
 
-        ls_sandbox_orphans_cleaned_total.inc(len(orphans))
+        ls_sandbox_orphans_cleaned_total.inc(cleaned)
         emit_audit(
             event_type="orphan_cleanup",
             workflow_id="startup",
-            details={"count": len(orphans), "names": orphans},
+            details={"count": cleaned, "failed": failed_names, "total_found": len(orphans)},
         )
 
 
