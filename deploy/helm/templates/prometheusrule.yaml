@@ -48,4 +48,12 @@ spec:
             severity: critical
           annotations:
             summary: "Workflow runner is down"
+
+        - alert: CircuitBreakerOpen
+          expr: increase(ls_sandbox_cleanup_failures_total[5m]) > 3
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LLM provider circuit breaker likely open — multiple consecutive sandbox failures"
 {{- end }}
