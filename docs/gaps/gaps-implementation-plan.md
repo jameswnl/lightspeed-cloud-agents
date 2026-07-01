@@ -223,11 +223,65 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **What NOT to change**: The activity still makes a synchronous HTTP call for the final result. Temporal still controls retry/timeout. The streaming is a side channel, not a replacement for the activity return value.
 
-**Decision needed**:
+**Status**: Deferred — needs architecture design discussion before implementation. Detailed design draft and reviewer feedback captured below.
+
+**Decisions needed**:
 - Which side channel? Redis pubsub (requires Redis), direct SSE from sandbox to runner (simpler but requires network access), or shared volume with file-based events (no extra infra)?
 - Should streaming be opt-in per workflow step, or always-on?
+- How to handle multi-replica deployments? (see reviewer finding 1 below)
 
 **Effort**: 1-2 weeks
+
+### T36 design draft (from Phase 1 planning)
+
+**Recommended approach**: Option A — direct callback from sandbox to runner. The sandbox POSTs progress events to a `progressUrl` provided in the request body.
+
+**Callback addressing**: Configured via `WORKFLOW_RUNNER_CALLBACK_URL` env var. Must be routable from inside the spawned sandbox container (not `localhost`):
+- K8s: `http://workflow-runner.{namespace}.svc:8080`
+- Podman: `http://workflow-runner:8080` (shared network)
+- Dev (Podman): `http://host.containers.internal:8080`
+
+If not set, progress streaming is disabled (opt-in).
+
+**Callback authentication**: Per-step callback token (random UUID):
+1. Activity generates token at spawn time, passes as `progressToken` in request body
+2. Sandbox sends `Authorization: Bearer {progressToken}` on every progress POST
+3. Runner validates token + workflow_id + step_name on ingestion, rejects invalid/missing
+
+**Event identity**: Keyed by `(workflow_id, step_name, attempt)` — not just workflow_id. Handles parallel steps and retries. Cleanup per-key when activity completes.
+
+**ProgressStore**: In-memory buffer in the runner process. Single-replica only in initial implementation. Multi-replica (Redis or external event store) deferred.
+
+**Runner-side components**:
+- `progress_store.py` (new) — in-memory buffer with append/read_since/cleanup/register_token/validate_token
+- `POST /v1/workflows/{id}/steps/{step}/progress` — authenticated ingestion endpoint
+- SSE enrichment — existing events endpoint interleaves progress events
+
+**Sandbox-side contract** (upstream work):
+- Read `progressUrl` and `progressToken` from request body
+- During LLM streaming: POST `{"type": "llm_token", "text": "..."}` with Bearer token
+- During tool calls: POST `{"type": "tool_call", "name": "...", "input": "..."}` with Bearer token
+- On tool result: POST `{"type": "tool_result", "name": "...", "output": "..."}` with Bearer token
+- Include `attempt` number in every event for retry isolation
+
+### T36 reviewer feedback (2 review rounds)
+
+**Round 1 findings** (all addressed in design draft above):
+1. In-memory ProgressStore breaks stateless runner contract → scoped as single-replica stepping stone
+2. Progress endpoint unauthenticated → per-step Bearer token
+3. Events keyed by workflow_id only → keyed by (workflow_id, step_name, attempt)
+4. T1 forwarding-only doesn't close security gap → explicitly scoped, parent task stays open
+5. progressUrl addressing undefined across deployment targets → WORKFLOW_RUNNER_CALLBACK_URL env var
+
+**Round 2 findings** (addressed):
+1. Sandbox-side section omitted auth contract → updated with Bearer token requirement
+2. Dev callback example used `localhost` (unreachable from container) → replaced with `host.containers.internal`
+
+**Open architecture questions** (to resolve before implementation):
+1. Is single-replica ProgressStore acceptable for initial deployment, or must we start with Redis?
+2. Should the sandbox-side work happen in the same phase, or is it a separate upstream task?
+3. What event schema should progress events follow? (freeform dict, or a defined Pydantic model?)
+4. Should progress events be persisted (for replay after reconnect), or ephemeral (lost on disconnect)?
 
 ---
 
