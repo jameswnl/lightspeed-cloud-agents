@@ -4,11 +4,20 @@ Single source of truth for all planned work. ARCHITECTURE.md TODO tags link here
 
 Items are organized by area. Each has a status: **Open**, **Decided**, **Closed**, or **Done**.
 
+## Priority Phases
+
+| Phase | Focus | Tasks |
+|-------|-------|-------|
+| **Phase 1** | High value, enables other work | T1, T3, T22, T36 |
+| **Phase 2** | Production hardening | T2, T7, T17, T19, T21, T24 |
+| **Phase 3** | Strategic / longer-term | T8, T11, T13, T14, T15, T23 |
+| **Phase 4** | Backlog | T5, T9, T12, T16, T18, T20, T25-T35 |
+
 ---
 
 ## Ephemeral Execution (source: `ephemeral-execution-gaps.md`)
 
-### T1: Forward PermissionScope to sandbox contract
+### T1: Forward PermissionScope to sandbox contract [Phase 1]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Security TODO — per-step tool filtering
@@ -27,7 +36,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
 
-### T2: Explicit sandbox termination on timeout/cancellation
+### T2: Explicit sandbox termination on timeout/cancellation [Phase 2]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
@@ -47,7 +56,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Is Temporal heartbeat sufficient, or do we need `spawner.terminate()` (SIGTERM before destroy)?
 
-### T3: Cleanup failure metrics
+### T3: Cleanup failure metrics [Phase 1]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Security TODO — cleanup failure metrics
@@ -68,7 +77,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 Generic runtime removed. Only one contract exists: `POST /v1/agent/run`.
 
-### T5: Document runtime input completeness
+### T5: Document runtime input completeness [Phase 4]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Sandbox Runtime config table
@@ -85,7 +94,7 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 ## Security & Access Control
 
-### T7: Per-user/team RBAC (R13)
+### T7: Per-user/team RBAC (R13) [Phase 2]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R13 — TODO
@@ -99,7 +108,7 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 **Effort**: 1-2 weeks
 
-### T8: Per-sandbox identity binding
+### T8: Per-sandbox identity binding [Phase 3]
 
 **Status**: Open
 
@@ -109,7 +118,7 @@ Decision: Option 3 (remove). Generic runtime was PoC1 legacy — removed.
 
 **Effort**: 1-2 weeks
 
-### T9: Dynamic RBAC from agent output
+### T9: Dynamic RBAC from agent output [Phase 4]
 
 **Status**: Open (from operator comparison Gap 4)
 
@@ -127,7 +136,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 ## Triggers & Composition (R15, R16)
 
-### T11: Agents-as-tools (R16)
+### T11: Agents-as-tools (R16) [Phase 3]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R16 — TODO
@@ -138,7 +147,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 **Effort**: 2-3 weeks. Depends on chatbot integration (T12).
 
-### T12: Chatbot trigger (R15)
+### T12: Chatbot trigger (R15) [Phase 4]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -149,7 +158,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 **Effort**: TBD — depends on LCS integration scope
 
-### T13: Alert trigger (R15)
+### T13: Alert trigger (R15) [Phase 3]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -160,7 +169,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 **Effort**: 1 week
 
-### T14: Schedule trigger (R15)
+### T14: Schedule trigger (R15) [Phase 3]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
@@ -175,7 +184,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 ## Escalation & Handoff (R17)
 
-### T15: Interactive CLI handoff (R5, R17)
+### T15: Interactive CLI handoff (R5, R17) [Phase 3]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R17 — TODO; Design Principle R5 — TODO
@@ -186,7 +195,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 **Effort**: 1-2 weeks
 
-### T16: Conversational approval
+### T16: Conversational approval [Phase 4]
 
 **Status**: Open (from BACKLOG.md)
 
@@ -200,7 +209,7 @@ PoC1 leftover. Referenced `load_tools()` / `importlib.import_module()` from the 
 
 ## Agent Progress Streaming
 
-### T36: Stream agent work-in-progress to callers
+### T36: Stream agent work-in-progress to callers [Phase 1]
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Observability; Sandbox Runtime
@@ -234,7 +243,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 ## Operational Readiness
 
-### T17: Prometheus alerting rules
+### T17: Prometheus alerting rules [Phase 2]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -242,7 +251,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 1 day
 
-### T18: Operational runbooks
+### T18: Operational runbooks [Phase 4]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -250,7 +259,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 1 day
 
-### T19: Circuit breaker for LLM provider
+### T19: Circuit breaker for LLM provider [Phase 2]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -258,7 +267,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 1-2 days
 
-### T20: Load and stress testing
+### T20: Load and stress testing [Phase 4]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -266,7 +275,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 2-3 days
 
-### T21: Template interpolation sanitization
+### T21: Template interpolation sanitization [Phase 2]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -274,7 +283,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: Half day
 
-### T22: Per-workflow model provider derivation
+### T22: Per-workflow model provider derivation [Phase 1]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -282,7 +291,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 1 day
 
-### T23: Rate limiting
+### T23: Rate limiting [Phase 3]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -290,7 +299,7 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 **Effort**: 2-3 days
 
-### T24: Pod disruption budgets
+### T24: Pod disruption budgets [Phase 2]
 
 **Status**: Open (from productization-roadmap.md P1)
 
@@ -302,19 +311,19 @@ Temporal stays in control of lifecycle (start, timeout, retry, approval). The st
 
 ## Workflow Features (from BACKLOG.md)
 
-### T25: Nested workflows
+### T25: Nested workflows [Phase 4]
 
 **Status**: Open
 
 Workflow-to-workflow composition (recursive execution).
 
-### T26: Workflow versioning and rollback
+### T26: Workflow versioning and rollback [Phase 4]
 
 **Status**: Open
 
 Schema migration + state compatibility for definition updates.
 
-### T27: Resumable SSE streaming
+### T27: Resumable SSE streaming [Phase 4]
 
 **Status**: Open
 
@@ -328,43 +337,43 @@ PoC1 leftover. Described ephemeral pods POSTing results back to a runner ingest 
 
 ## Infrastructure (from BACKLOG.md)
 
-### T29: Native K8s image volumes for skills
+### T29: Native K8s image volumes for skills [Phase 4]
 
 **Status**: Open (from operator comparison Gap 6)
 
 K8s 1.31+ image volumes instead of init container. Fallback for older versions.
 
-### T30: Spawner spec caching
+### T30: Spawner spec caching [Phase 4]
 
 **Status**: Open (from operator comparison Gap 7)
 
 Cache spawner configurations (env vars, volumes, labels) by content hash. When multiple workflow steps use identical sandbox config, reuse the cached spec instead of rebuilding it. Low priority — negligible overhead at expected volumes.
 
-### T31: Agent artifact storage
+### T31: Agent artifact storage [Phase 4]
 
 **Status**: Open
 
 OCI artifacts, derived images, git-sync sidecar for tool/skill distribution.
 
-### T32: Workflow visualization
+### T32: Workflow visualization [Phase 4]
 
 **Status**: Open
 
 Graph rendering UI or OpenShift console plugin integration.
 
-### T33: SBOM / SLSA provenance
+### T33: SBOM / SLSA provenance [Phase 4]
 
 **Status**: Open
 
 Image signing attestation and software bill of materials.
 
-### T34: Multi-replica E2E testing
+### T34: Multi-replica E2E testing [Phase 4]
 
 **Status**: Open
 
 2-replica workflow runner deployment with Temporal. Test: start workflow on replica A, kill replica A, verify Temporal re-dispatches activities to replica B and workflow completes.
 
-### T35: CRD-based K8s operator
+### T35: CRD-based K8s operator [Phase 4]
 
 **Status**: Open (from kubeclaw comparison)
 
