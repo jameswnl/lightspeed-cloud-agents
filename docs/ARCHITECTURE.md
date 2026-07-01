@@ -153,9 +153,21 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 **TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
 - Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
 - Advisory mode tool filtering (blocked on T1)
-- Per-user RBAC — implemented via PolicyFileAuthorizer. K8s SAR backend deferred. See [rbac.md](rbac.md)
 - Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
 - Cleanup failure metrics ([T3](gaps/gaps-implementation-plan.md#t3-cleanup-failure-metrics))
+
+### Authorization (RBAC)
+
+Pluggable authorization controls who can trigger, approve, view, and cancel workflows. Every API endpoint is authorized after authentication.
+
+- **CallerIdentity** — extracted from auth middleware (K8s ServiceAccount token → username/uid/groups, shared secret → anonymous)
+- **PolicyFileAuthorizer** — YAML policy rules with identity matching (user/team/sa/anonymous), workflow glob patterns, owner-scoped conditions, and configurable defaults
+- **NoopAuthorizer** — default, backward-compatible, all actions allowed
+- **WorkflowAuthzContext** — owner identity captured at trigger time, persisted in Temporal state, used for later approve/view/cancel authorization
+- **ApproverInfo** — approver identity recorded in workflow state, queryable via status API
+- **Fail-closed** — missing identity with authz enabled → 401; no matching rule → 403; context lookup failure → 503
+
+See [rbac.md](rbac.md) for full documentation including policy file format and quick start guide.
 
 ### Observability
 
