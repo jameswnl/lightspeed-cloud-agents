@@ -175,6 +175,11 @@ Actions in `allow` are permitted for any authenticated caller. Actions in `deny_
 
 In shared secret auth mode, all callers share the same token and are identified as `anonymous`. Policy rules still apply (you can restrict what `anonymous` can do), but this is **deployment-level authorization, not per-user RBAC**. For real per-user access control, use K8s ServiceAccount tokens.
 
+## Not Yet Implemented
+
+- **Risk-level scoped approval** — the design includes `conditions.risk_levels` in policy rules (e.g., a user can only approve low-risk steps). This requires the authorization check to know the pending step's `risk_level`, which means querying workflow state during approval authorization. Deferred — the model supports it but the runtime doesn't query step-level risk during authorization yet.
+- **K8s SubjectAccessReview backend** — delegates authorization to the K8s API server. Deferred pending resource model design (how workflow actions map to K8s verbs/resources).
+
 ## Fail-Closed Behavior
 
 - `WORKFLOW_AUTHZ=policy` but no authenticated identity → **401** (not silent fallback to anonymous)
