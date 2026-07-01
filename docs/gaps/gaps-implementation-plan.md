@@ -17,7 +17,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Ephemeral Execution (source: `ephemeral-execution-gaps.md`)
 
-### T1: Forward PermissionScope to sandbox contract [Phase 1]
+### T1: Forward PermissionScope to sandbox contract [Phase 1] — DONE
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Security TODO — per-step tool filtering
@@ -58,7 +58,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Note**: T36 (async streaming) may change the sync HTTP model this task builds on. If T36 is implemented first, T2's heartbeat design should adapt to the streaming architecture. Both tasks add metrics to `temporal_metrics.py` — coordinate with T3.
 
-### T3: Cleanup failure metrics [Phase 1]
+### T3: Cleanup failure metrics [Phase 1] — DONE
 
 **Status**: Open
 **ARCHITECTURE.md ref**: Observability — cleanup failure metrics
@@ -327,7 +327,7 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: Half day
 
-### T22: Per-workflow model provider derivation [Phase 1]
+### T22: Per-workflow model provider derivation [Phase 1] — DONE
 
 **Status**: Open (from productization-roadmap.md P1)
 
