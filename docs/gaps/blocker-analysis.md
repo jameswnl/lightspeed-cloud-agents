@@ -160,10 +160,45 @@ The complexity is real but it's already deprioritized. Blocker analysis should f
 | T36: Progress streaming | 1-2 weeks | 4-6 weeks | New runtime component, cross-repo contract, statelessness compromise |
 | T40: Prompt injection | TBD | 2-4 weeks | Research + design + integration with guardrail framework |
 
-## Recommended Immediate Actions
+## Second Reviewer Findings (from `technical-blocker-analysis.md`)
 
-1. **Pin Temporal SDK version** — zero cost, prevents silent breakage across all Temporal tasks
-2. **Move T36 from Phase 1 to Phase 3** — existing SSE polling is sufficient; T36 is a multi-month effort with upstream deps
-3. **Design auth evolution holistically** — write one auth design doc covering T8, T36, T42 before implementing any individually
-4. **Add advisory tool enforcement for T1** — runner-side response validation as interim mitigation while waiting on sandbox upstream
-5. **Tackle safe quick wins next** — T37 (secret redaction), T38 (body size limits), T39 (egress default), T14 (schedule trigger) are all low-risk, high-value, and unblocked
+### Additional blockers and corrections:
+
+**T35 (CRD Operator) is massively underestimated** — listed as a backlog item but is actually 6-8 weeks. The operator has 15+ type files, reconcilers, finalizers, owner references, CEL validation. "Thin bridge" is an iceberg. Consider whether the existing `lightspeed-agentic-operator` could be refactored to call the Cloud Agents API instead.
+
+**T11 sync/async impedance mismatch** — LLM tool calls expect synchronous responses, Temporal workflows are async (approvals, retries, minutes-long). Three options, each with different architecture: block (ties up LLM), poll (breaks tool patterns), restrict to fast workflows only. None addressed in the task description.
+
+**T25 (Nested Workflows) has resource and approval propagation issues** — 3-step nesting 3-step = 6+ pods. `MAX_SPAWNED_PODS` is global, no per-workflow budget. If nested workflow hits approval gate, who approves? Parent blocks?
+
+**T15 scope should be narrowed** — "generate launch command with pre-loaded context" (2-3 days) vs "launch interactive CLI session" (2+ weeks with security implications). Start with the former.
+
+**T8 and T9 are K8s-only** — no Podman equivalent for ServiceAccounts or dynamic RBAC. Accept feature divergence rather than stalling both tasks.
+
+**T12 is double-blocked** — depends on T11 (itself a blocker) AND LCS integration (external team, unknown scope). Don't plan until T11 is done.
+
+**T2/T36 ordering conflict** — T2's heartbeat design should anticipate the T36 side channel, or T36 should ship first. Currently both in Phase 3 with no stated order.
+
+**Podman callback fragility for T36** — `host.containers.internal` doesn't work on all Linux distros. Needs prototyping before committing.
+
+## Consolidated Recommended Actions
+
+### Immediate (zero/low cost):
+1. **Pin Temporal SDK version** — prevents silent breakage
+2. **Move T36 from Phase 1 to Phase 3** — existing SSE is sufficient
+3. **Add advisory tool enforcement for T1** — runner-side response validation
+
+### Before starting Phase 3:
+4. **Get sandbox team alignment on T36 contract extension** — longest lead-time item, start negotiation now
+5. **Design auth evolution holistically** — one doc for T8, T36, T42
+6. **Resolve T2/T36 ordering** — pick one, design to accommodate the other
+7. **Narrow T11 scope** — solve sync/async for one workflow, not auto-generation
+8. **Narrow T15 scope** — "generate launch command" not "launch session"
+9. **Reestimate T35** — 6-8 weeks, not a casual backlog item
+10. **Accept K8s/Podman divergence** for T8, T9 — K8s-only features
+
+### Safe quick wins to execute now:
+- T14 (schedule trigger) — 2-3 days
+- T37 (secret redaction) — 2-3 days
+- T38 (request body size) — half day
+- T39 (egress default) — half day
+- T13 (alert trigger) — 1 week
