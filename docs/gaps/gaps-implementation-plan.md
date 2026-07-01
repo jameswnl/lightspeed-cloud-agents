@@ -442,11 +442,33 @@ OCI artifacts, derived images, git-sync sidecar for tool/skill distribution.
 
 Graph rendering UI or OpenShift console plugin integration.
 
-### T33: SBOM / SLSA provenance [Phase 4]
+### T33: SBOM / SLSA provenance [Phase 5]
 
 **Status**: Open
 
 Image signing attestation and software bill of materials.
+
+### T44: Podman Enterprise mode support [Phase 5]
+
+**Status**: Open
+
+**Problem**: PodmanSpawner connects to the local Podman socket only. In Ansible Enterprise mode (multi-VM), containers are distributed across VMs — the spawner needs to reach remote Podman sockets.
+
+**What to build**:
+1. **Per-container resource limits** — pass `--cpus` and `--memory` to `containers.run()` from SpawnConfig values. In Growth mode (single VM) the VM caps everything, but Enterprise mode has multiple workloads per VM.
+2. **Remote Podman socket** — support `PODMAN_SOCKET_URL` env var for remote Podman API connections. The spawner currently uses the default local socket.
+3. **Cross-VM networking** — sandbox containers on different VMs need to reach each other and the workflow runner. May require Podman network configuration per VM.
+
+**Context**: Ansible containerized deployment has two modes:
+- **Growth** (single VM): current Podman spawner works — VM is the boundary
+- **Enterprise** (multi-VM): needs remote spawning, resource limits, cross-VM networking
+
+**Effort**: 2-3 weeks
+
+**⚠ RISKS**:
+- Remote Podman API may have different auth/TLS requirements per deployment
+- Cross-VM networking depends on the Ansible installer's network topology
+- Resource limit enforcement on Podman differs from K8s (no cgroups v2 on some distros)
 
 ### T34: Multi-replica E2E testing [Phase 4]
 

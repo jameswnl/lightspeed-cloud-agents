@@ -154,3 +154,21 @@ UnifAI bundles everything in one monolith. lightspeed-stack + cloud-agents cover
 **UnifAI**: Enterprise platform for building and running multi-agent AI workflows with visual UI, built-in RAG, and team collaboration.
 
 Similar scope, different architecture. lightspeed-stack + cloud-agents is modular (deploy what you need); UnifAI is monolithic (deploy everything). Both target enterprise AI teams. Our edge: governance (approval gates, audit trail, ephemeral isolation), deployment flexibility (K8s + Podman), and modular adoption. Their edge: visual UI, real-time streaming, team collaboration features.
+
+## Ansible Containerized Deployment Context
+
+In the Ansible deployment model, Podman is the production container runtime (not K8s). Two modes:
+
+- **Growth**: All pods in a single VM. The VM is the security/resource boundary. Our Podman spawner works here today — VM caps everything, per-container resource limits are less critical.
+- **Enterprise**: Pods distributed across multiple VMs with redundancy. Ansible installer calculates resource needs and fits containers to VMs. Here, per-container resource limits and cross-VM networking matter more.
+
+| Concern | Growth (single VM) | Enterprise (multi-VM) | Status |
+|---------|-------------------|----------------------|--------|
+| Resource limits | VM caps everything | Need per-container `--cpus`/`--memory` | **Gap for Enterprise** |
+| Container placement | All local | Need remote Podman socket | **Gap for Enterprise** |
+| Redundancy | No HA | Multi-runner + Temporal | Works ✓ |
+| Network | VM-scoped | Cross-VM container networking | **Gap for Enterprise** |
+| Credential delivery | Env vars | Env vars | Works ✓ |
+| Security boundary | VM isolation | VM isolation per node | Works ✓ |
+
+Podman production readiness: **Growth mode = ready. Enterprise mode = gaps in resource limits, remote spawning, and cross-VM networking.**
