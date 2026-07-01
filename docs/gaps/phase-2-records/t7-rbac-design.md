@@ -297,11 +297,20 @@ async def approve_workflow(
     request: ApproveRequest,
     caller: CallerIdentity = Depends(get_caller_identity),
 ):
-    # Authorize
+    # Retrieve persisted authz context for this workflow
+    authz_ctx = await get_workflow_authz_context(workflow_id)
+
+    # Authorize with full context
     decision = await authorizer.authorize(
         caller,
         WorkflowAction.APPROVE,
-        WorkflowResource(workflow_id=workflow_id, step=request.step_name),
+        WorkflowResource(
+            workflow_id=workflow_id,
+            workflow_name=authz_ctx.workflow_name,
+            owner=authz_ctx.owner_username,
+            namespace=authz_ctx.namespace,
+            step=request.step_name,
+        ),
     )
     if not decision.allowed:
         raise HTTPException(403, f"Not authorized to approve: {decision.reason}")
