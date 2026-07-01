@@ -417,7 +417,7 @@ def build_temporal_router(
 
 ```
 # Environment variables
-WORKFLOW_AUTHZ=none|policy|k8s-sar     # Authorization backend (default: none)
+WORKFLOW_AUTHZ=none|policy     # Authorization backend (default: none)
 WORKFLOW_AUTHZ_POLICY_PATH=/path       # For policy backend
 ```
 
@@ -425,7 +425,7 @@ For Helm chart:
 ```yaml
 # values.yaml
 authorization:
-  mode: policy  # none | policy | k8s-sar
+  mode: policy  # none | policy (k8s-sar deferred)
   policyFile: /etc/cloud-agents/policy.yaml
 ```
 
