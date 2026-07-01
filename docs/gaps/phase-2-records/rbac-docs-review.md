@@ -3,9 +3,9 @@
 **Reviewer**: Claude Opus (lightspeed-agentic-operator session)
 **Date**: 2026-07-01
 
-## Verdict: LGTM
+## Verdict: Approve with 1 gap
 
-The doc is accurate, well-structured, and consistent with the implementation.
+The doc is accurate, well-structured, and consistent with the implementation. One feature from the approved design is missing from both implementation and documentation.
 
 ## What's good
 
@@ -31,8 +31,22 @@ The doc is accurate, well-structured, and consistent with the implementation.
 | Definition endpoints authorized | `temporal_api.py` — `VIEW_DEFS` on GET, `MANAGE_DEFS` on POST | Yes |
 | Endpoint paths | Router prefix `/v1/workflows` + `/definitions`, `/definitions/{name}` | Yes |
 
-## Notes (not issues)
+## Gap
 
-- The design doc (`t7-rbac-design.md`) shows `risk_levels` as a policy condition for approve actions, but it's not implemented in `PolicyFileAuthorizer` and not documented in `rbac.md`. This is consistent — doc matches code, not the aspirational design. Can be added later.
+### `risk_levels` condition missing from implementation and docs
 
-- The comparison with the operator's approach (K8s RBAC, mutating webhook, dynamic Roles) is not in this doc, which is appropriate — this is a user-facing reference doc, not an architecture comparison. That context lives in `poc2/operator-comparison-code-review.md`.
+The LGTM'd design (`t7-rbac-design.md`) includes `risk_levels` as a policy condition for approve actions:
+
+```yaml
+- identity: "team:platform"
+  actions: [approve]
+  workflows: ["*"]
+  conditions:
+    risk_levels: [high, critical]  # can only approve high-risk steps
+```
+
+This enables per-risk-level approval control — a user can approve low-risk steps but not high-risk ones. The operator achieves equivalent behavior through its per-step approval in the ProposalApproval CRD.
+
+**Status**: Not implemented in `PolicyFileAuthorizer` (only `require_owner` is implemented). Not documented in `rbac.md`. The design was approved with this feature.
+
+**Decision needed**: Implement now (adds ~20 lines to `policy_authorizer.py` + tests), or explicitly defer with a tracking item. Either way, the design, code, and docs should agree.

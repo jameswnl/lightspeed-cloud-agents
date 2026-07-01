@@ -71,6 +71,7 @@ curl -s http://localhost:8080/healthz
 | `WORKFLOW_SPAWNER` | `podman` | Use PodmanSpawner |
 | `SPAWNER_NETWORK` | `cloud-agents-temporal` | Podman network for sandbox containers |
 | `AUTH_REQUIRED` | `false` | No auth for local dev |
+| `WORKFLOW_AUTHZ` | `none` | No authorization (default). Set to `policy` with `WORKFLOW_AUTHZ_POLICY_PATH` for RBAC. See [rbac.md](rbac.md). |
 
 To pass the LLM API key to sandbox containers, add to the workflow-runner service in docker-compose:
 ```yaml

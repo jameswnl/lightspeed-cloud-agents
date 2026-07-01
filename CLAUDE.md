@@ -61,6 +61,9 @@ All implemented guardrails have corresponding tests. When adding a new guardrail
 | Credential Secret mount | `kubernetes_spawner.py` | `spawner/test_kubernetes_spawner.py` |
 | MCP secret allowlist | `temporal_activities.py` | `temporal/test_activities.py` |
 | Audit events | `audit.py` + `temporal_api.py` | `temporal/test_audit.py`, `temporal/test_api.py` |
+| RBAC (CallerIdentity + PolicyFile) | `authorization.py` + `policy_authorizer.py` + `temporal_api.py` | `test_authorization.py`, `test_policy_authorizer.py`, `temporal/test_api.py` |
+| Circuit breaker | `circuit_breaker.py` + `temporal_activities.py` | `test_circuit_breaker.py`, `temporal/test_activities.py` |
+| Cleanup failure metrics | `temporal_metrics.py` + `temporal_activities.py` | `temporal/test_cleanup_metrics.py` |
 | Orphan reconciliation | `temporal_entrypoint.py` | `temporal/test_startup_reconciliation.py` |
 | Podman spawned-by label | `podman_spawner.py` | `spawner/test_podman_spawner.py` |
 | E2E guardrails | Both spawners | `e2e/test_guardrails.py` |

@@ -31,6 +31,7 @@ graph TD
 
 ## Key Docs
 
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements (with TODO status), design, components
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
 - [DEMO.md](docs/DEMO.md) — deployment guide (Podman / Kind / Helm) + workflow definition reference + diagnostic workflow example
+- [RBAC](docs/rbac.md) — authorization: policy file format, identity matching, quick start
 - [Implementation Plan](docs/gaps/gaps-implementation-plan.md) — all planned work (T1-T36)
