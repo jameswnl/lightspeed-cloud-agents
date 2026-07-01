@@ -18,12 +18,18 @@ from temporalio import activity
 
 from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.workflow.audit import emit_audit
+from cloud_agents.workflow.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.escalation import LogPackager
 from cloud_agents.workflow.notifier import NullNotifier
 from cloud_agents.workflow.temporal_context import build_sandbox_context
 from cloud_agents.workflow.temporal_models import StepResult
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
+
+_circuit_breaker = ProviderCircuitBreaker(
+    failure_threshold=int(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "5")),
+    reset_seconds=float(os.environ.get("CIRCUIT_BREAKER_RESET_SECONDS", "60")),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +88,16 @@ async def _run_sandbox_step_inner(
     provider = input["provider"]
     sandbox_image = input.get("sandbox_image", "sandbox:latest")
     attempt = activity.info().attempt if activity.in_activity() else 1
+
+    provider_name = provider.get("name", "unknown")
+    if _circuit_breaker.is_open(provider_name):
+        return {
+            "status": "failed",
+            "error": (
+                f"Circuit breaker open for provider '{provider_name}' "
+                "— too many consecutive failures"
+            ),
+        }
 
     pod_name = compute_pod_name(workflow_id, step_name, attempt)
     labels = {
@@ -231,12 +247,14 @@ async def _run_sandbox_step_inner(
         data = response.json()
 
         if not data.get("success", False):
+            _circuit_breaker.record_failure(provider_name)
             return {
                 "status": "failed",
                 "error": data.get("error", "agent returned success=false"),
                 "output": data.get("output"),
             }
 
+        _circuit_breaker.record_success(provider_name)
         output = data.get("output", {})
         for k, v in data.items():
             if k not in ("success", "output", "summary"):

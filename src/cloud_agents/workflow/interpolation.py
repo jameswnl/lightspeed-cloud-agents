@@ -9,10 +9,15 @@ distinguish injected data from instructions.
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Any
+from typing import Any, Final
 
 from cloud_agents.workflow.state import WorkflowState
+
+logger = logging.getLogger(__name__)
+
+MAX_INTERPOLATED_VALUE_LENGTH: Final[int] = 10000
 
 TEMPLATE_PATTERN = re.compile(
     r"\{\{\s*steps\.(\w+)\.output\.([\w]+(?:\[\d+\])?(?:\.[\w]+(?:\[\d+\])?)*)\s*\}\}"
@@ -74,15 +79,55 @@ def resolve_path(data: Any, path: str) -> Any:
     return current
 
 
-def _format_value(value: Any) -> str:
+def _sanitize_value(value_str: str, step_ref: str) -> str:
+    """Sanitize a resolved value string before template insertion.
+
+    Prevents recursive template injection by detecting template syntax
+    in interpolated values, and truncates oversized values.
+
+    Args:
+        value_str: The JSON-serialized value string.
+        step_ref: Human-readable reference (e.g. "steps.s1.output.x") for logging.
+
+    Returns:
+        The sanitized value string, possibly truncated.
+    """
+    if "{{" in value_str:
+        logger.warning(
+            "Interpolated value for '%s' contains template syntax; "
+            "it will NOT be recursively expanded",
+            step_ref,
+        )
+    if len(value_str) > MAX_INTERPOLATED_VALUE_LENGTH:
+        logger.warning(
+            "Interpolated value for '%s' truncated from %d to %d characters",
+            step_ref,
+            len(value_str),
+            MAX_INTERPOLATED_VALUE_LENGTH,
+        )
+        value_str = value_str[:MAX_INTERPOLATED_VALUE_LENGTH] + "..."
+    return value_str
+
+
+def _format_value(value: Any, step_ref: str = "") -> str:
     """Format a resolved value for template insertion.
 
     All values are JSON-serialized to prevent delimiter injection
-    in the <data>...</data> boundary.
+    in the <data>...</data> boundary.  Values are then sanitized
+    to prevent recursive template expansion and limit size.
+
+    Args:
+        value: The resolved value to format.
+        step_ref: Human-readable reference for logging.
+
+    Returns:
+        Formatted and sanitized string wrapped in <data> delimiters.
     """
     if value is None:
         return "<data>null</data>"
-    return f"<data>{json.dumps(value)}</data>"
+    serialized = json.dumps(value)
+    sanitized = _sanitize_value(serialized, step_ref)
+    return f"<data>{sanitized}</data>"
 
 
 def interpolate(template: str, state: WorkflowState) -> str:
@@ -104,16 +149,16 @@ def interpolate(template: str, state: WorkflowState) -> str:
 
     def replacer(match: re.Match) -> str:
         step_name, path = match.group(1), match.group(2)
+        step_ref = f"steps.{step_name}.output.{path}"
         result = state.steps.get(step_name)
         if result is None or result.output is None:
             raise ValueError(
-                f"Template references missing step or output: "
-                f"steps.{step_name}.output.{path}"
+                f"Template references missing step or output: {step_ref}"
             )
         if "." not in path and "[" not in path:
             value = result.output.get(path)
         else:
             value = resolve_path(result.output, path)
-        return _format_value(value)
+        return _format_value(value, step_ref)
 
     return TEMPLATE_PATTERN.sub(replacer, template)

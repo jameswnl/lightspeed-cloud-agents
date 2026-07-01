@@ -191,3 +191,52 @@ class TestNestedInterpolation:
         state = _make_state(diagnose={"summary": "ok"})
         with pytest.raises(ValueError, match="not found"):
             interpolate("{{ steps.diagnose.output.details.host }}", state)
+
+
+class TestInterpolationSanitization:
+    """Tests for template interpolation sanitization."""
+
+    def test_recursive_template_not_expanded(self) -> None:
+        """Step output containing {{ }} is not recursively expanded."""
+        state = _make_state(
+            s1={"payload": "{{ steps.s2.output.x }}"},
+            s2={"x": "secret"},
+        )
+        result = interpolate("Got: {{ steps.s1.output.payload }}", state)
+        # The literal template string should appear, NOT the expanded value
+        assert "{{ steps.s2.output.x }}" in result
+        assert "secret" not in result
+
+    def test_large_value_truncated(self) -> None:
+        """Step output over MAX_INTERPOLATED_VALUE_LENGTH is truncated."""
+        from cloud_agents.workflow.interpolation import MAX_INTERPOLATED_VALUE_LENGTH
+
+        large_value = "x" * 20000
+        state = _make_state(s1={"big": large_value})
+        result = interpolate("{{ steps.s1.output.big }}", state)
+        # Result should be truncated with "..." suffix
+        assert result.endswith("...</data>")
+        # Total interpolated value (inside <data>...</data>) should respect limit
+        inner = result.removeprefix("<data>").removesuffix("</data>")
+        assert len(inner) <= MAX_INTERPOLATED_VALUE_LENGTH + 3  # +3 for "..."
+
+    def test_normal_value_not_truncated(self) -> None:
+        """Normal-sized step output passes through unchanged."""
+        normal_value = "y" * 100
+        state = _make_state(s1={"small": normal_value})
+        result = interpolate("{{ steps.s1.output.small }}", state)
+        # Full value should be present, JSON-quoted
+        assert f'"{normal_value}"' in result
+        assert "..." not in result
+
+    def test_template_syntax_warning_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Warning logged when interpolated value contains template syntax."""
+        import logging
+
+        state = _make_state(s1={"payload": "has {{ braces }}"})
+        with caplog.at_level(logging.WARNING):
+            interpolate("Got: {{ steps.s1.output.payload }}", state)
+        assert any(
+            "template syntax" in record.message.lower()
+            for record in caplog.records
+        )

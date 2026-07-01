@@ -47,3 +47,10 @@ securityContext:
 
 rbac:
   create: true
+
+prometheusRule:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -1,0 +1,51 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-alerts
+  labels:
+    app: workflow-runner
+spec:
+  groups:
+    - name: cloud-agents
+      rules:
+        - alert: WorkflowStepFailureRateHigh
+          expr: rate(ls_workflow_step_runs_total{status="failed"}[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Workflow step failure rate above 10%"
+
+        - alert: SandboxCleanupFailure
+          expr: increase(ls_sandbox_cleanup_failures_total[10m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sandbox container cleanup failed — possible container leak"
+
+        - alert: SandboxOrphanDetected
+          expr: increase(ls_sandbox_orphans_cleaned_total[10m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Orphaned sandbox containers cleaned up on startup — possible prior crash"
+
+        - alert: WorkflowRunnerNotReady
+          expr: probe_success{job="workflow-runner", path="/readyz"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Workflow runner readyz probe failed — Temporal connectivity lost"
+
+        - alert: WorkflowRunnerDown
+          expr: up{job="workflow-runner"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Workflow runner is down"
+{{- end }}

@@ -1549,3 +1549,121 @@ class TestAuditEmission:
             if c[1].get("event_type") == "sandbox_destroyed"
         ]
         assert len(destroy_calls) == 1
+
+
+class TestCircuitBreakerInActivity:
+    """Tests for circuit breaker integration in sandbox activities."""
+
+    @pytest.mark.asyncio
+    async def test_open_breaker_returns_failed_without_spawning(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Open circuit breaker returns failed without spawning sandbox."""
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.temporal_activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = True
+        mock_spawner = mocker.AsyncMock()
+
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "failed"
+        assert "circuit breaker" in result["error"].lower()
+        mock_spawner.spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_success_records_on_breaker(self, mocker: MockerFixture) -> None:
+        """Successful sandbox step records success on breaker."""
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.temporal_activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = False
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        mock_cb.record_success.assert_called_with("openai")
+
+    @pytest.mark.asyncio
+    async def test_failure_records_on_breaker(self, mocker: MockerFixture) -> None:
+        """Failed sandbox step records failure on breaker."""
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.temporal_activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = False
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": False, "error": "agent failed"}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        mock_cb.record_failure.assert_called_with("openai")
