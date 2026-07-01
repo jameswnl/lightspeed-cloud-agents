@@ -169,6 +169,10 @@ Pluggable authorization controls who can trigger, approve, view, and cancel work
 
 See [rbac.md](rbac.md) for full documentation including policy file format and quick start guide.
 
+**RBAC TODO:**
+- Risk-level scoped approval — `conditions.risk_levels` in policy rules (requires querying step risk during authorization)
+- K8s SubjectAccessReview backend — delegates to K8s RBAC (requires resource model design)
+
 ### Observability
 
 - **OpenTelemetry** — distributed traces across workflow runner → Temporal → sandbox pods → LLM; Temporal `TracingInterceptor` propagates spans across workflow/activity boundaries
