@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any, Optional
 
@@ -89,15 +90,17 @@ def build_temporal_router(
         """Load persisted authz context for a workflow.
 
         Queries the running Temporal workflow for its authorization context
-        captured at trigger time. Falls back to a minimal resource if the
-        query fails.
+        captured at trigger time. Fails closed when authorization is enabled
+        and the context cannot be loaded.
 
         Parameters:
             workflow_id: The workflow run identifier.
 
         Returns:
-            WorkflowResource populated with owner/namespace/name from
-            the persisted authz context, or a minimal resource on error.
+            WorkflowResource populated with owner/namespace/name.
+
+        Raises:
+            HTTPException: 503 if authz is enabled and context lookup fails.
         """
         try:
             handle = temporal_client.get_workflow_handle(workflow_id)
@@ -109,8 +112,14 @@ def build_temporal_router(
                     owner=ctx.get("owner_username"),
                     namespace=ctx.get("namespace"),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            authz_mode = os.environ.get("WORKFLOW_AUTHZ", "none")
+            if authz_mode != "none":
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Cannot load authorization context for workflow '{workflow_id}': {exc}",
+                ) from exc
+            logger.warning("Failed to load authz context for '%s': %s", workflow_id, exc)
         return WorkflowResource(workflow_id=workflow_id)
 
     dependencies = [Depends(auth_dependency)] if auth_dependency else []

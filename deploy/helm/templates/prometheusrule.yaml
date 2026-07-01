@@ -33,14 +33,6 @@ spec:
           annotations:
             summary: "Orphaned sandbox containers cleaned up on startup — possible prior crash"
 
-        - alert: WorkflowRunnerNotReady
-          expr: up{job="workflow-runner"} == 1 unless on() (ls_workflow_runs_total)
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Workflow runner is up but has not processed any workflows — possible Temporal connectivity issue"
-
         - alert: WorkflowRunnerDown
           expr: up{job="workflow-runner"} == 0
           for: 2m
@@ -48,12 +40,6 @@ spec:
             severity: critical
           annotations:
             summary: "Workflow runner is down"
-
-        - alert: CircuitBreakerOpen
-          expr: increase(ls_sandbox_cleanup_failures_total[5m]) > 3
-          for: 1m
-          labels:
-            severity: warning
-          annotations:
-            summary: "LLM provider circuit breaker likely open — multiple consecutive sandbox failures"
+        # WorkflowRunnerNotReady: deferred — needs explicit Temporal connectivity metric (TODO T2 heartbeat)
+        # CircuitBreakerOpen: deferred — needs dedicated breaker state metric (TODO expose from ProviderCircuitBreaker)
 {{- end }}
