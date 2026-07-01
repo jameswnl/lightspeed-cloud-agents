@@ -55,7 +55,23 @@ spec:
           annotations:
             summary: "Sandbox container cleanup failed — possible container leak"
 
-        - alert: TemporalWorkerDown
+        - alert: SandboxOrphanDetected
+          expr: increase(ls_sandbox_orphans_cleaned_total[10m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Orphaned sandbox containers cleaned up on startup — possible prior crash"
+
+        - alert: WorkflowRunnerNotReady
+          expr: probe_success{job="workflow-runner", path="/readyz"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Workflow runner readyz probe failed — Temporal connectivity lost"
+
+        - alert: WorkflowRunnerDown
           expr: up{job="workflow-runner"} == 0
           for: 2m
           labels:
@@ -63,6 +79,15 @@ spec:
           annotations:
             summary: "Workflow runner is down"
 ```
+
+**Alert coverage** (matches parent roadmap T17 scope):
+- Step failure rate → `WorkflowStepFailureRateHigh`
+- Sandbox cleanup failures → `SandboxCleanupFailure`
+- Orphaned pods → `SandboxOrphanDetected`
+- Temporal worker health → `WorkflowRunnerNotReady` (readyz probe = Temporal connectivity)
+- Runner down → `WorkflowRunnerDown`
+
+Note: LLM provider error alerting depends on T19 circuit breaker metrics. A `CircuitBreakerOpen` alert can be added once T19 is implemented.
 
 **`deploy/helm/values.yaml`** — add:
 ```yaml
@@ -101,74 +126,98 @@ Track recent sandbox step failures. After N consecutive failures in M seconds, f
 
 **`src/cloud_agents/workflow/circuit_breaker.py`** (new):
 ```python
-class CircuitBreaker:
-    """Tracks consecutive sandbox failures and short-circuits when threshold is hit."""
+class ProviderCircuitBreaker:
+    """Per-provider circuit breaker. Tracks consecutive failures keyed by provider name.
+
+    Scope: per-process only. In multi-replica deployments, each runner
+    tracks its own breaker state independently. This is acceptable as
+    an interim step — shared state (Redis) is deferred.
+    """
 
     def __init__(self, failure_threshold: int = 5, reset_seconds: float = 60.0):
-        self._failures: int = 0
-        self._last_failure: float = 0.0
         self._threshold = failure_threshold
         self._reset_seconds = reset_seconds
+        self._providers: dict[str, _ProviderState] = {}
 
-    def record_success(self) -> None:
-        self._failures = 0
+    def record_success(self, provider: str) -> None:
+        if provider in self._providers:
+            self._providers[provider].failures = 0
 
-    def record_failure(self) -> None:
-        self._failures += 1
-        self._last_failure = time.monotonic()
+    def record_failure(self, provider: str) -> None:
+        state = self._providers.setdefault(provider, _ProviderState())
+        state.failures += 1
+        state.last_failure = time.monotonic()
 
-    def is_open(self) -> bool:
-        if self._failures < self._threshold:
+    def is_open(self, provider: str) -> bool:
+        state = self._providers.get(provider)
+        if state is None or state.failures < self._threshold:
             return False
-        elapsed = time.monotonic() - self._last_failure
+        elapsed = time.monotonic() - state.last_failure
         if elapsed > self._reset_seconds:
-            self._failures = 0
+            state.failures = 0
             return False
         return True
+
+class _ProviderState:
+    def __init__(self):
+        self.failures = 0
+        self.last_failure = 0.0
 ```
 
-**`src/cloud_agents/workflow/temporal_activities.py`** — check circuit breaker before spawning:
+**Scope limitation**: Per-process, per-provider. In multi-replica deployments, one runner can open its breaker while others keep spawning. This is acceptable for Phase 2. Shared breaker state (Redis) is a future enhancement.
+
+**`src/cloud_agents/workflow/temporal_activities.py`** — check circuit breaker keyed by provider before spawning:
 ```python
-if circuit_breaker.is_open():
-    return {"status": "failed", "error": "Circuit breaker open — too many consecutive failures"}
+provider_name = provider.get("name", "unknown")
+if circuit_breaker.is_open(provider_name):
+    return {"status": "failed", "error": f"Circuit breaker open for provider '{provider_name}'"}
 ```
-On success: `circuit_breaker.record_success()`. On failure: `circuit_breaker.record_failure()`.
+On success: `circuit_breaker.record_success(provider_name)`. On failure: `circuit_breaker.record_failure(provider_name)`.
 
 **Configuration**: `CIRCUIT_BREAKER_THRESHOLD` (default 5), `CIRCUIT_BREAKER_RESET_SECONDS` (default 60).
 
 ### Tests
 
 ```
-TestCircuitBreaker:
+TestProviderCircuitBreaker:
 
 1. test_closed_by_default
-   - New breaker → is_open() returns False
+   - New breaker → is_open("openai") returns False
 
 2. test_opens_after_threshold_failures
-   - Record 5 failures → is_open() returns True
+   - Record 5 failures for "openai" → is_open("openai") returns True
 
 3. test_resets_after_timeout
-   - Record 5 failures, wait > reset_seconds → is_open() returns False
+   - Record 5 failures, wait > reset_seconds → is_open("openai") returns False
 
 4. test_success_resets_counter
-   - Record 3 failures, then 1 success → is_open() returns False
+   - Record 3 failures for "openai", then 1 success → is_open("openai") returns False
 
 5. test_below_threshold_stays_closed
-   - Record 4 failures (threshold=5) → is_open() returns False
+   - Record 4 failures (threshold=5) → is_open("openai") returns False
+
+6. test_providers_isolated
+   - Record 5 failures for "openai" → is_open("openai") True
+   - is_open("gemini") still False (different provider)
+
+7. test_one_provider_failure_does_not_affect_another
+   - Record failures for "openai", success for "gemini"
+   - Assert each provider tracked independently
 
 TestCircuitBreakerInActivity:
 
-6. test_open_breaker_returns_failed_without_spawning
-   - Mock circuit_breaker.is_open() → True
-   - Call run_sandbox_step
+8. test_open_breaker_returns_failed_without_spawning
+   - Mock circuit_breaker.is_open("openai") → True
+   - Call run_sandbox_step with provider name "openai"
    - Assert spawner.spawn NOT called
    - Assert result status == "failed"
+   - Assert error message includes provider name
 
-7. test_success_records_on_breaker
-   - Successful sandbox step → circuit_breaker.record_success() called
+9. test_success_records_on_breaker
+   - Successful sandbox step → circuit_breaker.record_success("openai") called
 
-8. test_failure_records_on_breaker
-   - Failed sandbox step → circuit_breaker.record_failure() called
+10. test_failure_records_on_breaker
+    - Failed sandbox step → circuit_breaker.record_failure("openai") called
 ```
 
 ### Effort: 1-2 days
@@ -315,4 +364,7 @@ See `t7-rbac-design.md` Tests section.
 - [ ] T7: Approver identity recorded in workflow state
 - [ ] T7: Policy file rules enforce view/trigger/approve permissions
 - [ ] T7: Fail-closed: authz enabled + no identity → 401
+- [ ] T7: Unauthorized GET /definitions returns 403
+- [ ] T7: Unauthorized POST /definitions returns 403
+- [ ] T7: Authorized GET /definitions succeeds with VIEW_DEFS permission
 - [ ] All existing tests still pass (322 baseline)
