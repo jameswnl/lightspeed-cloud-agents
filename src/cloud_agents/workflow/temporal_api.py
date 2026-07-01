@@ -135,10 +135,13 @@ def build_temporal_router(
         caller=Depends(get_caller_identity),
     ) -> dict[str, str]:
         """Start a new workflow execution."""
+        wf_name = request.workflow_name
+        if not wf_name and request.definition:
+            wf_name = request.definition.get("metadata", {}).get("name")
         decision = await authz.authorize(
             caller,
             WorkflowAction.TRIGGER,
-            WorkflowResource(workflow_name=request.workflow_name),
+            WorkflowResource(workflow_name=wf_name),
         )
         if not decision.allowed:
             raise HTTPException(status_code=403, detail=decision.reason)
