@@ -203,6 +203,7 @@ async def _run_sandbox_step_inner(
         )
         ready = await spawner.wait_ready(endpoint, health_path="/health")
         if not ready:
+            _circuit_breaker.record_failure(provider_name)
             raise RuntimeError(
                 f"Sandbox pod '{pod_name}' never became ready for step '{step_name}'",
             )
@@ -240,6 +241,7 @@ async def _run_sandbox_step_inner(
             )
 
         if response.status_code == 502:
+            _circuit_breaker.record_failure(provider_name)
             raise RuntimeError(
                 f"Infrastructure error from sandbox (HTTP 502) for step '{step_name}'",
             )

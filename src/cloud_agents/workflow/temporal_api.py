@@ -85,6 +85,34 @@ def build_temporal_router(
 
     authz = authorizer or NoopAuthorizer()
 
+    async def _get_workflow_authz(workflow_id: str) -> WorkflowResource:
+        """Load persisted authz context for a workflow.
+
+        Queries the running Temporal workflow for its authorization context
+        captured at trigger time. Falls back to a minimal resource if the
+        query fails.
+
+        Parameters:
+            workflow_id: The workflow run identifier.
+
+        Returns:
+            WorkflowResource populated with owner/namespace/name from
+            the persisted authz context, or a minimal resource on error.
+        """
+        try:
+            handle = temporal_client.get_workflow_handle(workflow_id)
+            ctx = await handle.query(AgentWorkflow.get_authz_context)
+            if ctx:
+                return WorkflowResource(
+                    workflow_id=workflow_id,
+                    workflow_name=ctx.get("workflow_name"),
+                    owner=ctx.get("owner_username"),
+                    namespace=ctx.get("namespace"),
+                )
+        except Exception:
+            pass
+        return WorkflowResource(workflow_id=workflow_id)
+
     dependencies = [Depends(auth_dependency)] if auth_dependency else []
     router = APIRouter(
         prefix="/v1/workflows",
@@ -281,10 +309,12 @@ def build_temporal_router(
         caller=Depends(get_caller_identity),
     ) -> dict[str, str]:
         """Send an approval signal to a running workflow."""
+        resource = await _get_workflow_authz(workflow_id)
+        resource.step = request.step_name
         decision = await authz.authorize(
             caller,
             WorkflowAction.APPROVE,
-            WorkflowResource(workflow_id=workflow_id, step=request.step_name),
+            resource,
         )
         if not decision.allowed:
             raise HTTPException(status_code=403, detail=decision.reason)
@@ -292,7 +322,13 @@ def build_temporal_router(
         handle = temporal_client.get_workflow_handle(workflow_id)
         await handle.signal(
             AgentWorkflow.approve,
-            args=[request.step_name, request.decision, request.selected_option_id],
+            args=[
+                request.step_name,
+                request.decision,
+                request.selected_option_id,
+                caller.username,
+                caller.uid,
+            ],
         )
 
         from datetime import UTC, datetime
@@ -325,10 +361,11 @@ def build_temporal_router(
         caller=Depends(get_caller_identity),
     ) -> dict[str, Any]:
         """Query the current workflow status."""
+        resource = await _get_workflow_authz(workflow_id)
         view_decision = await authz.authorize(
             caller,
             WorkflowAction.VIEW,
-            WorkflowResource(workflow_id=workflow_id),
+            resource,
         )
         if not view_decision.allowed:
             raise HTTPException(status_code=403, detail=view_decision.reason)
@@ -345,10 +382,11 @@ def build_temporal_router(
         caller=Depends(get_caller_identity),
     ) -> StreamingResponse:
         """Stream workflow events via SSE, polling status every second."""
+        resource = await _get_workflow_authz(workflow_id)
         events_decision = await authz.authorize(
             caller,
             WorkflowAction.VIEW,
-            WorkflowResource(workflow_id=workflow_id),
+            resource,
         )
         if not events_decision.allowed:
             raise HTTPException(status_code=403, detail=events_decision.reason)
@@ -397,10 +435,11 @@ def build_temporal_router(
         caller=Depends(get_caller_identity),
     ) -> dict[str, str]:
         """Cancel a running workflow."""
+        resource = await _get_workflow_authz(workflow_id)
         cancel_decision = await authz.authorize(
             caller,
             WorkflowAction.CANCEL,
-            WorkflowResource(workflow_id=workflow_id),
+            resource,
         )
         if not cancel_decision.allowed:
             raise HTTPException(status_code=403, detail=cancel_decision.reason)

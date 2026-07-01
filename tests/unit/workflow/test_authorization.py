@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -262,3 +262,136 @@ class TestNamespaceParsing:
             parse_namespace_from_sa_username("system:serviceaccount:ns:name:extra")
             is None
         )
+
+
+class TestBearerMiddlewareSetsCallerIdentity:
+    """Tests that BearerAuthMiddleware sets caller_identity on request state."""
+
+    def test_bearer_middleware_sets_caller_identity(self) -> None:
+        """BearerAuthMiddleware sets anonymous CallerIdentity on request state."""
+        from cloud_agents.runtime.auth import BearerAuthMiddleware
+
+        import fastapi
+        from starlette.testclient import TestClient
+
+        token = "test-secret-token"
+
+        app = fastapi.FastAPI()
+
+        # Use Depends(get_caller_identity) to read what the middleware set,
+        # avoiding the from __future__ import annotations + Request issue.
+        @app.get("/check-identity")
+        async def check_identity(
+            caller=fastapi.Depends(get_caller_identity),
+        ):
+            return {
+                "username": caller.username,
+                "auth_mode": caller.auth_mode,
+            }
+
+        app.add_middleware(BearerAuthMiddleware, token=token)
+
+        client = TestClient(app)
+        response = client.get(
+            "/check-identity", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "anonymous"
+        assert data["auth_mode"] == "shared_secret"
+
+    def test_token_review_middleware_sets_caller_identity(self) -> None:
+        """TokenReviewAuthMiddleware sets CallerIdentity from TokenReview response."""
+        from cloud_agents.runtime.auth import TokenReviewAuthMiddleware
+
+        import fastapi
+        from starlette.testclient import TestClient
+
+        # Build a mock TokenReview result
+        mock_result = MagicMock()
+        mock_result.status.authenticated = True
+        mock_result.status.user.username = "system:serviceaccount:prod:sre-bot"
+        mock_result.status.user.uid = "uid-abc-123"
+        mock_result.status.user.groups = ["system:serviceaccounts", "team:sre"]
+
+        app = fastapi.FastAPI()
+
+        @app.get("/check-identity")
+        async def check_identity(
+            caller=fastapi.Depends(get_caller_identity),
+        ):
+            return {
+                "username": caller.username,
+                "uid": caller.uid,
+                "groups": caller.groups,
+                "auth_mode": caller.auth_mode,
+            }
+
+        app.add_middleware(TokenReviewAuthMiddleware)
+
+        client = TestClient(app)
+
+        with patch.object(
+            TokenReviewAuthMiddleware,
+            "_validate_token",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            response = client.get(
+                "/check-identity",
+                headers={"Authorization": "Bearer fake-sa-token"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "system:serviceaccount:prod:sre-bot"
+        assert data["uid"] == "uid-abc-123"
+        assert data["groups"] == ["system:serviceaccounts", "team:sre"]
+        assert data["auth_mode"] == "sa_token"
+
+
+class TestOwnerScopedAuthzDeniesNonOwner:
+    """Tests that owner-scoped authorization denies non-owners on existing workflows."""
+
+    async def test_owner_scoped_policy_denies_non_owner(self) -> None:
+        """An owner-scoped policy rule denies a non-owner on an existing workflow."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            WorkflowAuthorizer,
+        )
+
+        class OwnerOnlyAuthorizer(WorkflowAuthorizer):
+            """Authorizer that only allows the workflow owner."""
+
+            async def authorize(
+                self,
+                identity: CallerIdentity,
+                action: WorkflowAction,
+                resource: WorkflowResource,
+            ) -> AuthzDecision:
+                """Allow only if caller is the workflow owner."""
+                if resource.owner and identity.username != resource.owner:
+                    return AuthzDecision(
+                        allowed=False,
+                        reason=f"only owner '{resource.owner}' can {action.value}",
+                    )
+                return AuthzDecision(allowed=True)
+
+        authorizer = OwnerOnlyAuthorizer()
+
+        # Non-owner tries to view a workflow owned by someone else
+        caller = CallerIdentity(username="intruder", auth_mode="sa_token")
+        resource = WorkflowResource(
+            workflow_id="wf-1",
+            owner="sre-bot",
+            namespace="prod",
+        )
+
+        decision = await authorizer.authorize(caller, WorkflowAction.VIEW, resource)
+        assert decision.allowed is False
+        assert "sre-bot" in decision.reason
+
+        # Owner can view
+        owner = CallerIdentity(username="sre-bot", auth_mode="sa_token")
+        decision = await authorizer.authorize(owner, WorkflowAction.VIEW, resource)
+        assert decision.allowed is True

@@ -13,6 +13,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from cloud_agents.workflow.authorization import CallerIdentity
+
 EXEMPT_PATHS = {"/healthz", "/livez", "/metrics"}
 
 
@@ -48,6 +50,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing authorization token"},
             )
 
+        request.state.caller_identity = CallerIdentity(
+            username="anonymous", auth_mode="shared_secret"
+        )
         return await call_next(request)
 
 
@@ -85,16 +90,27 @@ class TokenReviewAuthMiddleware(BaseHTTPMiddleware):
             )
 
         token = auth_header[7:]
-        if not await self._validate_token(token):
+        review_result = await self._validate_token(token)
+        if review_result is None:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Token validation failed"},
             )
 
+        request.state.caller_identity = CallerIdentity(
+            username=review_result.status.user.username,
+            uid=review_result.status.user.uid,
+            groups=review_result.status.user.groups or [],
+            auth_mode="sa_token",
+        )
         return await call_next(request)
 
-    async def _validate_token(self, token: str) -> bool:
-        """Call K8s TokenReview API to validate the token."""
+    async def _validate_token(self, token: str) -> object | None:
+        """Call K8s TokenReview API to validate the token.
+
+        Returns:
+            The TokenReview result on success, None on failure.
+        """
         try:
             from kubernetes import client, config
 
@@ -107,9 +123,11 @@ class TokenReviewAuthMiddleware(BaseHTTPMiddleware):
                 ),
             )
             result = auth_api.create_token_review(review)
-            return result.status.authenticated
+            if result.status.authenticated:
+                return result
+            return None
         except Exception:
-            return False
+            return None
 
 
 def get_auth_mode() -> str:

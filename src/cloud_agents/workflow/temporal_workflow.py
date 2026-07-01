@@ -41,6 +41,7 @@ class AgentWorkflow:
         self._steps: dict[str, StepResult] = {}
         self._approval_decisions: dict[str, dict[str, Any]] = {}
         self._events: list[WorkflowEvent] = []
+        self._authz_context: Optional[dict[str, Any]] = None
 
     @workflow.signal
     async def approve(
@@ -48,11 +49,15 @@ class AgentWorkflow:
         step_name: str,
         decision: str,
         selected_option_id: Optional[str] = None,
+        approver_username: Optional[str] = None,
+        approver_uid: Optional[str] = None,
     ) -> None:
         """Receive an approval decision for a step."""
         self._approval_decisions[step_name] = {
             "decision": decision,
             "selected_option_id": selected_option_id,
+            "approver_username": approver_username,
+            "approver_uid": approver_uid,
         }
 
     @workflow.query
@@ -60,9 +65,16 @@ class AgentWorkflow:
         """Return current workflow status for queries."""
         return WorkflowStatus(steps=self._steps, events=self._events)
 
+    @workflow.query
+    def get_authz_context(self) -> dict[str, Any] | None:
+        """Return the workflow's authorization context."""
+        return self._authz_context
+
     @workflow.run
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
         """Execute the workflow by interpreting the YAML definition."""
+        if input.authz_context:
+            self._authz_context = input.authz_context.model_dump()
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
@@ -191,6 +203,8 @@ class AgentWorkflow:
             output={
                 "approved": approved,
                 "selected_option_id": decision_data.get("selected_option_id"),
+                "approver_username": decision_data.get("approver_username"),
+                "approver_uid": decision_data.get("approver_uid"),
             },
         )
         self._steps[output_key] = result

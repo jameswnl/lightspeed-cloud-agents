@@ -34,12 +34,12 @@ spec:
             summary: "Orphaned sandbox containers cleaned up on startup — possible prior crash"
 
         - alert: WorkflowRunnerNotReady
-          expr: probe_success{job="workflow-runner", path="/readyz"} == 0
-          for: 2m
+          expr: up{job="workflow-runner"} == 1 unless on() (ls_workflow_runs_total)
+          for: 10m
           labels:
-            severity: critical
+            severity: warning
           annotations:
-            summary: "Workflow runner readyz probe failed — Temporal connectivity lost"
+            summary: "Workflow runner is up but has not processed any workflows — possible Temporal connectivity issue"
 
         - alert: WorkflowRunnerDown
           expr: up{job="workflow-runner"} == 0

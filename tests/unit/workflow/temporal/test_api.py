@@ -882,3 +882,193 @@ class TestAuthorizationWiring:
         approver = details["approver"]
         assert approver["username"] == "anonymous"
         assert "approved_at" in approver
+
+    def test_approve_signal_includes_approver_info(
+        self,
+        mocker: MockerFixture,
+        mock_client: Any,
+    ) -> None:
+        """Approval signal passes approver username and uid to workflow."""
+        mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+
+        app = FastAPI()
+        router = build_temporal_router(mock_client)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        test_client.post(
+            "/v1/workflows/wf-test-1/approve",
+            json={"step_name": "approve-step", "decision": "approved"},
+        )
+
+        handle = mock_client.get_workflow_handle.return_value
+        handle.signal.assert_called_once()
+        signal_args = handle.signal.call_args
+        args_list = signal_args.kwargs.get("args") or signal_args[1].get("args", [])
+        # args: [step_name, decision, selected_option_id, username, uid]
+        assert len(args_list) == 5
+        assert args_list[0] == "approve-step"
+        assert args_list[1] == "approved"
+        assert args_list[2] is None  # selected_option_id
+        assert args_list[3] == "anonymous"  # approver_username
+        assert args_list[4] is None  # approver_uid (anonymous has no uid)
+
+
+class TestAuthzContextLoadedForLaterOperations:
+    """Tests that later operations load persisted authz context."""
+
+    def test_approve_loads_authz_context(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Approve endpoint queries authz context before authorization."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            CallerIdentity,
+            WorkflowAction,
+            WorkflowAuthorizer,
+            WorkflowResource,
+        )
+
+        class OwnerOnlyAuthorizer(WorkflowAuthorizer):
+            """Authorizer that only allows the workflow owner."""
+
+            async def authorize(
+                self,
+                identity: CallerIdentity,
+                action: WorkflowAction,
+                resource: WorkflowResource,
+            ) -> AuthzDecision:
+                """Allow only if caller matches owner."""
+                if resource.owner and identity.username != resource.owner:
+                    return AuthzDecision(
+                        allowed=False,
+                        reason=f"only owner '{resource.owner}' can {action.value}",
+                    )
+                return AuthzDecision(allowed=True)
+
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        # Workflow was triggered by "sre-bot", anonymous is not the owner
+        handle.query.return_value = {
+            "owner_username": "sre-bot",
+            "workflow_name": "diag",
+            "namespace": "prod",
+            "owner_groups": [],
+        }
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal, authorizer=OwnerOnlyAuthorizer()
+        )
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        # anonymous caller != sre-bot owner => should be denied
+        response = test_client.post(
+            "/v1/workflows/wf-owned/approve",
+            json={"step_name": "s1", "decision": "approved"},
+        )
+        assert response.status_code == 403
+        assert "sre-bot" in response.json()["detail"]
+
+    def test_view_loads_authz_context(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /{workflow_id} queries authz context before authorization."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            CallerIdentity,
+            WorkflowAction,
+            WorkflowAuthorizer,
+            WorkflowResource,
+        )
+
+        class OwnerOnlyAuthorizer(WorkflowAuthorizer):
+            """Authorizer that only allows the workflow owner."""
+
+            async def authorize(
+                self,
+                identity: CallerIdentity,
+                action: WorkflowAction,
+                resource: WorkflowResource,
+            ) -> AuthzDecision:
+                """Allow only if caller matches owner."""
+                if resource.owner and identity.username != resource.owner:
+                    return AuthzDecision(
+                        allowed=False,
+                        reason=f"only owner '{resource.owner}' can {action.value}",
+                    )
+                return AuthzDecision(allowed=True)
+
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        handle.query.return_value = {
+            "owner_username": "sre-bot",
+            "workflow_name": "diag",
+            "namespace": "prod",
+            "owner_groups": [],
+        }
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal, authorizer=OwnerOnlyAuthorizer()
+        )
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.get("/v1/workflows/wf-owned")
+        assert response.status_code == 403
+
+    def test_cancel_loads_authz_context(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /{workflow_id}/cancel queries authz context before authorization."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            CallerIdentity,
+            WorkflowAction,
+            WorkflowAuthorizer,
+            WorkflowResource,
+        )
+
+        class OwnerOnlyAuthorizer(WorkflowAuthorizer):
+            """Authorizer that only allows the workflow owner."""
+
+            async def authorize(
+                self,
+                identity: CallerIdentity,
+                action: WorkflowAction,
+                resource: WorkflowResource,
+            ) -> AuthzDecision:
+                """Allow only if caller matches owner."""
+                if resource.owner and identity.username != resource.owner:
+                    return AuthzDecision(
+                        allowed=False,
+                        reason=f"only owner '{resource.owner}' can {action.value}",
+                    )
+                return AuthzDecision(allowed=True)
+
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        handle.query.return_value = {
+            "owner_username": "sre-bot",
+            "workflow_name": "diag",
+            "namespace": "prod",
+            "owner_groups": [],
+        }
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal, authorizer=OwnerOnlyAuthorizer()
+        )
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/wf-owned/cancel")
+        assert response.status_code == 403
