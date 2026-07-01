@@ -1,8 +1,9 @@
 # Phase 1 — Implementation Plan
 
-**Tasks**: T1, T3, T22, T36
+**Tasks**: T1, T3, T22
 **Focus**: High value, enables other work
-**Reviewed by**: `implementation-plan-review-round-1.md` — 5 findings addressed below
+**T36 deferred**: Agent progress streaming requires more architecture/design discussion before implementation. Remains Phase 1 priority but not in this implementation cycle.
+**Reviewed by**: `implementation-plan-review-round-1.md` — 5 findings addressed; `implementation-plan-review-round-2.md` — 2 findings addressed; T36 deferred per user direction
 
 ---
 
@@ -227,10 +228,12 @@ Add a side-channel streaming path so callers can see agent LLM tokens, tool call
 
 This is explicitly a **single-runner stepping stone**. Multi-replica streaming (via Redis or external event store) is deferred to a future phase. The plan must not claim multi-replica support.
 
-**Callback addressing**: The runner's callback base URL is configured via `WORKFLOW_RUNNER_CALLBACK_URL` env var. The activity derives per-step progress endpoints from it:
-- K8s: `http://workflow-runner.{namespace}.svc:8080` (Service DNS)
-- Podman: `http://workflow-runner:8080` (container DNS on shared network)
-- Dev: `http://localhost:8080`
+**Callback addressing**: The runner's callback base URL is configured via `WORKFLOW_RUNNER_CALLBACK_URL` env var. The value must be routable from **inside the spawned sandbox container**, not from the operator's host shell. Examples:
+- K8s: `http://workflow-runner.{namespace}.svc:8080` (Service DNS, reachable from any pod in the cluster)
+- Podman: `http://workflow-runner:8080` (container DNS on shared Podman network)
+- Dev (Podman): `http://host.containers.internal:8080` (Podman's host gateway, when runner runs on the host)
+
+`localhost` is NOT valid — from inside the sandbox container, `localhost` refers to the sandbox itself, not the runner.
 
 If `WORKFLOW_RUNNER_CALLBACK_URL` is not set, progress streaming is disabled (no `progressUrl` in request body). This makes it opt-in.
 
@@ -421,10 +424,11 @@ The sandbox needs to POST progress events to `progressUrl` during execution. Thi
 T3 (metrics)  ─── independent, do first (half day)
 T22 (provider) ── independent (half day)
 T1 (permissions) ─ independent (half day)
-T36 (streaming) ── largest task, start after T1/T3/T22 (1-2 weeks)
 ```
 
-T1, T3, T22 can run in parallel. T36 is the big one and should start once the smaller tasks are verified.
+All three can run in parallel. Total effort: ~1.5 days.
+
+T36 (streaming) deferred — needs architecture design discussion first.
 
 ## Verification Checklist
 
@@ -435,6 +439,4 @@ T1, T3, T22 can run in parallel. T36 is the big one and should start once the sm
 - [ ] T3: Failed destroy increments failure counter
 - [ ] T22: `model_provider` in ProviderConfig → overrides env var
 - [ ] T22: No `model_provider` → falls back to env var
-- [ ] T36: Progress events flow from sandbox → runner → SSE
-- [ ] T36: SSE backward compatible when no progress events exist
 - [ ] All existing tests still pass (307 baseline)
