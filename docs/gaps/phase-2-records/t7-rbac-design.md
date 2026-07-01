@@ -33,13 +33,73 @@ However, Cloud Agents **can** use K8s RBAC as a backend for authorization decisi
 
 ## Design
 
-### Layer 1: Identity Extraction (already done)
+### Layer 1: Identity Extraction (needs implementation)
 
-The current auth middleware extracts the caller's identity:
-- **Shared secret mode**: All callers share the same token. No individual identity. Suitable for single-team / Podman deployments.
-- **SA token mode**: K8s TokenReview validates the token and returns the authenticated user (ServiceAccount name + namespace). This gives us per-caller identity.
+The current auth middleware validates tokens but does NOT expose caller identity to the request context. It returns 401/200 only. Layer 2 and Layer 3 require a `CallerIdentity` object attached to every authenticated request.
 
-**No changes needed here.** The auth middleware stays as-is. We add an authorization layer on top.
+**What to build**:
+
+```python
+class CallerIdentity(BaseModel):
+    """Authenticated caller identity attached to request state."""
+    username: str              # e.g. "system:serviceaccount:default:sre-bot"
+    uid: str | None = None     # K8s UID from TokenReview
+    groups: list[str] = []     # e.g. ["system:serviceaccounts", "team:sre"]
+    auth_mode: Literal["shared_secret", "sa_token", "jwt"]
+```
+
+**Identity contract per auth mode**:
+
+| Auth mode | `username` | `uid` | `groups` | Source |
+|-----------|-----------|-------|----------|--------|
+| Shared secret | `"anonymous"` | None | `[]` | Static — no individual identity. **This is coarse deployment-level auth, NOT per-user RBAC.** |
+| SA token (TokenReview) | `status.user.username` | `status.user.uid` | `status.user.groups` | K8s TokenReview response |
+| JWT (future) | `sub` claim | `sub` claim | `groups` claim | JWT payload |
+
+**Middleware changes**: Auth middleware sets `request.state.caller_identity = CallerIdentity(...)` after successful validation. A FastAPI dependency `get_caller_identity(request: Request) -> CallerIdentity` extracts it.
+
+```python
+async def get_caller_identity(request: Request) -> CallerIdentity:
+    """FastAPI dependency to extract caller identity from request state."""
+    identity = getattr(request.state, "caller_identity", None)
+    if identity is None:
+        return CallerIdentity(username="anonymous", auth_mode="shared_secret")
+    return identity
+```
+
+### Layer 1b: Persisted Authorization Context
+
+When a workflow is triggered, capture immutable authz metadata and store it in the `WorkflowInput` (which Temporal persists as workflow state). Later operations (`approve`, `view`, `cancel`) look this up to authorize.
+
+```python
+class WorkflowAuthzContext(BaseModel):
+    """Immutable authorization context captured at workflow trigger time."""
+    owner_username: str                # Who triggered the workflow
+    owner_groups: list[str] = []       # Caller's groups/teams at trigger time
+    workflow_name: str                 # Definition name (for pattern matching)
+    namespace: str | None = None       # K8s namespace (from caller SA or config)
+```
+
+**Stored in**: `WorkflowInput.authz_context` — persisted by Temporal as part of workflow state.
+
+**Retrieved by**: The API handler queries `AgentWorkflow.get_status()` which returns the authz context alongside step results. The authorizer uses this for approve/view/cancel checks:
+
+```python
+# For approve/view/cancel:
+authz_ctx = await get_workflow_authz_context(workflow_id)  # from Temporal query
+decision = await authz.authorize(
+    caller,
+    WorkflowAction.APPROVE,
+    WorkflowResource(
+        workflow_id=workflow_id,
+        workflow_name=authz_ctx.workflow_name,
+        owner=authz_ctx.owner_username,
+        namespace=authz_ctx.namespace,
+    ),
+)
+```
+
+**Namespace derivation**: For K8s SA token mode, namespace comes from the ServiceAccount's namespace in the TokenReview response. For Podman/shared secret, namespace is None (no namespace scoping).
 
 ### Layer 2: Authorization (new)
 
@@ -86,6 +146,8 @@ class NoopAuthorizer(WorkflowAuthorizer):
 ```
 
 Used when: `WORKFLOW_AUTHZ=none` (default) or Podman deployments with shared secret auth.
+
+**Limitation**: This is deployment-level authorization only, NOT per-user/team RBAC. All callers are indistinguishable. Suitable when a single team owns all workflows.
 
 #### Backend 2: `PolicyFileAuthorizer` (static rules, any deployment)
 
@@ -145,7 +207,18 @@ Used when: `WORKFLOW_AUTHZ=policy` + `WORKFLOW_AUTHZ_POLICY_PATH=/etc/cloud-agen
 - **JWT mode**: Identity = `"user:{username}"` or `"team:{group}"` (from JWT claims)
 - **Shared secret mode**: Identity = `"anonymous"` (no individual identity — all callers match the same rules)
 
-#### Backend 3: `K8sSubjectAccessReview` (K8s-native, OCP)
+#### Backend 3: `K8sSubjectAccessReview` — DEFERRED
+
+**Deferred from this phase.** The SAR resource model needs more design work:
+- Single `workflows` resource doesn't distinguish workflow runs from definitions
+- Namespace scope is undefined for Temporal executions
+- Verb mapping (`create`/`update`/`get`/`delete`) doesn't cleanly map to workflow actions
+
+Ship `NoopAuthorizer` + `PolicyFileAuthorizer` first. SAR backend can be added when the resource model is defined (potentially when/if CRDs are introduced).
+
+**Original design (reference only):**
+
+##### K8sSubjectAccessReview (K8s-native, OCP)
 
 Delegates authorization to the K8s API server via SubjectAccessReview. Uses the caller's token to ask "can this user perform this action on this resource?"
 
@@ -314,25 +387,26 @@ authorization:
 
 3. **Per-step approval RBAC** — The operator's ProposalApproval CR allows different users to approve different steps. Cloud Agents can do this with PolicyFile rules that include `conditions.risk_levels` — a user can be authorized to approve low-risk steps but not high-risk ones.
 
-## Implementation Plan
+## Implementation Plan (revised — SAR deferred)
 
 | Step | What | Effort |
 |---|---|---|
-| 1 | Define `WorkflowAction`, `CallerIdentity`, `WorkflowResource`, `AuthzDecision` models | 2 hours |
-| 2 | Implement `WorkflowAuthorizer` ABC + `NoopAuthorizer` | 1 hour |
-| 3 | Implement `PolicyFileAuthorizer` with YAML loading + rule matching | 1 day |
-| 4 | Wire authorizer into `build_temporal_router` — add authorization checks to all endpoints | 1 day |
-| 5 | Implement `CallerIdentity` extraction from auth context (SA token → username, JWT → claims) | Half day |
-| 6 | Add `ApproverInfo` to approval signal + workflow state | Half day |
-| 7 | Implement `K8sSARAuthorizer` | 1 day |
-| 8 | Add RBAC ClusterRole examples to Helm chart | Half day |
-| 9 | Tests: unit (all 3 backends) + integration (policy rules) + E2E (K8s SAR on Kind) | 2 days |
-| **Total** | | **~6-7 days** |
+| 1 | Define `CallerIdentity`, `WorkflowAction`, `WorkflowResource`, `WorkflowAuthzContext`, `AuthzDecision`, `ApproverInfo` models | 2 hours |
+| 2 | Implement `CallerIdentity` extraction — update auth middleware to attach identity to request state, add `get_caller_identity` dependency | Half day |
+| 3 | Implement `WorkflowAuthorizer` ABC + `NoopAuthorizer` | 1 hour |
+| 4 | Implement `PolicyFileAuthorizer` with YAML loading + rule matching | 1 day |
+| 5 | Wire authorizer into `build_temporal_router` — add authorization checks to all endpoints | 1 day |
+| 6 | Add `WorkflowAuthzContext` to `WorkflowInput` — capture owner identity at trigger time, persist in Temporal state, expose via status query | Half day |
+| 7 | Add `ApproverInfo` to approval signal + workflow state | Half day |
+| 8 | Tests | 1.5 days |
+| **Total** | | **~5 days** |
+
+K8sSARAuthorizer deferred — resource model needs more design work (see Backend 3 section).
 
 ## Tests
 
 ```
-tests/unit/agents/workflow/test_authorizer.py:
+tests/unit/workflow/test_authorizer.py:
   TestNoopAuthorizer:
     test_allows_everything
 
@@ -344,24 +418,29 @@ tests/unit/agents/workflow/test_authorizer.py:
     test_default_deny_trigger
     test_risk_level_condition_on_approve
     test_identity_matching_sa_token
-    test_identity_matching_jwt_user
     test_identity_matching_anonymous
-
-  TestK8sSARAuthorizer:
-    test_allowed_by_sar
-    test_denied_by_sar
-    test_action_to_verb_mapping
+    test_owner_scoped_rule (approve only own workflows)
 
   TestCallerIdentity:
     test_from_sa_token_review
-    test_from_jwt_claims
-    test_anonymous_fallback
+    test_anonymous_fallback_shared_secret
+    test_get_caller_identity_dependency
 
-tests/e2e/temporal/test_temporal_rbac.py:
+  TestWorkflowAuthzContext:
+    test_context_captured_at_trigger
+    test_context_persisted_in_workflow_state
+    test_context_available_for_approve_check
+
+  TestApproverInfo:
+    test_approver_recorded_in_step_result
+    test_approver_identity_from_caller
+
+tests/unit/workflow/temporal/test_api.py (additions):
   test_unauthorized_trigger_returns_403
   test_authorized_trigger_succeeds
   test_unauthorized_approve_returns_403
-  test_approver_identity_recorded_in_state
-  test_policy_file_loaded_from_config
-  test_k8s_sar_on_kind_cluster
+  test_approver_identity_in_signal
+
+tests/integration/:
+  test_policy_file_loaded_and_enforced
 ```
