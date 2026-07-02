@@ -91,5 +91,6 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image with cosign
+        continue-on-error: true
         run: |
           cosign sign --yes ${{ steps.push_image.outputs.registry-path }}@${{ steps.push_image.outputs.digest }}
