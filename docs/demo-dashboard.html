@@ -540,6 +540,23 @@ const app = {
     }
 
     if (isPaused && step.type === 'human-approval') {
+      const stepIdx = this.steps.findIndex(s => s.name === stepName);
+      const priorOutputs = this.steps.slice(0, stepIdx)
+        .filter(s => this.stepData[s.name])
+        .map(s => ({ name: s.name, output: this.stepData[s.name] }));
+
+      if (priorOutputs.length > 0) {
+        html += `<div class="detail-section">
+          <div class="detail-section-title">Prior Step Results (Review Before Approving)</div>`;
+        for (const prior of priorOutputs) {
+          html += `<div style="margin-bottom:8px;">
+            <div style="font-size:12px; font-weight:600; color:#3fb950; margin-bottom:4px;">${esc(prior.name)}</div>
+            <div class="detail-json">${syntaxHL(prior.output)}</div>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+
       html += `<div class="detail-section">
         <div class="detail-section-title">Approval Required</div>
         <p style="color:#d29922; font-size:13px; margin-bottom:12px;">${esc(step.message || 'Approve this step?')}</p>
