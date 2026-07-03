@@ -126,9 +126,15 @@ async def _run_sandbox_step_inner(
     if cred_secret and (cred_val := os.environ.get(cred_secret)):
         env_vars[cred_secret] = cred_val
 
-    # MCP server injection
+    # MCP server injection — step references servers by name from workflow-level catalog
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    raw_mcp_servers = input.get("mcp_servers")
+    step_mcp_names = step.get("mcp_servers")
+    all_mcp_servers = input.get("mcp_servers") or []
+    if step_mcp_names:
+        mcp_by_name = {s["name"]: s for s in all_mcp_servers}
+        raw_mcp_servers = [mcp_by_name[n] for n in step_mcp_names if n in mcp_by_name]
+    else:
+        raw_mcp_servers = None
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:

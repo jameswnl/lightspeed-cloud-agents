@@ -251,6 +251,7 @@ const SCENARIOS = [
         { name: 'gather-context', type: 'agent', output_key: 'context',
           prompt: 'You MUST use your filesystem tools to read all files in the /data/ directory. Read each file (cluster-status.txt, change-log.txt, runbook.md) and summarize what you find. Identify the root cause of any issues and which runbook step applies. Do NOT make up information — only report what the files contain.',
           output_schema: { type: 'object', properties: { summary: {type:'string'}, findings: {type:'array', items: {type:'string'}}, root_cause: {type:'string'}, runbook_step: {type:'string'} }, required: ['summary','root_cause'] },
+          mcp_servers: ['filesystem'],
           timeout_seconds: 120 },
         { name: 'recommend', type: 'agent', output_key: 'recommendation',
           prompt: 'Based on the findings: {{ steps.context.output.summary }}. Root cause: {{ steps.context.output.root_cause }}. Provide actionable recommendations following the runbook.',

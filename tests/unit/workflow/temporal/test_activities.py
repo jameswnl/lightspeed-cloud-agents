@@ -717,7 +717,10 @@ class TestMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "step": {
+                    "name": "s1", "prompt": "check", "output_key": "r1",
+                    "mcp_servers": ["sn"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -812,7 +815,8 @@ class TestMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["servicenow"]},
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -872,7 +876,8 @@ class TestMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["servicenow"]},
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -921,7 +926,8 @@ class TestMCPInjection:
         with pytest.raises(ValueError, match="not in MCP_ALLOWED_SECRETS"):
             await run_sandbox_step(
                 {
-                    "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                    "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                             "mcp_servers": ["sn"]},
                     "workflow_id": "wf-1",
                     "provider": {
                         "name": "openai",
@@ -975,7 +981,8 @@ class TestMCPInjection:
 
         result = await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["sn"]},
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -1001,6 +1008,179 @@ class TestMCPInjection:
         )
 
         assert result["status"] == "completed"
+
+
+class TestPerStepMCPInjection:
+    """Tests for per-step MCP server selection from workflow-level catalog."""
+
+    @pytest.mark.asyncio
+    async def test_step_without_mcp_servers_gets_none(self, mocker: MockerFixture) -> None:
+        """Step without mcp_servers key gets no LIGHTSPEED_MCP_SERVERS env var."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {"name": "filesystem", "url": "http://mcp:8081/sse"},
+                    {"name": "jira", "url": "http://jira:8082/sse"},
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert "LIGHTSPEED_MCP_SERVERS" not in env_vars
+
+    @pytest.mark.asyncio
+    async def test_step_selects_subset_from_catalog(self, mocker: MockerFixture) -> None:
+        """Step with mcp_servers: ['filesystem'] only gets that server."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["filesystem"]},
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {"name": "filesystem", "url": "http://mcp:8081/sse"},
+                    {"name": "jira", "url": "http://jira:8082/sse"},
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        import json
+        mcp_json = json.loads(env_vars["LIGHTSPEED_MCP_SERVERS"])
+        assert len(mcp_json) == 1
+        assert mcp_json[0]["name"] == "filesystem"
+
+    @pytest.mark.asyncio
+    async def test_step_selects_multiple_from_catalog(self, mocker: MockerFixture) -> None:
+        """Step with mcp_servers: ['filesystem', 'jira'] gets both."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["filesystem", "jira"]},
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {"name": "filesystem", "url": "http://mcp:8081/sse"},
+                    {"name": "jira", "url": "http://jira:8082/sse"},
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        import json
+        mcp_json = json.loads(env_vars["LIGHTSPEED_MCP_SERVERS"])
+        assert len(mcp_json) == 2
+        names = {s["name"] for s in mcp_json}
+        assert names == {"filesystem", "jira"}
+
+    @pytest.mark.asyncio
+    async def test_step_references_unknown_server_skipped(self, mocker: MockerFixture) -> None:
+        """Step referencing unknown MCP server name silently skips it."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
+                         "mcp_servers": ["nonexistent"]},
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+                "mcp_servers": [
+                    {"name": "filesystem", "url": "http://mcp:8081/sse"},
+                ],
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert "LIGHTSPEED_MCP_SERVERS" not in env_vars
 
 
 class TestOutputSchemaForwarding:
