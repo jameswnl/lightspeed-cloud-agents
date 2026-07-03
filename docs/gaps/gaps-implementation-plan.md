@@ -11,7 +11,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43, T48 |
-| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23 |
+| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
@@ -597,6 +597,20 @@ Image signing attestation and software bill of materials.
 - Policy violations return 422 with details
 
 **Effort**: 1-2 days for basic content rules; 1 week for configurable policy engine
+
+### T49: Validate output_schema before submission [Phase 3b]
+
+**Status**: Open
+
+**Problem**: Users can submit workflow definitions with invalid `output_schema` (e.g. `type: array` without `items`). The framework passes the schema through to the LLM provider, which rejects it at runtime with a cryptic 400 error (e.g. OpenAI: "array schema missing items"). The user sees `agent returned success=false` with no indication that the schema was invalid.
+
+**What to build**:
+- Validate `output_schema` in `temporal_validation.py` at definition submission time
+- Check JSON Schema validity: arrays must have `items`, objects should have `properties`
+- Provider-specific rules: OpenAI structured output requires `additionalProperties: false` on objects (warn if missing)
+- Return 422 with clear error message: "output_schema for step 'X': array type requires 'items' definition"
+
+**Effort**: 1 day
 
 ### T48: Sandbox inter-pod auth + TLS [Phase 3a]
 
