@@ -72,6 +72,7 @@ services:
 
   mcp-filesystem:
     image: docker.io/library/node:22-slim
+    restart: unless-stopped
     volumes:
       - ../../demo-data:/data:ro
     command: >
