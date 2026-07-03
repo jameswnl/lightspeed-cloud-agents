@@ -56,6 +56,10 @@ a { color: #58a6ff; text-decoration: none; }
 .step-node.completed { border-color: #238636; }
 .step-node.failed { border-color: #da3633; }
 .step-node.paused { border-color: #9e6a03; }
+.step-node.active-detail { box-shadow: 0 0 0 2px #58a6ff; }
+.step-detail-link { display: none; font-size: 10px; color: #58a6ff; margin-top: 8px; cursor: pointer; }
+.step-detail-link:hover { color: #79c0ff; text-decoration: underline; }
+.step-node.active-detail .step-detail-link { display: block; }
 .step-type-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
 .step-type-badge.agent { background: #0d2818; color: #3fb950; }
 .step-type-badge.approval { background: #2d2000; color: #d29922; }
@@ -433,6 +437,7 @@ const app = {
         </div>
         <div class="sandbox-ind" id="sb-${step.name}"></div>
         <div class="step-output-preview" id="op-${step.name}"></div>
+        <div class="step-detail-link" id="dl-${step.name}">&#9654; Details</div>
       `;
       el.appendChild(node);
 
@@ -513,9 +518,9 @@ const app = {
 
     this.activeDetailStep = stepName;
 
-    document.querySelectorAll('.step-node').forEach(n => n.classList.remove('selected'));
+    document.querySelectorAll('.step-node').forEach(n => { n.classList.remove('selected'); n.classList.remove('active-detail'); });
     const node = $('step-' + stepName);
-    if (node) node.classList.add('selected');
+    if (node) { node.classList.add('selected'); node.classList.add('active-detail'); }
 
     const output = this.stepData[stepName] || this.stepData[step.output_key];
     const statusIcon = $('si-' + stepName);
