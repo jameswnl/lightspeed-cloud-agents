@@ -163,7 +163,9 @@ class PodmanSpawner(AgentSpawner):
                 if host_port:
                     break
 
-        if host_port:
+        if self._podman_url:
+            endpoint = f"http://{container_name}:8080"
+        elif host_port:
             endpoint = f"http://localhost:{host_port}"
         else:
             endpoint = f"http://{container_name}:8080"
