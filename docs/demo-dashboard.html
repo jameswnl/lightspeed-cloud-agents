@@ -249,7 +249,7 @@ const SCENARIOS = [
       metadata: { name: 'mcp-tool-demo' },
       spec: { steps: [
         { name: 'gather-context', type: 'agent', output_key: 'context',
-          prompt: 'Gather context about the api-backend service: check for recent changes, open issues, and current health status. Summarize your findings.',
+          prompt: 'You MUST use your filesystem tools to read all files in the /data/ directory. Read each file (cluster-status.txt, change-log.txt, runbook.md) and summarize what you find. Identify the root cause of any issues and which runbook step applies. Do NOT make up information — only report what the files contain.',
           output_schema: { type: 'object', properties: { summary: {type:'string'}, findings: {type:'array', items: {type:'string'}}, risk_assessment: {type:'string'} }, required: ['summary'] },
           timeout_seconds: 90 },
         { name: 'recommend', type: 'agent', output_key: 'recommendation',
