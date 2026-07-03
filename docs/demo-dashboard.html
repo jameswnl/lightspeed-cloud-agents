@@ -498,19 +498,24 @@ const app = {
     log.scrollTop = log.scrollHeight;
   },
 
+  activeDetailStep: null,
+
   showDetail(stepName) {
     const panel = $('detail-panel');
     const inner = $('detail-inner');
     const step = this.steps.find(s => s.name === stepName);
     if (!step) return;
 
+    this.activeDetailStep = stepName;
+
     document.querySelectorAll('.step-node').forEach(n => n.classList.remove('selected'));
     const node = $('step-' + stepName);
     if (node) node.classList.add('selected');
 
-    const output = this.stepData[stepName];
+    const output = this.stepData[stepName] || this.stepData[step.output_key];
     const statusIcon = $('si-' + stepName);
     const isPaused = statusIcon && statusIcon.classList.contains('paused');
+    const isRunning = statusIcon && statusIcon.classList.contains('running');
 
     let html = `
       <div class="detail-header">
@@ -518,10 +523,32 @@ const app = {
         <button class="detail-close" onclick="app.closeDetail()">✕</button>
       </div>`;
 
-    if (step.prompt) {
+    if (step.type === 'agent') {
+      let prompt = step.prompt || '';
+      for (const s of this.steps) {
+        const sOut = this.stepData[s.name] || this.stepData[s.output_key];
+        if (sOut) {
+          const re = new RegExp('\\{\\{\\s*steps\\.' + s.output_key + '\\.output\\.(\\w+)\\s*\\}\\}', 'g');
+          prompt = prompt.replace(re, (m, field) => sOut[field] || m);
+        }
+      }
       html += `<div class="detail-section">
-        <div class="detail-section-title">Prompt</div>
-        <div class="detail-json">${esc(step.prompt)}</div>
+        <div class="detail-section-title">Prompt (Input)</div>
+        <div class="detail-json">${esc(prompt)}</div>
+      </div>`;
+    }
+
+    if (step.message) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Message</div>
+        <div class="detail-json">${esc(step.message)}</div>
+      </div>`;
+    }
+
+    if (step.condition) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Condition</div>
+        <div class="detail-json">${esc(step.condition)}</div>
       </div>`;
     }
 
@@ -529,6 +556,11 @@ const app = {
       html += `<div class="detail-section">
         <div class="detail-section-title">Output</div>
         <div class="detail-json">${syntaxHL(output)}</div>
+      </div>`;
+    } else if (isRunning) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Output</div>
+        <div class="detail-json" style="color:#484f58;">Waiting for agent to complete...</div>
       </div>`;
     }
 
@@ -572,6 +604,7 @@ const app = {
   },
 
   closeDetail() {
+    this.activeDetailStep = null;
     $('detail-panel').classList.remove('open');
     document.querySelectorAll('.step-node').forEach(n => n.classList.remove('selected'));
   },
@@ -682,15 +715,22 @@ const app = {
         const r = await fetch(this.apiUrl + '/v1/workflows/' + wfId);
         if (!r.ok) return;
         const data = await r.json();
+        let newData = false;
         for (const [key, result] of Object.entries(data.steps || {})) {
           if (result.output && !this.stepData[key]) {
             this.stepData[key] = result.output;
-            const preview = $('op-' + key);
+            newData = true;
+            const step = this.steps.find(s => s.output_key === key);
+            const previewKey = step ? step.name : key;
+            const preview = $('op-' + previewKey);
             if (preview && result.output) {
               const summary = typeof result.output === 'object' ? (result.output.summary || result.output.health_status || result.output.compliance_status || JSON.stringify(result.output).slice(0, 60)) : '';
               preview.textContent = summary;
             }
           }
+        }
+        if (newData && this.activeDetailStep) {
+          this.showDetail(this.activeDetailStep);
         }
       } catch {}
     }, 3000);
