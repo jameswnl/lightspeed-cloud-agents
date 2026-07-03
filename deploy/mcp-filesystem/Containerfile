@@ -4,4 +4,4 @@ RUN npm install -g @modelcontextprotocol/server-filesystem supergateway
 
 EXPOSE 8081
 
-CMD ["supergateway", "--stdio", "npx @modelcontextprotocol/server-filesystem /data", "--port", "8081"]
+CMD ["supergateway", "--stdio", "npx @modelcontextprotocol/server-filesystem /data", "--port", "8081", "--outputTransport", "streamableHttp", "--statefulMode"]
