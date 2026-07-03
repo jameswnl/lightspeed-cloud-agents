@@ -7,6 +7,7 @@ cancelling Temporal-backed agent workflows.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -418,7 +419,7 @@ def build_temporal_router(
                             if hasattr(event, "model_dump")
                             else event
                         )
-                        yield f"data: {data}\n\n"
+                        yield f"data: {json.dumps(data)}\n\n"
                     seen_count = len(events)
 
                     steps = result.steps if hasattr(result, "steps") else {}
