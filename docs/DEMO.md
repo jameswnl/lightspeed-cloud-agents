@@ -116,6 +116,10 @@ helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
 
 ---
 
+## Demo Recording
+
+See [examples/cloud-agents-demo-1.mov](../examples/cloud-agents-demo-1.mov) for a recorded walkthrough of the K8s Incident Response scenario (diagnose → approve → fix → verify).
+
 ## Part 3: Demo Dashboard
 
 The interactive dashboard visualizes workflow execution in real-time.
