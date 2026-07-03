@@ -16,7 +16,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus
 
 from cloud_agents.workflow.audit import emit_audit
 from cloud_agents.workflow.definition_store import DefinitionStore
@@ -422,35 +422,20 @@ def build_temporal_router(
                         yield f"data: {json.dumps(data)}\n\n"
                     seen_count = len(events)
 
-                    steps = result.steps if hasattr(result, "steps") else {}
-                    events_list = result.events if hasattr(result, "events") else []
-                    terminal_statuses = (
-                        "completed", "failed", "skipped", "denied", "escalated",
-                    )
-                    resolved_steps = {
-                        (e.step if hasattr(e, "step") else e.get("step", ""))
-                        for e in events_list
-                        if (e.type if hasattr(e, "type") else e.get("type", ""))
-                        in ("step.completed", "step.failed", "step.denied", "step.skipped")
-                    }
-                    still_paused = any(
-                        (e.step if hasattr(e, "step") else e.get("step", ""))
-                        not in resolved_steps
-                        for e in events_list
-                        if (e.type if hasattr(e, "type") else e.get("type", ""))
-                        == "workflow.paused"
-                    )
-                    all_terminal = (
-                        steps
-                        and not still_paused
-                        and all(
-                            s.status in terminal_statuses
-                            for s in steps.values()
-                        )
-                    )
-                    if all_terminal:
-                        yield 'data: {"type": "workflow.completed"}\n\n'
-                        break
+                    try:
+                        desc = await handle.describe()
+                        wf_status = desc.status
+                        if wf_status in (
+                            WorkflowExecutionStatus.COMPLETED,
+                            WorkflowExecutionStatus.FAILED,
+                            WorkflowExecutionStatus.CANCELED,
+                            WorkflowExecutionStatus.TERMINATED,
+                            WorkflowExecutionStatus.TIMED_OUT,
+                        ):
+                            yield 'data: {"type": "workflow.completed"}\n\n'
+                            break
+                    except Exception:
+                        pass
                 except Exception:
                     yield 'data: {"type": "workflow.error"}\n\n'
                     break

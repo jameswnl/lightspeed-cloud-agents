@@ -931,6 +931,16 @@ class TestSSEEventStream:
         ]
         return WorkflowStatus(steps=step_results, events=event_objs)
 
+    def _make_describe(self, status_name="RUNNING"):
+        """Build a mock workflow description with execution status."""
+        from unittest.mock import MagicMock
+
+        from temporalio.client import WorkflowExecutionStatus
+
+        desc = MagicMock()
+        desc.status = getattr(WorkflowExecutionStatus, status_name)
+        return desc
+
     def _collect_sse(self, response) -> list[dict]:
         """Parse SSE data lines from a streaming response."""
         import ast
@@ -973,6 +983,7 @@ class TestSSEEventStream:
             )
 
         handle.query = query_status
+        handle.describe = mocker.AsyncMock(return_value=self._make_describe("RUNNING"))
 
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
@@ -990,11 +1001,12 @@ class TestSSEEventStream:
         self,
         mocker: MockerFixture,
     ) -> None:
-        """SSE emits workflow.completed when all steps are terminal."""
+        """SSE emits workflow.completed when Temporal reports workflow finished."""
         mock_temporal = mocker.MagicMock()
         handle = mocker.AsyncMock()
         mock_temporal.get_workflow_handle.return_value = handle
 
+        handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
         handle.query = mocker.AsyncMock(return_value=self._make_status(
             steps={
                 "diagnosis": {"status": "completed"},
@@ -1061,6 +1073,17 @@ class TestSSEEventStream:
 
         handle.query = query_status
 
+        desc_count = 0
+
+        async def describe_status():
+            nonlocal desc_count
+            desc_count += 1
+            if desc_count == 1:
+                return self._make_describe("RUNNING")
+            return self._make_describe("COMPLETED")
+
+        handle.describe = describe_status
+
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
         app.include_router(router)
@@ -1106,6 +1129,17 @@ class TestSSEEventStream:
 
         handle.query = query_status
 
+        desc_count = 0
+
+        async def describe_status():
+            nonlocal desc_count
+            desc_count += 1
+            if desc_count == 1:
+                return self._make_describe("RUNNING")
+            return self._make_describe("COMPLETED")
+
+        handle.describe = describe_status
+
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
         app.include_router(router)
@@ -1123,11 +1157,12 @@ class TestSSEEventStream:
         self,
         mocker: MockerFixture,
     ) -> None:
-        """SSE emits workflow.completed when step fails (no pause)."""
+        """SSE emits workflow.completed when Temporal reports workflow finished after failure."""
         mock_temporal = mocker.MagicMock()
         handle = mocker.AsyncMock()
         mock_temporal.get_workflow_handle.return_value = handle
 
+        handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
         handle.query = mocker.AsyncMock(return_value=self._make_status(
             steps={
                 "diagnosis": {"status": "failed", "error": "retries exhausted"},
@@ -1161,6 +1196,7 @@ class TestSSEEventStream:
         handle = mocker.AsyncMock()
         mock_temporal.get_workflow_handle.return_value = handle
 
+        handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
         handle.query = mocker.AsyncMock(return_value=self._make_status(
             steps={"r1": {"status": "completed"}},
             events=[
@@ -1185,11 +1221,12 @@ class TestSSEEventStream:
         self,
         mocker: MockerFixture,
     ) -> None:
-        """workflow.paused then step.denied resolves the pause — stream can complete."""
+        """workflow.paused then step.denied — Temporal reports completed."""
         mock_temporal = mocker.MagicMock()
         handle = mocker.AsyncMock()
         mock_temporal.get_workflow_handle.return_value = handle
 
+        handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
         handle.query = mocker.AsyncMock(return_value=self._make_status(
             steps={
                 "diagnosis": {"status": "completed"},
