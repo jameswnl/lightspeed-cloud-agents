@@ -335,7 +335,7 @@ svg { width: 100%; height: auto; display: block; }
 <!-- TAB: DIAGNOSTIC WORKFLOW                                      -->
 <!-- ============================================================ -->
 <div id="tab-wf" class="tab-content">
-<h2>diagnose &rarr; approve &rarr; fix &rarr; verify &nbsp;(each step spawns a fresh sandbox container via Temporal)</h2>
+<h2>diagnose &rarr; approve &rarr; fix &rarr; verify &nbsp;(each step spawns a fresh sandbox running a complete agent loop &mdash; multiple LLM turns + tool calls)</h2>
 
 <div class="scene">
 <svg viewBox="0 0 1140 580" xmlns="http://www.w3.org/2000/svg">

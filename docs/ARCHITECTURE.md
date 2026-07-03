@@ -101,7 +101,9 @@ The stateless workflow engine. A FastAPI app that embeds a Temporal worker. Rece
 
 ### Sandbox Runtime
 
-A spawned runtime is an HTTP service that executes a step with agent-specific configuration supplied by the workflow engine. The current implementation passes provider and runtime configuration through environment variables and optional mounted content such as skills:
+Each agent step spawns a sandbox container that runs a **complete agent loop** — not a single LLM call. The agent runtime (e.g. OpenAI Agents SDK, Anthropic SDK) drives a multi-turn loop: send prompt + tools to LLM → LLM responds with a tool call → execute tool → feed result back → repeat until the LLM produces a final answer. A single workflow step may involve many LLM round-trips and tool invocations, all happening inside the sandbox container. The workflow runner has no visibility into these turns — it sees one activity call that returns a structured result.
+
+The sandbox is an HTTP service that receives a step request from the workflow engine and returns structured output. Configuration is supplied through environment variables and optional mounted content:
 
 | Configuration | Purpose |
 |---------------|---------|
