@@ -71,13 +71,10 @@ services:
       - "8080:8080"
 
   mcp-filesystem:
-    image: docker.io/library/node:22-slim
+    image: localhost/mcp-filesystem:latest
     restart: unless-stopped
     volumes:
       - ../../demo-data:/data:ro
-    command: >
-      sh -c "npm install -g @modelcontextprotocol/server-filesystem supergateway &&
-      supergateway --stdio 'npx @modelcontextprotocol/server-filesystem /data' --port 8081"
     ports:
       - "8081:8081"
 
