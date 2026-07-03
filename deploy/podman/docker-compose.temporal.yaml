@@ -36,18 +36,11 @@ services:
       POSTGRES_SEEDS: temporal-db
     ports:
       - "7233:7233"
-    healthcheck:
-      test: ["CMD", "temporal", "operator", "namespace", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
 
   temporal-ui:
     image: docker.io/temporalio/ui:latest
     depends_on:
-      temporal-server:
-        condition: service_healthy
+      - temporal-server
     environment:
       TEMPORAL_ADDRESS: temporal-server:7233
     ports:
@@ -56,8 +49,7 @@ services:
   workflow-runner:
     image: localhost/workflow-runner:latest
     depends_on:
-      temporal-server:
-        condition: service_healthy
+      - temporal-server
     privileged: true
     user: "0"
     environment:
