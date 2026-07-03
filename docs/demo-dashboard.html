@@ -42,7 +42,7 @@ a { color: #58a6ff; text-decoration: none; }
 .sc-badge.animated { background: #2d2000; color: #d29922; border: 1px solid #9e6a03; }
 
 /* Main area */
-.main { display: flex; flex-direction: column; border-bottom: 1px solid #21262d; }
+.main { display: flex; flex-direction: column; border-bottom: 1px solid #21262d; position: relative; }
 .pipeline-area { padding: 24px; overflow-x: auto; display: flex; flex-direction: column; }
 .pipeline-label { font-size: 11px; color: #484f58; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 16px; text-transform: uppercase; }
 .pipeline { display: flex; align-items: center; gap: 0; justify-content: center; flex-wrap: nowrap; min-height: 180px; }
@@ -57,9 +57,9 @@ a { color: #58a6ff; text-decoration: none; }
 .step-node.failed { border-color: #da3633; }
 .step-node.paused { border-color: #9e6a03; }
 .step-node.active-detail { box-shadow: 0 0 0 2px #58a6ff; }
-.step-detail-link { display: none; font-size: 10px; color: #58a6ff; margin-top: 8px; cursor: pointer; }
-.step-detail-link:hover { color: #79c0ff; text-decoration: underline; }
-.step-node.active-detail .step-detail-link { display: block; }
+.connector-line { position: absolute; pointer-events: none; z-index: 10; }
+.connector-line line { stroke: #58a6ff; stroke-width: 2; stroke-dasharray: 6 4; animation: dash 0.5s linear infinite; }
+.connector-line circle { fill: #58a6ff; }
 .step-type-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
 .step-type-badge.agent { background: #0d2818; color: #3fb950; }
 .step-type-badge.approval { background: #2d2000; color: #d29922; }
@@ -190,6 +190,7 @@ a { color: #58a6ff; text-decoration: none; }
       </div>
     </div>
   </div>
+  <svg class="connector-line" id="connector-line" style="display:none;"></svg>
   <div class="bottom-panels">
     <div class="event-log-area">
       <div class="event-log-label">Event Log</div>
@@ -437,7 +438,6 @@ const app = {
         </div>
         <div class="sandbox-ind" id="sb-${step.name}"></div>
         <div class="step-output-preview" id="op-${step.name}"></div>
-        <div class="step-detail-link" id="dl-${step.name}">&#9654; Details</div>
       `;
       el.appendChild(node);
 
@@ -521,6 +521,7 @@ const app = {
     document.querySelectorAll('.step-node').forEach(n => { n.classList.remove('selected'); n.classList.remove('active-detail'); });
     const node = $('step-' + stepName);
     if (node) { node.classList.add('selected'); node.classList.add('active-detail'); }
+    this.drawConnector(stepName);
 
     const output = this.stepData[stepName] || this.stepData[step.output_key];
     const statusIcon = $('si-' + stepName);
@@ -794,6 +795,35 @@ const app = {
     }
   },
 
+  drawConnector(stepName) {
+    const svg = $('connector-line');
+    const node = $('step-' + stepName);
+    const panel = $('detail-panel');
+    if (!node || !panel) { svg.style.display = 'none'; return; }
+
+    const mainEl = document.querySelector('.main');
+    const mainRect = mainEl.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+
+    const x1 = nodeRect.left + nodeRect.width / 2 - mainRect.left;
+    const y1 = nodeRect.bottom - mainRect.top;
+    const x2 = panelRect.left + 20 - mainRect.left;
+    const y2 = panelRect.top - mainRect.top;
+
+    svg.style.display = 'block';
+    svg.style.position = 'absolute';
+    svg.style.left = '0';
+    svg.style.top = '0';
+    svg.style.width = mainRect.width + 'px';
+    svg.style.height = mainRect.height + 'px';
+    svg.innerHTML = `
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>
+      <circle cx="${x1}" cy="${y1}" r="4"/>
+      <circle cx="${x2}" cy="${y2}" r="4"/>
+    `;
+  },
+
   async fetchFinalOutputs() {
     if (!this.workflowId) return;
     try {
@@ -914,7 +944,9 @@ const app = {
     this.state = 'idle';
     this.workflowId = null;
     this.stepData = {};
-    this.closeDetail();
+    this.activeDetailStep = null;
+    $('connector-line').style.display = 'none';
+    $('detail-inner').innerHTML = '<div style="color:#484f58; padding:20px; font-size:13px;">Click a step or run a workflow to see details here.</div>';
     $('event-log').innerHTML = '';
     this.setStatus('Idle');
     if (this.scenario) {
