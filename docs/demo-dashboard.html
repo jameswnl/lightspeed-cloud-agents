@@ -191,8 +191,8 @@ a { color: #58a6ff; text-decoration: none; }
       <div class="event-log-label">Event Log</div>
       <div class="event-log" id="event-log"></div>
     </div>
-    <div class="detail-panel" id="detail-panel">
-      <div class="detail-inner" id="detail-inner"></div>
+    <div class="detail-panel open" id="detail-panel">
+      <div class="detail-inner" id="detail-inner"><div style="color:#484f58; padding:20px; font-size:13px;">Click a step or run a workflow to see details here.</div></div>
     </div>
   </div>
 </div>
@@ -751,15 +751,19 @@ const app = {
       this.updateStep(step, 'running');
       const podName = 'ca-' + Math.random().toString(36).substr(2, 12);
       this.showSandbox(step, podName);
+      this.showDetail(step);
     } else if (type === 'step.completed') {
       this.updateStep(step, 'completed');
       this.hideSandbox(step);
+      this.showDetail(step);
     } else if (type === 'step.failed') {
       this.updateStep(step, 'failed');
       this.hideSandbox(step);
+      this.showDetail(step);
     } else if (type === 'step.auto_approved') {
       this.updateStep(step, 'completed');
       this.logEvent('info', step, 'Auto-approved (low risk)');
+      this.showDetail(step);
     } else if (type === 'workflow.paused') {
       this.updateStep(step, 'paused');
       this.state = 'paused';
@@ -768,6 +772,7 @@ const app = {
       this.fetchAndShowApproval(step);
     } else if (type === 'step.denied') {
       this.updateStep(step, 'denied');
+      this.showDetail(step);
     } else if (type === 'step.skipped') {
       this.updateStep(step, 'skipped');
     } else if (type === 'workflow.completed') {
@@ -831,7 +836,6 @@ const app = {
       this.logEvent('info', stepName, 'Approved');
       this.state = 'running';
       this.setStatus('Running: ' + this.workflowId, 'running');
-      this.closeDetail();
       this.updateButtons();
     } catch (e) {
       this.logEvent('error', stepName, 'Approval failed: ' + e.message);
@@ -847,7 +851,6 @@ const app = {
         body: JSON.stringify({ step_name: stepName, decision: 'denied' })
       });
       this.logEvent('denied', stepName, 'Denied by user');
-      this.closeDetail();
     } catch (e) {
       this.logEvent('error', stepName, 'Deny failed: ' + e.message);
     }
