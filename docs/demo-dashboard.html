@@ -542,8 +542,8 @@ const app = {
     if (isPaused && step.type === 'human-approval') {
       const stepIdx = this.steps.findIndex(s => s.name === stepName);
       const priorOutputs = this.steps.slice(0, stepIdx)
-        .filter(s => this.stepData[s.name])
-        .map(s => ({ name: s.name, output: this.stepData[s.name] }));
+        .filter(s => this.stepData[s.name] || this.stepData[s.output_key])
+        .map(s => ({ name: s.name, output: this.stepData[s.name] || this.stepData[s.output_key] }));
 
       if (priorOutputs.length > 0) {
         html += `<div class="detail-section">
