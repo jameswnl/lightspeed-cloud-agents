@@ -10,7 +10,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
-| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43 |
+| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43, T48 |
 | **Phase 3b** | Triggers + hardening | T2, T13, T14, T23 |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
@@ -244,6 +244,23 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 **ARCHITECTURE.md ref**: Observability; Sandbox Runtime
 
 **Problem**: The workflow activity makes a synchronous HTTP call to the sandbox and waits for the final result. The sandbox streams internally from the LLM (the OpenAI agents SDK supports it) but collapses everything into a single response. Callers see only workflow-level events (step started/completed) via SSE — no token-by-token output, tool calls, or intermediate results from the agent.
+
+**⚠ REQUIRES SANDBOX CHANGES**: The sandbox (`lightspeed-agentic-sandbox`) currently has no mechanism to push progress events externally. It has three internal observability layers — but none stream to the caller:
+
+1. **OTel spans** (`tracing.py`): Exported via gRPC OTLP to a collector (if configured). Creates `agent.run` and `tool.{name}` spans. But spans are batch-exported (~5s delay), the parent span doesn't appear until completion, and span attributes don't carry tool input/output content. OTel spans are for post-hoc tracing, not live progress.
+
+2. **Event logging** (`logging.py`): `EventLogger` writes thinking, tool calls, and results to Python `logging` (stdout). Visible via `kubectl logs` only — not streamed anywhere.
+
+3. **Audit events** (`audit.py`): `AuditLogger` writes structured JSON lines to stdout with trace_id, tool names, and content. Also creates OTel spans per tool call. But like event logging, this only goes to stdout.
+
+The LLM provider SDKs stream events internally (`async for event in result` in `query.py`), and the sandbox processes each event through `EventLogger` and `AuditLogger`. But all output stays inside the sandbox pod — nothing flows back to the orchestrator or any external consumer.
+
+**What the sandbox needs** (upstream work, requires coordination with lightspeed-agentic-sandbox team):
+- Read `progressUrl` and `progressToken` from the `/v1/agent/run` request body
+- During the `async for event in result` loop, POST progress events to `progressUrl` with bearer auth
+- Event types: `llm_token` (streaming text), `tool_call` (name + input), `tool_result` (name + output)
+- Failure handling: if the callback is unreachable, log and continue (don't break the primary agent execution)
+- This is the longest lead-time item — cross-team contract change that needs early alignment
 
 **Architecture**:
 ```
@@ -580,6 +597,50 @@ Image signing attestation and software bill of materials.
 - Policy violations return 422 with details
 
 **Effort**: 1-2 days for basic content rules; 1 week for configurable policy engine
+
+### T48: Sandbox inter-pod auth + TLS [Phase 3a]
+
+**Status**: Open
+
+**Problem**: Inter-pod traffic between the workflow runner and sandbox containers is unencrypted plain HTTP with no authentication. Prod sec policy (flagged on another project) requires authenticated and encrypted inter-pod communication. Currently anyone who can reach the sandbox network can call `POST /v1/agent/run` without credentials.
+
+**Current state of `lightspeed-agentic-sandbox` (verified 2026-07-01)**:
+- The sandbox has **no auth middleware** — no bearer token validation, no mTLS, no API key check on `/v1/agent/run`. Any pod that can reach port 8080 can call it.
+- The agentic operator also calls the sandbox over **plain HTTP** (`http://{fqdn}:8080` in `sandbox_agent.go:207`). The Go HTTP client configures TLS with `InsecureSkipVerify: true` but never uses it because the URL scheme is `http://`.
+- The operator sends **no auth headers** — only `traceparent` for OTel trace propagation (`sandbox_agent.go:213-215`).
+- The operator has **no NetworkPolicy** on sandbox pods.
+- The sandbox's OTel span export (`tracing.py`) also uses **unauthenticated gRPC** to the collector — `OTLPSpanExporter` is configured with no headers.
+- In short: the operator → sandbox path is **unencrypted, unauthenticated, and network-unrestricted** in the upstream implementation.
+
+Cloud Agents already has bearer auth between runner and sandbox (`BearerAuthMiddleware` + per-spawn `AGENT_API_TOKEN`). T48 adds TLS to make it encrypted as well. The auth piece is partially done — this task focuses on the encryption gap.
+
+**What to build**:
+
+1. **Per-spawn bearer token** (auth):
+   - Workflow runner generates a one-time token at spawn time (e.g. `secrets.token_urlsafe(32)`)
+   - Token passed to sandbox as env var `SANDBOX_AUTH_TOKEN`
+   - Sandbox validates `Authorization: Bearer <token>` on `/v1/agent/run` — rejects without it
+   - Token is unique per container, lives only as long as the container (seconds)
+
+2. **mTLS between runner and sandbox** (encryption):
+   - **K8s with service mesh (Istio)**: zero code change — mesh handles mTLS transparently
+   - **K8s without service mesh**: runner generates ephemeral CA + cert per spawn, injects via Secret volume mount, sandbox serves TLS, runner verifies against the ephemeral CA
+   - **Podman**: same app-level TLS — generate ephemeral cert pair, mount into container, runner calls `https://` instead of `http://`
+
+3. **Changes needed**:
+   - `temporal_activities.py`: generate token, add to env_vars, send `Authorization` header in httpx call
+   - Sandbox runtime: add auth middleware that validates `SANDBOX_AUTH_TOKEN`
+   - `spawner/base.py`: `wait_ready()` must send the token for health checks too
+   - For TLS: cert generation utility, Containerfile changes to include CA, httpx `verify=` parameter
+
+**Why it matters**: Prod sec requires it. Without it, a compromised pod on the same network can call any sandbox endpoint. The ephemeral lifetime (seconds) and network isolation reduce risk, but don't satisfy the policy.
+
+**Effort**: 1 week (token auth: 2 days, app-level TLS: 3 days, testing: 2 days)
+
+**⚠ RISKS**:
+- App-level TLS adds ~100ms per spawn for cert generation
+- Service mesh is the cleaner path for K8s but is an infrastructure dependency
+- Podman has no mesh equivalent — app-level TLS is the only option
 
 ---
 

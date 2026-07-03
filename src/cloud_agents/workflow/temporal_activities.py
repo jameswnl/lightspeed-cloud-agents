@@ -270,6 +270,12 @@ async def _run_sandbox_step_inner(
 
     finally:
         if endpoint and spawner:
+            if os.environ.get("SKIP_SANDBOX_DESTROY", "").lower() in ("1", "true"):
+                logger.info(
+                    "SKIP_SANDBOX_DESTROY set — keeping sandbox '%s' for inspection",
+                    pod_name,
+                )
+                return result  # noqa: B012
             try:
                 await spawner.destroy(pod_name)
                 emit_audit(

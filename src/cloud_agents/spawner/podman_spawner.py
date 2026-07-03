@@ -8,6 +8,7 @@ container control — deployers should secure the socket appropriately.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from cloud_agents.spawner.base import AgentSpawner
@@ -41,6 +42,15 @@ class PodmanSpawner(AgentSpawner):
         super().__init__(**kwargs)
         self._network = network
         self._volume_mounts = volume_mounts or {}
+        self._podman_url = os.environ.get("CONTAINER_HOST") or os.environ.get("DOCKER_HOST")
+
+    def _client(self) -> "PodmanClient":
+        """Create a PodmanClient with the configured socket URL."""
+        from podman import PodmanClient
+
+        if self._podman_url:
+            return PodmanClient(base_url=self._podman_url)
+        return PodmanClient()
 
     async def _do_spawn(
         self,
@@ -69,11 +79,6 @@ class PodmanSpawner(AgentSpawner):
                 f"Secret-based MCP headers are not supported on Podman. "
                 f"Agent '{agent_name}' requires K8s deployment for MCP secret headers."
             )
-        try:
-            from podman import PodmanClient
-        except ImportError as exc:
-            raise RuntimeError("podman-py not installed") from exc
-
         container_name = f"agent-{agent_name}"
 
         if read_only:
@@ -86,7 +91,7 @@ class PodmanSpawner(AgentSpawner):
             }
         skills_volume_name = None
 
-        with PodmanClient() as client:
+        with self._client() as client:
             if skills_image:
                 skills_volume_name = f"skills-{agent_name}"
                 try:
@@ -178,12 +183,7 @@ class PodmanSpawner(AgentSpawner):
         Returns:
             List of agent names (without the "agent-" prefix).
         """
-        try:
-            from podman import PodmanClient
-        except ImportError:
-            return []
-
-        with PodmanClient() as pc:
+        with self._client() as pc:
             all_filtered: list = []
             for k, v in (labels or {}).items():
                 matches = pc.containers.list(filters={"label": f"{k}={v}"})
@@ -197,10 +197,8 @@ class PodmanSpawner(AgentSpawner):
     async def _do_destroy(self, agent_name: str) -> None:
         """Stop and remove the Podman container."""
         try:
-            from podman import PodmanClient
-
             container_name = f"agent-{agent_name}"
-            with PodmanClient() as client:
+            with self._client() as client:
                 try:
                     container = client.containers.get(container_name)
                     container.stop(timeout=10)
