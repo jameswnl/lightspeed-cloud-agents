@@ -628,8 +628,17 @@ const app = {
     this.processingQueue = true;
     while (this.eventQueue.length > 0) {
       const evt = this.eventQueue.shift();
+      if (evt.type === 'workflow.completed') {
+        while (this.eventQueue.length > 0) {
+          const remaining = this.eventQueue.shift();
+          this.handleEvent(remaining);
+          await new Promise(r => setTimeout(r, 600));
+        }
+        this.handleEvent(evt);
+        break;
+      }
       this.handleEvent(evt);
-      const minDelay = evt.type === 'step.started' ? 1500 : evt.type === 'workflow.paused' ? 500 : 800;
+      const minDelay = evt.type === 'step.started' ? 1200 : evt.type === 'workflow.paused' ? 400 : 600;
       await new Promise(r => setTimeout(r, minDelay));
     }
     this.processingQueue = false;
