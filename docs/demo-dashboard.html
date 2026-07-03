@@ -42,10 +42,11 @@ a { color: #58a6ff; text-decoration: none; }
 .sc-badge.animated { background: #2d2000; color: #d29922; border: 1px solid #9e6a03; }
 
 /* Main area */
-.main { display: flex; min-height: 320px; border-bottom: 1px solid #21262d; }
-.pipeline-area { flex: 1; padding: 24px; overflow-x: auto; display: flex; flex-direction: column; }
+.main { display: flex; flex-direction: column; border-bottom: 1px solid #21262d; }
+.pipeline-area { padding: 24px; overflow-x: auto; display: flex; flex-direction: column; }
 .pipeline-label { font-size: 11px; color: #484f58; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 16px; text-transform: uppercase; }
 .pipeline { display: flex; align-items: center; gap: 0; justify-content: center; flex-wrap: nowrap; min-height: 180px; }
+.bottom-panels { display: flex; gap: 0; border-top: 1px solid #21262d; min-height: 250px; }
 
 /* Step nodes */
 .step-node { position: relative; width: 180px; min-height: 160px; background: #161b22; border: 2px solid #30363d; border-radius: 12px; padding: 16px; transition: all 0.3s; flex-shrink: 0; }
@@ -96,9 +97,9 @@ a { color: #58a6ff; text-decoration: none; }
 @keyframes dash { to { stroke-dashoffset: -10; } }
 
 /* Detail panel */
-.detail-panel { width: 0; overflow: hidden; border-left: 1px solid #21262d; background: #161b22; transition: width 0.3s; flex-shrink: 0; }
-.detail-panel.open { width: 380px; }
-.detail-inner { width: 380px; padding: 20px; }
+.detail-panel { flex: 1; overflow-y: auto; border-left: 1px solid #21262d; background: #161b22; display: none; }
+.detail-panel.open { display: block; }
+.detail-inner { padding: 20px; }
 .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .detail-title { font-size: 16px; font-weight: 600; color: #f0f6fc; }
 .detail-close { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 18px; padding: 4px; }
@@ -120,9 +121,9 @@ a { color: #58a6ff; text-decoration: none; }
 .btn-deny:hover { background: #2d1117; }
 
 /* Event log */
-.event-log-area { padding: 0 24px 12px; }
+.event-log-area { flex: 1; padding: 0 24px 12px; overflow-y: auto; }
 .event-log-label { font-size: 11px; color: #484f58; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding: 12px 0 8px; }
-.event-log { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 12px; font-family: 'SFMono-Regular', monospace; font-size: 11px; line-height: 1.8; max-height: 200px; overflow-y: auto; }
+.event-log { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 12px; font-family: 'SFMono-Regular', monospace; font-size: 11px; line-height: 1.8; max-height: 300px; overflow-y: auto; }
 .ev { white-space: nowrap; }
 .ev-time { color: #484f58; }
 .ev-type { font-weight: 600; }
@@ -185,15 +186,15 @@ a { color: #58a6ff; text-decoration: none; }
       </div>
     </div>
   </div>
-  <div class="detail-panel" id="detail-panel">
-    <div class="detail-inner" id="detail-inner"></div>
+  <div class="bottom-panels">
+    <div class="event-log-area">
+      <div class="event-log-label">Event Log</div>
+      <div class="event-log" id="event-log"></div>
+    </div>
+    <div class="detail-panel" id="detail-panel">
+      <div class="detail-inner" id="detail-inner"></div>
+    </div>
   </div>
-</div>
-
-<!-- Event Log -->
-<div class="event-log-area">
-  <div class="event-log-label">Event Log</div>
-  <div class="event-log" id="event-log"></div>
 </div>
 
 <!-- Controls -->
