@@ -719,8 +719,8 @@ const app = {
       this.updateStep(step, 'paused');
       this.state = 'paused';
       this.setStatus('Awaiting approval: ' + step, 'paused');
-      this.showDetail(step);
       this.updateButtons();
+      this.fetchAndShowApproval(step);
     } else if (type === 'step.denied') {
       this.updateStep(step, 'denied');
     } else if (type === 'step.skipped') {
@@ -736,6 +736,20 @@ const app = {
       this.cleanup();
       this.updateButtons();
     }
+  },
+
+  async fetchAndShowApproval(stepName) {
+    if (!this.workflowId) { this.showDetail(stepName); return; }
+    try {
+      const r = await fetch(this.apiUrl + '/v1/workflows/' + this.workflowId);
+      if (r.ok) {
+        const data = await r.json();
+        for (const [key, result] of Object.entries(data.steps || {})) {
+          if (result.output) this.stepData[key] = result.output;
+        }
+      }
+    } catch {}
+    this.showDetail(stepName);
   },
 
   async approve(stepName) {
