@@ -11,7 +11,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43, T48 |
-| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 |
+| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49, T50 |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
@@ -609,6 +609,19 @@ Image signing attestation and software bill of materials.
 - Check JSON Schema validity: arrays must have `items`, objects should have `properties`
 - Provider-specific rules: OpenAI structured output requires `additionalProperties: false` on objects (warn if missing)
 - Return 422 with clear error message: "output_schema for step 'X': array type requires 'items' definition"
+
+**Effort**: 1 day
+
+### T50: Per-step MCP server config [Phase 3b]
+
+**Status**: Open
+
+**Problem**: `mcp_servers` is set at the workflow run level, so every sandbox in the workflow gets `LIGHTSPEED_MCP_SERVERS` injected. Steps that don't need MCP tools still connect to MCP servers on startup, wasting resources and causing issues when MCP servers can't handle concurrent SSE sessions (e.g. supergateway crashes on second connection while first sandbox is still alive with SKIP_SANDBOX_DESTROY).
+
+**What to build**:
+- Allow `mcp_servers` in the step definition (per-step override), not just the run request
+- Activity code: if step has `mcp_servers`, use that; otherwise fall back to workflow-level config; if neither, don't inject `LIGHTSPEED_MCP_SERVERS`
+- This also enables different steps to use different MCP servers (e.g. step 1 uses filesystem, step 2 uses Jira)
 
 **Effort**: 1 day
 
