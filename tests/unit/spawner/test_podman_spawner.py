@@ -128,6 +128,94 @@ class TestPodmanSpawnerLabels:
             assert labels.get("spawned-by") == "workflow-runner"
 
 
+class TestPodmanSpawnerClient:
+    """Tests for PodmanSpawner._client() and CONTAINER_HOST / DOCKER_HOST env vars."""
+
+    def test_client_uses_container_host_env(self) -> None:
+        """CONTAINER_HOST set, PodmanClient called with base_url."""
+        mock_podman_cls = MagicMock()
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with (
+            patch.dict("os.environ", {"CONTAINER_HOST": "unix:///custom/podman.sock"}, clear=False),
+            patch.dict(sys.modules, {"podman": mock_podman_module}),
+        ):
+            # Remove DOCKER_HOST if present to isolate CONTAINER_HOST
+            import os
+            os.environ.pop("DOCKER_HOST", None)
+
+            spawner = PodmanSpawner(network="test")
+            spawner._client()
+
+            mock_podman_cls.assert_called_once_with(
+                base_url="unix:///custom/podman.sock"
+            )
+
+    def test_client_uses_docker_host_fallback(self) -> None:
+        """No CONTAINER_HOST but DOCKER_HOST set, PodmanClient uses DOCKER_HOST."""
+        mock_podman_cls = MagicMock()
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with (
+            patch.dict("os.environ", {"DOCKER_HOST": "unix:///docker/host.sock"}, clear=False),
+            patch.dict(sys.modules, {"podman": mock_podman_module}),
+        ):
+            import os
+            os.environ.pop("CONTAINER_HOST", None)
+
+            spawner = PodmanSpawner(network="test")
+            spawner._client()
+
+            mock_podman_cls.assert_called_once_with(
+                base_url="unix:///docker/host.sock"
+            )
+
+    def test_client_default_no_base_url(self) -> None:
+        """Neither env var set, PodmanClient() called with no args."""
+        mock_podman_cls = MagicMock()
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with (
+            patch.dict("os.environ", {}, clear=False),
+            patch.dict(sys.modules, {"podman": mock_podman_module}),
+        ):
+            import os
+            os.environ.pop("CONTAINER_HOST", None)
+            os.environ.pop("DOCKER_HOST", None)
+
+            spawner = PodmanSpawner(network="test")
+            spawner._client()
+
+            mock_podman_cls.assert_called_once_with()
+
+    def test_container_host_takes_precedence(self) -> None:
+        """Both CONTAINER_HOST and DOCKER_HOST set; CONTAINER_HOST wins."""
+        mock_podman_cls = MagicMock()
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "CONTAINER_HOST": "unix:///container/host.sock",
+                    "DOCKER_HOST": "unix:///docker/host.sock",
+                },
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"podman": mock_podman_module}),
+        ):
+            spawner = PodmanSpawner(network="test")
+            spawner._client()
+
+            mock_podman_cls.assert_called_once_with(
+                base_url="unix:///container/host.sock"
+            )
+
+
 class TestPodmanSpawnerDestroy:
     """Tests for PodmanSpawner destroy behavior."""
 

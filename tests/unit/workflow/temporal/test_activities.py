@@ -1738,3 +1738,121 @@ class TestCircuitBreakerInActivity:
             )
 
         mock_cb.record_failure.assert_called_with("openai")
+
+
+class TestSkipSandboxDestroy:
+    """Tests for SKIP_SANDBOX_DESTROY env var in the finally block."""
+
+    def _make_success_input(self) -> dict:
+        """Build a standard successful sandbox step input dict."""
+        return {
+            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4",
+                "credentials_secret": "k",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    def _mock_http_success(self, mocker: MockerFixture) -> None:
+        """Set up httpx.AsyncClient mock returning success=True."""
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+    @pytest.mark.asyncio
+    async def test_skip_destroy_when_env_set_true(
+        self, mocker: MockerFixture
+    ) -> None:
+        """SKIP_SANDBOX_DESTROY=true skips spawner.destroy, result still returned."""
+        mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "true"})
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(
+            self._make_success_input(),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        assert result["output"]["summary"] == "diagnosed ok"
+        mock_spawner.destroy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skip_destroy_when_env_set_1(
+        self, mocker: MockerFixture
+    ) -> None:
+        """SKIP_SANDBOX_DESTROY=1 skips spawner.destroy, result still returned."""
+        mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "1"})
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(
+            self._make_success_input(),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        assert result["output"]["summary"] == "diagnosed ok"
+        mock_spawner.destroy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_destroy_called_when_env_not_set(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Without SKIP_SANDBOX_DESTROY, spawner.destroy IS called."""
+        mocker.patch.dict("os.environ", {}, clear=False)
+        os.environ.pop("SKIP_SANDBOX_DESTROY", None)
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(
+            self._make_success_input(),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        mock_spawner.destroy.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skip_destroy_case_insensitive(
+        self, mocker: MockerFixture
+    ) -> None:
+        """SKIP_SANDBOX_DESTROY=True (capital T) also skips destroy."""
+        mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "True"})
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(
+            self._make_success_input(),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        assert result["output"]["summary"] == "diagnosed ok"
+        mock_spawner.destroy.assert_not_called()

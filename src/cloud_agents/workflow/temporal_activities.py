@@ -275,19 +275,26 @@ async def _run_sandbox_step_inner(
                     "SKIP_SANDBOX_DESTROY set — keeping sandbox '%s' for inspection",
                     pod_name,
                 )
-                return result  # noqa: B012
-            try:
-                await spawner.destroy(pod_name)
-                emit_audit(
-                    event_type="sandbox_destroyed",
-                    workflow_id=workflow_id,
-                    step_name=step_name,
-                    details={"pod_name": pod_name},
-                )
-            except Exception:
-                logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
-                from cloud_agents.workflow.temporal_metrics import ls_sandbox_cleanup_failures_total
-                ls_sandbox_cleanup_failures_total.labels(step_name=step_name).inc()
+            else:
+                try:
+                    await spawner.destroy(pod_name)
+                    emit_audit(
+                        event_type="sandbox_destroyed",
+                        workflow_id=workflow_id,
+                        step_name=step_name,
+                        details={"pod_name": pod_name},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to destroy pod '%s'", pod_name, exc_info=True
+                    )
+                    from cloud_agents.workflow.temporal_metrics import (
+                        ls_sandbox_cleanup_failures_total,
+                    )
+
+                    ls_sandbox_cleanup_failures_total.labels(
+                        step_name=step_name
+                    ).inc()
 
 
 @activity.defn

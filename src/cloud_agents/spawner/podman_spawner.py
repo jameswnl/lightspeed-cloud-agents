@@ -183,16 +183,19 @@ class PodmanSpawner(AgentSpawner):
         Returns:
             List of agent names (without the "agent-" prefix).
         """
-        with self._client() as pc:
-            all_filtered: list = []
-            for k, v in (labels or {}).items():
-                matches = pc.containers.list(filters={"label": f"{k}={v}"})
-                if not all_filtered:
-                    all_filtered = matches
-                else:
-                    match_ids = {c.id for c in matches}
-                    all_filtered = [c for c in all_filtered if c.id in match_ids]
-            return [c.name.removeprefix("agent-") for c in all_filtered]
+        try:
+            with self._client() as pc:
+                all_filtered: list = []
+                for k, v in (labels or {}).items():
+                    matches = pc.containers.list(filters={"label": f"{k}={v}"})
+                    if not all_filtered:
+                        all_filtered = matches
+                    else:
+                        match_ids = {c.id for c in matches}
+                        all_filtered = [c for c in all_filtered if c.id in match_ids]
+                return [c.name.removeprefix("agent-") for c in all_filtered]
+        except ImportError:
+            return []
 
     async def _do_destroy(self, agent_name: str) -> None:
         """Stop and remove the Podman container."""
