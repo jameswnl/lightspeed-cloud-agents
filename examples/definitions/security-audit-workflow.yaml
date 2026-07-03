@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: security-governance-demo
+spec:
+  steps:
+    - name: security-audit
+      type: agent
+      output_key: audit
+      prompt: >
+        Perform a security audit of the production namespace. Check for:
+        pods running as root, missing network policies, exposed secrets,
+        resource limits. Report compliance status.
+      output_schema:
+        type: object
+        properties:
+          compliance_status:
+            type: string
+          violations:
+            type: array
+            items:
+              type: string
+          risk_score:
+            type: number
+        required: [compliance_status, risk_score]
+      timeout_seconds: 60
+
+    - name: approve-remediation
+      type: human-approval
+      output_key: security_approval
+      message: Security audit complete. Review violations and approve remediation.
+      risk_level: critical
+
+    - name: remediate
+      type: agent
+      output_key: remediation
+      prompt: Apply security remediations for the violations found in the audit.
+      condition: "steps.security_approval.output.approved == true"
+      timeout_seconds: 120

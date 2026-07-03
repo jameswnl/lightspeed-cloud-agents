@@ -4,7 +4,7 @@
 
 This guide covers:
 1. **Deploying the cloud agents platform** (Temporal + workflow runner) on Podman or Kubernetes
-2. **Running a diagnostic workflow** that uses an LLM to diagnose cluster issues
+2. **Running workflows** via the API or the interactive demo dashboard
 
 ```mermaid
 graph LR
@@ -12,100 +12,96 @@ graph LR
         WR["Workflow Runner<br/><i>POST /v1/workflows/run</i>"]
         TS["Temporal Server"]
         SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
+        MCP["MCP Server<br/><i>optional tools</i>"]
     end
     LLM["LLM Provider"]
 
     WR -- "gRPC" --> TS
     WR -- "spawn / destroy" --> SB
     SB -- "HTTPS" --> LLM
+    SB -- "SSE" --> MCP
 ```
 
 ## Prerequisites
 
 - **Podman** with `podman machine start` (for Podman deployment)
 - **Kind** + `kubectl` (for Kubernetes deployment)
-- **OpenAI API key** in `$OPENAI_API_KEY`
-- Branch: `cloud-agents-temporal`
+- **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
 
 ## Part 1: Build Images
-
-Both deployment targets use the same images.
 
 ```bash
 # Workflow runner
 podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
 
-# Sandbox (from your fork with temporal-integration branch)
+# Sandbox (use our fork with MCP support)
 cd ../lightspeed-agentic-sandbox
-git checkout temporal-integration
-podman build -f Containerfile -t lightspeed-agentic-sandbox:temporal .
-cd ../lightspeed-stack
+git checkout temporal-integration   # branch with MCPServerSseParams fix
+podman build -f Containerfile -t lightspeed-agentic-sandbox:latest .
+cd ../lightspeed-cloud-agents
+
+# MCP filesystem server (for MCP demo scenario)
+podman build -f deploy/mcp-filesystem/Containerfile -t mcp-filesystem:latest .
 ```
 
 ---
 
 ## Part 2: Deploy the Platform
 
-### Option A: Podman
+### Option A: Podman (compose)
 
-The docker-compose stack includes Temporal Server, PostgreSQL, Temporal UI, and the workflow runner.
+The compose stack includes Temporal Server, PostgreSQL, Temporal UI, workflow runner, and MCP filesystem server.
 
 ```bash
-# Start the full stack
+export OPENAI_API_KEY="sk-..."
+# and/or: export ANTHROPIC_API_KEY="sk-ant-..."
+
 podman compose -f deploy/podman/docker-compose.temporal.yaml up -d
 
-# Wait for Temporal to initialize (~30s)
-sleep 30
-
 # Verify
-curl -s http://localhost:8080/healthz
-# → {"status":"ok"}
-
-# Temporal UI available at http://localhost:8233
+curl -s http://localhost:8080/readyz
+# → {"status":"ready"}
 ```
+
+| Service | URL |
+|---------|-----|
+| Workflow Runner API | http://localhost:8080 |
+| Temporal UI | http://localhost:8233 |
+| MCP Filesystem Server | http://localhost:8081 |
 
 **Environment variables** (set in docker-compose.temporal.yaml):
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `TEMPORAL_URL` | `temporal-server:7233` | Temporal gRPC address |
-| `WORKFLOW_SPAWNER` | `podman` | Use PodmanSpawner |
-| `SPAWNER_NETWORK` | `cloud-agents-temporal` | Podman network for sandbox containers |
-| `AUTH_REQUIRED` | `false` | No auth for local dev |
-| `WORKFLOW_AUTHZ` | `none` | No authorization (default). Set to `policy` with `WORKFLOW_AUTHZ_POLICY_PATH` for RBAC. See [rbac.md](rbac.md). |
 
-To pass the LLM API key to sandbox containers, add to the workflow-runner service in docker-compose:
-```yaml
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-```
+| Variable | Purpose |
+|----------|---------|
+| `TEMPORAL_URL` | Temporal gRPC address |
+| `WORKFLOW_SPAWNER` | `podman` or `kubernetes` |
+| `SPAWNER_NETWORK` | Podman network for sandbox containers |
+| `AUTH_REQUIRED` | `false` for local dev |
+| `CORS_ALLOWED_ORIGINS` | `*` for demo dashboard |
+| `OPENAI_API_KEY` | Forwarded to sandbox containers |
+| `ANTHROPIC_API_KEY` | Forwarded to sandbox containers |
+| `CONTAINER_HOST` | Podman socket path (for containerized runner) |
 
 ### Option B: Kubernetes (Kind)
 
 ```bash
-# Create a Kind cluster
 KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name cloud-agents --wait 60s
 
-# Load images into Kind
 kind load docker-image workflow-runner:latest --name cloud-agents
-kind load docker-image lightspeed-agentic-sandbox:temporal --name cloud-agents
+kind load docker-image lightspeed-agentic-sandbox:latest --name cloud-agents
 
-# Deploy Temporal Server
 kubectl apply -f deploy/kind/temporal.yaml
 kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
 
-# Create the LLM API key Secret
 kubectl create secret generic llm-api-key \
   --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
 
-# Deploy the workflow runner
 kubectl apply -f deploy/kind/rbac.yaml
 kubectl apply -f deploy/kind/workflow-runner.yaml
 kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
 
-# Verify
 kubectl port-forward svc/workflow-runner 8080:8080 &
-curl -s http://localhost:8080/healthz
-# → {"status":"ok"}
+curl -s http://localhost:8080/readyz
 ```
 
 ### Option C: Helm (production)
@@ -115,26 +111,124 @@ helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
   --set workflowRunner.image.repository=quay.io/openshift-lightspeed/workflow-runner \
   --set workflowRunner.image.tag=latest \
   --set temporal.url=temporal-server:7233 \
-  --set spawner.type=kubernetes \
-  --set spawner.namespace=default
+  --set spawner.type=kubernetes
+```
+
+---
+
+## Part 3: Demo Dashboard
+
+The interactive dashboard visualizes workflow execution in real-time.
+
+```bash
+# Serve the dashboard
+cd docs && python3 -m http.server 3000 &
+
+# Open http://localhost:3000/demo-dashboard.html
+```
+
+### Scenarios
+
+| Scenario | Type | Description |
+|----------|------|-------------|
+| K8s Incident Response | Live | diagnose → approve → fix → verify with real LLM calls |
+| MCP Tool Integration | Live | Agent reads files via filesystem MCP server tools |
+| Multi-workflow Composition | Animated | Chatbot triggers chained workflows (future vision) |
+| Security & Governance | Live | Audit → approve (critical) → remediate |
+
+### Terminal setup for demo
+
+**Terminal 1** — Dashboard: `cd docs && python3 -m http.server 3000`
+
+**Terminal 2** — Sandbox logs: 
+```bash
+while true; do
+  for c in $(podman ps --filter label=spawned-by=workflow-runner --format '{{.Names}}' 2>/dev/null); do
+    echo "=== $c ==="
+    podman logs -f "$c" 2>&1 &
+  done
+  sleep 1
+done
+```
+
+**Terminal 3** — Container lifecycle: `watch -n1 podman ps --filter label=spawned-by=workflow-runner`
+
+---
+
+## Part 4: API Reference
+
+### Submit a workflow
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "definition": {
+      "apiVersion": "v1",
+      "kind": "AgentWorkflow",
+      "metadata": { "name": "diagnose-production" },
+      "spec": { "steps": [...] }
+    },
+    "provider": {
+      "name": "openai",
+      "model": "gpt-4o",
+      "credentials_secret": "OPENAI_API_KEY"
+    },
+    "sandbox_image": "lightspeed-agentic-sandbox:latest"
+  }'
+# → {"workflow_id": "wf-abc123"}
+```
+
+Or register a definition first:
+
+```bash
+# Register
+python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
+  examples/definitions/diagnostic-workflow.yaml | \
+  curl -s -X POST http://localhost:8080/v1/workflows/definitions \
+    -H 'Content-Type: application/json' -d @-
+
+# Trigger by name
+curl -s -X POST http://localhost:8080/v1/workflows/run \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow_name": "diagnose-production", "provider": {...}, "sandbox_image": "..."}'
+```
+
+### Check status
+
+```bash
+curl -s http://localhost:8080/v1/workflows/<workflow_id> | python3 -m json.tool
+```
+
+### Approve a step
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/<workflow_id>/approve \
+  -H 'Content-Type: application/json' \
+  -d '{"step_name": "approve-fix", "decision": "approved"}'
+```
+
+### Stream events (SSE)
+
+```bash
+curl -N http://localhost:8080/v1/workflows/<workflow_id>/events
+```
+
+### Cancel
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/<workflow_id>/cancel
 ```
 
 ---
 
 ## Workflow Definition Reference
 
-### What you provide
-
-1. **A workflow definition** (YAML) — steps, prompts, output schemas, conditions, approval gates
-2. **A sandbox image** — container implementing `POST /v1/agent/run` (default: lightspeed-agentic-sandbox)
-3. **Skills** (optional) — domain knowledge packages as OCI images mounted at `/app/skills/`
-4. **MCP servers** (optional) — external tool servers configured via the API request
-
 ### Step types
 
 | Type | Purpose |
 |------|---------|
-| `agent` | Spawns a sandbox container, sends prompt + context, collects structured output |
+| `agent` | Spawns a sandbox container running a complete agent loop (multi-turn LLM + tool calls) |
 | `human-approval` | Pauses workflow, sends notification, waits for approval signal or timeout |
 
 ### Step fields
@@ -145,13 +239,14 @@ helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
 | `type` | Yes | `agent` or `human-approval` |
 | `output_key` | Yes | Key for this step's result in workflow state |
 | `prompt` | For agent | Prompt template (supports `{{ steps.X.output.Y }}` interpolation) |
-| `output_schema` | No | JSON Schema for structured output |
+| `output_schema` | No | JSON Schema for structured output (arrays require `items`) |
 | `timeout_seconds` | No | Max seconds for this step (default: 600 for agent, 86400 for approval) |
 | `condition` | No | Skip step if expression evaluates to false |
 | `risk_level` | No | `low`, `medium`, `high`, `critical` — used by auto-approve policy |
 | `message` | For approval | Human-readable approval request message |
 | `max_retries` | No | Number of retry attempts (default: 1) |
 | `parallel_group` | No | Steps sharing the same group run concurrently |
+| `mcp_servers` | No | List of MCP server names (from run request catalog) to inject into this step |
 
 ### API request fields
 
@@ -159,225 +254,25 @@ The workflow YAML defines *what* (steps, prompts, schemas). The API request prov
 
 | Field | Description |
 |-------|-------------|
-| `provider` | LLM provider, model, credentials |
+| `provider` | `{name, model, credentials_secret}` — LLM provider config |
 | `sandbox_image` | Container image for agent steps |
 | `skills_image` / `skills_paths` | Optional skills OCI image |
-| `mcp_servers` | Optional MCP server configs |
-| `approval_policy` | Auto-approve rules by risk level |
+| `mcp_servers` | MCP server catalog — `[{name, url, headers}]`. Steps reference by name. |
+| `approval_policy` | `{auto_approve_risk_levels: ["low"]}` |
 | `workflow_id` | Optional caller-supplied idempotency key |
 
 ### Example definitions
 
 See `examples/definitions/` for working workflow YAMLs:
-- `diagnostic-workflow.yaml` — diagnose + approve (used in Part 3 below)
+- `diagnostic-workflow.yaml` — diagnose + approve
 - `diagnose-fix-workflow.yaml` — diagnose → approve → fix → verify
+- `mcp-filesystem-workflow.yaml` — gather context via MCP tools → recommend
+- `security-audit-workflow.yaml` — audit → approve (critical) → remediate
 - `ephemeral-diagnose-workflow.yaml` — single diagnostic step
 
-These are validated by CI against the Pydantic schema — any new example added to that directory is automatically tested.
+These are validated by CI against the Pydantic schema.
 
 ---
-
-## Part 3: Diagnostic Workflow
-
-This workflow uses an LLM to diagnose a broken Kubernetes deployment. It works on both Podman and Kubernetes.
-
-### 3a. Create a broken deployment (for Kind only)
-
-```bash
-kubectl create namespace production
-kubectl apply -n production -f - <<'EOF'
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web-frontend
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: web-frontend
-  template:
-    metadata:
-      labels:
-        app: web-frontend
-    spec:
-      containers:
-        - name: web
-          image: nginx:1.25
-          ports:
-            - containerPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: api-backend
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: api-backend
-  template:
-    metadata:
-      labels:
-        app: api-backend
-    spec:
-      containers:
-        - name: api
-          image: nonexistent-registry.io/api-server:v2.broken
-          ports:
-            - containerPort: 8080
-EOF
-
-# Verify: web-frontend Running, api-backend ErrImagePull
-kubectl get pods -n production
-```
-
-### 3b. Workflow definition
-
-Save this as `diagnostic-workflow.yaml`:
-
-```yaml
-apiVersion: v1
-kind: AgentWorkflow
-metadata:
-  name: diagnose-production
-spec:
-  steps:
-    - name: diagnose
-      type: agent
-      output_key: diagnosis
-      prompt: >
-        Kubernetes cluster issue: api-backend deployment has 0/2 pods ready
-        due to ErrImagePull (image nonexistent-registry.io/api-server:v2.broken
-        does not exist). web-frontend is healthy (3/3 Running).
-        Diagnose and recommend fix.
-      output_schema:
-        type: object
-        properties:
-          health_status:
-            type: string
-          root_cause:
-            type: string
-          fix:
-            type: string
-          severity:
-            type: string
-            enum: [low, medium, high, critical]
-        required: [health_status, root_cause, fix, severity]
-      timeout_seconds: 60
-
-    - name: approve
-      type: human-approval
-      output_key: approval
-      message: Approve the recommended fix?
-      risk_level: low
-      timeout_seconds: 10
-```
-
-### 3c. Submit the workflow via API
-
-```bash
-# Submit the workflow (works on both Podman and K8s — just needs port 8080 forwarded)
-curl -s -X POST http://localhost:8080/v1/workflows/run \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "definition": '"$(cat diagnostic-workflow.yaml | python3 -c 'import sys,json,yaml; print(json.dumps(yaml.safe_load(sys.stdin)))')"',
-    "provider": {
-      "name": "openai",
-      "model": "gpt-4o-mini",
-      "credentials_secret": "OPENAI_API_KEY"
-    },
-    "sandbox_image": "localhost/lightspeed-agentic-sandbox:temporal",
-    "approval_policy": {"auto_approve_risk_levels": ["low"]},
-    "workflow_id": "wf-demo-1"
-  }'
-# → {"workflow_id": "wf-demo-1"}
-```
-
-### 3d. Check workflow status
-
-```bash
-# Poll for completion
-curl -s http://localhost:8080/v1/workflows/wf-demo-1 | python3 -m json.tool
-```
-
-### 3e. Expected output
-
-```json
-{
-  "steps": {
-    "diagnosis": {
-      "status": "completed",
-      "output": {
-        "health_status": "0/2 pods ready due to ErrImagePull",
-        "root_cause": "Container image does not exist in the specified registry",
-        "fix": "Update the deployment to use a valid image",
-        "severity": "high"
-      }
-    },
-    "approval": {
-      "status": "completed",
-      "output": {
-        "approved": true,
-        "auto_approved": true
-      }
-    }
-  }
-}
-```
-
-### 3f. Alternative: run programmatically
-
-For development or CI, you can run the workflow directly in Python without the API server:
-
-```bash
-OPENAI_API_KEY="$OPENAI_API_KEY" uv run python -c "
-import asyncio, yaml
-from temporalio.client import Client
-from temporalio.worker import Worker
-from agents.workflow.temporal_workflow import AgentWorkflow
-from agents.workflow.temporal_activities import run_sandbox_step, build_escalation_activity, send_approval_notification
-from agents.workflow.temporal_models import ProviderConfig, WorkflowInput
-from agents.spawner.podman_spawner import PodmanSpawner
-from agents.workflow.temporal_worker import _bind_sandbox_activity
-
-async def main():
-    client = await Client.connect('localhost:7233')
-    spawner = PodmanSpawner(network='podman')
-    bound = _bind_sandbox_activity(spawner)
-
-    with open('diagnostic-workflow.yaml') as f:
-        definition = yaml.safe_load(f)
-
-    async with Worker(client, task_queue='demo', workflows=[AgentWorkflow],
-                      activities=[bound, build_escalation_activity, send_approval_notification]):
-        r = await client.execute_workflow(
-            AgentWorkflow.run,
-            WorkflowInput(
-                definition=definition,
-                workflow_id='wf-demo-1',
-                provider=ProviderConfig(name='openai', model='gpt-4o-mini', credentials_secret='OPENAI_API_KEY'),
-                sandbox_image='localhost/lightspeed-agentic-sandbox:temporal',
-                approval_policy={'auto_approve_risk_levels': ['low']},
-            ),
-            id='wf-demo-1', task_queue='demo')
-
-        for key, step in r.steps.items():
-            print(f'{key}: {step.status}')
-            if step.output:
-                for k, v in step.output.items():
-                    print(f'  {k}: {v}')
-
-asyncio.run(main())
-"
-```
-
-## What happens under the hood
-
-1. **API receives request** — validates definition, generates workflow_id (or uses caller-supplied), emits `workflow_started` audit event
-2. **Temporal workflow starts** — `AgentWorkflow.run()` interprets the definition
-3. **Step "diagnose"** — activity spawns a sandbox container (`lightspeed-agentic-sandbox`), sets `LIGHTSPEED_PROVIDER`/`LIGHTSPEED_MODEL` env vars, calls `POST /v1/agent/run` with prompt + output schema, parses structured response, destroys container
-4. **Step "approve"** — auto-approved (low risk policy) without human intervention, emits `step_approved` audit event
-5. **Workflow completes** — structured diagnosis queryable via `GET /v1/workflows/{id}`
 
 ## Cleanup
 
@@ -391,17 +286,12 @@ podman compose -f deploy/podman/docker-compose.temporal.yaml down
 KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name cloud-agents
 ```
 
-### Images (optional)
-```bash
-podman rmi workflow-runner:latest lightspeed-agentic-sandbox:temporal
-```
-
 ## Running tests
 
 ```bash
-# Unit + integration tests (no infra needed)
-uv run pytest tests/unit/agents/ tests/integration/temporal/ -q
+# Unit tests
+uv run pytest tests/unit/ -q
 
-# Temporal server tests (requires running Temporal)
-uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v
+# Integration tests (requires Temporal)
+uv run pytest tests/integration/ -v
 ```
