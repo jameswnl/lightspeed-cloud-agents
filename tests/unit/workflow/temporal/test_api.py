@@ -1150,6 +1150,37 @@ class TestSSEEventStream:
         event_types = [e.get("type") for e in events]
         assert "workflow.completed" in event_types
 
+    def test_sse_data_is_valid_json(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE data lines must be valid JSON, not Python dict repr."""
+        import json as json_mod
+
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        handle.query = mocker.AsyncMock(return_value=self._make_status(
+            steps={"r1": {"status": "completed"}},
+            events=[
+                {"type": "step.started", "step": "s1", "timestamp": "t1"},
+                {"type": "step.completed", "step": "s1", "timestamp": "t2"},
+            ],
+        ))
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-json/events")
+        for line in response.text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("data: "):
+                raw = line[6:]
+                json_mod.loads(raw)  # must not raise JSONDecodeError
+
     def test_denied_step_with_paused_not_terminal(
         self,
         mocker: MockerFixture,
