@@ -241,31 +241,26 @@ const SCENARIOS = [
   {
     id: 'mcp-tools', idx: 2,
     title: 'MCP Tool Integration',
-    subtitle: 'Agent uses external tools via MCP servers',
+    subtitle: 'Agent uses external tools via MCP',
     icon: '🔧',
-    mode: 'animated',
-    steps: [
-      { name: 'inject-mcp', type: 'trigger', label: 'MCP Config Injected' },
-      { name: 'gather-context', type: 'agent', label: 'Gather Context' },
-      { name: 'recommend', type: 'agent', label: 'Recommend Actions' }
-    ],
-    animationSequence: [
-      { delay: 0, type: 'info', step: 'inject-mcp', log: 'Workflow triggered with mcp_servers: [{name:"filesystem", url:"http://mcp-fs:8081/sse"}, {name:"jira", url:"http://jira-mcp:8082/sse"}]' },
-      { delay: 1500, type: 'step.started', step: 'inject-mcp', log: 'LIGHTSPEED_MCP_SERVERS env var injected into sandbox container' },
-      { delay: 2500, type: 'step.completed', step: 'inject-mcp', log: 'Sandbox spawned with MCP server connections configured' },
-      { delay: 3500, type: 'step.started', step: 'gather-context', log: 'Agent loop started — LLM has filesystem + Jira tools available' },
-      { delay: 5000, type: 'info', step: 'gather-context', log: 'LLM tool_call: read_file("/data/cluster-status.txt") via filesystem MCP' },
-      { delay: 6500, type: 'info', step: 'gather-context', log: 'Tool result: api-backend 0/2 Ready (ErrImagePull), web-frontend 3/3 Ready' },
-      { delay: 8000, type: 'info', step: 'gather-context', log: 'LLM tool_call: read_file("/data/change-log.txt") via filesystem MCP' },
-      { delay: 9500, type: 'info', step: 'gather-context', log: 'Tool result: api-backend image updated to v2.broken by ci-bot at 02:15' },
-      { delay: 11000, type: 'info', step: 'gather-context', log: 'LLM tool_call: search_issues("api-backend ErrImagePull") via Jira MCP' },
-      { delay: 12500, type: 'info', step: 'gather-context', log: 'Tool result: INCIDENT-4521 "api-backend deployment broken after CI push"' },
-      { delay: 14000, type: 'step.completed', step: 'gather-context', log: 'Output: {root_cause: "CI pushed invalid image tag", files_read: 3, jira_incidents: 1}' },
-      { delay: 15500, type: 'step.started', step: 'recommend', log: 'Agent loop started with context from gather-context step' },
-      { delay: 17000, type: 'info', step: 'recommend', log: 'LLM reasoning: cross-referencing cluster status, change log, and Jira incident' },
-      { delay: 18500, type: 'step.completed', step: 'recommend', log: 'Recommendation: rollback api-backend to v2.stable, update INCIDENT-4521' },
-      { delay: 19500, type: 'info', step: '', log: 'Workflow complete — agent used 5 MCP tool calls across 2 steps, 0 human intervention' }
-    ]
+    mode: 'live',
+    definition: {
+      apiVersion: 'v1', kind: 'AgentWorkflow',
+      metadata: { name: 'mcp-tool-demo' },
+      spec: { steps: [
+        { name: 'gather-context', type: 'agent', output_key: 'context',
+          prompt: 'Gather context about the api-backend service: check for recent changes, open issues, and current health status. Summarize your findings.',
+          output_schema: { type: 'object', properties: { summary: {type:'string'}, findings: {type:'array'}, risk_assessment: {type:'string'} }, required: ['summary'] },
+          timeout_seconds: 90 },
+        { name: 'recommend', type: 'agent', output_key: 'recommendation',
+          prompt: 'Based on the findings: {{ steps.context.output.summary }}. Provide actionable recommendations.',
+          timeout_seconds: 60 }
+      ]}
+    },
+    runRequest: {
+      provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+      sandbox_image: 'lightspeed-agentic-sandbox:temporal'
+    }
   },
   {
     id: 'multi-workflow', idx: 3,
