@@ -422,10 +422,30 @@ def build_temporal_router(
                     seen_count = len(events)
 
                     steps = result.steps if hasattr(result, "steps") else {}
-                    all_terminal = steps and all(
-                        s.status
-                        in ("completed", "failed", "skipped", "denied", "escalated")
-                        for s in steps.values()
+                    events_list = result.events if hasattr(result, "events") else []
+                    terminal_statuses = (
+                        "completed", "failed", "skipped", "denied", "escalated",
+                    )
+                    resolved_steps = {
+                        (e.step if hasattr(e, "step") else e.get("step", ""))
+                        for e in events_list
+                        if (e.type if hasattr(e, "type") else e.get("type", ""))
+                        in ("step.completed", "step.failed", "step.denied", "step.skipped")
+                    }
+                    still_paused = any(
+                        (e.step if hasattr(e, "step") else e.get("step", ""))
+                        not in resolved_steps
+                        for e in events_list
+                        if (e.type if hasattr(e, "type") else e.get("type", ""))
+                        == "workflow.paused"
+                    )
+                    all_terminal = (
+                        steps
+                        and not still_paused
+                        and all(
+                            s.status in terminal_statuses
+                            for s in steps.values()
+                        )
                     )
                     if all_terminal:
                         yield 'data: {"type": "workflow.completed"}\n\n'

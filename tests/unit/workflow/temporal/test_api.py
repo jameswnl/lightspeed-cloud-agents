@@ -914,6 +914,275 @@ class TestAuthorizationWiring:
         assert args_list[4] is None  # approver_uid (anonymous has no uid)
 
 
+class TestSSEEventStream:
+    """Tests for GET /v1/workflows/{id}/events SSE endpoint."""
+
+    def _make_status(self, steps, events):
+        """Build a mock WorkflowStatus."""
+        from cloud_agents.workflow.temporal_models import StepResult, WorkflowEvent, WorkflowStatus
+
+        step_results = {
+            k: StepResult(**v) if isinstance(v, dict) else v
+            for k, v in steps.items()
+        }
+        event_objs = [
+            WorkflowEvent(**e) if isinstance(e, dict) else e
+            for e in events
+        ]
+        return WorkflowStatus(steps=step_results, events=event_objs)
+
+    def _collect_sse(self, response) -> list[dict]:
+        """Parse SSE data lines from a streaming response."""
+        import ast
+        import json
+
+        events = []
+        for line in response.text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("data: "):
+                raw = line[6:]
+                try:
+                    events.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    events.append(ast.literal_eval(raw))
+        return events
+
+    def test_paused_workflow_does_not_emit_completed(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE should NOT emit workflow.completed when workflow is paused."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        call_count = 0
+
+        async def query_status(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 3:
+                raise Exception("stop polling")
+            return self._make_status(
+                steps={"diagnosis": {"status": "completed"}},
+                events=[
+                    {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
+                    {"type": "step.completed", "step": "diagnose", "timestamp": "t2"},
+                    {"type": "workflow.paused", "step": "approve-fix", "timestamp": "t3"},
+                ],
+            )
+
+        handle.query = query_status
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-paused/events")
+        events = self._collect_sse(response)
+
+        event_types = [e.get("type") for e in events]
+        assert "workflow.paused" in event_types
+        assert "workflow.completed" not in event_types
+
+    def test_all_terminal_emits_completed(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE emits workflow.completed when all steps are terminal."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        handle.query = mocker.AsyncMock(return_value=self._make_status(
+            steps={
+                "diagnosis": {"status": "completed"},
+                "approval": {"status": "completed", "output": {"approved": True}},
+                "fix": {"status": "completed"},
+            },
+            events=[
+                {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
+                {"type": "step.completed", "step": "diagnose", "timestamp": "t2"},
+                {"type": "step.completed", "step": "approve", "timestamp": "t3"},
+                {"type": "step.started", "step": "fix", "timestamp": "t4"},
+                {"type": "step.completed", "step": "fix", "timestamp": "t5"},
+            ],
+        ))
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-done/events")
+        events = self._collect_sse(response)
+
+        event_types = [e.get("type") for e in events]
+        assert "workflow.completed" in event_types
+        assert event_types[-1] == "workflow.completed"
+
+    def test_paused_then_resolved_emits_completed(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE emits workflow.completed after paused step is resolved."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        call_count = 0
+
+        async def query_status(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return self._make_status(
+                    steps={"diagnosis": {"status": "completed"}},
+                    events=[
+                        {"type": "step.completed", "step": "diagnose", "timestamp": "t1"},
+                        {"type": "workflow.paused", "step": "approve", "timestamp": "t2"},
+                    ],
+                )
+            else:
+                return self._make_status(
+                    steps={
+                        "diagnosis": {"status": "completed"},
+                        "approval": {"status": "completed", "output": {"approved": True}},
+                        "fix": {"status": "completed"},
+                    },
+                    events=[
+                        {"type": "step.completed", "step": "diagnose", "timestamp": "t1"},
+                        {"type": "workflow.paused", "step": "approve", "timestamp": "t2"},
+                        {"type": "step.completed", "step": "approve", "timestamp": "t3"},
+                        {"type": "step.completed", "step": "fix", "timestamp": "t4"},
+                    ],
+                )
+
+        handle.query = query_status
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-resume/events")
+        events = self._collect_sse(response)
+
+        event_types = [e.get("type") for e in events]
+        assert "workflow.paused" in event_types
+        assert "workflow.completed" in event_types
+        assert event_types[-1] == "workflow.completed"
+
+    def test_events_streamed_incrementally(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE streams events incrementally using cursor-based dedup."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        call_count = 0
+
+        async def query_status(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return self._make_status(
+                    steps={},
+                    events=[
+                        {"type": "step.started", "step": "s1", "timestamp": "t1"},
+                    ],
+                )
+            else:
+                return self._make_status(
+                    steps={"r1": {"status": "completed"}},
+                    events=[
+                        {"type": "step.started", "step": "s1", "timestamp": "t1"},
+                        {"type": "step.completed", "step": "s1", "timestamp": "t2"},
+                    ],
+                )
+
+        handle.query = query_status
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-incr/events")
+        events = self._collect_sse(response)
+
+        started_count = sum(1 for e in events if e.get("type") == "step.started")
+        completed_count = sum(1 for e in events if e.get("type") == "step.completed")
+        assert started_count == 1, "step.started should appear exactly once (no duplicates)"
+        assert completed_count == 1
+
+    def test_failed_step_is_terminal(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """SSE emits workflow.completed when step fails (no pause)."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        handle.query = mocker.AsyncMock(return_value=self._make_status(
+            steps={
+                "diagnosis": {"status": "failed", "error": "retries exhausted"},
+                "escalation": {"status": "escalated"},
+            },
+            events=[
+                {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
+                {"type": "step.failed", "step": "diagnose", "timestamp": "t2"},
+            ],
+        ))
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-fail/events")
+        events = self._collect_sse(response)
+
+        event_types = [e.get("type") for e in events]
+        assert "workflow.completed" in event_types
+
+    def test_denied_step_with_paused_not_terminal(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """workflow.paused then step.denied resolves the pause — stream can complete."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        handle.query = mocker.AsyncMock(return_value=self._make_status(
+            steps={
+                "diagnosis": {"status": "completed"},
+                "approval": {"status": "denied"},
+            },
+            events=[
+                {"type": "step.completed", "step": "diagnose", "timestamp": "t1"},
+                {"type": "workflow.paused", "step": "approve", "timestamp": "t2"},
+                {"type": "step.denied", "step": "approve", "timestamp": "t3"},
+            ],
+        ))
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get("/v1/workflows/wf-denied/events")
+        events = self._collect_sse(response)
+
+        event_types = [e.get("type") for e in events]
+        assert "workflow.completed" in event_types
+
+
 class TestAuthzContextLoadedForLaterOperations:
     """Tests that later operations load persisted authz context."""
 

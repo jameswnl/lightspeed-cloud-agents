@@ -616,13 +616,32 @@ const app = {
     }
   },
 
+  eventQueue: [],
+  processingQueue: false,
+
+  enqueueEvent(evt) {
+    this.eventQueue.push(evt);
+    if (!this.processingQueue) this.processQueue();
+  },
+
+  async processQueue() {
+    this.processingQueue = true;
+    while (this.eventQueue.length > 0) {
+      const evt = this.eventQueue.shift();
+      this.handleEvent(evt);
+      const minDelay = evt.type === 'step.started' ? 1500 : evt.type === 'workflow.paused' ? 500 : 800;
+      await new Promise(r => setTimeout(r, minDelay));
+    }
+    this.processingQueue = false;
+  },
+
   connectSSE(wfId) {
     if (this.sse) this.sse.close();
     this.sse = new EventSource(this.apiUrl + '/v1/workflows/' + wfId + '/events');
     this.sse.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
-        this.handleEvent(evt);
+        this.enqueueEvent(evt);
       } catch {}
     };
     this.sse.onerror = () => {
