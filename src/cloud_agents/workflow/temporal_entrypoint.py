@@ -224,6 +224,17 @@ def build_temporal_app(
 
     app = FastAPI(title="Cloud Agents Workflow Runner (Temporal)", lifespan=lifespan)
 
+    cors_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+    if cors_origins:
+        from starlette.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[o.strip() for o in cors_origins.split(",")],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
     placeholder_client = _DeferredClient(temporal_client_holder)
     definition_store = DefinitionStore()
 

@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Agents — Live Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; overflow-x: hidden; }
+a { color: #58a6ff; text-decoration: none; }
+
+/* Header */
+.header { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; border-bottom: 1px solid #21262d; background: #161b22; }
+.header h1 { font-size: 16px; color: #f0f6fc; font-weight: 600; }
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 12px; }
+.conn-status { display: flex; align-items: center; gap: 6px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; }
+.conn-dot.ok { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+.conn-dot.err { background: #f85149; }
+.conn-dot.warn { background: #d29922; animation: blink 1s ease infinite; }
+@keyframes blink { 50% { opacity: 0.3; } }
+.api-input { background: #0d1117; color: #8b949e; border: 1px solid #30363d; padding: 4px 8px; border-radius: 4px; font-size: 11px; width: 200px; font-family: 'SFMono-Regular', monospace; }
+
+/* Scenarios */
+.scenarios { display: flex; gap: 12px; padding: 16px 24px; overflow-x: auto; }
+.scenario-card { flex: 0 0 220px; background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s; border-left: 3px solid transparent; }
+.scenario-card:hover { border-color: #484f58; background: #1c2128; }
+.scenario-card.selected { border-left-color: #58a6ff; border-color: #58a6ff; background: #1c2128; }
+.scenario-card.s1 { border-left-color: #3fb950; }
+.scenario-card.s2 { border-left-color: #a371f7; }
+.scenario-card.s3 { border-left-color: #d29922; }
+.scenario-card.s4 { border-left-color: #f85149; }
+.scenario-card.selected.s1 { border-color: #3fb950; }
+.scenario-card.selected.s2 { border-color: #a371f7; }
+.scenario-card.selected.s3 { border-color: #d29922; }
+.scenario-card.selected.s4 { border-color: #f85149; }
+.sc-icon { font-size: 24px; margin-bottom: 8px; }
+.sc-title { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 4px; }
+.sc-sub { font-size: 11px; color: #8b949e; line-height: 1.4; }
+.sc-badge { display: inline-block; font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-top: 6px; font-weight: 600; }
+.sc-badge.live { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+.sc-badge.animated { background: #2d2000; color: #d29922; border: 1px solid #9e6a03; }
+
+/* Main area */
+.main { display: flex; min-height: 320px; border-bottom: 1px solid #21262d; }
+.pipeline-area { flex: 1; padding: 24px; overflow-x: auto; display: flex; flex-direction: column; }
+.pipeline-label { font-size: 11px; color: #484f58; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 16px; text-transform: uppercase; }
+.pipeline { display: flex; align-items: center; gap: 0; justify-content: center; flex-wrap: nowrap; min-height: 180px; }
+
+/* Step nodes */
+.step-node { position: relative; width: 180px; min-height: 160px; background: #161b22; border: 2px solid #30363d; border-radius: 12px; padding: 16px; transition: all 0.3s; flex-shrink: 0; }
+.step-node:hover { border-color: #484f58; }
+.step-node.selected { border-color: #58a6ff; box-shadow: 0 0 12px rgba(88,166,255,0.15); }
+.step-node.running { border-color: #238636; }
+.step-node.completed { border-color: #238636; }
+.step-node.failed { border-color: #da3633; }
+.step-node.paused { border-color: #9e6a03; }
+.step-type-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+.step-type-badge.agent { background: #0d2818; color: #3fb950; }
+.step-type-badge.approval { background: #2d2000; color: #d29922; }
+.step-type-badge.trigger { background: #1c2333; color: #58a6ff; }
+.step-type-badge.sub-workflow { background: #2d1b4e; color: #d2a8ff; }
+.step-name { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 12px; margin-top: 4px; }
+.step-status { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 8px; }
+.status-icon { width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; }
+.status-icon.pending { border: 2px solid #484f58; }
+.status-icon.running { background: #238636; animation: pulse 1.5s ease infinite; }
+.status-icon.completed { background: #238636; color: #fff; }
+.status-icon.failed { background: #da3633; color: #fff; }
+.status-icon.paused { background: #9e6a03; color: #fff; }
+.status-icon.skipped { border: 2px solid #484f58; background: #21262d; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(35,134,54,0.5); } 50% { box-shadow: 0 0 0 8px rgba(35,134,54,0); } }
+.status-text { color: #8b949e; }
+.status-text.running { color: #3fb950; }
+.status-text.completed { color: #3fb950; }
+.status-text.failed { color: #f85149; }
+.status-text.paused { color: #d29922; }
+
+/* Sandbox indicator */
+.sandbox-ind { margin-top: 8px; padding: 6px 8px; background: #0d2818; border: 1px solid #238636; border-radius: 6px; font-family: 'SFMono-Regular', monospace; font-size: 10px; color: #3fb950; opacity: 0; transition: opacity 0.4s; display: none; }
+.sandbox-ind.visible { display: block; opacity: 1; animation: glow 1.4s ease-in-out infinite; }
+@keyframes glow { 0%,100% { box-shadow: 0 0 3px rgba(35,134,54,0.3); } 50% { box-shadow: 0 0 10px rgba(63,185,80,0.4); } }
+
+/* Step output preview */
+.step-output-preview { margin-top: 8px; font-size: 10px; color: #8b949e; font-family: 'SFMono-Regular', monospace; max-height: 40px; overflow: hidden; word-break: break-all; }
+
+/* Arrow */
+.step-arrow { flex-shrink: 0; width: 40px; display: flex; align-items: center; justify-content: center; position: relative; }
+.step-arrow svg { width: 40px; height: 20px; }
+.step-arrow .arrow-line { stroke: #30363d; stroke-width: 2; fill: none; }
+.step-arrow .arrow-head { fill: #30363d; }
+.step-arrow.active .arrow-line { stroke: #58a6ff; stroke-dasharray: 6 4; animation: dash 0.5s linear infinite; }
+.step-arrow.active .arrow-head { fill: #58a6ff; }
+.step-arrow.done .arrow-line { stroke: #238636; }
+.step-arrow.done .arrow-head { fill: #238636; }
+@keyframes dash { to { stroke-dashoffset: -10; } }
+
+/* Detail panel */
+.detail-panel { width: 0; overflow: hidden; border-left: 1px solid #21262d; background: #161b22; transition: width 0.3s; flex-shrink: 0; }
+.detail-panel.open { width: 380px; }
+.detail-inner { width: 380px; padding: 20px; }
+.detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.detail-title { font-size: 16px; font-weight: 600; color: #f0f6fc; }
+.detail-close { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 18px; padding: 4px; }
+.detail-close:hover { color: #f0f6fc; }
+.detail-section { margin-bottom: 16px; }
+.detail-section-title { font-size: 11px; font-weight: 600; color: #58a6ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.detail-json { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SFMono-Regular', monospace; font-size: 11px; line-height: 1.6; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+.json-key { color: #79c0ff; }
+.json-str { color: #a5d6ff; }
+.json-num { color: #d2a8ff; }
+.json-bool { color: #ff7b72; }
+.json-null { color: #8b949e; }
+
+/* Approval buttons */
+.approval-btns { display: flex; gap: 12px; margin-top: 12px; }
+.btn-approve { background: #238636; color: #fff; border: none; padding: 10px 24px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; flex: 1; }
+.btn-approve:hover { background: #2ea043; }
+.btn-deny { background: #21262d; color: #f85149; border: 1px solid #da3633; padding: 10px 24px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; flex: 1; }
+.btn-deny:hover { background: #2d1117; }
+
+/* Event log */
+.event-log-area { padding: 0 24px 12px; }
+.event-log-label { font-size: 11px; color: #484f58; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding: 12px 0 8px; }
+.event-log { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 12px; font-family: 'SFMono-Regular', monospace; font-size: 11px; line-height: 1.8; max-height: 200px; overflow-y: auto; }
+.ev { white-space: nowrap; }
+.ev-time { color: #484f58; }
+.ev-type { font-weight: 600; }
+.ev-type.started { color: #58a6ff; }
+.ev-type.completed { color: #3fb950; }
+.ev-type.failed { color: #f85149; }
+.ev-type.paused { color: #d29922; }
+.ev-type.auto_approved { color: #3fb950; }
+.ev-type.skipped { color: #484f58; }
+.ev-type.denied { color: #f85149; }
+.ev-type.info { color: #8b949e; }
+.ev-type.error { color: #f85149; }
+.ev-type.security { color: #a371f7; }
+.ev-step { color: #c9d1d9; }
+
+/* Controls */
+.controls { display: flex; align-items: center; gap: 8px; padding: 12px 24px; border-top: 1px solid #21262d; background: #161b22; }
+.btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn:hover { background: #30363d; }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.btn.primary { background: #238636; border-color: #238636; color: #fff; }
+.btn.primary:hover { background: #2ea043; }
+.btn.danger { background: #21262d; border-color: #da3633; color: #f85149; }
+.ctrl-status { margin-left: auto; font-size: 12px; color: #8b949e; }
+.ctrl-status .running { color: #3fb950; }
+
+/* Empty state */
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; color: #484f58; }
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+.empty-state .msg { font-size: 14px; }
+.empty-state .hint { font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>Cloud Agents Framework</h1>
+  <div class="header-right">
+    <div class="conn-status">
+      <div class="conn-dot err" id="conn-dot"></div>
+      <span id="conn-label">Disconnected</span>
+    </div>
+    <input class="api-input" id="api-url" value="http://localhost:8080" onchange="app.checkConnection()">
+  </div>
+</div>
+
+<!-- Scenario Cards -->
+<div class="scenarios" id="scenarios"></div>
+
+<!-- Main Area -->
+<div class="main">
+  <div class="pipeline-area">
+    <div class="pipeline-label" id="pipeline-label">Select a scenario to begin</div>
+    <div class="pipeline" id="pipeline">
+      <div class="empty-state">
+        <div class="icon">&#9881;</div>
+        <div class="msg">Select a scenario above to visualize a workflow</div>
+        <div class="hint">Live scenarios connect to the workflow runner API</div>
+      </div>
+    </div>
+  </div>
+  <div class="detail-panel" id="detail-panel">
+    <div class="detail-inner" id="detail-inner"></div>
+  </div>
+</div>
+
+<!-- Event Log -->
+<div class="event-log-area">
+  <div class="event-log-label">Event Log</div>
+  <div class="event-log" id="event-log"></div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button class="btn primary" id="btn-run" onclick="app.run()" disabled>&#9654; Run Workflow</button>
+  <button class="btn" id="btn-reset" onclick="app.reset()">Reset</button>
+  <button class="btn danger" id="btn-cancel" onclick="app.cancel()" disabled>Cancel</button>
+  <div class="ctrl-status" id="ctrl-status">Idle</div>
+</div>
+
+<script>
+// ─── Scenario Definitions ───────────────────────────────────────
+
+const SCENARIOS = [
+  {
+    id: 'k8s-incident', idx: 1,
+    title: 'K8s Incident Response',
+    subtitle: 'diagnose → approve → fix → verify',
+    icon: '⚠️',
+    mode: 'live',
+    definition: {
+      apiVersion: 'v1', kind: 'AgentWorkflow',
+      metadata: { name: 'k8s-incident-response' },
+      spec: { steps: [
+        { name: 'diagnose', type: 'agent', output_key: 'diagnosis',
+          prompt: 'Kubernetes cluster issue: api-backend deployment has 0/2 pods ready due to ErrImagePull (image nonexistent-registry.io/api-server:v2.broken does not exist). web-frontend is healthy (3/3 Running). Diagnose the root cause and recommend a fix.',
+          output_schema: { type: 'object', properties: { health_status: {type:'string'}, root_cause: {type:'string'}, fix: {type:'string'}, severity: {type:'string', enum:['low','medium','high','critical']} }, required: ['health_status','root_cause','fix','severity'] },
+          timeout_seconds: 120 },
+        { name: 'approve-fix', type: 'human-approval', output_key: 'approval',
+          message: 'Review the diagnosis and approve remediation.', risk_level: 'high' },
+        { name: 'fix', type: 'agent', output_key: 'fix',
+          prompt: 'Apply the recommended fix: {{ steps.diagnosis.output.fix }}',
+          condition: 'steps.approval.output.approved == true', timeout_seconds: 180 },
+        { name: 'verify', type: 'agent', output_key: 'verification',
+          prompt: 'Verify the cluster is healthy after remediation. Check that api-backend pods are running.',
+          condition: 'steps.fix.status == completed', timeout_seconds: 120 }
+      ]}
+    },
+    runRequest: {
+      provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+      sandbox_image: 'lightspeed-agentic-sandbox:temporal',
+      approval_policy: { auto_approve_risk_levels: ['low'] }
+    }
+  },
+  {
+    id: 'mcp-tools', idx: 2,
+    title: 'MCP Tool Integration',
+    subtitle: 'Agent uses external tools via MCP',
+    icon: '🔧',
+    mode: 'live',
+    definition: {
+      apiVersion: 'v1', kind: 'AgentWorkflow',
+      metadata: { name: 'mcp-tool-demo' },
+      spec: { steps: [
+        { name: 'gather-context', type: 'agent', output_key: 'context',
+          prompt: 'Gather context about the api-backend service: check for recent changes, open issues, and current health status. Summarize your findings.',
+          output_schema: { type: 'object', properties: { summary: {type:'string'}, findings: {type:'array'}, risk_assessment: {type:'string'} }, required: ['summary'] },
+          timeout_seconds: 90 },
+        { name: 'recommend', type: 'agent', output_key: 'recommendation',
+          prompt: 'Based on the findings: {{ steps.context.output.summary }}. Provide actionable recommendations.',
+          timeout_seconds: 60 }
+      ]}
+    },
+    runRequest: {
+      provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+      sandbox_image: 'lightspeed-agentic-sandbox:temporal'
+    }
+  },
+  {
+    id: 'multi-workflow', idx: 3,
+    title: 'Multi-workflow Composition',
+    subtitle: 'Chatbot triggers chained workflows',
+    icon: '🔗',
+    mode: 'animated',
+    steps: [
+      { name: 'user-question', type: 'trigger', label: 'User asks question' },
+      { name: 'chatbot-reason', type: 'agent', label: 'Chatbot LLM reasoning' },
+      { name: 'diagnose-wf', type: 'sub-workflow', label: 'Diagnostic Workflow' },
+      { name: 'chatbot-eval', type: 'agent', label: 'Evaluate results' },
+      { name: 'fix-wf', type: 'sub-workflow', label: 'Fix Workflow' },
+      { name: 'chatbot-respond', type: 'agent', label: 'Respond to user' }
+    ],
+    animationSequence: [
+      { delay: 0, type: 'info', step: 'user-question', log: 'User: "Is web-02 healthy? Can I deploy v3.0?"' },
+      { delay: 1500, type: 'step.started', step: 'user-question', log: 'Incoming user message received' },
+      { delay: 2500, type: 'step.completed', step: 'user-question', log: 'Routed to chatbot agent' },
+      { delay: 3500, type: 'step.started', step: 'chatbot-reason', log: 'LLM reasoning: "I need to check cluster health..."' },
+      { delay: 5000, type: 'info', step: 'chatbot-reason', log: 'LLM tool_call: start_diagnostic_workflow(cluster="web-02")' },
+      { delay: 6000, type: 'step.completed', step: 'chatbot-reason', log: 'Tool call dispatched' },
+      { delay: 7000, type: 'step.started', step: 'diagnose-wf', log: 'Temporal: StartWorkflowExecution("diagnostic-workflow")' },
+      { delay: 8500, type: 'info', step: 'diagnose-wf', log: 'Sandbox ca-a1b2c3 spawned → agent loop: 3 LLM turns, 2 tool calls' },
+      { delay: 10500, type: 'step.completed', step: 'diagnose-wf', log: 'Result: {health_status: "healthy", severity: "low"}' },
+      { delay: 12000, type: 'step.started', step: 'chatbot-eval', log: 'LLM evaluates diagnostic result → cluster healthy' },
+      { delay: 13500, type: 'info', step: 'chatbot-eval', log: 'LLM tool_call: start_deploy_readiness(namespace="frontend")' },
+      { delay: 14500, type: 'step.completed', step: 'chatbot-eval', log: 'Deploy readiness check dispatched' },
+      { delay: 15500, type: 'step.started', step: 'fix-wf', log: 'Temporal: StartWorkflowExecution("deploy-readiness")' },
+      { delay: 17000, type: 'info', step: 'fix-wf', log: 'Sandbox ca-d4e5f6 spawned → agent loop: 2 LLM turns' },
+      { delay: 19000, type: 'step.completed', step: 'fix-wf', log: 'Result: {ready: true, warnings: ["web-03 at 68% CPU"]}' },
+      { delay: 20500, type: 'step.started', step: 'chatbot-respond', log: 'LLM synthesizes both results into response' },
+      { delay: 22000, type: 'step.completed', step: 'chatbot-respond', log: 'Chatbot: "web-02 is healthy. Safe to deploy. Note: web-03 at 68% CPU."' },
+      { delay: 23000, type: 'info', step: '', log: '✓ Two workflows executed, zero long-running agents, full context preserved' }
+    ]
+  },
+  {
+    id: 'security', idx: 4,
+    title: 'Security & Governance',
+    subtitle: 'RBAC, approval gates, audit trail',
+    icon: '🔒',
+    mode: 'live',
+    definition: {
+      apiVersion: 'v1', kind: 'AgentWorkflow',
+      metadata: { name: 'security-governance-demo' },
+      spec: { steps: [
+        { name: 'security-audit', type: 'agent', output_key: 'audit',
+          prompt: 'Perform a security audit of the production namespace. Check for: pods running as root, missing network policies, exposed secrets, resource limits. Report compliance status.',
+          output_schema: { type: 'object', properties: { compliance_status: {type:'string'}, violations: {type:'array'}, risk_score: {type:'number'} }, required: ['compliance_status','risk_score'] },
+          timeout_seconds: 60 },
+        { name: 'approve-remediation', type: 'human-approval', output_key: 'security_approval',
+          message: 'Security audit complete. Review violations and approve remediation.', risk_level: 'critical' },
+        { name: 'remediate', type: 'agent', output_key: 'remediation',
+          prompt: 'Apply security remediations for the violations found in the audit.',
+          condition: 'steps.security_approval.output.approved == true', timeout_seconds: 120 }
+      ]}
+    },
+    runRequest: {
+      provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+      sandbox_image: 'lightspeed-agentic-sandbox:temporal',
+      approval_policy: { auto_approve_risk_levels: ['low'] }
+    }
+  }
+];
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function ts() { return new Date().toISOString().substr(11, 12); }
+
+function syntaxHL(obj) {
+  const s = JSON.stringify(obj, null, 2);
+  if (!s) return '';
+  return s.replace(/(".*?")(\s*:\s*)/g, '<span class="json-key">$1</span>$2')
+    .replace(/:\s*(".*?")/g, ': <span class="json-str">$1</span>')
+    .replace(/:\s*(\d+\.?\d*)/g, ': <span class="json-num">$1</span>')
+    .replace(/:\s*(true|false)/g, ': <span class="json-bool">$1</span>')
+    .replace(/:\s*(null)/g, ': <span class="json-null">$1</span>');
+}
+
+// ─── App ─────────────────────────────────────────────────────────
+
+const app = {
+  apiUrl: 'http://localhost:8080',
+  connected: false,
+  scenario: null,
+  workflowId: null,
+  sse: null,
+  pollTimer: null,
+  state: 'idle', // idle, running, paused, completed, error
+  steps: [],
+  stepData: {},
+  animTimer: null,
+
+  init() {
+    this.apiUrl = $('api-url').value;
+    this.renderScenarios();
+    this.checkConnection();
+  },
+
+  async checkConnection() {
+    this.apiUrl = $('api-url').value;
+    try {
+      const r = await fetch(this.apiUrl + '/readyz', { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        this.connected = true;
+        $('conn-dot').className = 'conn-dot ok';
+        $('conn-label').textContent = 'Connected';
+      } else throw new Error();
+    } catch {
+      this.connected = false;
+      $('conn-dot').className = 'conn-dot err';
+      $('conn-label').textContent = 'Disconnected';
+    }
+    this.updateButtons();
+  },
+
+  renderScenarios() {
+    const el = $('scenarios');
+    el.innerHTML = SCENARIOS.map(s => `
+      <div class="scenario-card s${s.idx}" id="sc-${s.id}" onclick="app.selectScenario('${s.id}')">
+        <div class="sc-icon">${s.icon}</div>
+        <div class="sc-title">${esc(s.title)}</div>
+        <div class="sc-sub">${esc(s.subtitle)}</div>
+        <span class="sc-badge ${s.mode}">${s.mode === 'live' ? 'LIVE' : 'ANIMATED'}</span>
+      </div>
+    `).join('');
+  },
+
+  selectScenario(id) {
+    this.reset();
+    this.scenario = SCENARIOS.find(s => s.id === id);
+    document.querySelectorAll('.scenario-card').forEach(c => c.classList.remove('selected'));
+    $('sc-' + id).classList.add('selected');
+
+    const steps = this.scenario.mode === 'animated'
+      ? this.scenario.steps
+      : this.scenario.definition.spec.steps;
+    this.steps = steps;
+    this.renderPipeline(steps);
+    this.updateButtons();
+  },
+
+  renderPipeline(steps) {
+    $('pipeline-label').textContent = this.scenario.title;
+    const el = $('pipeline');
+    el.innerHTML = '';
+
+    steps.forEach((step, i) => {
+      const type = step.type || 'agent';
+      const typeLabel = type === 'human-approval' ? 'approval' : type.replace('-', ' ');
+      const name = step.label || step.name;
+
+      const node = document.createElement('div');
+      node.className = 'step-node';
+      node.id = 'step-' + step.name;
+      node.onclick = () => this.showDetail(step.name);
+      node.innerHTML = `
+        <span class="step-type-badge ${type === 'human-approval' ? 'approval' : type === 'sub-workflow' ? 'sub-workflow' : type === 'trigger' ? 'trigger' : 'agent'}">${esc(typeLabel)}</span>
+        <div class="step-name">${esc(name)}</div>
+        <div class="step-status">
+          <span class="status-icon pending" id="si-${step.name}"></span>
+          <span class="status-text" id="st-${step.name}">Pending</span>
+        </div>
+        <div class="sandbox-ind" id="sb-${step.name}"></div>
+        <div class="step-output-preview" id="op-${step.name}"></div>
+      `;
+      el.appendChild(node);
+
+      if (i < steps.length - 1) {
+        const arrow = document.createElement('div');
+        arrow.className = 'step-arrow';
+        arrow.id = 'arrow-' + i;
+        arrow.innerHTML = '<svg viewBox="0 0 40 20"><line class="arrow-line" x1="0" y1="10" x2="30" y2="10"/><polygon class="arrow-head" points="28,5 38,10 28,15"/></svg>';
+        el.appendChild(arrow);
+      }
+    });
+  },
+
+  updateStep(stepName, status, output) {
+    const node = $('step-' + stepName);
+    if (!node) return;
+
+    node.className = 'step-node ' + (status === 'completed' || status === 'auto_approved' ? 'completed' : status === 'failed' || status === 'denied' ? 'failed' : status === 'running' || status === 'started' ? 'running' : status === 'paused' ? 'paused' : '');
+
+    const icon = $('si-' + stepName);
+    const text = $('st-' + stepName);
+    const displayStatus = status === 'auto_approved' ? 'completed' : status === 'started' ? 'running' : status;
+
+    icon.className = 'status-icon ' + displayStatus;
+    icon.textContent = displayStatus === 'completed' ? '✓' : displayStatus === 'failed' ? '✗' : displayStatus === 'paused' ? '⏸' : displayStatus === 'skipped' ? '–' : '';
+
+    const labels = { pending: 'Pending', running: 'Running...', completed: 'Completed', failed: 'Failed', paused: 'Awaiting approval', skipped: 'Skipped', denied: 'Denied' };
+    text.textContent = labels[displayStatus] || displayStatus;
+    text.className = 'status-text ' + displayStatus;
+
+    if (output) {
+      this.stepData[stepName] = output;
+      const preview = $('op-' + stepName);
+      if (preview) {
+        const summary = typeof output === 'object' ? (output.summary || output.health_status || output.compliance_status || JSON.stringify(output).slice(0, 60)) : String(output).slice(0, 60);
+        preview.textContent = summary;
+      }
+    }
+
+    // Update arrows
+    const stepIdx = this.steps.findIndex(s => s.name === stepName);
+    if (stepIdx > 0) {
+      const prevArrow = $('arrow-' + (stepIdx - 1));
+      if (prevArrow) prevArrow.className = 'step-arrow ' + (displayStatus === 'running' ? 'active' : 'done');
+    }
+  },
+
+  showSandbox(stepName, podName) {
+    const sb = $('sb-' + stepName);
+    if (sb) {
+      sb.textContent = '⬢ ' + (podName || 'ca-xxxxxx');
+      sb.classList.add('visible');
+    }
+  },
+
+  hideSandbox(stepName) {
+    const sb = $('sb-' + stepName);
+    if (sb) sb.classList.remove('visible');
+  },
+
+  logEvent(type, step, message) {
+    const log = $('event-log');
+    const cssType = type.replace('step.', '').replace('workflow.', '');
+    const line = document.createElement('div');
+    line.className = 'ev';
+    line.innerHTML = `<span class="ev-time">${ts()}</span> <span class="ev-type ${esc(cssType)}">${esc(type)}</span>${step ? ' <span class="ev-step">' + esc(step) + '</span>' : ''} ${message ? '<span style="color:#8b949e">' + esc(message) + '</span>' : ''}`;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  },
+
+  showDetail(stepName) {
+    const panel = $('detail-panel');
+    const inner = $('detail-inner');
+    const step = this.steps.find(s => s.name === stepName);
+    if (!step) return;
+
+    document.querySelectorAll('.step-node').forEach(n => n.classList.remove('selected'));
+    const node = $('step-' + stepName);
+    if (node) node.classList.add('selected');
+
+    const output = this.stepData[stepName];
+    const statusIcon = $('si-' + stepName);
+    const isPaused = statusIcon && statusIcon.classList.contains('paused');
+
+    let html = `
+      <div class="detail-header">
+        <span class="detail-title">${esc(step.label || step.name)}</span>
+        <button class="detail-close" onclick="app.closeDetail()">✕</button>
+      </div>`;
+
+    if (step.prompt) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Prompt</div>
+        <div class="detail-json">${esc(step.prompt)}</div>
+      </div>`;
+    }
+
+    if (output) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Output</div>
+        <div class="detail-json">${syntaxHL(output)}</div>
+      </div>`;
+    }
+
+    if (step.output_schema) {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Output Schema</div>
+        <div class="detail-json">${syntaxHL(step.output_schema)}</div>
+      </div>`;
+    }
+
+    if (isPaused && step.type === 'human-approval') {
+      html += `<div class="detail-section">
+        <div class="detail-section-title">Approval Required</div>
+        <p style="color:#d29922; font-size:13px; margin-bottom:12px;">${esc(step.message || 'Approve this step?')}</p>
+        <div class="approval-btns">
+          <button class="btn-approve" onclick="app.approve('${esc(step.name)}')">Approve</button>
+          <button class="btn-deny" onclick="app.deny('${esc(step.name)}')">Deny</button>
+        </div>
+      </div>`;
+    }
+
+    inner.innerHTML = html;
+    panel.classList.add('open');
+  },
+
+  closeDetail() {
+    $('detail-panel').classList.remove('open');
+    document.querySelectorAll('.step-node').forEach(n => n.classList.remove('selected'));
+  },
+
+  updateButtons() {
+    const canRun = this.scenario && (this.scenario.mode === 'animated' || this.connected) && this.state === 'idle';
+    $('btn-run').disabled = !canRun;
+    $('btn-cancel').disabled = this.state !== 'running' && this.state !== 'paused';
+  },
+
+  setStatus(text, cls) {
+    const el = $('ctrl-status');
+    el.innerHTML = cls ? `<span class="${cls}">${esc(text)}</span>` : esc(text);
+  },
+
+  async run() {
+    if (!this.scenario) return;
+    this.state = 'running';
+    this.updateButtons();
+    $('event-log').innerHTML = '';
+    this.stepData = {};
+    this.closeDetail();
+
+    if (this.scenario.mode === 'animated') {
+      this.runAnimated();
+      return;
+    }
+
+    this.setStatus('Starting workflow...', 'running');
+    this.logEvent('info', '', 'Submitting workflow: ' + this.scenario.definition.metadata.name);
+
+    try {
+      const body = {
+        ...this.scenario.runRequest,
+        definition: this.scenario.definition,
+        workflow_id: 'wf-demo-' + Date.now()
+      };
+      const r = await fetch(this.apiUrl + '/v1/workflows/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        const err = await r.text();
+        throw new Error(`HTTP ${r.status}: ${err}`);
+      }
+      const data = await r.json();
+      this.workflowId = data.workflow_id;
+      this.logEvent('info', '', 'Workflow started: ' + this.workflowId);
+      this.setStatus('Running: ' + this.workflowId, 'running');
+
+      this.connectSSE(this.workflowId);
+      this.startPolling(this.workflowId);
+    } catch (e) {
+      this.logEvent('error', '', 'Failed: ' + e.message);
+      this.state = 'error';
+      this.setStatus('Error: ' + e.message);
+      this.updateButtons();
+    }
+  },
+
+  connectSSE(wfId) {
+    if (this.sse) this.sse.close();
+    this.sse = new EventSource(this.apiUrl + '/v1/workflows/' + wfId + '/events');
+    this.sse.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        this.handleEvent(evt);
+      } catch {}
+    };
+    this.sse.onerror = () => {
+      this.logEvent('info', '', 'SSE connection closed');
+    };
+  },
+
+  startPolling(wfId) {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(this.apiUrl + '/v1/workflows/' + wfId);
+        if (!r.ok) return;
+        const data = await r.json();
+        for (const [key, result] of Object.entries(data.steps || {})) {
+          if (result.output && !this.stepData[key]) {
+            this.stepData[key] = result.output;
+            const preview = $('op-' + key);
+            if (preview && result.output) {
+              const summary = typeof result.output === 'object' ? (result.output.summary || result.output.health_status || result.output.compliance_status || JSON.stringify(result.output).slice(0, 60)) : '';
+              preview.textContent = summary;
+            }
+          }
+        }
+      } catch {}
+    }, 3000);
+  },
+
+  handleEvent(evt) {
+    const type = evt.type || '';
+    const step = evt.step || '';
+
+    this.logEvent(type, step);
+
+    if (type === 'step.started') {
+      this.updateStep(step, 'running');
+      const podName = 'ca-' + Math.random().toString(36).substr(2, 12);
+      this.showSandbox(step, podName);
+    } else if (type === 'step.completed') {
+      this.updateStep(step, 'completed');
+      this.hideSandbox(step);
+    } else if (type === 'step.failed') {
+      this.updateStep(step, 'failed');
+      this.hideSandbox(step);
+    } else if (type === 'step.auto_approved') {
+      this.updateStep(step, 'completed');
+      this.logEvent('info', step, 'Auto-approved (low risk)');
+    } else if (type === 'workflow.paused') {
+      this.updateStep(step, 'paused');
+      this.state = 'paused';
+      this.setStatus('Awaiting approval: ' + step, 'paused');
+      this.showDetail(step);
+      this.updateButtons();
+    } else if (type === 'step.denied') {
+      this.updateStep(step, 'denied');
+    } else if (type === 'step.skipped') {
+      this.updateStep(step, 'skipped');
+    } else if (type === 'workflow.completed') {
+      this.state = 'completed';
+      this.setStatus('Workflow completed');
+      this.cleanup();
+      this.updateButtons();
+    } else if (type === 'workflow.error') {
+      this.state = 'error';
+      this.setStatus('Workflow error');
+      this.cleanup();
+      this.updateButtons();
+    }
+  },
+
+  async approve(stepName) {
+    if (!this.workflowId) return;
+    this.logEvent('info', stepName, 'Sending approval...');
+    try {
+      await fetch(this.apiUrl + '/v1/workflows/' + this.workflowId + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step_name: stepName, decision: 'approved' })
+      });
+      this.logEvent('info', stepName, 'Approved');
+      this.state = 'running';
+      this.setStatus('Running: ' + this.workflowId, 'running');
+      this.closeDetail();
+      this.updateButtons();
+    } catch (e) {
+      this.logEvent('error', stepName, 'Approval failed: ' + e.message);
+    }
+  },
+
+  async deny(stepName) {
+    if (!this.workflowId) return;
+    try {
+      await fetch(this.apiUrl + '/v1/workflows/' + this.workflowId + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step_name: stepName, decision: 'denied' })
+      });
+      this.logEvent('denied', stepName, 'Denied by user');
+      this.closeDetail();
+    } catch (e) {
+      this.logEvent('error', stepName, 'Deny failed: ' + e.message);
+    }
+  },
+
+  async cancel() {
+    if (!this.workflowId) return;
+    try {
+      await fetch(this.apiUrl + '/v1/workflows/' + this.workflowId + '/cancel', { method: 'POST' });
+      this.logEvent('info', '', 'Workflow cancelled');
+      this.state = 'idle';
+      this.setStatus('Cancelled');
+      this.cleanup();
+      this.updateButtons();
+    } catch (e) {
+      this.logEvent('error', '', 'Cancel failed: ' + e.message);
+    }
+  },
+
+  runAnimated() {
+    this.setStatus('Playing animation...', 'running');
+    const seq = this.scenario.animationSequence;
+    let i = 0;
+
+    const play = () => {
+      if (i >= seq.length) {
+        this.state = 'completed';
+        this.setStatus('Animation complete');
+        this.updateButtons();
+        return;
+      }
+      const frame = seq[i];
+      const delay = i === 0 ? 0 : frame.delay - (seq[i-1]?.delay || 0);
+      this.animTimer = setTimeout(() => {
+        if (frame.type === 'info') {
+          this.logEvent('info', frame.step, frame.log);
+        } else {
+          this.handleEvent({ type: frame.type, step: frame.step });
+          if (frame.log) this.logEvent('info', frame.step, frame.log);
+        }
+        i++;
+        play();
+      }, delay);
+    };
+    play();
+  },
+
+  cleanup() {
+    if (this.sse) { this.sse.close(); this.sse = null; }
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.animTimer) { clearTimeout(this.animTimer); this.animTimer = null; }
+  },
+
+  reset() {
+    this.cleanup();
+    this.state = 'idle';
+    this.workflowId = null;
+    this.stepData = {};
+    this.closeDetail();
+    $('event-log').innerHTML = '';
+    this.setStatus('Idle');
+    if (this.scenario) {
+      const steps = this.scenario.mode === 'animated' ? this.scenario.steps : this.scenario.definition.spec.steps;
+      this.renderPipeline(steps);
+    }
+    this.updateButtons();
+  }
+};
+
+// ─── Boot ────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => app.init());
+</script>
+
+<div style="text-align:center; padding:16px 0 8px; color:#484f58; font-size:11px;">
+  Cloud Agents Framework &mdash; Demo Dashboard &mdash; <span id="build-date"></span>
+</div>
+<script>document.getElementById('build-date').textContent = document.lastModified;</script>
+</body>
+</html>

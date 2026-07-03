@@ -63,6 +63,7 @@ services:
       CONTAINER_HOST: unix:///run/podman/podman.sock
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CORS_ALLOWED_ORIGINS: "*"
     volumes:
       - /run/podman/podman.sock:/run/podman/podman.sock
     ports:
