@@ -1,0 +1,6 @@
+=== Recent Changes ===
+
+2026-07-03 02:15 - deploy: api-backend image updated to v2.broken (by: ci-bot)
+2026-07-03 01:30 - config: redis connection pool increased to 50
+2026-07-02 23:00 - deploy: web-frontend v3.1.2 rolled out successfully
+2026-07-02 18:00 - infra: node pool scaled from 3 to 5 nodes

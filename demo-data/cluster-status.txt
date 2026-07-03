@@ -1,0 +1,14 @@
+=== Cluster Status Report ===
+Date: 2026-07-03
+Region: us-east-1
+
+Deployments:
+  api-backend:    0/2 Ready  (ErrImagePull)
+  web-frontend:   3/3 Ready
+  redis-cache:    1/1 Ready
+  worker-queue:   2/2 Ready
+
+Recent Events:
+  [ERROR] api-backend: Failed to pull image nonexistent-registry.io/api-server:v2.broken
+  [WARN]  api-backend: Back-off restarting failed container
+  [OK]    web-frontend: Passed readiness check
