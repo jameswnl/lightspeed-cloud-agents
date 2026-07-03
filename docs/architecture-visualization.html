@@ -228,7 +228,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R13</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc"><em>(TODO)</em> Per-user/team RBAC for who can trigger, approve, view workflows. Per-step tool scoping via PermissionScope model exists but is not yet enforced end-to-end through the sandbox contract.</div>
+  <div class="req-desc">Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). CallerIdentity extracted from auth middleware, fail-closed when enabled. Per-step tool scoping via PermissionScope forwarded to sandbox contract.</div>
 </div>
 
 <div class="req-card">
@@ -285,7 +285,7 @@ svg { width: 100%; height: auto; display: block; }
     <strong>Future / not yet in workflow path:</strong><br>
     &bull; Per-step tool filtering (allowed_tools / denied_tools via PermissionScope) &mdash; model exists, enforced in generic agent runtime but not yet passed through the sandbox /v1/agent/run contract<br>
     &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet in sandbox path<br>
-    &bull; Per-user RBAC for who can trigger/approve/view workflows<br>
+    &bull; Risk-level scoped approval (conditions.risk_levels in policy rules)<br>
     &bull; Dynamic RBAC from agent output (per-proposal ServiceAccount + Roles)<br>
     &bull; Tool origin validation allowlist</div>
 </div>
@@ -363,7 +363,7 @@ svg { width: 100%; height: auto; display: block; }
 <g class="comp"><rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/><text x="245" y="155" text-anchor="middle" class="lbl">Agent &amp; Workflow Registry</text><text x="245" y="168" text-anchor="middle" class="desc">definitions + endpoints</text></g>
 <g class="comp"><rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/><text x="245" y="470" text-anchor="middle" class="lbl">Temporal Server</text><text x="245" y="484" text-anchor="middle" class="desc">durable execution + state</text></g>
 <g class="comp"><rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/><text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text><text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text></g>
-<g class="comp"><rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="900" y="236" text-anchor="middle" class="desc">OpenAI gpt-4o-mini</text><text x="900" y="250" text-anchor="middle" class="desc">OpenAI agents SDK</text></g>
+<g class="comp"><rect x="830" y="195" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="900" y="220" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="900" y="236" text-anchor="middle" class="desc">OpenAI / Claude / Gemini</text><text x="900" y="250" text-anchor="middle" class="desc">via sandbox runtime</text></g>
 <g class="comp"><rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/><text x="900" y="333" text-anchor="middle" class="lbl">Observability</text><text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text></g>
 <g class="comp"><rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/><text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text><text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text></g>
 
@@ -431,7 +431,7 @@ svg { width: 100%; height: auto; display: block; }
 <g class="comp"><rect x="220" y="380" width="250" height="60" fill="#1c2333" stroke="#d29922"/><text x="345" y="405" text-anchor="middle" class="lbl">Workflow Runner</text><text x="345" y="422" text-anchor="middle" class="desc">Temporal AgentWorkflow → sandbox steps</text></g>
 <g class="comp"><rect x="220" y="458" width="250" height="50" fill="#1c2333" stroke="#79c0ff"/><text x="345" y="479" text-anchor="middle" class="lbl">Temporal Server</text><text x="345" y="496" text-anchor="middle" class="desc">gRPC — durable execution + state</text></g>
 
-<g class="comp"><rect x="860" y="150" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="930" y="175" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="930" y="191" text-anchor="middle" class="desc">OpenAI / local model</text><text x="930" y="205" text-anchor="middle" class="desc">tool calling</text></g>
+<g class="comp"><rect x="860" y="150" width="140" height="65" fill="#2d1b4e" stroke="#a371f7"/><text x="930" y="175" text-anchor="middle" class="lbl" fill="#d2a8ff">LLM</text><text x="930" y="191" text-anchor="middle" class="desc">OpenAI / Claude / Gemini</text><text x="930" y="205" text-anchor="middle" class="desc">tool calling</text></g>
 <g class="comp"><rect x="860" y="260" width="140" height="50" fill="#1c2333" stroke="#8b949e"/><text x="930" y="283" text-anchor="middle" class="lbl">Observability</text><text x="930" y="299" text-anchor="middle" class="desc">Prometheus + OTel</text></g>
 <g class="comp"><rect x="860" y="360" width="140" height="50" fill="#1f2937" stroke="#6366f1"/><text x="930" y="383" text-anchor="middle" class="lbl">Human Approver</text><text x="930" y="399" text-anchor="middle" class="desc">SRE / Operator</text></g>
 
