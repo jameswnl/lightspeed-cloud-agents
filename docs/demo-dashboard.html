@@ -772,6 +772,7 @@ const app = {
     } else if (type === 'workflow.completed') {
       this.state = 'completed';
       this.setStatus('Workflow completed');
+      this.fetchFinalOutputs();
       this.cleanup();
       this.updateButtons();
     } else if (type === 'workflow.error') {
@@ -780,6 +781,27 @@ const app = {
       this.cleanup();
       this.updateButtons();
     }
+  },
+
+  async fetchFinalOutputs() {
+    if (!this.workflowId) return;
+    try {
+      const r = await fetch(this.apiUrl + '/v1/workflows/' + this.workflowId);
+      if (!r.ok) return;
+      const data = await r.json();
+      for (const [key, result] of Object.entries(data.steps || {})) {
+        if (result.output) {
+          this.stepData[key] = result.output;
+          const step = this.steps.find(s => s.output_key === key);
+          const previewKey = step ? step.name : key;
+          const preview = $('op-' + previewKey);
+          if (preview) {
+            const summary = typeof result.output === 'object' ? (result.output.summary || result.output.health_status || result.output.compliance_status || JSON.stringify(result.output).slice(0, 60)) : '';
+            preview.textContent = summary;
+          }
+        }
+      }
+    } catch {}
   },
 
   async fetchAndShowApproval(stepName) {
