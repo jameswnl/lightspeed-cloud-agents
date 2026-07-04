@@ -1,5 +1,11 @@
 # Cloud Agents — Deployment & Demo
 
+## Prerequisites
+
+- **Podman** with Podman Desktop or `podman machine start`
+- **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+- **Kind** + `kubectl` (only for Kubernetes deployment)
+
 ## Quick Start
 
 ```bash
@@ -44,12 +50,6 @@ graph LR
     SB -- "HTTPS" --> LLM
     SB -- "HTTP" --> MCP
 ```
-
-## Prerequisites
-
-- **Podman** with Podman Desktop or `podman machine start`
-- **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
-- **Kind** + `kubectl` (only for Kubernetes deployment)
 
 ## Building Images
 
