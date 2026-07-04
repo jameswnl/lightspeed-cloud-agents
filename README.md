@@ -2,6 +2,10 @@
 
 Agent workflow and harness platform. Deploys AI agents as ephemeral sandbox containers in Kubernetes or Podman, powered by Temporal.
 
+
+---
+
+
 ## Quick Start
 
 ### Prerequisites
@@ -107,6 +111,10 @@ You can also open the Temporal UI at http://localhost:8233 to inspect workflow r
 
 See [docs/DEMO.md](docs/DEMO.md) for the full API reference, demo dashboard, and Kubernetes deployment.
 
+
+---
+
+
 ## Development
 
 Run the workflow runner locally (without containers) for development and debugging.
@@ -132,6 +140,9 @@ Run tests:
 uv run pytest tests/unit/ -q             # unit tests
 uv run pytest tests/integration/ -v      # integration tests (requires Temporal)
 ```
+
+---
+
 
 ## Key Docs
 
