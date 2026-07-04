@@ -1,0 +1,93 @@
+name: E2E tests (Temporal)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/cloud_agents/**'
+      - 'tests/e2e/**'
+      - 'examples/workflow-definitions/**'
+  pull_request:
+    paths:
+      - 'src/cloud_agents/**'
+      - 'tests/e2e/**'
+      - 'examples/workflow-definitions/**'
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: temporal
+          POSTGRES_PASSWORD: temporal
+          POSTGRES_DB: temporal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      temporal:
+        image: temporalio/auto-setup:latest
+        env:
+          DB: postgres12
+          DB_PORT: "5432"
+          POSTGRES_USER: temporal
+          POSTGRES_PWD: temporal
+          POSTGRES_SEEDS: postgres
+          BIND_ON_IP: "0.0.0.0"
+        ports:
+          - 7233:7233
+        options: >-
+          --health-cmd "echo ok"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 60s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Wait for Temporal Server
+        run: |
+          READY=false
+          for i in $(seq 1 30); do
+            if uv run python -c "
+          import asyncio
+          from temporalio.client import Client
+          async def check():
+              await Client.connect('localhost:7233')
+          asyncio.run(check())
+          " 2>/dev/null; then
+              echo "Temporal Server is ready"
+              READY=true
+              break
+            fi
+            echo "Waiting for Temporal Server... ($i/30)"
+            sleep 5
+          done
+          if [ "$READY" != "true" ]; then
+            echo "Temporal Server failed to start"
+            exit 1
+          fi
+
+      - name: Run E2E tests
+        env:
+          TEMPORAL_E2E_URL: localhost:7233
+        run: uv run pytest tests/e2e/test_workflow_e2e.py -v
