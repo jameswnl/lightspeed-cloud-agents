@@ -67,8 +67,14 @@ KIND_CLUSTER ?= cloud-agents
 
 kind-up: build  ## Create Kind cluster and deploy cloud agents
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
-	kind load docker-image workflow-runner:latest --name $(KIND_CLUSTER)
-	kind load docker-image lightspeed-agentic-sandbox:latest --name $(KIND_CLUSTER)
+	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar
+	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/workflow-runner.tar --name $(KIND_CLUSTER)
+	rm -f /tmp/workflow-runner.tar
+	podman save localhost/lightspeed-agentic-sandbox:latest -o /tmp/sandbox.tar
+	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/sandbox.tar --name $(KIND_CLUSTER)
+	rm -f /tmp/sandbox.tar
+	kubectl apply -f deploy/kind/postgres.yaml
+	kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
 	kubectl apply -f deploy/kind/temporal.yaml
 	kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
 	kubectl create secret generic llm-api-key \
