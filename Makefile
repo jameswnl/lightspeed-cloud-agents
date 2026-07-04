@@ -14,7 +14,7 @@ DEMO_COMPOSE_FILE = deploy/podman/docker-compose.demo.yaml
 
 build: build-runner build-sandbox  ## Build core images (runner + sandbox)
 
-build-all: build build-mcp  ## Build all images including demo MCP server
+build-demo: build build-mcp  ## Build all images including demo MCP server
 
 build-runner:  ## Build workflow runner image
 	podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .

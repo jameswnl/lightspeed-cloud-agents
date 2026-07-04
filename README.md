@@ -28,7 +28,7 @@ make up         # start the platform (Temporal + runner)
 For the interactive demo dashboard (includes MCP server):
 
 ```bash
-make build-all  # build all 3 images (adds MCP server)
+make build-demo  # build all 3 images (adds MCP server)
 make demo-up    # start platform + MCP server + CORS
 make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
 ```
