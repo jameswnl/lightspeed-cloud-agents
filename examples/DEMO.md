@@ -19,7 +19,7 @@ make dashboard  # serves at http://localhost:3000/demo-dashboard.html
 | K8s Incident Response | Live | diagnose → approve → fix → verify with real LLM calls |
 | MCP Tool Integration | Live | Agent reads files via filesystem MCP server tools |
 | Multi-workflow Composition | Animated | Chatbot triggers chained workflows (future vision) |
-| Security & Governance | Live | Audit → approve (critical) → remediate |
+| Security & Governance | Live | RBAC, approval gates, audit trail |
 
 ### Terminal setup for demo
 

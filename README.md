@@ -29,7 +29,7 @@ make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.ht
 
 ### What Gets Deployed
 
-Three images, five containers:
+Three images, six containers:
 
 | Image | Purpose | Container |
 |-------|---------|-----------|
@@ -37,12 +37,13 @@ Three images, five containers:
 | `lightspeed-agentic-sandbox` | Agent runtime — each workflow step spawns one of these. Runs a complete agent loop (multi-turn LLM + tool calls) then exits. | `agent-ca-*` (ephemeral) |
 | `mcp-filesystem` | MCP tool server (demo only) — exposes filesystem read/write tools over streamable HTTP. Sandbox containers connect to it for tool calls. | `podman-mcp-filesystem-1` |
 
-Plus two infrastructure containers managed by compose:
+Plus three infrastructure containers managed by compose:
 
 | Container | Purpose |
 |-----------|---------|
 | `podman-temporal-server-1` | Temporal Server — durable workflow state, retry, signals |
 | `podman-temporal-db-1` | PostgreSQL — Temporal's storage backend |
+| `podman-temporal-ui-1` | Temporal Web UI — workflow inspection at http://localhost:8233 |
 
 ```mermaid
 graph LR
