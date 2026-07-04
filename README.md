@@ -149,5 +149,6 @@ uv run pytest tests/integration/ -v      # integration tests (requires Temporal 
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
 - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deployment options (Podman / Kind / Helm), API reference, workflow definition schema
+- [DEMO.md](examples/DEMO.md) — demo dashboard, recording, terminal setup
 - [RBAC](docs/rbac.md) — authorization: policy file format, identity matching, quick start
 - [Implementation Plan](docs/gaps/gaps-implementation-plan.md) — all planned work (T1-T50)
