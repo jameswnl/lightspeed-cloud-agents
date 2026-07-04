@@ -1,15 +1,38 @@
 # Cloud Agents — Deployment & Demo
 
-## Overview
+## Quick Start
 
-This guide covers:
-1. **Deploying the cloud agents platform** (Temporal + workflow runner) on Podman or Kubernetes
-2. **Running workflows** via the API or the interactive demo dashboard
+```bash
+export OPENAI_API_KEY="sk-..."    # or ANTHROPIC_API_KEY
+
+make build   # build all 3 images
+make up      # start the platform
+make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
+```
+
+That's it. Select a scenario in the dashboard and click Run.
+
+## What Gets Deployed
+
+Three images, five containers:
+
+| Image | Purpose | Container |
+|-------|---------|-----------|
+| `workflow-runner` | REST API + Temporal Worker — the brain that interprets workflow YAML and dispatches steps | `podman-workflow-runner-1` |
+| `lightspeed-agentic-sandbox` | Agent runtime — each workflow step spawns one of these. Runs a complete agent loop (multi-turn LLM + tool calls) then exits. | `agent-ca-*` (ephemeral) |
+| `mcp-filesystem` | MCP tool server — exposes filesystem read/write tools over streamable HTTP. Sandbox containers connect to it for tool calls. | `podman-mcp-filesystem-1` |
+
+Plus two infrastructure containers managed by compose:
+
+| Container | Purpose |
+|-----------|---------|
+| `podman-temporal-server-1` | Temporal Server — durable workflow state, retry, signals |
+| `podman-temporal-db-1` | PostgreSQL — Temporal's storage backend |
 
 ```mermaid
 graph LR
     subgraph cluster["Cloud Agents System"]
-        WR["Workflow Runner<br/><i>POST /v1/workflows/run</i>"]
+        WR["Workflow Runner<br/><i>API + Temporal Worker</i>"]
         TS["Temporal Server"]
         SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
         MCP["MCP Server<br/><i>optional tools</i>"]
@@ -19,49 +42,38 @@ graph LR
     WR -- "gRPC" --> TS
     WR -- "spawn / destroy" --> SB
     SB -- "HTTPS" --> LLM
-    SB -- "SSE" --> MCP
+    SB -- "HTTP" --> MCP
 ```
 
 ## Prerequisites
 
-- **Podman** with `podman machine start` (for Podman deployment)
-- **Kind** + `kubectl` (for Kubernetes deployment)
+- **Podman** with Podman Desktop or `podman machine start`
 - **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+- **Kind** + `kubectl` (only for Kubernetes deployment)
 
-## Part 1: Build Images
+## Building Images
 
 ```bash
-# Workflow runner
-podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
-
-# Sandbox (use our fork with MCP support)
-git clone git@github.com:jameswnl/lightspeed-agentic-sandbox.git ../lightspeed-agentic-sandbox
-cd ../lightspeed-agentic-sandbox
-git checkout temporal-integration   # branch with MCP streamable HTTP support
-podman build -f Containerfile -t lightspeed-agentic-sandbox:latest .
-cd ../lightspeed-cloud-agents
-
-# MCP filesystem server (for MCP demo scenario)
-podman build -f deploy/mcp-filesystem/Containerfile -t mcp-filesystem:latest .
+make build          # builds all 3 images
+make build-runner   # just the workflow runner
+make build-sandbox  # just the sandbox (clones fork if needed)
+make build-mcp      # just the MCP filesystem server
 ```
+
+The sandbox image must be built from our fork (`jameswnl/lightspeed-agentic-sandbox`, branch `temporal-integration`) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
 
 ---
 
-## Part 2: Deploy the Platform
+## Deploying the Platform
 
 ### Option A: Podman (compose)
 
-The compose stack includes Temporal Server, PostgreSQL, Temporal UI, workflow runner, and MCP filesystem server.
-
 ```bash
 export OPENAI_API_KEY="sk-..."
-# and/or: export ANTHROPIC_API_KEY="sk-ant-..."
 
-podman compose -f deploy/podman/docker-compose.temporal.yaml up -d
-
-# Verify
-curl -s http://localhost:8080/readyz
-# → {"status":"ready"}
+make up      # starts all containers
+make status  # show what's running
+make down    # stop everything
 ```
 
 | Service | URL |
@@ -69,19 +81,6 @@ curl -s http://localhost:8080/readyz
 | Workflow Runner API | http://localhost:8080 |
 | Temporal UI | http://localhost:8233 |
 | MCP Filesystem Server | http://localhost:8081 |
-
-**Environment variables** (set in docker-compose.temporal.yaml):
-
-| Variable | Purpose |
-|----------|---------|
-| `TEMPORAL_URL` | Temporal gRPC address |
-| `WORKFLOW_SPAWNER` | `podman` or `kubernetes` |
-| `SPAWNER_NETWORK` | Podman network for sandbox containers |
-| `AUTH_REQUIRED` | `false` for local dev |
-| `CORS_ALLOWED_ORIGINS` | `*` for demo dashboard |
-| `OPENAI_API_KEY` | Forwarded to sandbox containers |
-| `ANTHROPIC_API_KEY` | Forwarded to sandbox containers |
-| `CONTAINER_HOST` | Podman socket path (for containerized runner) |
 
 ### Option B: Kubernetes (Kind)
 
