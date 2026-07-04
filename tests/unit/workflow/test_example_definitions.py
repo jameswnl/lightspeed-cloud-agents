@@ -16,7 +16,7 @@ import yaml
 from cloud_agents.workflow.definition import WorkflowDefinition
 from cloud_agents.workflow.temporal_validation import validate_definition
 
-EXAMPLES_DIR = Path(__file__).parents[3] / "examples" / "definitions"
+EXAMPLES_DIR = Path(__file__).parents[3] / "examples" / "workflow-definitions"
 
 
 def _workflow_yamls() -> list[Path]:

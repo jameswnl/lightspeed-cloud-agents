@@ -66,7 +66,7 @@ Register a workflow definition (this one uses MCP tools to read files — no app
 
 ```bash
 python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
-  examples/definitions/mcp-filesystem-workflow.yaml | \
+  examples/workflow-definitions/mcp-filesystem-workflow.yaml | \
   curl -s -X POST http://localhost:8080/v1/workflows/definitions \
     -H 'Content-Type: application/json' -d @-
 ```

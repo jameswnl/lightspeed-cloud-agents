@@ -82,7 +82,7 @@ Or register a definition first:
 ```bash
 # Register
 python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
-  examples/definitions/diagnostic-workflow.yaml | \
+  examples/workflow-definitions/diagnostic-workflow.yaml | \
   curl -s -X POST http://localhost:8080/v1/workflows/definitions \
     -H 'Content-Type: application/json' -d @-
 
@@ -161,7 +161,7 @@ The workflow YAML defines *what* (steps, prompts, schemas). The API request prov
 
 ### Example definitions
 
-See `examples/definitions/` for working workflow YAMLs:
+See `examples/workflow-definitions/` for working workflow YAMLs:
 - `diagnostic-workflow.yaml` — diagnose + approve
 - `diagnose-fix-workflow.yaml` — diagnose → approve → fix → verify
 - `mcp-filesystem-workflow.yaml` — gather context via MCP tools → recommend
