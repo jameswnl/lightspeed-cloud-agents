@@ -241,13 +241,3 @@ podman compose -f deploy/podman/docker-compose.temporal.yaml down
 ```bash
 KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name cloud-agents
 ```
-
-## Running tests
-
-```bash
-# Unit tests
-uv run pytest tests/unit/ -q
-
-# Integration tests (requires Temporal)
-uv run pytest tests/integration/ -v
-```
