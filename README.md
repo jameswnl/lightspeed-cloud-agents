@@ -62,11 +62,11 @@ graph LR
 
 ### Try It
 
-Register a workflow definition:
+Register a workflow definition (this one uses MCP tools to read files — no approval needed):
 
 ```bash
 python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
-  examples/definitions/diagnose-fix-workflow.yaml | \
+  examples/definitions/mcp-filesystem-workflow.yaml | \
   curl -s -X POST http://localhost:8080/v1/workflows/definitions \
     -H 'Content-Type: application/json' -d @-
 ```
@@ -77,16 +77,16 @@ List registered workflows:
 curl -s http://localhost:8080/v1/workflows/definitions | python3 -m json.tool
 ```
 
-Run a workflow:
+Run a workflow (the agent reads cluster status files via MCP tools and recommends a fix):
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/workflows/run \
   -H 'Content-Type: application/json' \
   -d '{
-    "workflow_name": "diagnose-and-fix",
+    "workflow_name": "mcp-filesystem-demo",
     "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "OPENAI_API_KEY"},
     "sandbox_image": "lightspeed-agentic-sandbox:latest",
-    "approval_policy": {"auto_approve_risk_levels": ["low", "high"]}
+    "mcp_servers": [{"name": "filesystem", "url": "http://mcp-filesystem:8081/mcp"}]
   }'
 # → {"workflow_id": "wf-abc123"}
 ```
