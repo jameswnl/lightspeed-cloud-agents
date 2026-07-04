@@ -1,17 +1,22 @@
 # Demo Guide
 
+## Setup
+
+```bash
+make build-demo  # build all 3 images (runner, sandbox, MCP server)
+make demo-up     # start platform + MCP server + CORS
+make dashboard   # open http://localhost:3000/demo-dashboard.html
+```
+
+The demo stack adds an MCP filesystem server and CORS support on top of the core platform. See [README Quick Start](../README.md#quick-start) for core-only setup.
+
 ## Recording
 
 See [cloud-agents-demo-1.mov](cloud-agents-demo-1.mov) for a recorded walkthrough of the K8s Incident Response scenario (diagnose → approve → fix → verify).
 
 ## Dashboard
 
-The interactive dashboard visualizes workflow execution in real-time.
-
-```bash
-make demo-up    # starts platform + MCP server + CORS
-make dashboard  # serves at http://localhost:3000/demo-dashboard.html
-```
+The interactive dashboard visualizes workflow execution in real-time. Select a scenario and click Run.
 
 ### Scenarios
 

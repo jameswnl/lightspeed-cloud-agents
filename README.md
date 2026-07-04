@@ -25,18 +25,8 @@ make build      # build 2 images (runner + sandbox)
 make up         # start the platform (Temporal + runner)
 ```
 
-For the interactive demo dashboard (includes MCP server):
-
-```bash
-make build-demo  # build all 3 images (adds MCP server)
-make demo-up    # start platform + MCP server + CORS
-make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
-```
-
 
 ### What Gets Deployed
-
-**Core** (`make up`) — 4 containers:
 
 | Container | Purpose |
 |-----------|---------|
@@ -47,31 +37,23 @@ make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.ht
 
 Plus ephemeral `agent-ca-*` sandbox containers spawned per workflow step (complete agent loop: multi-turn LLM + tool calls, then destroyed).
 
-**Demo** (`make demo-up`) adds:
-
-| Container | Purpose |
-|-----------|---------|
-| `podman-mcp-filesystem-1` | MCP tool server — filesystem tools over streamable HTTP |
-
 ```mermaid
 graph LR
     subgraph cluster["Cloud Agents Platform"]
         WR["Workflow Runner<br/><i>API + Temporal Worker</i>"]
         TS["Temporal Server"]
         SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
-        MCP["MCP Server<br/><i>optional tools</i>"]
     end
     LLM["LLM Provider"]
 
     WR -- "gRPC" --> TS
     WR -- "spawn / destroy" --> SB
     SB -- "HTTPS" --> LLM
-    SB -- "HTTP" --> MCP
 ```
 
 ### Try It
 
-Register a workflow definition (single diagnostic step — no MCP, no approval):
+Register a workflow definition:
 
 ```bash
 python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
@@ -117,7 +99,7 @@ curl -s http://localhost:8080/v1/workflows/<workflow_id> | python3 -m json.tool
 
 You can also open the Temporal UI at http://localhost:8233 to inspect workflow runs, event history, and step state.
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full API reference, demo dashboard, and Kubernetes deployment.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full API reference and Kubernetes deployment. See [examples/DEMO.md](examples/DEMO.md) for the interactive demo dashboard with MCP tools.
 
 
 ---
@@ -132,7 +114,7 @@ Run the workflow runner locally (without containers) for development and debuggi
 uv sync --group dev --extra podman
 
 # Start Temporal (still needs containers)
-podman compose -f deploy/podman/docker-compose.temporal.yaml up -d temporal-db temporal-server
+podman compose -f deploy/podman/docker-compose.yaml up -d temporal-db temporal-server
 
 # Run the workflow runner on the host
 TEMPORAL_URL=localhost:7233 \
