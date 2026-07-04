@@ -6,7 +6,9 @@ Catches errors at submission time rather than deep in workflow execution.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Optional
+
+from cloud_agents.workflow.content_policy import ContentPolicy, evaluate_content_policy
 
 
 def _validate_schema(
@@ -36,10 +38,19 @@ def _validate_schema(
             _validate_schema(prop_schema, step_name, f"{path}.{prop_name}", errors)
 
 
-def validate_definition(defn: dict[str, Any]) -> list[str]:
+def validate_definition(
+    defn: dict[str, Any],
+    content_policy: Optional[ContentPolicy] = None,
+) -> list[str]:
     """Validate a workflow definition dict.
 
-    Returns a list of error messages. Empty list means valid.
+    Parameters:
+        defn: The workflow definition dict to validate.
+        content_policy: Optional content policy to enforce. When provided,
+            the definition is also checked against the policy rules.
+
+    Returns:
+        A list of error messages. Empty list means valid.
     """
     errors: list[str] = []
     spec = defn.get("spec", {})
@@ -79,5 +90,13 @@ def validate_definition(defn: dict[str, Any]) -> list[str]:
         output_schema = step.get("output_schema")
         if output_schema and isinstance(output_schema, dict):
             _validate_schema(output_schema, name, "root", errors)
+
+    # --- Content policy checks ---
+    if content_policy is not None:
+        violations = evaluate_content_policy(defn, content_policy)
+        for v in violations:
+            errors.append(
+                f"Content policy violation ({v.rule}) in step '{v.step_name}': {v.reason}"
+            )
 
     return errors

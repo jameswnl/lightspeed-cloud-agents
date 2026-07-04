@@ -23,6 +23,7 @@ AuditEventType = Literal[
     "escalation_triggered",
     "mcp_secret_mounted",
     "orphan_cleanup",
+    "content_policy_violation",
 ]
 
 

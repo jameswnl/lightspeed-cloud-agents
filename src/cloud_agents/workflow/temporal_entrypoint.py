@@ -124,6 +124,26 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
         )
 
 
+CONTENT_POLICY_PATH = os.environ.get("CONTENT_POLICY_PATH", "")
+
+
+def _load_content_policy():
+    """Load content policy from CONTENT_POLICY_PATH env var.
+
+    Returns None when the env var is unset, allowing backward-compatible
+    operation without any content policy enforcement.
+    """
+    if not CONTENT_POLICY_PATH:
+        logger.info("CONTENT_POLICY_PATH not set — content policy disabled")
+        return None
+
+    from cloud_agents.workflow.content_policy import load_content_policy
+
+    policy = load_content_policy(CONTENT_POLICY_PATH)
+    logger.info("Content policy loaded from %s", CONTENT_POLICY_PATH)
+    return policy
+
+
 AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
 
@@ -239,10 +259,12 @@ def build_temporal_app(
     definition_store = DefinitionStore()
 
     auth_dep = _get_auth_dependency()
+    content_policy = _load_content_policy()
     router = build_temporal_router(
         placeholder_client,  # type: ignore[arg-type]
         auth_dependency=auth_dep,
         definition_store=definition_store,
+        content_policy=content_policy,
     )
     app.include_router(router)
 
