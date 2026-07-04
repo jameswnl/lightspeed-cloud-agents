@@ -30,16 +30,22 @@ build-sandbox:  ## Build sandbox image (from fork)
 build-mcp:  ## Build MCP filesystem server image (demo only)
 	podman build -f deploy/mcp-filesystem/Containerfile -t mcp-filesystem:latest .
 
-# ── Run (core) ────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────
 
-.PHONY: up down restart status logs
+.PHONY: ensure-podman
 
-up:  ## Start core platform (Temporal + runner)
+ensure-podman:
 	@if ! podman machine inspect >/dev/null 2>&1 || \
 		[ "$$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then \
 		echo "Starting Podman machine..."; \
 		podman machine start; \
 	fi
+
+# ── Run (core) ────────────────────────────────────────
+
+.PHONY: up down restart status logs
+
+up: ensure-podman  ## Start core platform (Temporal + runner)
 	podman compose -f $(COMPOSE_FILE) up -d
 	@echo ""
 	@echo "Services:"
@@ -49,7 +55,7 @@ up:  ## Start core platform (Temporal + runner)
 down:  ## Stop core platform
 	podman compose -f $(COMPOSE_FILE) down
 
-restart:  ## Restart core platform
+restart: ensure-podman  ## Restart core platform
 	podman compose -f $(COMPOSE_FILE) down
 	podman compose -f $(COMPOSE_FILE) up -d
 
@@ -63,13 +69,8 @@ logs:  ## Show workflow runner logs
 
 .PHONY: demo-up demo-down dashboard
 
-demo-up: build-demo  ## Start demo stack (core + MCP server + CORS)
-	@if ! podman machine inspect >/dev/null 2>&1 || \
-		[ "$$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then \
-		echo "Starting Podman machine..."; \
-		podman machine start; \
-	fi
-	podman compose -f $(DEMO_COMPOSE_FILE) up -d
+demo-up: build-demo ensure-podman  ## Start demo stack (core + MCP server + CORS)
+	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) up -d
 	@echo ""
 	@echo "Services:"
 	@echo "  Workflow Runner API: http://localhost:8080"
@@ -79,7 +80,7 @@ demo-up: build-demo  ## Start demo stack (core + MCP server + CORS)
 	@echo "Run 'make dashboard' to start the demo dashboard."
 
 demo-down:  ## Stop demo stack
-	podman compose -f $(DEMO_COMPOSE_FILE) down
+	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down
 
 dashboard:  ## Serve demo dashboard at http://localhost:3000
 	@echo "Dashboard: http://localhost:3000/demo-dashboard.html"
@@ -143,8 +144,8 @@ clean-sandboxes:  ## Remove leftover sandbox containers
 	@echo "Sandbox containers cleaned."
 
 clean: clean-sandboxes  ## Stop everything and clean up
+	-podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down 2>/dev/null
 	-podman compose -f $(COMPOSE_FILE) down 2>/dev/null
-	-podman compose -f $(DEMO_COMPOSE_FILE) down 2>/dev/null
 
 # ── Tests ──────────────────────────────────────────────
 

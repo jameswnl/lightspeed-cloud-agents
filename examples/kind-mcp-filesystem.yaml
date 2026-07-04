@@ -4,7 +4,7 @@
 # Prerequisites:
 #   kubectl create configmap demo-data --from-file=examples/demo-data/
 #   MCP image loaded into Kind: podman save + kind load image-archive
-# See PR #1 for make kind-up integration.
+# See Makefile kind-up target for automated setup.
 ---
 apiVersion: apps/v1
 kind: Deployment

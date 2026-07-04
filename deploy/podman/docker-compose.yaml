@@ -51,6 +51,8 @@ services:
     image: localhost/workflow-runner:latest
     depends_on:
       - temporal-server
+    # Required for Podman socket access (DooD pattern — runner spawns
+    # sibling sandbox containers via the host Podman socket).
     privileged: true
     user: "0"
     environment:
