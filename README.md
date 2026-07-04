@@ -54,6 +54,55 @@ graph LR
     SB -- "HTTP" --> MCP
 ```
 
+### Try It
+
+Register a workflow definition:
+
+```bash
+python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
+  examples/definitions/diagnose-fix-workflow.yaml | \
+  curl -s -X POST http://localhost:8080/v1/workflows/definitions \
+    -H 'Content-Type: application/json' -d @-
+```
+
+List registered workflows:
+
+```bash
+curl -s http://localhost:8080/v1/workflows/definitions | python3 -m json.tool
+```
+
+Run a workflow:
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "workflow_name": "diagnose-and-fix",
+    "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "OPENAI_API_KEY"},
+    "sandbox_image": "lightspeed-agentic-sandbox:latest",
+    "approval_policy": {"auto_approve_risk_levels": ["low", "high"]}
+  }'
+# → {"workflow_id": "wf-abc123"}
+```
+
+Watch the sandbox containers spawn and execute:
+
+```bash
+# In another terminal — see containers appear and disappear
+watch podman ps --filter label=spawned-by=workflow-runner
+
+# Tail the agent loop logs inside a sandbox
+podman logs -f $(podman ps --filter label=spawned-by=workflow-runner --format '{{.Names}}' | head -1)
+```
+
+Check workflow result:
+
+```bash
+curl -s http://localhost:8080/v1/workflows/<workflow_id> | python3 -m json.tool
+```
+
+See [docs/DEMO.md](docs/DEMO.md) for the full API reference, demo dashboard, and Kubernetes deployment.
+
 ## Key Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
