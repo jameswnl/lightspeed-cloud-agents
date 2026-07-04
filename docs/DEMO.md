@@ -35,8 +35,9 @@ graph LR
 podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
 
 # Sandbox (use our fork with MCP support)
+git clone git@github.com:jameswnl/lightspeed-agentic-sandbox.git ../lightspeed-agentic-sandbox
 cd ../lightspeed-agentic-sandbox
-git checkout temporal-integration   # branch with MCPServerSseParams fix
+git checkout temporal-integration   # branch with MCP streamable HTTP support
 podman build -f Containerfile -t lightspeed-agentic-sandbox:latest .
 cd ../lightspeed-cloud-agents
 
