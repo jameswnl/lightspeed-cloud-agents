@@ -10,7 +10,7 @@ DEMO_COMPOSE_FILE = deploy/podman/docker-compose.demo.yaml
 
 # ── Build ──────────────────────────────────────────────
 
-.PHONY: build build-runner build-sandbox build-mcp
+.PHONY: build build-demo build-runner build-sandbox build-mcp
 
 build: build-runner build-sandbox  ## Build core images (runner + sandbox)
 
@@ -142,7 +142,9 @@ clean-sandboxes:  ## Remove leftover sandbox containers
 	@podman rm -f $$(podman ps -a --filter label=spawned-by=workflow-runner --format '{{.Names}}' 2>/dev/null) 2>/dev/null || true
 	@echo "Sandbox containers cleaned."
 
-clean: down clean-sandboxes  ## Stop everything and clean up
+clean: clean-sandboxes  ## Stop everything and clean up
+	-podman compose -f $(COMPOSE_FILE) down 2>/dev/null
+	-podman compose -f $(DEMO_COMPOSE_FILE) down 2>/dev/null
 
 # ── Tests ──────────────────────────────────────────────
 
