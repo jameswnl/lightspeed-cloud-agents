@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,7 @@ async def test_diagnose_fix_workflow_e2e():
             wf_input,
             id=wf_id,
             task_queue=queue,
+            execution_timeout=timedelta(seconds=120),
         )
 
     # All 4 steps completed
@@ -112,8 +114,9 @@ async def test_diagnose_fix_events_emitted():
             wf_input,
             id=wf_id,
             task_queue=queue,
+            execution_timeout=timedelta(seconds=120),
         )
-        await handle.result()
+        await handle.result(timeout=timedelta(seconds=120))
         status = await handle.query(AgentWorkflow.get_status)
 
     event_types = [e.type for e in status.events]
