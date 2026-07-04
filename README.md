@@ -12,6 +12,7 @@ AI agent workflow platform. Define multi-step agent workflows in YAML, run them 
 
 - **Podman** with Podman Desktop or `podman machine start`
 - **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+- **Linux only**: if `make up` fails with a socket error, set `export PODMAN_SOCK=/run/user/$(id -u)/podman/podman.sock`
 
 
 

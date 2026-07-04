@@ -65,7 +65,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
-      - ${PODMAN_SOCK:-/run/user/501/podman/podman.sock}:/run/podman/podman.sock
+      - ${PODMAN_SOCK}:/run/podman/podman.sock
     ports:
       - "8080:8080"
 
