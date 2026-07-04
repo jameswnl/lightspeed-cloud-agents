@@ -1,6 +1,6 @@
 # Lightspeed Cloud Agents
 
-Agent workflow and harness platform. Deploys AI agents as ephemeral sandbox containers in Kubernetes or Podman, powered by Temporal.
+AI agent workflow platform. Define multi-step agent workflows in YAML, run them in ephemeral sandbox containers on Kubernetes or Podman, with human approval gates and durable execution via Temporal.
 
 
 ---
@@ -138,7 +138,7 @@ uv run uvicorn cloud_agents.workflow.temporal_entrypoint:app --host 0.0.0.0 --po
 Run tests:
 
 ```bash
-uv run pytest tests/unit/ -q             # unit tests
+make test-unit                           # unit tests (no infra needed)
 uv run pytest tests/integration/ -v      # integration tests (requires Temporal — see Quick Start)
 ```
 
@@ -148,6 +148,6 @@ uv run pytest tests/integration/ -v      # integration tests (requires Temporal 
 ## Key Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
-- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deployment guide (Podman / Kind / Helm) + workflow definition reference + diagnostic workflow example
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deployment options (Podman / Kind / Helm), API reference, workflow definition schema
 - [RBAC](docs/rbac.md) — authorization: policy file format, identity matching, quick start
 - [Implementation Plan](docs/gaps/gaps-implementation-plan.md) — all planned work (T1-T50)
