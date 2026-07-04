@@ -138,7 +138,7 @@ Run tests:
 
 ```bash
 uv run pytest tests/unit/ -q             # unit tests
-uv run pytest tests/integration/ -v      # integration tests (requires Temporal)
+uv run pytest tests/integration/ -v      # integration tests (requires Temporal — see Quick Start)
 ```
 
 ---
