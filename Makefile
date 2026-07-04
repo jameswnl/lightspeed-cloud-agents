@@ -59,6 +59,31 @@ status:  ## Show running containers
 logs:  ## Show workflow runner logs
 	podman logs -f podman-workflow-runner-1
 
+# ── Kind (Kubernetes) ──────────────────────────────────
+
+KIND_CLUSTER ?= cloud-agents
+
+.PHONY: kind-up kind-down
+
+kind-up: build  ## Create Kind cluster and deploy cloud agents
+	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
+	kind load docker-image workflow-runner:latest --name $(KIND_CLUSTER)
+	kind load docker-image lightspeed-agentic-sandbox:latest --name $(KIND_CLUSTER)
+	kubectl apply -f deploy/kind/temporal.yaml
+	kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
+	kubectl create secret generic llm-api-key \
+		--from-literal=OPENAI_API_KEY="$$OPENAI_API_KEY" 2>/dev/null || true
+	kubectl apply -f deploy/kind/rbac.yaml
+	kubectl apply -f deploy/kind/workflow-runner.yaml
+	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
+	@echo ""
+	@echo "Kind cluster '$(KIND_CLUSTER)' ready."
+	@echo "Run: kubectl port-forward svc/workflow-runner 8080:8080"
+	@echo "Then: curl http://localhost:8080/readyz"
+
+kind-down:  ## Delete Kind cluster
+	KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name $(KIND_CLUSTER)
+
 # ── Dashboard ──────────────────────────────────────────
 
 dashboard:  ## Serve demo dashboard at http://localhost:3000

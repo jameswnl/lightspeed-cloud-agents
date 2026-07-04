@@ -37,23 +37,14 @@ make down    # stop everything
 ### Option B: Kubernetes (Kind)
 
 ```bash
-KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name cloud-agents --wait 60s
+export OPENAI_API_KEY="sk-..."
 
-kind load docker-image workflow-runner:latest --name cloud-agents
-kind load docker-image lightspeed-agentic-sandbox:latest --name cloud-agents
-
-kubectl apply -f deploy/kind/temporal.yaml
-kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
-
-kubectl create secret generic llm-api-key \
-  --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
-
-kubectl apply -f deploy/kind/rbac.yaml
-kubectl apply -f deploy/kind/workflow-runner.yaml
-kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
+make kind-up    # creates cluster, loads images, deploys Temporal + runner
 
 kubectl port-forward svc/workflow-runner 8080:8080 &
 curl -s http://localhost:8080/readyz
+
+make kind-down  # delete cluster
 ```
 
 ### Option C: Helm (production)
@@ -232,12 +223,8 @@ These are validated by CI against the Pydantic schema.
 
 ## Cleanup
 
-### Podman
 ```bash
-podman compose -f deploy/podman/docker-compose.temporal.yaml down
-```
-
-### Kubernetes
-```bash
-KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name cloud-agents
+make down       # Podman
+make kind-down  # Kubernetes
+make clean      # stop + remove leftover sandbox containers
 ```
