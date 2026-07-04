@@ -65,6 +65,47 @@ class TestDefinitionValidation:
         errors = validate_definition(defn)
         assert any("nonexistent" in e for e in errors)
 
+    def test_null_prompt_no_crash(self) -> None:
+        """Step with prompt: null does not crash validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "approve",
+                        "type": "human-approval",
+                        "output_key": "a1",
+                        "prompt": None,
+                        "message": "Approve?",
+                    },
+                ]
+            },
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+    def test_missing_prompt_no_crash(self) -> None:
+        """Step without prompt key does not crash validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "approve",
+                        "type": "human-approval",
+                        "output_key": "a1",
+                        "message": "Approve?",
+                    },
+                ]
+            },
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
     def test_missing_name(self) -> None:
         """Step without name is caught."""
         defn = {

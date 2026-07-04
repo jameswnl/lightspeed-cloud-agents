@@ -9,6 +9,7 @@ from pytest_mock import MockerFixture
 
 from cloud_agents.workflow.temporal_activities import (
     _normalize_config_ref,
+    _to_k8s_secret_name,
     build_escalation_activity,
     compute_pod_name,
     run_sandbox_step,
@@ -451,6 +452,71 @@ class TestNormalizeConfigRef:
     def test_dots_and_special_chars(self) -> None:
         """Dots and special chars become underscores."""
         assert _normalize_config_ref("my.config.ref") == "MY_CONFIG_REF"
+
+
+class TestToK8sSecretName:
+    """Tests for credentials_secret to K8s Secret name conversion."""
+
+    def test_uppercase_with_underscores(self) -> None:
+        """OPENAI_API_KEY becomes openai-api-key."""
+        assert _to_k8s_secret_name("OPENAI_API_KEY") == "openai-api-key"
+
+    def test_anthropic_key(self) -> None:
+        """ANTHROPIC_API_KEY becomes anthropic-api-key."""
+        assert _to_k8s_secret_name("ANTHROPIC_API_KEY") == "anthropic-api-key"
+
+    def test_already_lowercase(self) -> None:
+        """Already lowercase with hyphens passes through."""
+        assert _to_k8s_secret_name("my-secret") == "my-secret"
+
+    def test_none_returns_none(self) -> None:
+        """None input returns None."""
+        assert _to_k8s_secret_name(None) is None
+
+    def test_empty_returns_none(self) -> None:
+        """Empty string returns None."""
+        assert _to_k8s_secret_name("") is None
+
+    @pytest.mark.asyncio
+    async def test_credential_secret_name_converted_for_spawner(
+        self, mocker: MockerFixture
+    ) -> None:
+        """credentials_secret is converted to K8s-valid name before passing to spawner."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "OPENAI_API_KEY",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("credential_secret_name") == "openai-api-key"
 
 
 class TestNotificationConfigResolution:
