@@ -119,3 +119,4 @@ When updating documentation:
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`
 - Podman `list_active` filter as a list instead of string — silently returns empty
+- Adding fields to workflow YAML or `temporal_workflow.py`/`temporal_activities.py` without updating `WorkflowStepSpec` in `definition.py` — Pydantic v2 silently ignores extra fields, so the YAML still loads but the schema is wrong and validation is skipped for that field

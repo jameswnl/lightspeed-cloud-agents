@@ -38,7 +38,7 @@ make kind-down  # delete cluster
 ### Option C: Helm (production)
 
 ```bash
-helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
+helm install cloud-agents deploy/helm/ \
   --set workflowRunner.image.repository=quay.io/openshift-lightspeed/workflow-runner \
   --set workflowRunner.image.tag=latest \
   --set temporal.url=temporal-server:7233 \
