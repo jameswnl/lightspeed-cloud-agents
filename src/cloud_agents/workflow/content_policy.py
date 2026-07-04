@@ -12,7 +12,7 @@ import re
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,16 @@ class BlockedPattern(BaseModel):
 
     pattern: str
     reason: str
+
+    @field_validator("pattern")
+    @classmethod
+    def pattern_must_be_valid_regex(cls, v: str) -> str:
+        """Validate that the pattern is a compilable regex."""
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex pattern: {exc}") from exc
+        return v
 
 
 class ContentPolicy(BaseModel):
@@ -84,7 +94,7 @@ def evaluate_content_policy(
         prompt = step.get("prompt") or ""
         instructions = step.get("instructions") or ""
 
-        # --- Max prompt length ---
+        # --- Max prompt/instructions length ---
         if prompt and len(prompt) > policy.max_prompt_length:
             violations.append(
                 ContentPolicyViolation(
@@ -93,6 +103,17 @@ def evaluate_content_policy(
                     reason=(
                         f"Prompt exceeds {policy.max_prompt_length} chars "
                         f"(got {len(prompt)})"
+                    ),
+                )
+            )
+        if instructions and len(instructions) > policy.max_prompt_length:
+            violations.append(
+                ContentPolicyViolation(
+                    rule="max_prompt_length",
+                    step_name=step_name,
+                    reason=(
+                        f"Instructions exceeds {policy.max_prompt_length} chars "
+                        f"(got {len(instructions)})"
                     ),
                 )
             )

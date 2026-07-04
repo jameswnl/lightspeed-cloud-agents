@@ -10,7 +10,6 @@ import hashlib
 import json
 import logging
 import os
-import secrets
 from datetime import UTC
 from typing import Any, Optional
 
@@ -54,19 +53,6 @@ def _to_k8s_secret_name(name: str | None) -> str | None:
     if not name:
         return None
     return name.lower().replace("_", "-")
-
-
-def _is_sandbox_auth_enabled() -> bool:
-    """Check if per-spawn sandbox authentication is enabled.
-
-    Reads the SANDBOX_AUTH_ENABLED environment variable. Accepts
-    'true' or '1' (case-insensitive). Disabled by default for
-    backward compatibility.
-
-    Returns:
-        True if sandbox auth is enabled, False otherwise.
-    """
-    return os.environ.get("SANDBOX_AUTH_ENABLED", "").lower() in ("true", "1")
 
 
 def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
@@ -196,12 +182,6 @@ async def _run_sandbox_step_inner(
 
         env_vars["LIGHTSPEED_MCP_SERVERS"] = json.dumps(mcp_env_list)
 
-    # Per-spawn sandbox authentication (Phase 1, issue #10)
-    sandbox_token: str | None = None
-    if _is_sandbox_auth_enabled():
-        sandbox_token = secrets.token_urlsafe(32)
-        env_vars["SANDBOX_AUTH_TOKEN"] = sandbox_token
-
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
@@ -270,15 +250,10 @@ async def _run_sandbox_step_inner(
         if permissions.get("denied_tools"):
             request_body["deniedTools"] = permissions["denied_tools"]
 
-        http_headers: dict[str, str] = {}
-        if sandbox_token:
-            http_headers["Authorization"] = f"Bearer {sandbox_token}"
-
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             response = await client.post(
                 f"{endpoint}/v1/agent/run",
                 json=request_body,
-                headers=http_headers,
             )
 
         if response.status_code == 502:
