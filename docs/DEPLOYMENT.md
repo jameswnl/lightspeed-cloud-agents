@@ -47,46 +47,9 @@ helm install cloud-agents deploy/helm/cloud-agents-temporal/ \
 
 ---
 
-## Demo Recording
+## Demo
 
-See [examples/cloud-agents-demo-1.mov](../examples/cloud-agents-demo-1.mov) for a recorded walkthrough of the K8s Incident Response scenario (diagnose → approve → fix → verify).
-
-## Demo Dashboard
-
-The interactive dashboard visualizes workflow execution in real-time.
-
-```bash
-# Serve the dashboard
-cd docs && python3 -m http.server 3000 &
-
-# Open http://localhost:3000/demo-dashboard.html
-```
-
-### Scenarios
-
-| Scenario | Type | Description |
-|----------|------|-------------|
-| K8s Incident Response | Live | diagnose → approve → fix → verify with real LLM calls |
-| MCP Tool Integration | Live | Agent reads files via filesystem MCP server tools |
-| Multi-workflow Composition | Animated | Chatbot triggers chained workflows (future vision) |
-| Security & Governance | Live | Audit → approve (critical) → remediate |
-
-### Terminal setup for demo
-
-**Terminal 1** — Dashboard: `cd docs && python3 -m http.server 3000`
-
-**Terminal 2** — Sandbox logs: 
-```bash
-while true; do
-  for c in $(podman ps --filter label=spawned-by=workflow-runner --format '{{.Names}}' 2>/dev/null); do
-    echo "=== $c ==="
-    podman logs -f "$c" 2>&1 &
-  done
-  sleep 1
-done
-```
-
-**Terminal 3** — Container lifecycle: `watch -n1 podman ps --filter label=spawned-by=workflow-runner`
+See [examples/DEMO.md](../examples/DEMO.md) for the interactive dashboard, demo recording, and terminal setup.
 
 ---
 
