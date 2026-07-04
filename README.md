@@ -11,7 +11,7 @@ Agent workflow and harness platform. Deploys AI agents as ephemeral sandbox cont
 
 
 
-### Start the cloud agents platform
+### Start the Cloud Agents Platform
 
 
 ```bash
@@ -42,7 +42,7 @@ Plus two infrastructure containers managed by compose:
 
 ```mermaid
 graph LR
-    subgraph cluster["Cloud Agents System"]
+    subgraph cluster["Cloud Agents Platform"]
         WR["Workflow Runner<br/><i>API + Temporal Worker</i>"]
         TS["Temporal Server"]
         SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
@@ -102,6 +102,8 @@ Check workflow result:
 ```bash
 curl -s http://localhost:8080/v1/workflows/<workflow_id> | python3 -m json.tool
 ```
+
+You can also open the Temporal UI at http://localhost:8233 to inspect workflow runs, event history, and step state.
 
 See [docs/DEMO.md](docs/DEMO.md) for the full API reference, demo dashboard, and Kubernetes deployment.
 
