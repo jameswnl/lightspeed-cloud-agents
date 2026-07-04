@@ -11,7 +11,10 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from cloud_agents.workflow.content_policy import ContentPolicy
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -29,6 +32,30 @@ from cloud_agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
 from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_content_policy_audit(
+    workflow_id: str,
+    definition: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Emit an audit event for content policy violations.
+
+    Parameters:
+        workflow_id: Workflow run ID or placeholder.
+        definition: The rejected workflow definition.
+        errors: List of validation error messages.
+    """
+    policy_errors = [e for e in errors if "content policy" in e.lower()]
+    if policy_errors:
+        emit_audit(
+            event_type="content_policy_violation",
+            workflow_id=workflow_id,
+            details={
+                "definition_name": definition.get("metadata", {}).get("name", ""),
+                "violations": policy_errors,
+            },
+        )
 
 
 class RunWorkflowRequest(BaseModel):
@@ -64,6 +91,7 @@ def build_temporal_router(
     auth_dependency: Optional[Any] = None,
     authorizer: Optional[Any] = None,
     definition_store: Optional[DefinitionStore] = None,
+    content_policy: Optional["ContentPolicy"] = None,
 ) -> APIRouter:
     """Build FastAPI router with Temporal workflow endpoints.
 
@@ -74,6 +102,9 @@ def build_temporal_router(
         authorizer: Optional WorkflowAuthorizer for fine-grained access
             control. Defaults to NoopAuthorizer (permit all).
         definition_store: Optional store for workflow-name resolution.
+        content_policy: Optional content policy for definition validation.
+            When provided, definitions are checked against the policy rules
+            at both /run and /definitions submission time.
 
     Returns:
         APIRouter with workflow endpoints.
@@ -183,8 +214,14 @@ def build_temporal_router(
 
         from cloud_agents.workflow.temporal_validation import validate_definition
 
-        validation_errors = validate_definition(definition)
+        validation_errors = validate_definition(definition, content_policy=content_policy)
         if validation_errors:
+            if content_policy is not None:
+                _emit_content_policy_audit(
+                    workflow_id=request.workflow_id or "unknown",
+                    definition=definition,
+                    errors=validation_errors,
+                )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"validation_errors": validation_errors},
@@ -274,8 +311,14 @@ def build_temporal_router(
             from cloud_agents.workflow.definition import WorkflowDefinition
             from cloud_agents.workflow.temporal_validation import validate_definition
 
-            validation_errors = validate_definition(body)
+            validation_errors = validate_definition(body, content_policy=content_policy)
             if validation_errors:
+                if content_policy is not None:
+                    _emit_content_policy_audit(
+                        workflow_id="definition-submission",
+                        definition=body,
+                        errors=validation_errors,
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail={"validation_errors": validation_errors},
