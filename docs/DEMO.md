@@ -2,38 +2,6 @@
 
 For quick start, see [README.md](../README.md#quick-start).
 
-## What Gets Deployed
-
-Three images, five containers:
-
-| Image | Purpose | Container |
-|-------|---------|-----------|
-| `workflow-runner` | REST API + Temporal Worker — the brain that interprets workflow YAML and dispatches steps | `podman-workflow-runner-1` |
-| `lightspeed-agentic-sandbox` | Agent runtime — each workflow step spawns one of these. Runs a complete agent loop (multi-turn LLM + tool calls) then exits. | `agent-ca-*` (ephemeral) |
-| `mcp-filesystem` | MCP tool server — exposes filesystem read/write tools over streamable HTTP. Sandbox containers connect to it for tool calls. | `podman-mcp-filesystem-1` |
-
-Plus two infrastructure containers managed by compose:
-
-| Container | Purpose |
-|-----------|---------|
-| `podman-temporal-server-1` | Temporal Server — durable workflow state, retry, signals |
-| `podman-temporal-db-1` | PostgreSQL — Temporal's storage backend |
-
-```mermaid
-graph LR
-    subgraph cluster["Cloud Agents System"]
-        WR["Workflow Runner<br/><i>API + Temporal Worker</i>"]
-        TS["Temporal Server"]
-        SB["Sandbox Container<br/><i>ephemeral, per step</i>"]
-        MCP["MCP Server<br/><i>optional tools</i>"]
-    end
-    LLM["LLM Provider"]
-
-    WR -- "gRPC" --> TS
-    WR -- "spawn / destroy" --> SB
-    SB -- "HTTPS" --> LLM
-    SB -- "HTTP" --> MCP
-```
 
 ## Building Images
 
