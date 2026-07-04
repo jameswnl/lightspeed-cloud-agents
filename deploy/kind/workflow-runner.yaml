@@ -17,7 +17,6 @@ spec:
         environment: cloud-agents
     spec:
       serviceAccountName: workflow-runner
-      automountServiceAccountToken: false
       containers:
         - name: workflow-runner
           image: localhost/workflow-runner:latest

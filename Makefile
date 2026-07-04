@@ -73,12 +73,19 @@ kind-up: build  ## Create Kind cluster and deploy cloud agents
 	podman save localhost/lightspeed-agentic-sandbox:latest -o /tmp/sandbox.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/sandbox.tar --name $(KIND_CLUSTER)
 	rm -f /tmp/sandbox.tar
+	@echo "Tagging images inside Kind node..."
+	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
+		localhost/lightspeed-agentic-sandbox:latest docker.io/library/lightspeed-agentic-sandbox:latest
 	kubectl apply -f deploy/kind/postgres.yaml
 	kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
 	kubectl apply -f deploy/kind/temporal.yaml
 	kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
 	kubectl create secret generic llm-api-key \
 		--from-literal=OPENAI_API_KEY="$$OPENAI_API_KEY" 2>/dev/null || true
+	kubectl create secret generic openai-api-key \
+		--from-literal=OPENAI_API_KEY="$$OPENAI_API_KEY" 2>/dev/null || true
+	kubectl create secret generic anthropic-api-key \
+		--from-literal=ANTHROPIC_API_KEY="$$ANTHROPIC_API_KEY" 2>/dev/null || true
 	kubectl apply -f deploy/kind/rbac.yaml
 	kubectl apply -f deploy/kind/workflow-runner.yaml
 	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s

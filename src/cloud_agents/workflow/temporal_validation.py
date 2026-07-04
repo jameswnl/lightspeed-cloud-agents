@@ -41,7 +41,7 @@ def validate_definition(defn: dict[str, Any]) -> list[str]:
                 errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
             output_keys.add(output_key)
 
-        prompt = step.get("prompt", "")
+        prompt = step.get("prompt") or ""
         refs = re.findall(r"\{\{\s*steps\.(\w+)\.", prompt)
         for ref in refs:
             if ref not in output_keys:

@@ -45,6 +45,16 @@ def _normalize_config_ref(ref: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", ref).upper()
 
 
+def _to_k8s_secret_name(name: str | None) -> str | None:
+    """Convert a credentials_secret value to a valid K8s Secret name.
+
+    e.g. 'OPENAI_API_KEY' -> 'openai-api-key'
+    """
+    if not name:
+        return None
+    return name.lower().replace("_", "-")
+
+
 def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
     """Compute a content-hash pod name for idempotent spawning.
 
@@ -204,7 +214,7 @@ async def _run_sandbox_step_inner(
             skills_paths=input.get("skills_paths"),
             service_account=sa,
             read_only=advisory,
-            credential_secret_name=provider.get("credentials_secret") or None,
+            credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret")) or None,
             mcp_secret_mounts=mcp_secret_mounts or None,
         )
         ready = await spawner.wait_ready(endpoint, health_path="/health")
