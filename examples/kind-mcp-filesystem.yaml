@@ -1,0 +1,58 @@
+# MCP filesystem server for Kind demo.
+# Serves demo-data files over streamable HTTP so agents can read them via MCP tools.
+#
+# Prerequisites:
+#   - ConfigMap 'demo-data' created from examples/demo-data/
+#   - MCP image loaded into Kind (make kind-up handles both)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-filesystem
+  labels:
+    app: mcp-filesystem
+    environment: cloud-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-filesystem
+  template:
+    metadata:
+      labels:
+        app: mcp-filesystem
+        environment: cloud-agents
+    spec:
+      containers:
+        - name: mcp-filesystem
+          image: localhost/mcp-filesystem:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: demo-data
+              mountPath: /data
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: demo-data
+          configMap:
+            name: demo-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-filesystem
+  labels:
+    app: mcp-filesystem
+    environment: cloud-agents
+spec:
+  selector:
+    app: mcp-filesystem
+  ports:
+    - port: 8081
+      targetPort: 8081

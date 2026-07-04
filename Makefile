@@ -65,7 +65,7 @@ KIND_CLUSTER ?= cloud-agents
 
 .PHONY: kind-up kind-down
 
-kind-up: build  ## Create Kind cluster and deploy cloud agents
+kind-up: build-all  ## Create Kind cluster and deploy cloud agents + MCP demo
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
 	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/workflow-runner.tar --name $(KIND_CLUSTER)
@@ -73,9 +73,14 @@ kind-up: build  ## Create Kind cluster and deploy cloud agents
 	podman save localhost/lightspeed-agentic-sandbox:latest -o /tmp/sandbox.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/sandbox.tar --name $(KIND_CLUSTER)
 	rm -f /tmp/sandbox.tar
+	podman save localhost/mcp-filesystem:latest -o /tmp/mcp-filesystem.tar
+	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/mcp-filesystem.tar --name $(KIND_CLUSTER)
+	rm -f /tmp/mcp-filesystem.tar
 	@echo "Tagging images inside Kind node..."
 	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
 		localhost/lightspeed-agentic-sandbox:latest docker.io/library/lightspeed-agentic-sandbox:latest
+	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
+		localhost/mcp-filesystem:latest docker.io/library/mcp-filesystem:latest
 	kubectl apply -f deploy/kind/postgres.yaml
 	kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
 	kubectl apply -f deploy/kind/temporal.yaml
@@ -86,9 +91,13 @@ kind-up: build  ## Create Kind cluster and deploy cloud agents
 		--from-literal=OPENAI_API_KEY="$$OPENAI_API_KEY" 2>/dev/null || true
 	kubectl create secret generic anthropic-api-key \
 		--from-literal=ANTHROPIC_API_KEY="$$ANTHROPIC_API_KEY" 2>/dev/null || true
+	kubectl create configmap demo-data \
+		--from-file=examples/demo-data/ 2>/dev/null || true
 	kubectl apply -f deploy/kind/rbac.yaml
 	kubectl apply -f deploy/kind/workflow-runner.yaml
 	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
+	kubectl apply -f examples/kind-mcp-filesystem.yaml
+	kubectl wait --for=condition=ready pod -l app=mcp-filesystem --timeout=60s
 	@echo ""
 	@echo "Kind cluster '$(KIND_CLUSTER)' ready."
 	@echo "Run: kubectl port-forward svc/workflow-runner 8080:8080"
