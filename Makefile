@@ -65,7 +65,7 @@ KIND_CLUSTER ?= cloud-agents
 
 .PHONY: kind-up kind-down
 
-kind-up: build-all  ## Create Kind cluster and deploy cloud agents + MCP demo
+kind-up: build  ## Create Kind cluster and deploy cloud agents + MCP demo
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
 	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/workflow-runner.tar --name $(KIND_CLUSTER)
