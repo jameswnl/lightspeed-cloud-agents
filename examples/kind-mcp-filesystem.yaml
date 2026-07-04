@@ -2,8 +2,9 @@
 # Serves demo-data files over streamable HTTP so agents can read them via MCP tools.
 #
 # Prerequisites:
-#   - ConfigMap 'demo-data' created from examples/demo-data/
-#   - MCP image loaded into Kind (make kind-up handles both)
+#   kubectl create configmap demo-data --from-file=examples/demo-data/
+#   MCP image loaded into Kind: podman save + kind load image-archive
+# See Makefile kind-up target for automated setup.
 ---
 apiVersion: apps/v1
 kind: Deployment

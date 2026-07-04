@@ -1,0 +1,20 @@
+# Demo overlay — layer on top of docker-compose.yaml.
+# Adds MCP filesystem server + CORS for the demo dashboard.
+# NOT for production use — CORS_ALLOWED_ORIGINS is set to "*".
+#
+# Usage:
+#   podman compose -f deploy/podman/docker-compose.yaml -f deploy/podman/docker-compose.demo.yaml up -d
+
+services:
+  workflow-runner:
+    environment:
+      CORS_ALLOWED_ORIGINS: "*"
+      SKIP_SANDBOX_DESTROY: ${SKIP_SANDBOX_DESTROY:-}
+
+  mcp-filesystem:
+    image: localhost/mcp-filesystem:latest
+    restart: unless-stopped
+    volumes:
+      - ../../examples/demo-data:/data:ro
+    ports:
+      - "8081:8081"

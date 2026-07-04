@@ -1,14 +1,13 @@
-# Temporal workflow engine stack for cloud agents.
+# Cloud Agents platform — core stack.
 #
 # Usage:
-#   export OPENAI_API_KEY="sk-..."        # and/or
-#   export ANTHROPIC_API_KEY="sk-ant-..."
-#   podman compose -f deploy/podman/docker-compose.temporal.yaml up -d
-#   podman compose -f deploy/podman/docker-compose.temporal.yaml down
+#   export OPENAI_API_KEY="sk-..."
+#   podman compose -f deploy/podman/docker-compose.yaml up -d
+#   podman compose -f deploy/podman/docker-compose.yaml down
 #
-# Temporal UI: http://localhost:8233
-# Temporal gRPC: localhost:7233
 # Workflow runner API: http://localhost:8080
+# Temporal UI:        http://localhost:8233
+# Temporal gRPC:      localhost:7233
 
 services:
   temporal-db:
@@ -52,6 +51,8 @@ services:
     image: localhost/workflow-runner:latest
     depends_on:
       - temporal-server
+    # Required for Podman socket access (DooD pattern — runner spawns
+    # sibling sandbox containers via the host Podman socket).
     privileged: true
     user: "0"
     environment:
@@ -63,20 +64,10 @@ services:
       CONTAINER_HOST: unix:///run/podman/podman.sock
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      CORS_ALLOWED_ORIGINS: "*"
-      SKIP_SANDBOX_DESTROY: ${SKIP_SANDBOX_DESTROY:-}
     volumes:
       - ${PODMAN_SOCK:-/run/user/501/podman/podman.sock}:/run/podman/podman.sock
     ports:
       - "8080:8080"
-
-  mcp-filesystem:
-    image: localhost/mcp-filesystem:latest
-    restart: unless-stopped
-    volumes:
-      - ../../examples/demo-data:/data:ro
-    ports:
-      - "8081:8081"
 
 volumes:
   temporal-db-data:

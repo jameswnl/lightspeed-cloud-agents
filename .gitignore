@@ -4,3 +4,4 @@ __pycache__/
 
 # Local Netlify folder
 .netlify
+.claude/worktrees/

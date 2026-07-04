@@ -6,10 +6,11 @@ For quick start, see [README.md](../README.md#quick-start).
 ## Building Images
 
 ```bash
-make build          # builds all 3 images
+make build          # builds 2 core images (runner + sandbox)
+make build-demo     # builds all 3 images (adds MCP server for demo)
 make build-runner   # just the workflow runner
 make build-sandbox  # just the sandbox (clones fork if needed)
-make build-mcp      # just the MCP filesystem server
+make build-mcp      # just the MCP filesystem server (demo only)
 ```
 
 The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sandbox @ temporal-integration](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/temporal-integration)) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
@@ -175,7 +176,8 @@ These are validated by CI against the Pydantic schema.
 ## Cleanup
 
 ```bash
-make down       # Podman
+make down       # Podman (core)
+make demo-down  # Podman (demo stack)
 make kind-down  # Kubernetes
 make clean      # stop + remove leftover sandbox containers
 ```
