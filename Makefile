@@ -63,7 +63,7 @@ logs:  ## Show workflow runner logs
 
 .PHONY: demo-up demo-down dashboard
 
-demo-up: build-mcp  ## Start demo stack (core + MCP server + CORS)
+demo-up: build-demo  ## Start demo stack (core + MCP server + CORS)
 	@if ! podman machine inspect >/dev/null 2>&1 || \
 		[ "$$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then \
 		echo "Starting Podman machine..."; \

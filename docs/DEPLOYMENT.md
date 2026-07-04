@@ -28,7 +28,7 @@ See [Quick Start](../README.md#quick-start).
 ```bash
 export OPENAI_API_KEY="sk-..."
 
-make kind-up    # creates cluster, loads images, deploys Temporal + runner + MCP demo
+make kind-up    # creates cluster, loads images, deploys Temporal + runner
 
 kubectl port-forward svc/workflow-runner 8080:8080 &
 curl -s http://localhost:8080/readyz
