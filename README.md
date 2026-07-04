@@ -107,6 +107,32 @@ You can also open the Temporal UI at http://localhost:8233 to inspect workflow r
 
 See [docs/DEMO.md](docs/DEMO.md) for the full API reference, demo dashboard, and Kubernetes deployment.
 
+## Development
+
+Run the workflow runner locally (without containers) for development and debugging.
+
+```bash
+# Install dependencies
+uv sync --group dev --extra podman
+
+# Start Temporal (still needs containers)
+podman compose -f deploy/podman/docker-compose.temporal.yaml up -d temporal-db temporal-server
+
+# Run the workflow runner on the host
+TEMPORAL_URL=localhost:7233 \
+WORKFLOW_SPAWNER=podman \
+SPAWNER_NETWORK=podman_default \
+AUTH_REQUIRED=false \
+uv run uvicorn cloud_agents.workflow.temporal_entrypoint:app --host 0.0.0.0 --port 8080
+```
+
+Run tests:
+
+```bash
+uv run pytest tests/unit/ -q             # unit tests
+uv run pytest tests/integration/ -v      # integration tests (requires Temporal)
+```
+
 ## Key Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
