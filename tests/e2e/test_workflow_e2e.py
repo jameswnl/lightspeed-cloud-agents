@@ -116,7 +116,7 @@ async def test_diagnose_fix_events_emitted():
             task_queue=queue,
             execution_timeout=timedelta(seconds=120),
         )
-        await handle.result(timeout=timedelta(seconds=120))
+        await handle.result()
         status = await handle.query(AgentWorkflow.get_status)
 
     event_types = [e.type for e in status.events]
