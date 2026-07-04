@@ -3,8 +3,7 @@
 ## Setup
 
 ```bash
-make build-demo  # build all 3 images (runner, sandbox, MCP server)
-make demo-up     # start platform + MCP server + CORS
+make demo-up     # build images + start platform + MCP server + CORS
 make dashboard   # open http://localhost:3000/demo-dashboard.html
 ```
 

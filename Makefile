@@ -67,9 +67,9 @@ logs:  ## Show workflow runner logs
 
 # ── Demo (core + MCP + dashboard) ─────────────────────
 
-.PHONY: demo-up demo-down dashboard
+.PHONY: demo-up demo-down demo-restart dashboard
 
-demo-up: build-demo ensure-podman  ## Start demo stack (core + MCP server + CORS)
+demo-up: ensure-podman build-demo  ## Start demo stack (core + MCP server + CORS)
 	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) up -d
 	@echo ""
 	@echo "Services:"
@@ -81,6 +81,10 @@ demo-up: build-demo ensure-podman  ## Start demo stack (core + MCP server + CORS
 
 demo-down:  ## Stop demo stack
 	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down
+
+demo-restart: ensure-podman  ## Restart demo stack
+	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down
+	podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) up -d
 
 dashboard:  ## Serve demo dashboard at http://localhost:3000
 	@echo "Dashboard: http://localhost:3000/demo-dashboard.html"
@@ -152,9 +156,10 @@ clean-sandboxes:  ## Remove leftover sandbox containers
 	@podman rm -f $$(podman ps -a --filter label=spawned-by=workflow-runner --format '{{.Names}}' 2>/dev/null) 2>/dev/null || true
 	@echo "Sandbox containers cleaned."
 
-clean: clean-sandboxes  ## Stop everything and clean up
+clean:  ## Stop everything and clean up
 	-podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down 2>/dev/null
 	-podman compose -f $(COMPOSE_FILE) down 2>/dev/null
+	@$(MAKE) clean-sandboxes
 
 # ── Tests ──────────────────────────────────────────────
 
