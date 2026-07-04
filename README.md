@@ -4,6 +4,8 @@ Agent workflow and harness platform. Deploys AI agents as ephemeral sandbox cont
 
 ## Quick Start
 
+Prerequisites: **Podman** (with Podman Desktop or `podman machine start`), **LLM API key** (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`).
+
 ```bash
 export OPENAI_API_KEY="sk-..."    # or ANTHROPIC_API_KEY
 
@@ -12,7 +14,7 @@ make up         # start the platform (Temporal + runner + MCP)
 make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
 ```
 
-Select a scenario in the dashboard and click Run. See [docs/DEMO.md](docs/DEMO.md) for full deployment guide, API reference, and Kubernetes setup.
+Select a scenario in the dashboard and click Run. See [docs/DEMO.md](docs/DEMO.md) for details, API reference, and Kubernetes setup.
 
 ## Architecture
 

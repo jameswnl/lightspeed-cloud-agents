@@ -1,22 +1,6 @@
 # Cloud Agents — Deployment & Demo
 
-## Prerequisites
-
-- **Podman** with Podman Desktop or `podman machine start`
-- **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
-- **Kind** + `kubectl` (only for Kubernetes deployment)
-
-## Quick Start
-
-```bash
-export OPENAI_API_KEY="sk-..."    # or ANTHROPIC_API_KEY
-
-make build   # build all 3 images
-make up      # start the platform
-make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
-```
-
-That's it. Select a scenario in the dashboard and click Run.
+For quick start, see [README.md](../README.md#quick-start).
 
 ## What Gets Deployed
 
