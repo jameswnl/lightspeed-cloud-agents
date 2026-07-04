@@ -20,19 +20,7 @@ The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sand
 
 ### Option A: Podman (compose)
 
-```bash
-export OPENAI_API_KEY="sk-..."
-
-make up      # starts all containers
-make status  # show what's running
-make down    # stop everything
-```
-
-| Service | URL |
-|---------|-----|
-| Workflow Runner API | http://localhost:8080 |
-| Temporal UI | http://localhost:8233 |
-| MCP Filesystem Server | http://localhost:8081 |
+See [Quick Start](../README.md#quick-start).
 
 ### Option B: Kubernetes (Kind)
 
