@@ -433,6 +433,47 @@ class TestDefinitionManagement:
         assert response.status_code == 201
         assert response.json()["name"] == "my-wf"
 
+    def test_post_definition_with_invalid_schema_returns_422(
+        self, mocker: MockerFixture
+    ) -> None:
+        """POST /definitions with invalid output_schema returns 422."""
+        from cloud_agents.workflow.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "bad-schema"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "output_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "items": {"type": "array"},
+                                },
+                            },
+                        },
+                    ]
+                },
+            },
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert "validation_errors" in body.get("detail", {})
+
     def test_get_definition_by_name(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns a stored definition."""
         from cloud_agents.workflow.definition_store import DefinitionStore

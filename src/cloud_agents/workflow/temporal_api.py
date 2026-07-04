@@ -272,6 +272,14 @@ def build_temporal_router(
                 raise HTTPException(status_code=403, detail=decision.reason)
 
             from cloud_agents.workflow.definition import WorkflowDefinition
+            from cloud_agents.workflow.temporal_validation import validate_definition
+
+            validation_errors = validate_definition(body)
+            if validation_errors:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": validation_errors},
+                )
 
             defn = WorkflowDefinition.model_validate(body)
             stored = await definition_store.save(defn)
