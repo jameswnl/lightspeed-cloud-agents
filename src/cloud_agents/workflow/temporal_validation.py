@@ -30,9 +30,10 @@ def _validate_schema(
     if "items" in schema and isinstance(schema["items"], dict):
         _validate_schema(schema["items"], step_name, f"{path}.items", errors)
 
+    # Note: does not recurse into additionalProperties or allOf/anyOf/oneOf.
     for prop_name, prop_schema in schema.get("properties", {}).items():
         if isinstance(prop_schema, dict):
-            _validate_schema(prop_schema, step_name, prop_name, errors)
+            _validate_schema(prop_schema, step_name, f"{path}.{prop_name}", errors)
 
 
 def validate_definition(defn: dict[str, Any]) -> list[str]:

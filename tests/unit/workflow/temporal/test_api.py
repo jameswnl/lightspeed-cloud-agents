@@ -462,7 +462,7 @@ class TestDefinitionManagement:
                             "output_schema": {
                                 "type": "object",
                                 "properties": {
-                                    "items": {"type": "array"},
+                                    "things": {"type": "array"},
                                 },
                             },
                         },

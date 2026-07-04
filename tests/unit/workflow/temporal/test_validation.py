@@ -171,7 +171,7 @@ class TestOutputSchemaValidation:
                 }
             }
         }))
-        assert any("items" in e.lower() and "inner_list" in e for e in errors)
+        assert any("items" in e.lower() and "root.outer.inner_list" in e for e in errors)
 
     def test_no_output_schema_passes(self) -> None:
         """Step without output_schema passes validation."""
