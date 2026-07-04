@@ -2,16 +2,19 @@
 
 SANDBOX_REPO ?= ../lightspeed-agentic-sandbox
 SANDBOX_BRANCH ?= temporal-integration
-COMPOSE_FILE = deploy/podman/docker-compose.temporal.yaml
+COMPOSE_FILE = deploy/podman/docker-compose.yaml
+DEMO_COMPOSE_FILE = deploy/podman/docker-compose.demo.yaml
 
 ## Quick start: make build up
-## Dashboard: make dashboard → http://localhost:3000/demo-dashboard.html
+## Demo:        make demo-up dashboard
 
 # ── Build ──────────────────────────────────────────────
 
 .PHONY: build build-runner build-sandbox build-mcp
 
-build: build-runner build-sandbox build-mcp  ## Build all images
+build: build-runner build-sandbox  ## Build core images (runner + sandbox)
+
+build-all: build build-mcp  ## Build all images including demo MCP server
 
 build-runner:  ## Build workflow runner image
 	podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
@@ -24,14 +27,14 @@ build-sandbox:  ## Build sandbox image (from fork)
 	cd $(SANDBOX_REPO) && git checkout $(SANDBOX_BRANCH) && \
 		podman build -f Containerfile -t lightspeed-agentic-sandbox:latest .
 
-build-mcp:  ## Build MCP filesystem server image
+build-mcp:  ## Build MCP filesystem server image (demo only)
 	podman build -f deploy/mcp-filesystem/Containerfile -t mcp-filesystem:latest .
 
-# ── Run ────────────────────────────────────────────────
+# ── Run (core) ────────────────────────────────────────
 
-.PHONY: up down restart status logs dashboard
+.PHONY: up down restart status logs
 
-up:  ## Start all services (Temporal + runner + MCP)
+up:  ## Start core platform (Temporal + runner)
 	@if ! podman machine inspect >/dev/null 2>&1 || \
 		[ "$$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then \
 		echo "Starting Podman machine..."; \
@@ -42,14 +45,11 @@ up:  ## Start all services (Temporal + runner + MCP)
 	@echo "Services:"
 	@echo "  Workflow Runner API: http://localhost:8080"
 	@echo "  Temporal UI:        http://localhost:8233"
-	@echo "  MCP Filesystem:     http://localhost:8081"
-	@echo ""
-	@echo "Run 'make dashboard' to start the demo dashboard."
 
-down:  ## Stop all services
+down:  ## Stop core platform
 	podman compose -f $(COMPOSE_FILE) down
 
-restart:  ## Restart all services
+restart:  ## Restart core platform
 	podman compose -f $(COMPOSE_FILE) down
 	podman compose -f $(COMPOSE_FILE) up -d
 
@@ -58,6 +58,32 @@ status:  ## Show running containers
 
 logs:  ## Show workflow runner logs
 	podman logs -f podman-workflow-runner-1
+
+# ── Demo (core + MCP + dashboard) ─────────────────────
+
+.PHONY: demo-up demo-down dashboard
+
+demo-up: build-mcp  ## Start demo stack (core + MCP server + CORS)
+	@if ! podman machine inspect >/dev/null 2>&1 || \
+		[ "$$(podman machine inspect --format '{{.State}}' 2>/dev/null)" != "running" ]; then \
+		echo "Starting Podman machine..."; \
+		podman machine start; \
+	fi
+	podman compose -f $(DEMO_COMPOSE_FILE) up -d
+	@echo ""
+	@echo "Services:"
+	@echo "  Workflow Runner API: http://localhost:8080"
+	@echo "  Temporal UI:        http://localhost:8233"
+	@echo "  MCP Filesystem:     http://localhost:8081"
+	@echo ""
+	@echo "Run 'make dashboard' to start the demo dashboard."
+
+demo-down:  ## Stop demo stack
+	podman compose -f $(DEMO_COMPOSE_FILE) down
+
+dashboard:  ## Serve demo dashboard at http://localhost:3000
+	@echo "Dashboard: http://localhost:3000/demo-dashboard.html"
+	cd docs && python3 -m http.server 3000
 
 # ── Kind (Kubernetes) ──────────────────────────────────
 
@@ -96,12 +122,6 @@ kind-up: build  ## Create Kind cluster and deploy cloud agents
 
 kind-down:  ## Delete Kind cluster
 	KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name $(KIND_CLUSTER)
-
-# ── Dashboard ──────────────────────────────────────────
-
-dashboard:  ## Serve demo dashboard at http://localhost:3000
-	@echo "Dashboard: http://localhost:3000/demo-dashboard.html"
-	cd docs && python3 -m http.server 3000
 
 # ── Sandbox log watcher ────────────────────────────────
 

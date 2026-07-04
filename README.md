@@ -21,29 +21,37 @@ AI agent workflow platform. Define multi-step agent workflows in YAML, run them 
 ```bash
 export OPENAI_API_KEY="sk-..."    # or ANTHROPIC_API_KEY
 
-make build      # build all 3 images (runner, sandbox, MCP server — MCP is only needed for demo)
-make up         # start the platform (Temporal + runner + MCP)
+make build      # build 2 images (runner + sandbox)
+make up         # start the platform (Temporal + runner)
+```
+
+For the interactive demo dashboard (includes MCP server):
+
+```bash
+make build-all  # build all 3 images (adds MCP server)
+make demo-up    # start platform + MCP server + CORS
 make dashboard  # open demo dashboard at http://localhost:3000/demo-dashboard.html
 ```
 
 
 ### What Gets Deployed
 
-Three images, six containers:
-
-| Image | Purpose | Container |
-|-------|---------|-----------|
-| `workflow-runner` | REST API + Temporal Worker — the brain that interprets workflow YAML and dispatches steps | `podman-workflow-runner-1` |
-| `lightspeed-agentic-sandbox` | Agent runtime — each workflow step spawns one of these. Runs a complete agent loop (multi-turn LLM + tool calls) then exits. | `agent-ca-*` (ephemeral) |
-| `mcp-filesystem` | MCP tool server (demo only) — exposes filesystem read/write tools over streamable HTTP. Sandbox containers connect to it for tool calls. | `podman-mcp-filesystem-1` |
-
-Plus three infrastructure containers managed by compose:
+**Core** (`make up`) — 4 containers:
 
 | Container | Purpose |
 |-----------|---------|
+| `podman-workflow-runner-1` | REST API + Temporal Worker — interprets workflow YAML, dispatches steps |
 | `podman-temporal-server-1` | Temporal Server — durable workflow state, retry, signals |
 | `podman-temporal-db-1` | PostgreSQL — Temporal's storage backend |
-| `podman-temporal-ui-1` | Temporal Web UI — workflow inspection at http://localhost:8233 |
+| `podman-temporal-ui-1` | Temporal Web UI — http://localhost:8233 |
+
+Plus ephemeral `agent-ca-*` sandbox containers spawned per workflow step (complete agent loop: multi-turn LLM + tool calls, then destroyed).
+
+**Demo** (`make demo-up`) adds:
+
+| Container | Purpose |
+|-----------|---------|
+| `podman-mcp-filesystem-1` | MCP tool server — filesystem tools over streamable HTTP |
 
 ```mermaid
 graph LR
@@ -63,11 +71,11 @@ graph LR
 
 ### Try It
 
-Register a workflow definition (this one uses MCP tools to read files — no approval needed):
+Register a workflow definition (single diagnostic step — no MCP, no approval):
 
 ```bash
 python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))" \
-  examples/workflow-definitions/mcp-filesystem-workflow.yaml | \
+  examples/workflow-definitions/ephemeral-diagnose-workflow.yaml | \
   curl -s -X POST http://localhost:8080/v1/workflows/definitions \
     -H 'Content-Type: application/json' -d @-
 ```
@@ -78,16 +86,15 @@ List registered workflows:
 curl -s http://localhost:8080/v1/workflows/definitions | python3 -m json.tool
 ```
 
-Run a workflow (the agent reads cluster status files via MCP tools and recommends a fix):
+Run a workflow:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/workflows/run \
   -H 'Content-Type: application/json' \
   -d '{
-    "workflow_name": "mcp-filesystem-demo",
+    "workflow_name": "ephemeral-diagnose",
     "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "OPENAI_API_KEY"},
-    "sandbox_image": "lightspeed-agentic-sandbox:latest",
-    "mcp_servers": [{"name": "filesystem", "url": "http://mcp-filesystem:8081/mcp"}]
+    "sandbox_image": "lightspeed-agentic-sandbox:latest"
   }'
 # → {"workflow_id": "wf-abc123"}
 ```

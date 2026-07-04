@@ -9,6 +9,7 @@ See [cloud-agents-demo-1.mov](cloud-agents-demo-1.mov) for a recorded walkthroug
 The interactive dashboard visualizes workflow execution in real-time.
 
 ```bash
+make demo-up    # starts platform + MCP server + CORS
 make dashboard  # serves at http://localhost:3000/demo-dashboard.html
 ```
 

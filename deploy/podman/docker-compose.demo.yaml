@@ -1,14 +1,13 @@
-# Temporal workflow engine stack for cloud agents.
+# Cloud Agents platform — demo stack (includes MCP server + CORS).
 #
 # Usage:
-#   export OPENAI_API_KEY="sk-..."        # and/or
-#   export ANTHROPIC_API_KEY="sk-ant-..."
-#   podman compose -f deploy/podman/docker-compose.temporal.yaml up -d
-#   podman compose -f deploy/podman/docker-compose.temporal.yaml down
+#   export OPENAI_API_KEY="sk-..."
+#   podman compose -f deploy/podman/docker-compose.demo.yaml up -d
+#   podman compose -f deploy/podman/docker-compose.demo.yaml down
 #
-# Temporal UI: http://localhost:8233
-# Temporal gRPC: localhost:7233
 # Workflow runner API: http://localhost:8080
+# Temporal UI:        http://localhost:8233
+# MCP Filesystem:     http://localhost:8081
 
 services:
   temporal-db:
