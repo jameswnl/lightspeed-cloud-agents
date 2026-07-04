@@ -43,7 +43,7 @@ Do NOT use these in examples or documentation. The test `test_example_definition
 - **At API submission**: `/run` endpoint validates definitions via `temporal_validation.py` (duplicate names, undefined step refs, missing fields). Returns 422 for invalid definitions.
 - **At definition store**: `/definitions` POST validates via `WorkflowDefinition.model_validate()` (full Pydantic validation).
 - **Example YAML files**: `tests/unit/agents/workflow/test_example_definitions.py` validates ALL workflow YAMLs in `examples/definitions/` against the Pydantic model. Add new examples there and the test picks them up automatically.
-- **DEMO.md inline YAML**: `tests/unit/agents/workflow/test_demo_yaml.py` extracts and validates the workflow YAML from DEMO.md. If you edit the DEMO example, this test catches schema errors.
+- **DEPLOYMENT.md inline YAML**: `tests/unit/agents/workflow/test_demo_yaml.py` extracts and validates the workflow YAML from DEPLOYMENT.md. If you edit the DEMO example, this test catches schema errors.
 
 ## Security Guardrails
 
@@ -84,7 +84,7 @@ uv run pytest tests/unit/agents/ -q
 # Example YAML validation
 uv run pytest tests/unit/agents/workflow/test_example_definitions.py -v
 
-# DEMO.md YAML validation
+# DEPLOYMENT.md YAML validation
 uv run pytest tests/unit/agents/workflow/test_demo_yaml.py -v
 
 # E2E guardrails (requires Podman running)
@@ -100,7 +100,7 @@ uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v
 ## Documentation
 
 - `docs/design/cloud-agents/ARCHITECTURE.md` — system architecture (keep in sync with code)
-- `docs/design/cloud-agents/DEMO.md` — deployment guide + diagnostic workflow example
+- `docs/design/cloud-agents/DEPLOYMENT.md` — deployment guide + diagnostic workflow example
 - `docs/design/cloud-agents/architecture-visualization.html` — interactive visualization (passcode: lcs)
 - `docs/design/cloud-agents/productization-roadmap.md` — P0/P1/backlog gap analysis
 - `docs/design/cloud-agents/prod/implementation-plan.md` — productization task breakdown

@@ -109,7 +109,7 @@ curl -s http://localhost:8080/v1/workflows/<workflow_id> | python3 -m json.tool
 
 You can also open the Temporal UI at http://localhost:8233 to inspect workflow runs, event history, and step state.
 
-See [docs/DEMO.md](docs/DEMO.md) for the full API reference, demo dashboard, and Kubernetes deployment.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full API reference, demo dashboard, and Kubernetes deployment.
 
 
 ---
@@ -147,6 +147,6 @@ uv run pytest tests/integration/ -v      # integration tests (requires Temporal 
 ## Key Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — goals, requirements, design, components
-- [DEMO.md](docs/DEMO.md) — deployment guide (Podman / Kind / Helm) + workflow definition reference + diagnostic workflow example
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deployment guide (Podman / Kind / Helm) + workflow definition reference + diagnostic workflow example
 - [RBAC](docs/rbac.md) — authorization: policy file format, identity matching, quick start
 - [Implementation Plan](docs/gaps/gaps-implementation-plan.md) — all planned work (T1-T50)

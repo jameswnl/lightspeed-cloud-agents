@@ -541,7 +541,7 @@ Image signing attestation and software bill of materials.
 **What to build**:
 - Change Helm default to `networkPolicy.egress.enabled: true`
 - Require explicit `llmCidrs` configuration for LLM provider access
-- Document the egress policy in DEMO.md and rbac.md
+- Document the egress policy in DEPLOYMENT.md and rbac.md
 - Add a note that Podman deployments need host firewall rules for equivalent protection
 
 **Effort**: Half day (Helm change + docs)

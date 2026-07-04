@@ -12,7 +12,7 @@ make build-sandbox  # just the sandbox (clones fork if needed)
 make build-mcp      # just the MCP filesystem server
 ```
 
-The sandbox image must be built from our fork (`jameswnl/lightspeed-agentic-sandbox`, branch `temporal-integration`) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
+The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sandbox @ temporal-integration](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/temporal-integration)) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
 
 ---
 
