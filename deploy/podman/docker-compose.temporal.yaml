@@ -74,7 +74,7 @@ services:
     image: localhost/mcp-filesystem:latest
     restart: unless-stopped
     volumes:
-      - ../../demo-data:/data:ro
+      - ../../examples/demo-data:/data:ro
     ports:
       - "8081:8081"
 
