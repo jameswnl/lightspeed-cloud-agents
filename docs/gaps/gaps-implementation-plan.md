@@ -10,9 +10,9 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
-| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43, T48 |
-| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49, T50 |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36 |
+| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43 ✓, T48 ✓ |
+| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 ✓, T50 ✓ |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
@@ -587,7 +587,7 @@ Image signing attestation and software bill of materials.
 
 ### T43: Workflow definition content policy [Phase 3a]
 
-**Status**: Open
+**Status**: Done (PR #20)
 
 **Problem**: RBAC controls who can submit definitions, but not what definitions contain. A user with `manage_defs` permission could submit a definition with instructions that bypass organizational policies (e.g., "ignore safety guidelines", "access all namespaces").
 
@@ -600,7 +600,7 @@ Image signing attestation and software bill of materials.
 
 ### T49: Validate output_schema before submission [Phase 3b]
 
-**Status**: Open
+**Status**: Done (PR #5)
 
 **Problem**: Users can submit workflow definitions with invalid `output_schema` (e.g. `type: array` without `items`). The framework passes the schema through to the LLM provider, which rejects it at runtime with a cryptic 400 error (e.g. OpenAI: "array schema missing items"). The user sees `agent returned success=false` with no indication that the schema was invalid.
 
@@ -614,7 +614,7 @@ Image signing attestation and software bill of materials.
 
 ### T50: Per-step MCP server config [Phase 3b]
 
-**Status**: Open
+**Status**: Done (commit 507b29e)
 
 **Problem**: `mcp_servers` is set at the workflow run level, so every sandbox in the workflow gets `LIGHTSPEED_MCP_SERVERS` injected. Steps that don't need MCP tools still connect to MCP servers on startup, wasting resources and causing issues when MCP servers can't handle concurrent SSE sessions (e.g. supergateway crashes on second connection while first sandbox is still alive with SKIP_SANDBOX_DESTROY).
 
@@ -625,48 +625,38 @@ Image signing attestation and software bill of materials.
 
 **Effort**: 1 day
 
-### T48: Sandbox inter-pod auth + TLS [Phase 3a]
+### T48: Sandbox per-spawn bearer token auth [Phase 3a]
 
-**Status**: Open
+**Status**: Done (PR #19)
 
-**Problem**: Inter-pod traffic between the workflow runner and sandbox containers is unencrypted plain HTTP with no authentication. Prod sec policy (flagged on another project) requires authenticated and encrypted inter-pod communication. Currently anyone who can reach the sandbox network can call `POST /v1/agent/run` without credentials.
+**Problem**: Inter-pod traffic between the workflow runner and sandbox containers had no authentication. Anyone who could reach the sandbox network could call `POST /v1/agent/run` without credentials.
 
-**Current state of `lightspeed-agentic-sandbox` (verified 2026-07-01)**:
-- The sandbox has **no auth middleware** — no bearer token validation, no mTLS, no API key check on `/v1/agent/run`. Any pod that can reach port 8080 can call it.
-- The agentic operator also calls the sandbox over **plain HTTP** (`http://{fqdn}:8080` in `sandbox_agent.go:207`). The Go HTTP client configures TLS with `InsecureSkipVerify: true` but never uses it because the URL scheme is `http://`.
-- The operator sends **no auth headers** — only `traceparent` for OTel trace propagation (`sandbox_agent.go:213-215`).
-- The operator has **no NetworkPolicy** on sandbox pods.
-- The sandbox's OTel span export (`tracing.py`) also uses **unauthenticated gRPC** to the collector — `OTLPSpanExporter` is configured with no headers.
-- In short: the operator → sandbox path is **unencrypted, unauthenticated, and network-unrestricted** in the upstream implementation.
+**What was built**:
+- Per-spawn bearer token via `secrets.token_urlsafe(32)`, injected as `SANDBOX_AUTH_TOKEN` env var
+- `Authorization: Bearer {token}` header sent in httpx POST to `/v1/agent/run`
+- Gated by `SANDBOX_AUTH_ENABLED` env var (disabled by default for backward compat)
+- Health endpoint stays unauthenticated (K8s probes need it)
+- 12 unit tests
 
-Cloud Agents already has bearer auth between runner and sandbox (`BearerAuthMiddleware` + per-spawn `AGENT_API_TOKEN`). T48 adds TLS to make it encrypted as well. The auth piece is partially done — this task focuses on the encryption gap.
+**Remaining**: TLS encryption moved to T51.
+
+### T51: App-level TLS for runner-to-sandbox encryption [Phase 4]
+
+**Status**: Open ([issue #21](https://github.com/jameswnl/lightspeed-cloud-agents/issues/21))
+
+**Problem**: T48 added authentication but traffic is still unencrypted HTTP. Prod sec requires encryption for inter-pod communication. Deployments with a service mesh (Istio) get mTLS transparently, but Podman and non-mesh K8s deployments need app-level TLS.
 
 **What to build**:
+- Ephemeral cert generation utility (`tls.py`): CA + server cert per spawn, valid 10 minutes
+- K8s: cert Secret creation + volume mount + cleanup in `_do_destroy`
+- Podman: temp dir with cert files + bind mount
+- `SANDBOX_TLS_MODE`: `app` (app-level TLS), `mesh` (skip, mesh handles it), disabled by default
+- `cryptography>=44.0` added to pyproject.toml optional deps
 
-1. **Per-spawn bearer token** (auth):
-   - Workflow runner generates a one-time token at spawn time (e.g. `secrets.token_urlsafe(32)`)
-   - Token passed to sandbox as env var `SANDBOX_AUTH_TOKEN`
-   - Sandbox validates `Authorization: Bearer <token>` on `/v1/agent/run` — rejects without it
-   - Token is unique per container, lives only as long as the container (seconds)
-
-2. **mTLS between runner and sandbox** (encryption):
-   - **K8s with service mesh (Istio)**: zero code change — mesh handles mTLS transparently
-   - **K8s without service mesh**: runner generates ephemeral CA + cert per spawn, injects via Secret volume mount, sandbox serves TLS, runner verifies against the ephemeral CA
-   - **Podman**: same app-level TLS — generate ephemeral cert pair, mount into container, runner calls `https://` instead of `http://`
-
-3. **Changes needed**:
-   - `temporal_activities.py`: generate token, add to env_vars, send `Authorization` header in httpx call
-   - Sandbox runtime: add auth middleware that validates `SANDBOX_AUTH_TOKEN`
-   - `spawner/base.py`: `wait_ready()` must send the token for health checks too
-   - For TLS: cert generation utility, Containerfile changes to include CA, httpx `verify=` parameter
-
-**Why it matters**: Prod sec requires it. Without it, a compromised pod on the same network can call any sandbox endpoint. The ephemeral lifetime (seconds) and network isolation reduce risk, but don't satisfy the policy.
-
-**Effort**: 1 week (token auth: 2 days, app-level TLS: 3 days, testing: 2 days)
+**Effort**: 3 days
 
 **⚠ RISKS**:
 - App-level TLS adds ~100ms per spawn for cert generation
-- Service mesh is the cleaner path for K8s but is an infrastructure dependency
 - Podman has no mesh equivalent — app-level TLS is the only option
 
 ---
