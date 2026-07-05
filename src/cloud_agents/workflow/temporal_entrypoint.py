@@ -255,6 +255,11 @@ def build_temporal_app(
             allow_headers=["*"],
         )
 
+    from cloud_agents.workflow.middleware import ContentSizeLimitMiddleware
+
+    max_body = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "1048576"))
+    app.add_middleware(ContentSizeLimitMiddleware, max_content_size=max_body)
+
     placeholder_client = _DeferredClient(temporal_client_holder)
     definition_store = DefinitionStore()
 
