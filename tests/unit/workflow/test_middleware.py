@@ -158,6 +158,49 @@ class TestContentSizeLimitMiddleware:
         assert str(limit) in response.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_chunked_body_counted_via_receive(self) -> None:
+        """Byte counting via receive() catches oversized chunked bodies."""
+        responses: list[dict] = []
+
+        async def capture_send(message):
+            responses.append(message)
+
+        async def inner_app(scope, receive, send):
+            # Consume the body like FastAPI would
+            body = b""
+            while True:
+                msg = await receive()
+                body += msg.get("body", b"")
+                if not msg.get("more_body", False):
+                    break
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        middleware = ContentSizeLimitMiddleware(inner_app, max_content_size=50)
+
+        # Simulate chunked transfer — no Content-Length header, body in receive()
+        chunk = b"x" * 100
+        call_count = 0
+
+        async def mock_receive():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"type": "http.request", "body": chunk, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/workflows/run",
+            "headers": [],  # No Content-Length header
+        }
+
+        await middleware(scope, mock_receive, capture_send)
+        status = next(r["status"] for r in responses if r["type"] == "http.response.start")
+        assert status == 413
+
+    @pytest.mark.asyncio
     async def test_non_http_scope_passes_through(self) -> None:
         """Non-HTTP scopes (e.g., WebSocket) pass through without checking."""
         app_called = False
