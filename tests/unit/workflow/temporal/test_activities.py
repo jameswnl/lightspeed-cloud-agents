@@ -2249,6 +2249,55 @@ class TestSecretRedactionInActivity:
         assert "mcp-token-secret-abc" not in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_success_false_error_redacted(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Sandbox success=false error containing secret is redacted."""
+        mocker.patch.dict(
+            "os.environ",
+            {"MY_SECRET": "sk-secret-value-123"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": False,
+            "error": "auth failed with key sk-secret-value-123",
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "MY_SECRET",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "failed"
+        assert "sk-secret-value-123" not in result["error"]
+        assert "***REDACTED***" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_no_secret_no_redaction_needed(
         self, mocker: MockerFixture
     ) -> None:

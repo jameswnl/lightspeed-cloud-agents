@@ -277,10 +277,18 @@ async def _run_sandbox_step_inner(
 
             if not data.get("success", False):
                 _circuit_breaker.record_failure(provider_name)
+                error_msg = data.get("error", "agent returned success=false")
+                output_val = data.get("output")
+                if secret_values:
+                    error_msg = redact_secrets(str(error_msg), secret_values)
+                    if output_val:
+                        output_val = json.loads(
+                            redact_secrets(json.dumps(output_val), secret_values)
+                        )
                 return {
                     "status": "failed",
-                    "error": data.get("error", "agent returned success=false"),
-                    "output": data.get("output"),
+                    "error": error_msg,
+                    "output": output_val,
                 }
 
             _circuit_breaker.record_success(provider_name)
