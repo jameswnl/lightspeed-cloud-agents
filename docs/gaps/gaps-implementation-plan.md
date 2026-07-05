@@ -10,7 +10,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
-| **Phase 3a** | Security quick wins | T37, T38 ✓, T39, T42, T43 ✓, T48 ✓ |
+| **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39, T42, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
@@ -505,9 +505,9 @@ Image signing attestation and software bill of materials.
 
 ## Security & Governance Hardening
 
-### T37: Secret redaction in logs and error responses [Phase 3a]
+### T37: Secret redaction in logs and error responses [Phase 3a] -- DONE
 
-**Status**: Open
+**Status**: Done (PR #7)
 
 **Problem**: `credentials_secret` value is injected as a plain env var on sandbox pods. If a sandbox error response includes environment details or the activity logs the full env dict, secrets leak into logs or API responses. Audit events include `secret_name` but the activity doesn't redact credential values from error paths.
 

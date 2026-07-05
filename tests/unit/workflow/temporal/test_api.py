@@ -1292,6 +1292,76 @@ class TestSSEEventStream:
         assert "workflow.completed" in event_types
 
 
+class TestBareRaiseGuard:
+    """Tests that non-RPC exceptions from start_workflow return generic 500."""
+
+    def test_non_rpc_error_returns_500(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Non-RPC exception from start_workflow returns generic 500."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = AsyncMock(
+            side_effect=RuntimeError("Temporal connection lost: secret=sk-abc123")
+        )
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 500
+        body = response.json()
+        assert body["detail"] == "Internal workflow error"
+        assert "sk-abc123" not in str(body)
+        assert "Temporal connection lost" not in str(body)
+
+    def test_rpc_already_exists_still_returns_409(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """RPCError ALREADY_EXISTS still returns 409, not generic 500."""
+        from temporalio.service import RPCError, RPCStatusCode
+
+        exc = RPCError(
+            message="Workflow execution already started",
+            status=RPCStatusCode.ALREADY_EXISTS,
+            raw_grpc_status=None,
+        )
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = AsyncMock(side_effect=exc)
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 409
+
+    def test_generic_exception_returns_500(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Generic Exception from start_workflow returns 500 with safe message."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = AsyncMock(
+            side_effect=Exception("unexpected internal error with password=hunter2")
+        )
+
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post("/v1/workflows/run", json=VALID_RUN_PAYLOAD)
+        assert response.status_code == 500
+        body = response.json()
+        assert body["detail"] == "Internal workflow error"
+        assert "hunter2" not in str(body)
+
+
 class TestAuthzContextLoadedForLaterOperations:
     """Tests that later operations load persisted authz context."""
 

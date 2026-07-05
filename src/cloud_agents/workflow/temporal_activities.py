@@ -21,6 +21,7 @@ from cloud_agents.workflow.audit import emit_audit
 from cloud_agents.workflow.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.escalation import LogPackager
 from cloud_agents.workflow.notifier import NullNotifier
+from cloud_agents.workflow.redact import redact_secrets
 from cloud_agents.workflow.temporal_context import build_sandbox_context
 from cloud_agents.workflow.temporal_models import StepResult
 
@@ -132,9 +133,13 @@ async def _run_sandbox_step_inner(
         if val := os.environ.get(deploy_var):
             env_vars[deploy_var] = val
 
+    # Track secret values for redaction in error paths
+    secret_values: set[str] = set()
+
     cred_secret = provider.get("credentials_secret", "")
     if cred_secret and (cred_val := os.environ.get(cred_secret)):
         env_vars[cred_secret] = cred_val
+        secret_values.add(cred_val)
 
     # MCP server injection — step references servers by name from workflow-level catalog
     mcp_secret_mounts: list[tuple[str, str, str]] = []
@@ -148,10 +153,15 @@ async def _run_sandbox_step_inner(
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:
+            plain_headers = dict(server.get("headers") or {})
+            # Track plain-text header values as secrets for redaction
+            for header_val in plain_headers.values():
+                if isinstance(header_val, str) and header_val:
+                    secret_values.add(header_val)
             entry: dict[str, Any] = {
                 "name": server["name"],
                 "url": server["url"],
-                "headers": dict(server.get("headers") or {}),
+                "headers": plain_headers,
             }
             secret_headers = server.get("secret_headers") or {}
             for header_name, ref in secret_headers.items():
@@ -200,89 +210,103 @@ async def _run_sandbox_step_inner(
     )
     endpoint = None
     try:
-        sa = permissions.get("service_account")
-        advisory = step.get("advisory", False)
-        if advisory and not sa:
-            sa = "advisory-sa"
+        try:
+            sa = permissions.get("service_account")
+            advisory = step.get("advisory", False)
+            if advisory and not sa:
+                sa = "advisory-sa"
 
-        endpoint = await spawner.spawn(
-            pod_name,
-            sandbox_image,
-            env=env_vars,
-            labels=labels,
-            skills_image=input.get("skills_image"),
-            skills_paths=input.get("skills_paths"),
-            service_account=sa,
-            read_only=advisory,
-            credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret")) or None,
-            mcp_secret_mounts=mcp_secret_mounts or None,
-        )
-        ready = await spawner.wait_ready(endpoint, health_path="/health")
-        if not ready:
-            _circuit_breaker.record_failure(provider_name)
-            raise RuntimeError(
-                f"Sandbox pod '{pod_name}' never became ready for step '{step_name}'",
+            endpoint = await spawner.spawn(
+                pod_name,
+                sandbox_image,
+                env=env_vars,
+                labels=labels,
+                skills_image=input.get("skills_image"),
+                skills_paths=input.get("skills_paths"),
+                service_account=sa,
+                read_only=advisory,
+                credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret")) or None,
+                mcp_secret_mounts=mcp_secret_mounts or None,
             )
+            ready = await spawner.wait_ready(endpoint, health_path="/health")
+            if not ready:
+                _circuit_breaker.record_failure(provider_name)
+                raise RuntimeError(
+                    f"Sandbox pod '{pod_name}' never became ready for step '{step_name}'",
+                )
 
-        prior_steps = {
-            k: StepResult(
-                status=v.get("status", "completed"),
-                output=v.get("output"),
-                error=v.get("error"),
-            )
-            for k, v in input.get("context", {}).items()
-        }
-        context = build_sandbox_context(
-            workflow_steps=prior_steps,
-            current_step=step,
-        )
-
-        request_body: dict[str, Any] = {
-            "query": step.get("prompt", ""),
-            "context": context,
-        }
-        if instructions := step.get("instructions"):
-            request_body["systemPrompt"] = instructions
-        if output_schema := step.get("output_schema"):
-            request_body["outputSchema"] = output_schema
-        if permissions.get("allowed_tools"):
-            request_body["allowedTools"] = permissions["allowed_tools"]
-        if permissions.get("denied_tools"):
-            request_body["deniedTools"] = permissions["denied_tools"]
-
-        async with httpx.AsyncClient(timeout=http_timeout) as client:
-            response = await client.post(
-                f"{endpoint}/v1/agent/run",
-                json=request_body,
-            )
-
-        if response.status_code == 502:
-            _circuit_breaker.record_failure(provider_name)
-            raise RuntimeError(
-                f"Infrastructure error from sandbox (HTTP 502) for step '{step_name}'",
-            )
-
-        data = response.json()
-
-        if not data.get("success", False):
-            _circuit_breaker.record_failure(provider_name)
-            return {
-                "status": "failed",
-                "error": data.get("error", "agent returned success=false"),
-                "output": data.get("output"),
+            prior_steps = {
+                k: StepResult(
+                    status=v.get("status", "completed"),
+                    output=v.get("output"),
+                    error=v.get("error"),
+                )
+                for k, v in input.get("context", {}).items()
             }
+            context = build_sandbox_context(
+                workflow_steps=prior_steps,
+                current_step=step,
+            )
 
-        _circuit_breaker.record_success(provider_name)
-        output = data.get("output", {})
-        for k, v in data.items():
-            if k not in ("success", "output", "summary"):
-                output[k] = v
-        if summary := data.get("summary"):
-            output["summary"] = summary
-        return {
-            "status": "completed",
-            "output": output,
-        }
+            request_body: dict[str, Any] = {
+                "query": step.get("prompt", ""),
+                "context": context,
+            }
+            if instructions := step.get("instructions"):
+                request_body["systemPrompt"] = instructions
+            if output_schema := step.get("output_schema"):
+                request_body["outputSchema"] = output_schema
+            if permissions.get("allowed_tools"):
+                request_body["allowedTools"] = permissions["allowed_tools"]
+            if permissions.get("denied_tools"):
+                request_body["deniedTools"] = permissions["denied_tools"]
+
+            async with httpx.AsyncClient(timeout=http_timeout) as client:
+                response = await client.post(
+                    f"{endpoint}/v1/agent/run",
+                    json=request_body,
+                )
+
+            if response.status_code == 502:
+                _circuit_breaker.record_failure(provider_name)
+                raise RuntimeError(
+                    f"Infrastructure error from sandbox (HTTP 502) for step '{step_name}'",
+                )
+
+            data = response.json()
+
+            if not data.get("success", False):
+                _circuit_breaker.record_failure(provider_name)
+                error_msg = data.get("error", "agent returned success=false")
+                output_val = data.get("output")
+                if secret_values:
+                    error_msg = redact_secrets(str(error_msg), secret_values)
+                    if output_val:
+                        output_val = json.loads(
+                            redact_secrets(json.dumps(output_val), secret_values)
+                        )
+                return {
+                    "status": "failed",
+                    "error": error_msg,
+                    "output": output_val,
+                }
+
+            _circuit_breaker.record_success(provider_name)
+            output = data.get("output", {})
+            for k, v in data.items():
+                if k not in ("success", "output", "summary"):
+                    output[k] = v
+            if summary := data.get("summary"):
+                output["summary"] = summary
+            return {
+                "status": "completed",
+                "output": output,
+            }
+        except Exception as exc:
+            if secret_values:
+                redacted_msg = redact_secrets(str(exc), secret_values)
+                raise RuntimeError(redacted_msg) from None
+            raise
 
     finally:
         if endpoint and spawner:
