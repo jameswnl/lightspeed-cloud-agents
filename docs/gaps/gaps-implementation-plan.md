@@ -521,7 +521,7 @@ Image signing attestation and software bill of materials.
 
 ### T38: Request body size limits [Phase 3a] -- DONE
 
-**Status**: Done (PR #8)
+**Status**: Done (PR #22)
 
 **Problem**: `POST /v1/workflows/run` accepts arbitrarily large definition/prompt payloads. A malicious or misconfigured client could submit a multi-MB definition to exhaust memory or Temporal payload limits.
 
