@@ -280,7 +280,11 @@ def build_temporal_router(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Workflow '{workflow_id}' already exists",
                 ) from exc
-            raise
+            logger.error("Workflow start failed for '%s': %s", workflow_id, type(exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal workflow error",
+            ) from None
 
         emit_audit(
             event_type="workflow_started",

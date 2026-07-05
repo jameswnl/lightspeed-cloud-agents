@@ -2102,3 +2102,172 @@ class TestSkipSandboxDestroy:
         assert result["status"] == "completed"
         assert result["output"]["summary"] == "diagnosed ok"
         mock_spawner.destroy.assert_not_called()
+
+
+class TestSecretRedactionInActivity:
+    """Tests for secret redaction in activity error paths."""
+
+    @pytest.mark.asyncio
+    async def test_spawner_error_containing_secret_is_redacted(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Spawner error containing API key secret is redacted before re-raising."""
+        mocker.patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "sk-secret-key-12345"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.side_effect = RuntimeError(
+            "Container failed: env OPENAI_API_KEY=sk-secret-key-12345 rejected"
+        )
+
+        with pytest.raises(RuntimeError, match=r"\*\*\*REDACTED\*\*\*") as exc_info:
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+        assert "sk-secret-key-12345" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_http_error_containing_secret_is_redacted(
+        self, mocker: MockerFixture
+    ) -> None:
+        """HTTP error containing credential value is redacted."""
+        mocker.patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "ant-key-secret-789"},
+        )
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(
+                    side_effect=RuntimeError(
+                        "Connection failed with key ant-key-secret-789"
+                    )
+                ),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        with pytest.raises(RuntimeError, match=r"\*\*\*REDACTED\*\*\*") as exc_info:
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "anthropic",
+                        "model": "claude-3",
+                        "credentials_secret": "ANTHROPIC_API_KEY",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+        assert "ant-key-secret-789" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_error_without_secret_preserved(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Errors without secret values are re-raised with original message."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.side_effect = RuntimeError("Pod scheduling failed")
+
+        with pytest.raises(RuntimeError, match="Pod scheduling failed"):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_header_secrets_redacted(
+        self, mocker: MockerFixture
+    ) -> None:
+        """MCP server header values are included in secret redaction."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.side_effect = RuntimeError(
+            "Failed: header value Bearer mcp-token-secret-abc leaked"
+        )
+
+        with pytest.raises(RuntimeError, match=r"\*\*\*REDACTED\*\*\*") as exc_info:
+            await run_sandbox_step(
+                {
+                    "step": {
+                        "name": "s1",
+                        "prompt": "check",
+                        "output_key": "r1",
+                        "mcp_servers": ["sn"],
+                    },
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                    "mcp_servers": [
+                        {
+                            "name": "sn",
+                            "url": "http://mcp.local/sse",
+                            "headers": {"Authorization": "Bearer mcp-token-secret-abc"},
+                        }
+                    ],
+                },
+                spawner=mock_spawner,
+            )
+
+        assert "mcp-token-secret-abc" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_no_secret_no_redaction_needed(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When no secrets are tracked, errors pass through unchanged."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.side_effect = RuntimeError("Network unreachable")
+
+        with pytest.raises(RuntimeError, match="Network unreachable"):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
