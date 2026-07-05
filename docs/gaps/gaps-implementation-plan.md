@@ -10,7 +10,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
-| **Phase 3a** | Security quick wins | T37, T38, T39, T42, T43 ✓, T48 ✓ |
+| **Phase 3a** | Security quick wins | T37, T38 ✓, T39, T42, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
@@ -519,16 +519,19 @@ Image signing attestation and software bill of materials.
 
 **Effort**: 2-3 days (revised up from 1 day — secret tracking through spawner is non-trivial)
 
-### T38: Request body size limits [Phase 3a]
+### T38: Request body size limits [Phase 3a] -- DONE
 
-**Status**: Open
+**Status**: Done (PR #8)
 
 **Problem**: `POST /v1/workflows/run` accepts arbitrarily large definition/prompt payloads. A malicious or misconfigured client could submit a multi-MB definition to exhaust memory or Temporal payload limits.
 
-**What to build**:
-- FastAPI request body size limit (configurable via `MAX_REQUEST_BODY_BYTES`, default 1MB)
-- Return 413 Payload Too Large when exceeded
-- Add test that verifies oversized payload is rejected
+**What was built**:
+- `ContentSizeLimitMiddleware` ASGI middleware in `src/cloud_agents/workflow/middleware.py`
+- Checks Content-Length header (fast path) and counts bytes from receive() (chunked encoding)
+- Returns 413 with descriptive error when exceeded
+- Wired into `temporal_entrypoint.py` after CORS middleware
+- Configurable via `MAX_REQUEST_BODY_BYTES` env var (default 1 MB)
+- 7 unit tests covering oversized Content-Length, oversized chunked body, normal payloads, GET bypass, exact limit boundary, error message content, and non-HTTP scope passthrough
 
 **Effort**: Half day
 
