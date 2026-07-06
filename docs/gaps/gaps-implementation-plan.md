@@ -578,14 +578,14 @@ Image signing attestation and software bill of materials.
 
 ### T42: Token rotation and expiry for bearer auth [Phase 3a] -- DONE
 
-**Status**: Done (PR #26)
+**Status**: Done (PR #25)
 
 **Problem**: Bearer tokens are static (`AGENT_API_TOKEN` env var). No rotation mechanism, no expiry. A leaked token grants permanent access until the env var is manually changed and the runner restarted.
 
 **What was built**:
 - Multi-token support via `AGENT_API_TOKENS` env var (comma-separated), backward compatible with `AGENT_API_TOKEN`
 - Optional per-token expiry via `token:unix_timestamp` suffix format
-- Rejected token logging with prefix (first 4 chars) — never logs full token
+- Rejected token logging with prefix (first 4 chars) -- never logs full token
 - `auth_rejected` audit event emitted on token rejection (invalid or expired)
 - `emit_audit()` workflow_id made optional for pre-workflow events
 - `create_bearer_auth_dependency()` factory returns a proper FastAPI dependency (closure) instead of returning the middleware class

@@ -1,50 +1,172 @@
 """Authentication middleware for agent and workflow endpoints.
 
 Validates bearer tokens on protected endpoints. Health and liveness
-probes are exempt. Token is configured via AGENT_API_TOKEN env var.
+probes are exempt. Tokens are configured via AGENT_API_TOKENS (comma-
+separated, preferred) or AGENT_API_TOKEN (single, backward compat).
+
+Supports optional token expiry via timestamp suffix: ``token:unix_ts``.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from cloud_agents.workflow.audit import emit_audit
 from cloud_agents.workflow.authorization import CallerIdentity
+
+logger = logging.getLogger(__name__)
 
 EXEMPT_PATHS = {"/healthz", "/livez", "/metrics"}
 
 
+def _parse_token_map(raw_tokens: list[str]) -> dict[str, float | None]:
+    """Parse raw tokens into a mapping of token value to optional expiry.
+
+    Tokens may include an expiry timestamp suffix separated by ``:``.
+    For example ``mytoken:1735689600`` means the token ``mytoken`` expires
+    at Unix timestamp 1735689600. If the part after the last ``:`` is not
+    a valid number, the entire raw string is treated as the token with no
+    expiry.
+
+    Parameters:
+        raw_tokens: List of raw token strings, possibly with ``:timestamp``.
+
+    Returns:
+        Dict mapping token value to expiry timestamp (or None if no expiry).
+    """
+    token_map: dict[str, float | None] = {}
+    for raw in raw_tokens:
+        if not raw:
+            continue
+        if ":" in raw:
+            prefix, suffix = raw.rsplit(":", 1)
+            try:
+                expiry = float(suffix)
+                token_map[prefix] = expiry
+            except ValueError:
+                # Suffix is not a number — treat entire raw string as token
+                token_map[raw] = None
+        else:
+            token_map[raw] = None
+    return token_map
+
+
+def _find_matching_token(
+    presented: str, valid_tokens: dict[str, float | None]
+) -> str | None:
+    """Find a matching token using constant-time comparison.
+
+    Iterates all valid tokens to prevent timing side-channels.
+
+    Parameters:
+        presented: The token presented by the client.
+        valid_tokens: Map of valid token strings to optional expiry timestamps.
+
+    Returns:
+        The matching token string, or None if no match.
+    """
+    import secrets
+
+    match = None
+    for candidate in valid_tokens:
+        if secrets.compare_digest(presented, candidate):
+            match = candidate
+    return match
+
+
+def _token_prefix(token: str) -> str:
+    """Return the first 4 characters of a token for safe logging.
+
+    Parameters:
+        token: The full token string.
+
+    Returns:
+        First 4 characters (or fewer if the token is shorter).
+    """
+    return token[:4]
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Middleware that validates Bearer token on non-exempt endpoints.
+    """Middleware that validates Bearer tokens on non-exempt endpoints.
+
+    Supports multiple tokens for zero-downtime rotation and optional
+    per-token expiry via timestamp suffix.
 
     Attributes:
-        token: The expected bearer token. If empty, auth is disabled.
+        valid_tokens: Mapping of token value to optional expiry timestamp.
     """
 
-    def __init__(self, app: object, token: str = "") -> None:
-        """Initialize with the expected token.
+    def __init__(self, app: object, tokens: list[str] | None = None) -> None:
+        """Initialize with one or more valid tokens.
 
         Args:
             app: The ASGI application.
-            token: Expected bearer token. Empty string disables auth.
+            tokens: List of valid token strings (may include ``:timestamp``
+                suffix for expiry). Empty or None disables auth.
         """
         super().__init__(app)
-        self.token = token
+        self.valid_tokens: dict[str, float | None] = _parse_token_map(tokens or [])
 
     async def dispatch(self, request: Request, call_next: object) -> object:
         """Check authorization on non-exempt paths."""
         if request.url.path in EXEMPT_PATHS:
             return await call_next(request)
 
-        if not self.token:
+        if not self.valid_tokens:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization", "")
-        if auth_header != f"Bearer {self.token}":
+        if not auth_header.startswith("Bearer "):
+            logger.warning("Missing or malformed Authorization header on %s", request.url.path)
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing authorization token"},
+            )
+
+        presented_token = auth_header[7:]
+        matched = _find_matching_token(presented_token, self.valid_tokens)
+
+        if matched is None:
+            logger.warning(
+                "Rejected bearer token (length=%d, prefix=%s...)",
+                len(presented_token),
+                _token_prefix(presented_token),
+            )
+            emit_audit(
+                event_type="auth_rejected",
+                details={
+                    "token_prefix": _token_prefix(presented_token),
+                    "path": request.url.path,
+                    "reason": "invalid",
+                },
+            )
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing authorization token"},
+            )
+
+        expiry = self.valid_tokens[matched]
+        if expiry is not None and time.time() > expiry:
+            logger.warning(
+                "Rejected expired bearer token (length=%d, prefix=%s...)",
+                len(presented_token),
+                _token_prefix(presented_token),
+            )
+            emit_audit(
+                event_type="auth_rejected",
+                details={
+                    "token_prefix": _token_prefix(presented_token),
+                    "path": request.url.path,
+                    "reason": "expired",
+                },
+            )
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing authorization token"},
@@ -142,7 +264,7 @@ def get_auth_mode() -> str:
 def get_api_token() -> str:
     """Get the API token from environment.
 
-    Both Podman and K8s use AGENT_API_TOKEN — injected via env var
+    Both Podman and K8s use AGENT_API_TOKEN -- injected via env var
     (Podman) or K8s Secret secretKeyRef (K8s). The same shared
     token is used by all pods in the deployment.
 
@@ -150,6 +272,107 @@ def get_api_token() -> str:
         Token string. Empty string means auth is disabled.
     """
     return os.environ.get("AGENT_API_TOKEN", "")
+
+
+def get_api_tokens() -> list[str]:
+    """Get all valid API tokens from environment.
+
+    Reads ``AGENT_API_TOKENS`` (comma-separated, preferred) and
+    ``AGENT_API_TOKEN`` (single, backward compat). Both are merged;
+    duplicates are removed while preserving order.
+
+    Returns:
+        List of token strings (may include ``:timestamp`` suffix).
+        Empty list means auth is disabled.
+    """
+    multi = os.environ.get("AGENT_API_TOKENS", "")
+    single = os.environ.get("AGENT_API_TOKEN", "")
+    tokens = [t.strip() for t in multi.split(",") if t.strip()]
+    if single and single not in tokens:
+        tokens.append(single)
+    return tokens
+
+
+def create_bearer_auth_dependency(
+    tokens: list[str],
+):
+    """Create a FastAPI dependency function that validates bearer tokens.
+
+    Returns an async callable suitable for ``Depends()``. Validates the
+    presented bearer token against the provided token list, supporting
+    multi-token rotation and optional expiry via timestamp suffix.
+
+    Parameters:
+        tokens: List of valid token strings (may include ``:timestamp``).
+
+    Returns:
+        Async dependency function for FastAPI router dependencies.
+    """
+    token_map = _parse_token_map(tokens)
+
+    async def verify_bearer(request: Request) -> None:
+        """Validate bearer token from Authorization header.
+
+        Parameters:
+            request: The incoming FastAPI request.
+
+        Raises:
+            HTTPException: 401 when token is missing, invalid, or expired.
+        """
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing authorization token",
+            )
+
+        presented_token = auth_header[7:]
+        matched = _find_matching_token(presented_token, token_map)
+
+        if matched is None:
+            logger.warning(
+                "Rejected bearer token (length=%d, prefix=%s...)",
+                len(presented_token),
+                _token_prefix(presented_token),
+            )
+            emit_audit(
+                event_type="auth_rejected",
+                details={
+                    "token_prefix": _token_prefix(presented_token),
+                    "path": request.url.path,
+                    "reason": "invalid",
+                },
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing authorization token",
+            )
+
+        expiry = token_map[matched]
+        if expiry is not None and time.time() > expiry:
+            logger.warning(
+                "Rejected expired bearer token (length=%d, prefix=%s...)",
+                len(presented_token),
+                _token_prefix(presented_token),
+            )
+            emit_audit(
+                event_type="auth_rejected",
+                details={
+                    "token_prefix": _token_prefix(presented_token),
+                    "path": request.url.path,
+                    "reason": "expired",
+                },
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing authorization token",
+            )
+
+        request.state.caller_identity = CallerIdentity(
+            username="anonymous", auth_mode="shared_secret"
+        )
+
+    return verify_bearer
 
 
 SA_TOKEN_PATH = "/var/run/secrets/cloud-agents/token"
