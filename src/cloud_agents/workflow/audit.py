@@ -27,6 +27,11 @@ AuditEventType = Literal[
     "content_policy_violation",
     "auth_rejected",
     "rate_limit_exceeded",
+    "alert_triggered",
+    "alert_validation_failed",
+    "schedule_created",
+    "schedule_deleted",
+    "schedule_triggered",
 ]
 
 
