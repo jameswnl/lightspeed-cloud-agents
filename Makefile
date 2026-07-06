@@ -126,6 +126,7 @@ kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
 	kubectl create configmap demo-data \
 		--from-file=examples/demo-data/ 2>/dev/null || true
 	kubectl apply -f deploy/kind/rbac.yaml
+	kubectl apply -f deploy/kind/network-policy.yaml
 	kubectl apply -f deploy/kind/workflow-runner.yaml
 	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
 	kubectl apply -f examples/kind-mcp-filesystem.yaml

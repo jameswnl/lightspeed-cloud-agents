@@ -37,7 +37,7 @@ sandboxImage: "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
 networkPolicy:
   enabled: true
   egress:
-    enabled: false
+    enabled: true
     llmCidrs: []
 
 securityContext:
