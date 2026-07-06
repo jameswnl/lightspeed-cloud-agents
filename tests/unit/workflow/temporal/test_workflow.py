@@ -531,7 +531,7 @@ class TestHeartbeatTimeoutConfig:
 
     @pytest.mark.asyncio
     async def test_heartbeat_timeout_set_on_sandbox_activity(self) -> None:
-        """execute_activity for run_sandbox_step includes heartbeat_timeout=60s."""
+        """execute_activity for run_sandbox_step includes heartbeat_timeout=180s."""
         from datetime import datetime, timedelta, timezone
         from unittest.mock import AsyncMock, patch
 
@@ -559,4 +559,4 @@ class TestHeartbeatTimeoutConfig:
 
         assert mock_execute.call_count >= 1
         sandbox_call = mock_execute.call_args_list[0]
-        assert sandbox_call.kwargs.get("heartbeat_timeout") == timedelta(seconds=60)
+        assert sandbox_call.kwargs.get("heartbeat_timeout") == timedelta(seconds=180)
