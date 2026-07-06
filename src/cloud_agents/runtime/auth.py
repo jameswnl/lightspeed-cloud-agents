@@ -58,6 +58,29 @@ def _parse_token_map(raw_tokens: list[str]) -> dict[str, float | None]:
     return token_map
 
 
+def _find_matching_token(
+    presented: str, valid_tokens: dict[str, float | None]
+) -> str | None:
+    """Find a matching token using constant-time comparison.
+
+    Iterates all valid tokens to prevent timing side-channels.
+
+    Parameters:
+        presented: The token presented by the client.
+        valid_tokens: Map of valid token strings to optional expiry timestamps.
+
+    Returns:
+        The matching token string, or None if no match.
+    """
+    import secrets
+
+    match = None
+    for candidate in valid_tokens:
+        if secrets.compare_digest(presented, candidate):
+            match = candidate
+    return match
+
+
 def _token_prefix(token: str) -> str:
     """Return the first 4 characters of a token for safe logging.
 
@@ -108,8 +131,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             )
 
         presented_token = auth_header[7:]
+        matched = _find_matching_token(presented_token, self.valid_tokens)
 
-        if presented_token not in self.valid_tokens:
+        if matched is None:
             logger.warning(
                 "Rejected bearer token (length=%d, prefix=%s...)",
                 len(presented_token),
@@ -128,7 +152,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing authorization token"},
             )
 
-        expiry = self.valid_tokens[presented_token]
+        expiry = self.valid_tokens[matched]
         if expiry is not None and time.time() > expiry:
             logger.warning(
                 "Rejected expired bearer token (length=%d, prefix=%s...)",
@@ -303,8 +327,9 @@ def create_bearer_auth_dependency(
             )
 
         presented_token = auth_header[7:]
+        matched = _find_matching_token(presented_token, token_map)
 
-        if presented_token not in token_map:
+        if matched is None:
             logger.warning(
                 "Rejected bearer token (length=%d, prefix=%s...)",
                 len(presented_token),
@@ -323,7 +348,7 @@ def create_bearer_auth_dependency(
                 detail="Invalid or missing authorization token",
             )
 
-        expiry = token_map[presented_token]
+        expiry = token_map[matched]
         if expiry is not None and time.time() > expiry:
             logger.warning(
                 "Rejected expired bearer token (length=%d, prefix=%s...)",
