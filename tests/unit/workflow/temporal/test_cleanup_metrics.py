@@ -145,3 +145,33 @@ class TestOrphanCleanupMetrics:
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after >= before + 2  # 2 succeeded, 1 failed
         assert after < before + 3   # NOT 3 — the failed one shouldn't count
+
+
+class TestSandboxTimeoutMetrics:
+    """Tests for ls_sandbox_timeout_total counter (T2)."""
+
+    def test_counter_increments_with_timeout_reason(self) -> None:
+        """ls_sandbox_timeout_total increments with reason=timeout."""
+        from cloud_agents.workflow.temporal_metrics import ls_sandbox_timeout_total
+
+        before = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "timeout"}
+        )
+        ls_sandbox_timeout_total.labels(step_name="t2-step", reason="timeout").inc()
+        after = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "timeout"}
+        )
+        assert after > before
+
+    def test_counter_increments_with_cancelled_reason(self) -> None:
+        """ls_sandbox_timeout_total increments with reason=cancelled."""
+        from cloud_agents.workflow.temporal_metrics import ls_sandbox_timeout_total
+
+        before = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "cancelled"}
+        )
+        ls_sandbox_timeout_total.labels(step_name="t2-step", reason="cancelled").inc()
+        after = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "cancelled"}
+        )
+        assert after > before

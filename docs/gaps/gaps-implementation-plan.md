@@ -11,7 +11,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
-| **Phase 3b** | Triggers + hardening | T2, T13 ✓, T14, T23, T49 ✓, T50 ✓ |
+| **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
@@ -50,9 +50,9 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
 
-### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b]
+### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b] — DONE
 
-**Status**: Open
+**Status**: Done
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
 
 **Problem**: When a Temporal activity times out, cleanup is best-effort in `finally`. No heartbeat, no explicit kill signal if worker crashes mid-timeout.

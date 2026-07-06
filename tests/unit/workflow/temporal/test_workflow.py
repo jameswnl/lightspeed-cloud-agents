@@ -524,3 +524,39 @@ class TestAutoApproval:
             )
 
         assert result.steps["approval"].status == "denied"
+
+
+class TestHeartbeatTimeoutConfig:
+    """Tests that heartbeat_timeout is configured on sandbox activity (T2)."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_timeout_set_on_sandbox_activity(self) -> None:
+        """execute_activity for run_sandbox_step includes heartbeat_timeout=60s."""
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {
+            "status": "completed",
+            "output": {"summary": "ok"},
+        }
+
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+            }
+
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        assert mock_execute.call_count >= 1
+        sandbox_call = mock_execute.call_args_list[0]
+        assert sandbox_call.kwargs.get("heartbeat_timeout") == timedelta(seconds=60)
