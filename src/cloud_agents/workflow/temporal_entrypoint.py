@@ -278,6 +278,33 @@ def build_temporal_app(
     )
     app.include_router(router)
 
+    alert_trigger_enabled = os.environ.get("ALERT_TRIGGER_ENABLED", "false").lower() == "true"
+    if alert_trigger_enabled:
+        from cloud_agents.workflow.alert_trigger import (
+            AlertTriggerConfig,
+            build_alert_router,
+        )
+
+        alert_config = AlertTriggerConfig(
+            workflow_name_label=os.environ.get(
+                "ALERT_TRIGGER_WORKFLOW_LABEL", "cloud_agents_workflow"
+            ),
+            default_workflow=os.environ.get("ALERT_TRIGGER_DEFAULT_WORKFLOW") or None,
+            dedup_window_seconds=int(os.environ.get("ALERT_TRIGGER_DEDUP_WINDOW", "300")),
+            fire_on_resolved=os.environ.get(
+                "ALERT_TRIGGER_FIRE_ON_RESOLVED", "false"
+            ).lower()
+            == "true",
+        )
+        alert_router = build_alert_router(
+            temporal_client=placeholder_client,  # type: ignore[arg-type]
+            definition_store=definition_store,
+            config=alert_config,
+            auth_dependency=auth_dep,
+        )
+        app.include_router(alert_router)
+        logger.info("Alert trigger enabled (label=%s)", alert_config.workflow_name_label)
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""
