@@ -43,3 +43,15 @@ ls_sandbox_orphans_cleaned_total = Counter(
     "ls_sandbox_orphans_cleaned_total",
     "Number of orphaned sandbox containers cleaned up on startup",
 )
+
+ls_alert_triggers_total = Counter(
+    "ls_alert_triggers_total",
+    "Total number of Alertmanager alert trigger outcomes",
+    ["workflow_name", "status"],
+)
+
+ls_schedule_triggers_total = Counter(
+    "ls_schedule_triggers_total",
+    "Total number of schedule trigger outcomes",
+    ["workflow_name", "status"],
+)

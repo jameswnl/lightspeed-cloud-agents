@@ -39,6 +39,9 @@ class WorkflowAction(str, Enum):
     CANCEL = "cancel"
     VIEW_DEFS = "view_defs"
     MANAGE_DEFS = "manage_defs"
+    SCHEDULE_CREATE = "schedule_create"
+    SCHEDULE_VIEW = "schedule_view"
+    SCHEDULE_DELETE = "schedule_delete"
 
 
 class WorkflowResource(BaseModel):

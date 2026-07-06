@@ -278,6 +278,20 @@ def build_temporal_app(
     )
     app.include_router(router)
 
+    schedule_trigger_enabled = (
+        os.environ.get("SCHEDULE_TRIGGER_ENABLED", "false").lower() == "true"
+    )
+    if schedule_trigger_enabled:
+        from cloud_agents.workflow.schedule_trigger import build_schedule_router
+
+        schedule_router = build_schedule_router(
+            temporal_client=placeholder_client,  # type: ignore[arg-type]
+            definition_store=definition_store,
+            auth_dependency=auth_dep,
+        )
+        app.include_router(schedule_router)
+        logger.info("Schedule trigger enabled")
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""

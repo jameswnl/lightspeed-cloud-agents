@@ -11,7 +11,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
-| **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 ✓, T50 ✓ |
+| **Phase 3b** | Triggers + hardening | T2, T13, T14 ✓, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
@@ -196,14 +196,27 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Effort**: 1 week
 
-### T14: Schedule trigger (R15) [Phase 3b]
+### T14: Schedule trigger (R15) [Phase 3b] — DONE
 
-**Status**: Open
+**Status**: Done
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
 
 **Problem**: No cron/scheduled workflow execution.
 
 **What to build**: Expose Temporal's native cron schedule via API.
+
+**What was built**:
+- `schedule_trigger.py`: Pydantic models (`ScheduleSpec`, `ScheduleInput`, `ScheduleInfo`)
+  with cron expression validation (5-field standard + Temporal shorthands)
+- CRUD endpoints via `build_schedule_router()` on separate `APIRouter(prefix="/v1/schedules")`:
+  POST (create), GET list, GET by id, DELETE, POST pause, POST resume
+- Leverages Temporal's native Schedule API (not cron_schedule on start_workflow)
+- Schedule-specific `WorkflowAction` enum values: `SCHEDULE_CREATE`, `SCHEDULE_VIEW`,
+  `SCHEDULE_DELETE`
+- Audit event types: `schedule_created`, `schedule_deleted`, `schedule_triggered`
+- `ls_schedule_triggers_total` Prometheus counter with workflow_name/status labels
+- Opt-in via `SCHEDULE_TRIGGER_ENABLED=true` env var
+- CallerIdentity with `auth_mode="scheduler"` for schedule-triggered workflows
 
 **Effort**: 2-3 days
 
