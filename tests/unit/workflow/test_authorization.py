@@ -289,7 +289,7 @@ class TestBearerMiddlewareSetsCallerIdentity:
                 "auth_mode": caller.auth_mode,
             }
 
-        app.add_middleware(BearerAuthMiddleware, token=token)
+        app.add_middleware(BearerAuthMiddleware, tokens=[token])
 
         client = TestClient(app)
         response = client.get(

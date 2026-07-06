@@ -148,34 +148,39 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
 
 def _get_auth_dependency():
-    """Build auth middleware from environment configuration.
+    """Build auth dependency from environment configuration.
 
     Returns None when AUTH_REQUIRED=false. Fails closed when true.
+
+    For shared_secret mode, returns a FastAPI dependency function (closure)
+    that validates bearer tokens against the configured token list.
+    For sa_token mode, returns the TokenReviewAuthMiddleware class.
     """
     if not AUTH_REQUIRED:
         logger.info("AUTH_REQUIRED=false — endpoints unauthenticated")
         return None
 
     from cloud_agents.runtime.auth import (
-        BearerAuthMiddleware,
         TokenReviewAuthMiddleware,
-        get_api_token,
+        create_bearer_auth_dependency,
+        get_api_tokens,
         get_auth_mode,
     )
 
     mode = get_auth_mode()
-    token = get_api_token()
-    if not token:
+    tokens = get_api_tokens()
+    if not tokens:
         raise RuntimeError(
-            "AUTH_REQUIRED=true but AGENT_API_TOKEN is not set. "
+            "AUTH_REQUIRED=true but no tokens configured. "
+            "Set AGENT_API_TOKENS or AGENT_API_TOKEN. "
             "Refusing to start with unauthenticated workflow endpoints."
         )
 
     if mode == "sa_token":
         logger.info("Using TokenReview auth middleware")
         return TokenReviewAuthMiddleware
-    logger.info("Using Bearer auth middleware")
-    return BearerAuthMiddleware
+    logger.info("Using Bearer auth with %d configured token(s)", len(tokens))
+    return create_bearer_auth_dependency(tokens)
 
 
 def build_temporal_app(

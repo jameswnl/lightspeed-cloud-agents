@@ -24,6 +24,7 @@ AuditEventType = Literal[
     "mcp_secret_mounted",
     "orphan_cleanup",
     "content_policy_violation",
+    "auth_rejected",
 ]
 
 
@@ -51,7 +52,7 @@ class AuditEvent(BaseModel):
 
 def emit_audit(
     event_type: AuditEventType,
-    workflow_id: str,
+    workflow_id: str = "",
     step_name: str | None = None,
     actor: str | None = None,
     risk_level: str | None = None,
@@ -61,7 +62,8 @@ def emit_audit(
 
     Parameters:
         event_type: Action identifier.
-        workflow_id: Workflow run ID.
+        workflow_id: Workflow run ID. Defaults to empty string for
+            pre-workflow events (e.g. auth rejection).
         step_name: Step name, if applicable.
         actor: Identity that triggered the action.
         risk_level: Risk classification.

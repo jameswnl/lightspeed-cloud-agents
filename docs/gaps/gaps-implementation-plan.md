@@ -10,7 +10,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 |-------|-------|-------|
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
-| **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39, T42, T43 ✓, T48 ✓ |
+| **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2, T13, T14, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
@@ -575,18 +575,22 @@ Image signing attestation and software bill of materials.
 
 **Effort**: 1-2 days for file-based audit log; 1 week for signed/chained logs
 
-### T42: Token rotation and expiry for bearer auth [Phase 3a]
+### T42: Token rotation and expiry for bearer auth [Phase 3a] -- DONE
 
-**Status**: Open
+**Status**: Done (PR #25)
 
 **Problem**: Bearer tokens are static (`AGENT_API_TOKEN` env var). No rotation mechanism, no expiry. A leaked token grants permanent access until the env var is manually changed and the runner restarted.
 
-**What to build**:
-- Support multiple valid tokens (`AGENT_API_TOKENS` comma-separated) for rotation
-- Optional token expiry checking (if tokens include a timestamp or JWT-like structure)
-- Log when a token is rejected to help operators detect leaked token usage
+**What was built**:
+- Multi-token support via `AGENT_API_TOKENS` env var (comma-separated), backward compatible with `AGENT_API_TOKEN`
+- Optional per-token expiry via `token:unix_timestamp` suffix format
+- Rejected token logging with prefix (first 4 chars) -- never logs full token
+- `auth_rejected` audit event emitted on token rejection (invalid or expired)
+- `emit_audit()` workflow_id made optional for pre-workflow events
+- `create_bearer_auth_dependency()` factory returns a proper FastAPI dependency (closure) instead of returning the middleware class
+- 43 unit tests covering multi-token, backward compat, rejection logging, audit events, expiry, and dependency wiring
 
-**Effort**: 1 day for multi-token support; 1 week for JWT-based expiry
+**Effort**: 1 day
 
 ### T43: Workflow definition content policy [Phase 3a]
 
