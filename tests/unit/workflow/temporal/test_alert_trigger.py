@@ -1,7 +1,8 @@
 """Unit tests for Alertmanager webhook alert trigger (TDD).
 
 Tests cover: payload parsing, alert-to-workflow mapping, dedup tracking,
-webhook endpoint behavior, config wiring, and Prometheus metrics.
+webhook endpoint behavior, config wiring, Prometheus metrics,
+authorization, and content policy enforcement.
 """
 
 from __future__ import annotations
@@ -208,6 +209,40 @@ class TestAlertToWorkflowMapping:
         resolved = AlertmanagerAlert.model_validate(resolved_data)
         assert should_process_alert(resolved, config) is True
 
+    def test_long_labels_truncated_in_prompt(self) -> None:
+        """Labels exceeding max chars are truncated in the input prompt."""
+        from cloud_agents.workflow.alert_trigger import (
+            AlertmanagerAlert,
+            AlertTriggerConfig,
+            _MAX_ALERT_FIELD_CHARS,
+            map_alert_to_workflow_input,
+        )
+
+        long_description = "x" * (_MAX_ALERT_FIELD_CHARS + 500)
+        alert_data = {
+            **SAMPLE_ALERT,
+            "annotations": {"description": long_description},
+        }
+        alert = AlertmanagerAlert.model_validate(alert_data)
+        config = AlertTriggerConfig()
+        _, input_prompt = map_alert_to_workflow_input(alert, config)
+        # Full description should NOT appear — it should be truncated.
+        assert long_description not in input_prompt
+        assert "...[truncated]" in input_prompt
+
+    def test_short_labels_not_truncated(self) -> None:
+        """Labels within limit are not truncated."""
+        from cloud_agents.workflow.alert_trigger import (
+            AlertmanagerAlert,
+            AlertTriggerConfig,
+            map_alert_to_workflow_input,
+        )
+
+        alert = AlertmanagerAlert.model_validate(SAMPLE_ALERT)
+        config = AlertTriggerConfig()
+        _, input_prompt = map_alert_to_workflow_input(alert, config)
+        assert "...[truncated]" not in input_prompt
+
 
 # ===========================================================================
 # 3. Dedup tracker
@@ -258,11 +293,7 @@ class TestAlertDedupTracker:
         tracker = AlertDedupTracker(window_seconds=0)
         tracker.should_fire("fp-old-1")
         tracker.should_fire("fp-old-2")
-        # With window_seconds=0, entries expire immediately.
-        # Pruning should clear them on the next call.
         tracker.should_fire("fp-new")
-        # Internal state should not accumulate unbounded entries.
-        # After pruning, old fingerprints should not be tracked.
         assert tracker.should_fire("fp-old-1") is True
 
 
@@ -276,6 +307,8 @@ def _build_alert_app(
     definition_store: Any = None,
     alert_config: Any = None,
     auth_dependency: Any = None,
+    authorizer: Any = None,
+    content_policy: Any = None,
 ) -> FastAPI:
     """Build a FastAPI app with the alert webhook router for testing."""
     from cloud_agents.workflow.alert_trigger import (
@@ -292,6 +325,8 @@ def _build_alert_app(
         definition_store=store,
         config=config,
         auth_dependency=auth_dependency,
+        authorizer=authorizer,
+        content_policy=content_policy,
     )
     app.include_router(router)
     return app
@@ -335,22 +370,16 @@ def _make_stored_definition(name: str = "diagnose-cpu") -> Any:
 class TestAlertWebhookEndpoint:
     """Tests for POST /v1/webhooks/alertmanager endpoint."""
 
-    def test_valid_payload_starts_workflow(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_valid_payload_starts_workflow(self, mocker: MockerFixture) -> None:
         """Valid Alertmanager payload starts workflow via Temporal client."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response.status_code == 200
         body = response.json()
@@ -359,101 +388,69 @@ class TestAlertWebhookEndpoint:
         assert body["alerts_skipped"] == 0
         mock_temporal.start_workflow.assert_called_once()
 
-    def test_resolved_alerts_skipped_by_default(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_resolved_alerts_skipped_by_default(self, mocker: MockerFixture) -> None:
         """Resolved alerts are skipped by default."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
-
-        resolved_payload = {
-            **SAMPLE_PAYLOAD,
-            "alerts": [{**SAMPLE_ALERT, "status": "resolved"}],
-        }
+        resolved_payload = {**SAMPLE_PAYLOAD, "alerts": [{**SAMPLE_ALERT, "status": "resolved"}]}
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=resolved_payload)
         assert response.status_code == 200
         assert response.json()["alerts_skipped"] == 1
         assert response.json()["workflows_started"] == 0
         mock_temporal.start_workflow.assert_not_called()
 
-    def test_unknown_workflow_returns_partial_success(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_unknown_workflow_returns_partial_success(self, mocker: MockerFixture) -> None:
         """Unknown workflow name results in error count in response."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=None)
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response.status_code == 200
         body = response.json()
         assert body["workflows_started"] == 0
         assert body["errors"] >= 1
 
-    def test_dedup_prevents_duplicate_starts(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_dedup_prevents_duplicate_starts(self, mocker: MockerFixture) -> None:
         """Dedup prevents duplicate workflow starts for same fingerprint."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
-        # First request starts workflow
         response1 = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response1.json()["workflows_started"] == 1
-
-        # Second request with same fingerprint is deduped
         response2 = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response2.json()["workflows_started"] == 0
         assert response2.json()["alerts_skipped"] >= 1
 
-    def test_audit_event_emitted(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_audit_event_emitted(self, mocker: MockerFixture) -> None:
         """Audit event emitted for each triggered workflow."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
 
         triggered_calls = [
-            c
-            for c in mock_emit.call_args_list
+            c for c in mock_emit.call_args_list
             if c[1].get("event_type") == "alert_triggered"
         ]
         assert len(triggered_calls) == 1
@@ -461,63 +458,249 @@ class TestAlertWebhookEndpoint:
         assert details["alertname"] == "HighCPU"
         assert details["workflow_name"] == "diagnose-cpu"
 
-    def test_multiple_alerts_start_multiple_workflows(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_multiple_alerts_start_multiple_workflows(self, mocker: MockerFixture) -> None:
         """Multiple alerts in one payload start multiple workflows."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         second_alert = {
             **SAMPLE_ALERT,
-            "labels": {
-                "alertname": "DiskFull",
-                "severity": "warning",
-                "cloud_agents_workflow": "diagnose-cpu",
-            },
+            "labels": {"alertname": "DiskFull", "severity": "warning", "cloud_agents_workflow": "diagnose-cpu"},
             "fingerprint": "def456",
         }
         multi_payload = {**SAMPLE_PAYLOAD, "alerts": [SAMPLE_ALERT, second_alert]}
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=multi_payload)
         assert response.status_code == 200
         assert response.json()["workflows_started"] == 2
         assert mock_temporal.start_workflow.call_count == 2
 
-    def test_auth_enforced_when_configured(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_auth_enforced_when_configured(self, mocker: MockerFixture) -> None:
         """Auth required when auth_dependency is set."""
-
         def reject_unauthenticated():
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated",
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
         mock_temporal = mocker.MagicMock()
-        app = _build_alert_app(
-            mock_temporal,
-            auth_dependency=reject_unauthenticated,
-        )
+        app = _build_alert_app(mock_temporal, auth_dependency=reject_unauthenticated)
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response.status_code == 401
 
 
 # ===========================================================================
-# 5. Entrypoint wiring
+# 5. Authorization
+# ===========================================================================
+
+
+class TestAlertTriggerAuthorization:
+    """Tests for authorization enforcement in alert trigger."""
+
+    def test_authorizer_called_before_workflow_start(self, mocker: MockerFixture) -> None:
+        """Authorizer is called with TRIGGER action before starting workflow."""
+        from cloud_agents.workflow.authorization import AuthzDecision, WorkflowAction
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        mock_authorizer = mocker.AsyncMock()
+        mock_authorizer.authorize = mocker.AsyncMock(
+            return_value=AuthzDecision(allowed=True, reason="ok")
+        )
+
+        app = _build_alert_app(mock_temporal, definition_store=store, authorizer=mock_authorizer)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        assert response.json()["workflows_started"] == 1
+
+        mock_authorizer.authorize.assert_called_once()
+        call_args = mock_authorizer.authorize.call_args
+        assert call_args[0][1] == WorkflowAction.TRIGGER
+
+    def test_authorizer_denies_blocks_workflow(self, mocker: MockerFixture) -> None:
+        """Denied authorization prevents workflow start."""
+        from cloud_agents.workflow.authorization import AuthzDecision
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        mock_authorizer = mocker.AsyncMock()
+        mock_authorizer.authorize = mocker.AsyncMock(
+            return_value=AuthzDecision(allowed=False, reason="not allowed")
+        )
+
+        app = _build_alert_app(mock_temporal, definition_store=store, authorizer=mock_authorizer)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["workflows_started"] == 0
+        assert body["errors"] == 1
+        mock_temporal.start_workflow.assert_not_called()
+
+    def test_noop_authorizer_used_by_default(self, mocker: MockerFixture) -> None:
+        """NoopAuthorizer is used when no authorizer is provided."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        app = _build_alert_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        assert response.json()["workflows_started"] == 1
+
+    def test_authz_context_includes_namespace_and_groups(
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """WorkflowAuthzContext includes configured namespace and groups."""
+        monkeypatch.setenv("ALERT_TRIGGER_NAMESPACE", "prod")
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        app = _build_alert_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        assert response.json()["workflows_started"] == 1
+
+        call_args = mock_temporal.start_workflow.call_args
+        workflow_input = call_args[0][1]
+        assert workflow_input.authz_context.namespace == "prod"
+        assert "prod:alertmanager" in workflow_input.authz_context.owner_groups
+
+    def test_authorization_denied_audit_event(self, mocker: MockerFixture) -> None:
+        """Audit event emitted when authorization is denied."""
+        from cloud_agents.workflow.authorization import AuthzDecision
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        mock_authorizer = mocker.AsyncMock()
+        mock_authorizer.authorize = mocker.AsyncMock(
+            return_value=AuthzDecision(allowed=False, reason="denied by policy")
+        )
+
+        app = _build_alert_app(mock_temporal, definition_store=store, authorizer=mock_authorizer)
+        client = TestClient(app, raise_server_exceptions=False)
+        client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+
+        denied_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "alert_authorization_denied"
+        ]
+        assert len(denied_calls) == 1
+        details = denied_calls[0][1]["details"]
+        assert details["workflow_name"] == "diagnose-cpu"
+        assert details["reason"] == "denied by policy"
+
+
+# ===========================================================================
+# 6. Content policy enforcement
+# ===========================================================================
+
+
+class TestAlertTriggerContentPolicy:
+    """Tests for content policy re-validation in alert trigger."""
+
+    def test_content_policy_blocks_violating_definition(self, mocker: MockerFixture) -> None:
+        """Content policy violations prevent workflow start."""
+        from cloud_agents.workflow.content_policy import ContentPolicy
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        policy = ContentPolicy(max_prompt_length=3)
+        app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["workflows_started"] == 0
+        assert body["errors"] == 1
+        mock_temporal.start_workflow.assert_not_called()
+
+    def test_content_policy_allows_compliant_definition(self, mocker: MockerFixture) -> None:
+        """Compliant definitions pass content policy check."""
+        from cloud_agents.workflow.content_policy import ContentPolicy
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        policy = ContentPolicy(max_prompt_length=10000)
+        app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        assert response.json()["workflows_started"] == 1
+
+    def test_no_content_policy_skips_validation(self, mocker: MockerFixture) -> None:
+        """No content policy means definitions are not re-validated."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        app = _build_alert_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+        assert response.status_code == 200
+        assert response.json()["workflows_started"] == 1
+
+    def test_content_policy_violation_audit_event(self, mocker: MockerFixture) -> None:
+        """Audit event emitted for content policy violations."""
+        from cloud_agents.workflow.content_policy import ContentPolicy
+
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.start_workflow = mocker.AsyncMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+        mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+
+        policy = ContentPolicy(max_prompt_length=3)
+        app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
+        client = TestClient(app, raise_server_exceptions=False)
+        client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
+
+        violation_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "content_policy_violation"
+        ]
+        assert len(violation_calls) == 1
+        details = violation_calls[0][1]["details"]
+        assert details["workflow_name"] == "diagnose-cpu"
+        assert details["alertname"] == "HighCPU"
+
+
+# ===========================================================================
+# 7. Entrypoint wiring
 # ===========================================================================
 
 
@@ -525,46 +708,29 @@ class TestAlertTriggerEntrypointWiring:
     """Tests for alert trigger config wiring in entrypoint."""
 
     def test_alert_endpoint_not_registered_when_disabled(
-        self,
-        mocker: MockerFixture,
-        monkeypatch: pytest.MonkeyPatch,
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Endpoint not registered when ALERT_TRIGGER_ENABLED=false."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "false")
-
-        # Import inside test to pick up monkeypatched env
         import importlib
-
         import cloud_agents.workflow.temporal_entrypoint as ep_mod
-
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
         client = TestClient(app, raise_server_exceptions=False)
-
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
-        # Should get 404 because the route is not registered
         assert response.status_code in (404, 405)
 
     def test_alert_endpoint_registered_when_enabled(
-        self,
-        mocker: MockerFixture,
-        monkeypatch: pytest.MonkeyPatch,
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Endpoint registered when ALERT_TRIGGER_ENABLED=true."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "true")
-
         import importlib
-
         import cloud_agents.workflow.temporal_entrypoint as ep_mod
-
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
-
-        # Verify endpoint is reachable (not 404) by making a request.
-        # The request will fail validation (no auth, etc.) but
-        # should NOT be 404/405 which would indicate the route is missing.
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
         assert response.status_code not in (404, 405), (
@@ -573,28 +739,22 @@ class TestAlertTriggerEntrypointWiring:
 
 
 # ===========================================================================
-# 6. Prometheus metrics
+# 8. Prometheus metrics
 # ===========================================================================
 
 
 class TestAlertTriggerMetrics:
     """Tests for alert trigger Prometheus metrics."""
 
-    def test_counter_incremented_on_trigger(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_counter_incremented_on_trigger(self, mocker: MockerFixture) -> None:
         """Counter incremented on successful trigger."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         from cloud_agents.workflow.temporal_metrics import ls_alert_triggers_total
-
         before = ls_alert_triggers_total.labels(
             workflow_name="diagnose-cpu", status="started"
         )._value.get()
@@ -608,34 +768,24 @@ class TestAlertTriggerMetrics:
         )._value.get()
         assert after > before
 
-    def test_counter_incremented_on_dedup_skip(
-        self,
-        mocker: MockerFixture,
-    ) -> None:
+    def test_counter_incremented_on_dedup_skip(self, mocker: MockerFixture) -> None:
         """Counter incremented on dedup skip."""
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
-
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-
         mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
 
         from cloud_agents.workflow.temporal_metrics import ls_alert_triggers_total
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
-
-        # First call to populate dedup tracker
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
 
         before = ls_alert_triggers_total.labels(
             workflow_name="unknown", status="skipped_dedup"
         )._value.get()
-
-        # Second call triggers dedup
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
-
         after = ls_alert_triggers_total.labels(
             workflow_name="unknown", status="skipped_dedup"
         )._value.get()

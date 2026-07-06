@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
@@ -24,7 +25,14 @@ from cloud_agents.workflow.temporal_models import ProviderConfig, WorkflowInput
 from cloud_agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
 from cloud_agents.workflow.temporal_workflow import AgentWorkflow
 
+if TYPE_CHECKING:
+    from cloud_agents.workflow.content_policy import ContentPolicy
+
 logger = logging.getLogger(__name__)
+
+# Maximum characters for alert labels/annotations embedded into prompts.
+# Prevents prompt injection via excessively large alert metadata.
+_MAX_ALERT_FIELD_CHARS: int = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +128,29 @@ def should_process_alert(alert: AlertmanagerAlert, config: AlertTriggerConfig) -
     return True
 
 
+def _truncate(text: str, max_chars: int = _MAX_ALERT_FIELD_CHARS) -> str:
+    """Truncate text to max_chars, appending an indicator if trimmed.
+
+    Parameters:
+        text: The text to truncate.
+        max_chars: Maximum allowed length.
+
+    Returns:
+        The original text if within limits, or truncated with '...[truncated]'.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "...[truncated]"
+
+
 def map_alert_to_workflow_input(
     alert: AlertmanagerAlert,
     config: AlertTriggerConfig,
 ) -> tuple[str, str]:
     """Map an alert to a workflow name and input prompt.
+
+    Alert labels and annotations are treated as structured data and truncated
+    to ``_MAX_ALERT_FIELD_CHARS`` to bound prompt size.
 
     Parameters:
         alert: The alert to map.
@@ -149,10 +175,15 @@ def map_alert_to_workflow_input(
     severity = alert.labels.get("severity", "unknown")
     description = alert.annotations.get("description", alert.annotations.get("summary", ""))
 
+    # Truncate user-controlled fields to bound prompt size and limit
+    # prompt injection surface. Labels/annotations are structured input.
+    truncated_description = _truncate(description)
+    truncated_labels = _truncate(json.dumps(alert.labels))
+
     input_prompt = (
         f"Alert: {alertname}, Severity: {severity}, "
-        f"Description: {description}, "
-        f"Labels: {json.dumps(alert.labels)}"
+        f"Description: {truncated_description}, "
+        f"Labels: {truncated_labels}"
     )
 
     return workflow_name, input_prompt
@@ -225,6 +256,8 @@ def build_alert_router(
     definition_store: DefinitionStore,
     config: AlertTriggerConfig | None = None,
     auth_dependency: Optional[Any] = None,
+    authorizer: Optional[Any] = None,
+    content_policy: Optional["ContentPolicy"] = None,
 ) -> APIRouter:
     """Build FastAPI router for Alertmanager webhook endpoint.
 
@@ -233,12 +266,26 @@ def build_alert_router(
         definition_store: Store for workflow definition lookup.
         config: Alert trigger configuration. Defaults to AlertTriggerConfig().
         auth_dependency: Optional FastAPI auth dependency.
+        authorizer: Optional WorkflowAuthorizer for fine-grained access
+            control. Defaults to NoopAuthorizer (permit all).
+        content_policy: Optional content policy for definition validation.
+            When provided, stored definitions are re-validated before execution.
 
     Returns:
         APIRouter with the alertmanager webhook endpoint.
     """
+    from cloud_agents.workflow.authorization import (
+        CallerIdentity,
+        NoopAuthorizer,
+        WorkflowAction,
+        WorkflowResource,
+    )
+
     trigger_config = config or AlertTriggerConfig()
     dedup_tracker = AlertDedupTracker(window_seconds=trigger_config.dedup_window_seconds)
+    authz = authorizer or NoopAuthorizer()
+
+    alert_namespace = os.environ.get("ALERT_TRIGGER_NAMESPACE", "system")
 
     dependencies = [Depends(auth_dependency)] if auth_dependency else []
     router = APIRouter(
@@ -266,6 +313,13 @@ def build_alert_router(
         started = 0
         skipped = 0
         errors = 0
+
+        # Build a synthetic caller identity for authorization checks.
+        alert_caller = CallerIdentity(
+            username="alertmanager",
+            groups=[f"{alert_namespace}:alertmanager"],
+            auth_mode="webhook",
+        )
 
         for alert in payload.alerts:
             alertname = alert.labels.get("alertname", "unknown")
@@ -318,6 +372,34 @@ def build_alert_router(
                 )
                 continue
 
+            # --- Authorization check ---
+            decision = await authz.authorize(
+                alert_caller,
+                WorkflowAction.TRIGGER,
+                WorkflowResource(workflow_name=workflow_name),
+            )
+            if not decision.allowed:
+                errors += 1
+                ls_alert_triggers_total.labels(
+                    workflow_name=workflow_name, status="error"
+                ).inc()
+                logger.warning(
+                    "Authorization denied for alert '%s' -> workflow '%s': %s",
+                    alertname,
+                    workflow_name,
+                    decision.reason,
+                )
+                emit_audit(
+                    event_type="alert_authorization_denied",
+                    workflow_id="",
+                    details={
+                        "alertname": alertname,
+                        "workflow_name": workflow_name,
+                        "reason": decision.reason,
+                    },
+                )
+                continue
+
             # Look up workflow definition
             stored = await definition_store.get(workflow_name)
             if not stored:
@@ -343,6 +425,37 @@ def build_alert_router(
 
             # Build workflow input
             definition = stored.definition.model_dump()
+
+            # --- Content policy re-validation ---
+            if content_policy is not None:
+                from cloud_agents.workflow.temporal_validation import validate_definition
+
+                validation_errors = validate_definition(
+                    definition, content_policy=content_policy
+                )
+                if validation_errors:
+                    errors += 1
+                    ls_alert_triggers_total.labels(
+                        workflow_name=workflow_name, status="error"
+                    ).inc()
+                    logger.warning(
+                        "Content policy violation for workflow '%s' "
+                        "triggered by alert '%s': %s",
+                        workflow_name,
+                        alertname,
+                        validation_errors,
+                    )
+                    emit_audit(
+                        event_type="content_policy_violation",
+                        workflow_id="",
+                        details={
+                            "alertname": alertname,
+                            "workflow_name": workflow_name,
+                            "violations": validation_errors,
+                        },
+                    )
+                    continue
+
             if stored.definition.provider:
                 provider = ProviderConfig(**stored.definition.provider.model_dump())
             else:
@@ -372,8 +485,9 @@ def build_alert_router(
 
             authz_ctx = WorkflowAuthzContext(
                 owner_username="alertmanager",
-                owner_groups=[],
+                owner_groups=[f"{alert_namespace}:alertmanager"],
                 workflow_name=workflow_name,
+                namespace=alert_namespace,
             )
 
             workflow_input = WorkflowInput(

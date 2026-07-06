@@ -301,6 +301,8 @@ def build_temporal_app(
             definition_store=definition_store,
             config=alert_config,
             auth_dependency=auth_dep,
+            authorizer=None,
+            content_policy=content_policy,
         )
         app.include_router(alert_router)
         logger.info("Alert trigger enabled (label=%s)", alert_config.workflow_name_label)
