@@ -55,3 +55,9 @@ ls_schedule_triggers_total = Counter(
     "Total number of schedule trigger outcomes",
     ["workflow_name", "status"],
 )
+
+ls_sandbox_tls_errors_total = Counter(
+    "ls_sandbox_tls_errors_total",
+    "Total number of TLS-related errors during sandbox communication",
+    ["step_name", "error_type"],
+)

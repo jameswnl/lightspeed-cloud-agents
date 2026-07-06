@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 from datetime import UTC
 from typing import Any, Optional
 
@@ -23,7 +24,9 @@ from cloud_agents.workflow.escalation import LogPackager
 from cloud_agents.workflow.notifier import NullNotifier
 from cloud_agents.workflow.redact import redact_secrets
 from cloud_agents.workflow.temporal_context import build_sandbox_context
+from cloud_agents.workflow.temporal_metrics import ls_sandbox_tls_errors_total
 from cloud_agents.workflow.temporal_models import StepResult
+from cloud_agents.workflow.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
 
@@ -208,6 +211,16 @@ async def _run_sandbox_step_inner(
         step_name=step_name,
         details={"pod_name": pod_name, "image": sandbox_image},
     )
+    # TLS cert generation for app-level encryption
+    tls_mode = get_tls_mode()
+    tls_certs = None
+    if tls_mode == TLSMode.APP:
+        san_dns = [pod_name, f"agent-{pod_name}"]
+        tls_certs = generate_ephemeral_certs(
+            common_name=pod_name,
+            san_dns=san_dns,
+        )
+
     endpoint = None
     try:
         try:
@@ -225,8 +238,10 @@ async def _run_sandbox_step_inner(
                 skills_paths=input.get("skills_paths"),
                 service_account=sa,
                 read_only=advisory,
-                credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret")) or None,
+                credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret"))
+                or None,
                 mcp_secret_mounts=mcp_secret_mounts or None,
+                tls_certs=tls_certs,
             )
             ready = await spawner.wait_ready(endpoint, health_path="/health")
             if not ready:
@@ -261,11 +276,34 @@ async def _run_sandbox_step_inner(
             if permissions.get("denied_tools"):
                 request_body["deniedTools"] = permissions["denied_tools"]
 
-            async with httpx.AsyncClient(timeout=http_timeout) as client:
-                response = await client.post(
-                    f"{endpoint}/v1/agent/run",
-                    json=request_body,
-                )
+            # Configure httpx client for TLS verification
+            client_kwargs: dict[str, Any] = {"timeout": http_timeout}
+            if tls_mode == TLSMode.APP and tls_certs:
+                ssl_ctx = ssl.create_default_context()
+                ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
+                client_kwargs["verify"] = ssl_ctx
+
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                try:
+                    response = await client.post(
+                        f"{endpoint}/v1/agent/run",
+                        json=request_body,
+                    )
+                except ssl.SSLError as tls_exc:
+                    emit_audit(
+                        event_type="tls_error",
+                        workflow_id=workflow_id,
+                        step_name=step_name,
+                        details={
+                            "pod_name": pod_name,
+                            "error": str(tls_exc),
+                        },
+                    )
+                    ls_sandbox_tls_errors_total.labels(
+                        step_name=step_name,
+                        error_type="ssl_error",
+                    ).inc()
+                    raise
 
             if response.status_code == 502:
                 _circuit_breaker.record_failure(provider_name)
@@ -325,16 +363,12 @@ async def _run_sandbox_step_inner(
                         details={"pod_name": pod_name},
                     )
                 except Exception:
-                    logger.warning(
-                        "Failed to destroy pod '%s'", pod_name, exc_info=True
-                    )
+                    logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
                     from cloud_agents.workflow.temporal_metrics import (
                         ls_sandbox_cleanup_failures_total,
                     )
 
-                    ls_sandbox_cleanup_failures_total.labels(
-                        step_name=step_name
-                    ).inc()
+                    ls_sandbox_cleanup_failures_total.labels(step_name=step_name).inc()
 
 
 @activity.defn
@@ -431,9 +465,7 @@ async def _build_escalation_inner(
         if config_type == "webhook":
             from cloud_agents.workflow.escalation import WebhookPackager
 
-            ref = _normalize_config_ref(
-                (escalation_config or {}).get("config_ref", "DEFAULT")
-            )
+            ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
             url = os.environ.get(f"ESCALATION_WEBHOOK_{ref}_URL", "")
             packager = WebhookPackager(url=url)
         else:

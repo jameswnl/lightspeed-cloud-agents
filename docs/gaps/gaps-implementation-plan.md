@@ -12,7 +12,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2, T13, T14 ✓, T23, T49 ✓, T50 ✓ |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 ✓ |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
@@ -661,9 +661,9 @@ Image signing attestation and software bill of materials.
 
 **Remaining**: TLS encryption moved to T51.
 
-### T51: App-level TLS for runner-to-sandbox encryption [Phase 4]
+### T51: App-level TLS for runner-to-sandbox encryption [Phase 4] -- DONE
 
-**Status**: Open ([issue #21](https://github.com/jameswnl/lightspeed-cloud-agents/issues/21))
+**Status**: Done ([issue #21](https://github.com/jameswnl/lightspeed-cloud-agents/issues/21))
 
 **Problem**: T48 added authentication but traffic is still unencrypted HTTP. Prod sec requires encryption for inter-pod communication. Deployments with a service mesh (Istio) get mTLS transparently, but Podman and non-mesh K8s deployments need app-level TLS.
 
