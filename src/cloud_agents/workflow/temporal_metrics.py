@@ -50,3 +50,8 @@ ls_sandbox_orphans_cleaned_total = Counter(
     "Number of orphaned sandbox containers cleaned up on startup",
 )
 
+ls_rate_limit_rejections_total = Counter(
+    "ls_rate_limit_rejections_total",
+    "Total number of requests rejected by per-caller rate limiting",
+    ["path"],
+)

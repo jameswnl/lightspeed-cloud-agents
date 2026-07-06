@@ -26,6 +26,7 @@ AuditEventType = Literal[
     "orphan_cleanup",
     "content_policy_violation",
     "auth_rejected",
+    "rate_limit_exceeded",
 ]
 
 

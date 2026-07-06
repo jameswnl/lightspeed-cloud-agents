@@ -265,6 +265,15 @@ def build_temporal_app(
     max_body = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "1048576"))
     app.add_middleware(ContentSizeLimitMiddleware, max_content_size=max_body)
 
+    rate_limit_enabled = os.environ.get("RATE_LIMIT_ENABLED", "false").lower() == "true"
+    if rate_limit_enabled:
+        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+
+        rate = float(os.environ.get("RATE_LIMIT_RATE", "10"))
+        burst = int(os.environ.get("RATE_LIMIT_BURST", "20"))
+        app.add_middleware(RateLimitMiddleware, rate=rate, burst=burst)
+        logger.info("Rate limiting enabled (rate=%.1f/s, burst=%d)", rate, burst)
+
     placeholder_client = _DeferredClient(temporal_client_holder)
     definition_store = DefinitionStore()
 
