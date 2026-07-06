@@ -517,6 +517,136 @@ class TestTLSWiring:
         # Verify TLS error metric was incremented
         mock_metric.labels.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_tls_san_includes_k8s_fqdn(self, mocker: MockerFixture) -> None:
+        """TLS mode=app -> SAN DNS includes K8s service FQDN entries."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app", "NAMESPACE": "prod"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        pod_name = gen_call[1].get("common_name") or gen_call[0][0]
+
+        # Verify K8s FQDN entries
+        assert f"agent-{pod_name}.prod.svc" in san_dns
+        assert f"agent-{pod_name}.prod.svc.cluster.local" in san_dns
+
+    @pytest.mark.asyncio
+    async def test_tls_san_includes_localhost(self, mocker: MockerFixture) -> None:
+        """TLS mode=app -> SAN DNS includes localhost, SAN IPs includes 127.0.0.1."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        san_ips = gen_call[1].get("san_ips", [])
+
+        assert "localhost" in san_dns
+        assert "127.0.0.1" in san_ips
+
+    @pytest.mark.asyncio
+    async def test_tls_san_uses_default_namespace(self, mocker: MockerFixture) -> None:
+        """TLS mode=app without NAMESPACE env -> uses 'default' namespace."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+        os.environ.pop("NAMESPACE", None)
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        pod_name = gen_call[1].get("common_name") or gen_call[0][0]
+
+        assert f"agent-{pod_name}.default.svc" in san_dns
+        assert f"agent-{pod_name}.default.svc.cluster.local" in san_dns
+
+    @pytest.mark.asyncio
+    async def test_tls_app_passes_ca_cert_pem_to_wait_ready(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TLS mode=app -> ca_cert_pem from tls_certs is passed to wait_ready."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        wait_call = mock_spawner.wait_ready.call_args
+        assert wait_call[1].get("ca_cert_pem") is mock_certs.ca_cert_pem
+
+    @pytest.mark.asyncio
+    async def test_tls_disabled_no_ca_cert_to_wait_ready(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TLS mode=disabled -> ca_cert_pem=None passed to wait_ready."""
+        mocker.patch.dict("os.environ", {}, clear=False)
+        os.environ.pop("SANDBOX_TLS_MODE", None)
+
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        wait_call = mock_spawner.wait_ready.call_args
+        assert wait_call[1].get("ca_cert_pem") is None
+
 
 class TestNotificationActivity:
     """Tests for approval notification activity."""

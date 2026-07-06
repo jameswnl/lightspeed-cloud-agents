@@ -108,6 +108,72 @@ class TestAgentSpawner:
         assert endpoint == "http://test:8080"
 
 
+class TestWaitReadyTLS:
+    """Tests for wait_ready with ca_cert_pem TLS parameter."""
+
+    @pytest.mark.asyncio
+    async def test_wait_ready_with_ca_cert_pem_creates_ssl_context(self) -> None:
+        """wait_ready with ca_cert_pem creates httpx client with verify=SSLContext."""
+        import ssl
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        spawner = MockSpawner()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client_cls = MagicMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        ca_pem = b"-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----\n"
+        mock_ssl_ctx = MagicMock(spec=ssl.SSLContext)
+
+        with (
+            patch("cloud_agents.spawner.base.httpx.AsyncClient", mock_client_cls),
+            patch("ssl.create_default_context", return_value=mock_ssl_ctx) as mock_ctx,
+        ):
+            result = await spawner.wait_ready(
+                "https://pod:8443",
+                timeout=5.0,
+                ca_cert_pem=ca_pem,
+            )
+
+            assert result is True
+            mock_ctx.assert_called_once()
+            mock_ssl_ctx.load_verify_locations.assert_called_once_with(
+                cadata=ca_pem.decode()
+            )
+            init_call = mock_client_cls.call_args
+            assert init_call[1].get("verify") is mock_ssl_ctx
+
+    @pytest.mark.asyncio
+    async def test_wait_ready_without_ca_cert_pem_no_verify(self) -> None:
+        """wait_ready without ca_cert_pem does not set verify on httpx client."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        spawner = MockSpawner()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client_cls = MagicMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("cloud_agents.spawner.base.httpx.AsyncClient", mock_client_cls):
+            result = await spawner.wait_ready(
+                "http://pod:8080",
+                timeout=5.0,
+            )
+
+            assert result is True
+            init_call = mock_client_cls.call_args
+            assert "verify" not in init_call[1]
+
+
 class TestSpawnConfig:
     """Tests for SpawnConfig resource limit validation."""
 
