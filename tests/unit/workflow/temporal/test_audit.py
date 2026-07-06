@@ -69,9 +69,7 @@ class TestEmitAudit:
             )
         assert any("workflow_started" in r.message for r in caplog.records)
 
-    def test_emit_audit_includes_workflow_id(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_emit_audit_includes_workflow_id(self, caplog: pytest.LogCaptureFixture) -> None:
         """emit_audit log message includes workflow_id."""
         with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.audit"):
             emit_audit(
@@ -81,3 +79,13 @@ class TestEmitAudit:
                 details={"pod_name": "ca-123"},
             )
         assert any("wf-xyz" in r.message for r in caplog.records)
+
+    def test_tls_error_is_valid_audit_event_type(self) -> None:
+        """tls_error is a valid AuditEventType."""
+        event = AuditEvent(
+            event_type="tls_error",
+            workflow_id="wf-tls",
+            step_name="diag",
+            details={"error": "cert expired"},
+        )
+        assert event.event_type == "tls_error"

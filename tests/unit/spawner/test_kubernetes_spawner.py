@@ -14,9 +14,7 @@ from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 def mock_k8s():
     """Mock the kubernetes client module."""
     with (
-        patch(
-            "cloud_agents.spawner.kubernetes_spawner.KubernetesSpawner._do_spawn"
-        ) as mock_spawn,
+        patch("cloud_agents.spawner.kubernetes_spawner.KubernetesSpawner._do_spawn") as mock_spawn,
         patch(
             "cloud_agents.spawner.kubernetes_spawner.KubernetesSpawner._do_destroy"
         ) as mock_destroy,
@@ -82,9 +80,7 @@ class TestKubernetesSpawnerAlreadyExists:
         mock_batch.create_namespaced_job.side_effect = exc_409
 
         existing_job = MagicMock()
-        existing_job.spec.template.spec.containers = [
-            MagicMock(image="agent-runtime:latest")
-        ]
+        existing_job.spec.template.spec.containers = [MagicMock(image="agent-runtime:latest")]
         mock_batch.read_namespaced_job.return_value = existing_job
 
         mock_k8s_client = MagicMock()
@@ -279,15 +275,11 @@ class TestKubernetesSpawnerSecurityContext:
             await spawner._do_spawn("sec-agent", "agent-runtime:latest", {})
 
         volume_calls = mock_k8s_client.V1Volume.call_args_list
-        tmp_vol_calls = [
-            c for c in volume_calls if (c[1] or {}).get("name") == "tmp-scratch"
-        ]
+        tmp_vol_calls = [c for c in volume_calls if (c[1] or {}).get("name") == "tmp-scratch"]
         assert len(tmp_vol_calls) == 1, "Expected one V1Volume named 'tmp-scratch'"
 
         empty_dir_call = mock_k8s_client.V1EmptyDirVolumeSource.call_args_list
-        mem_calls = [
-            c for c in empty_dir_call if (c[1] or {}).get("medium") == "Memory"
-        ]
+        mem_calls = [c for c in empty_dir_call if (c[1] or {}).get("medium") == "Memory"]
         assert len(mem_calls) >= 1, "Expected V1EmptyDirVolumeSource(medium='Memory')"
 
         mount_calls = mock_k8s_client.V1VolumeMount.call_args_list
@@ -339,20 +331,14 @@ class TestKubernetesSpawnerCredentialMount:
             )
 
         volume_calls = mock_k8s_client.V1Volume.call_args_list
-        cred_vol_calls = [
-            c for c in volume_calls if (c[1] or {}).get("name") == "llm-credentials"
-        ]
+        cred_vol_calls = [c for c in volume_calls if (c[1] or {}).get("name") == "llm-credentials"]
         assert len(cred_vol_calls) == 1, "Expected one V1Volume named 'llm-credentials'"
 
         secret_vol_src_calls = mock_k8s_client.V1SecretVolumeSource.call_args_list
         cred_src_calls = [
-            c
-            for c in secret_vol_src_calls
-            if (c[1] or {}).get("secret_name") == "llm-creds"
+            c for c in secret_vol_src_calls if (c[1] or {}).get("secret_name") == "llm-creds"
         ]
-        assert (
-            len(cred_src_calls) == 1
-        ), "Expected V1SecretVolumeSource(secret_name='llm-creds')"
+        assert len(cred_src_calls) == 1, "Expected V1SecretVolumeSource(secret_name='llm-creds')"
 
         mount_calls = mock_k8s_client.V1VolumeMount.call_args_list
         cred_mount_calls = [
@@ -400,14 +386,10 @@ class TestKubernetesSpawnerCredentialMount:
             )
 
         env_from_calls = mock_k8s_client.V1EnvFromSource.call_args_list
-        assert (
-            len(env_from_calls) == 1
-        ), "Expected one V1EnvFromSource for credential secret"
+        assert len(env_from_calls) == 1, "Expected one V1EnvFromSource for credential secret"
 
         secret_env_calls = mock_k8s_client.V1SecretEnvSource.call_args_list
-        cred_env_calls = [
-            c for c in secret_env_calls if (c[1] or {}).get("name") == "llm-creds"
-        ]
+        cred_env_calls = [c for c in secret_env_calls if (c[1] or {}).get("name") == "llm-creds"]
         assert len(cred_env_calls) == 1, "Expected V1SecretEnvSource(name='llm-creds')"
 
         container_call = mock_k8s_client.V1Container.call_args
@@ -447,9 +429,7 @@ class TestKubernetesSpawnerCredentialMount:
             )
 
         volume_calls = mock_k8s_client.V1Volume.call_args_list
-        cred_vol_calls = [
-            c for c in volume_calls if (c[1] or {}).get("name") == "llm-credentials"
-        ]
+        cred_vol_calls = [c for c in volume_calls if (c[1] or {}).get("name") == "llm-credentials"]
         assert (
             len(cred_vol_calls) == 0
         ), "Expected no V1Volume named 'llm-credentials' when no credential_secret_name"
@@ -464,6 +444,245 @@ class TestKubernetesSpawnerCredentialMount:
         assert (
             container_kwargs.get("env_from") is None
         ), "env_from should be None when no credential_secret_name"
+
+
+class TestKubernetesSpawnerTLS:
+    """Tests for TLS cert injection in KubernetesSpawner."""
+
+    def _make_tls_certs(self) -> "EphemeralCerts":
+        """Create a mock EphemeralCerts for testing."""
+        from cloud_agents.workflow.tls import EphemeralCerts
+
+        return EphemeralCerts(
+            ca_cert_pem=b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",
+            server_cert_pem=b"-----BEGIN CERTIFICATE-----\nSERVER\n-----END CERTIFICATE-----\n",
+            server_key_pem=b"mock-server-key-pem-data",
+            valid_seconds=600,
+        )
+
+    def _make_mock_k8s(self) -> tuple:
+        """Create mock K8s client modules."""
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        return mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core
+
+    @pytest.mark.asyncio
+    async def test_tls_certs_creates_k8s_secret(self) -> None:
+        """TLS certs provided -> K8s Secret created with cert+key data."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+        tls_certs = self._make_tls_certs()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "tls-agent",
+                "agent-runtime:latest",
+                {},
+                tls_certs=tls_certs,
+            )
+
+        mock_core.create_namespaced_secret.assert_called_once()
+        secret_call = mock_core.create_namespaced_secret.call_args
+        assert secret_call[1]["namespace"] == "default"
+
+    @pytest.mark.asyncio
+    async def test_tls_certs_adds_volume_mount(self) -> None:
+        """TLS certs provided -> sandbox-tls volume mount added to pod spec."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+        tls_certs = self._make_tls_certs()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "tls-agent",
+                "agent-runtime:latest",
+                {},
+                tls_certs=tls_certs,
+            )
+
+        volume_calls = mock_k8s_client.V1Volume.call_args_list
+        tls_vol_calls = [c for c in volume_calls if (c[1] or {}).get("name") == "sandbox-tls"]
+        assert len(tls_vol_calls) == 1
+
+        mount_calls = mock_k8s_client.V1VolumeMount.call_args_list
+        tls_mount_calls = [
+            c
+            for c in mount_calls
+            if (c[1] or {}).get("name") == "sandbox-tls"
+            and (c[1] or {}).get("mount_path") == "/var/run/secrets/sandbox-tls/"
+        ]
+        assert len(tls_mount_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_tls_certs_changes_port_to_8443(self) -> None:
+        """TLS certs provided -> container port changed to 8443."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+        tls_certs = self._make_tls_certs()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "tls-agent",
+                "agent-runtime:latest",
+                {},
+                tls_certs=tls_certs,
+            )
+
+        port_calls = mock_k8s_client.V1ContainerPort.call_args_list
+        assert any(
+            (c[1] or {}).get("container_port") == 8443 for c in port_calls
+        ), "Expected container_port=8443 with TLS"
+
+    @pytest.mark.asyncio
+    async def test_tls_certs_endpoint_uses_https(self) -> None:
+        """TLS certs provided -> endpoint URL uses https and port 8443."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+        tls_certs = self._make_tls_certs()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            endpoint = await spawner._do_spawn(
+                "tls-agent",
+                "agent-runtime:latest",
+                {},
+                tls_certs=tls_certs,
+            )
+
+        assert endpoint.startswith("https://")
+        assert ":8443" in endpoint
+
+    @pytest.mark.asyncio
+    async def test_tls_certs_sets_env_vars(self) -> None:
+        """TLS certs provided -> SANDBOX_TLS_CERT_PATH and _KEY_PATH env vars set."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+        tls_certs = self._make_tls_certs()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "tls-agent",
+                "agent-runtime:latest",
+                {},
+                tls_certs=tls_certs,
+            )
+
+        env_calls = mock_k8s_client.V1EnvVar.call_args_list
+        cert_path_calls = [
+            c for c in env_calls if (c[1] or {}).get("name") == "SANDBOX_TLS_CERT_PATH"
+        ]
+        key_path_calls = [
+            c for c in env_calls if (c[1] or {}).get("name") == "SANDBOX_TLS_KEY_PATH"
+        ]
+        assert len(cert_path_calls) == 1
+        assert len(key_path_calls) == 1
+        assert cert_path_calls[0][1]["value"] == "/var/run/secrets/sandbox-tls/tls.crt"
+        assert key_path_calls[0][1]["value"] == "/var/run/secrets/sandbox-tls/tls.key"
+
+    @pytest.mark.asyncio
+    async def test_no_tls_certs_no_secret_created(self) -> None:
+        """tls_certs=None -> no K8s Secret created, endpoint uses http."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            endpoint = await spawner._do_spawn(
+                "no-tls-agent",
+                "agent-runtime:latest",
+                {},
+            )
+
+        mock_core.create_namespaced_secret.assert_not_called()
+        assert endpoint.startswith("http://")
+        assert ":8080" in endpoint
+
+    @pytest.mark.asyncio
+    async def test_destroy_deletes_tls_secret(self) -> None:
+        """Destroy deletes the TLS Secret for the agent."""
+        import sys
+
+        mock_k8s, mock_k8s_client, mock_k8s_config, mock_batch, mock_core = self._make_mock_k8s()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_destroy("tls-agent")
+
+        # Verify best-effort TLS Secret cleanup was attempted
+        secret_delete_calls = mock_core.delete_namespaced_secret.call_args_list
+        tls_secret_calls = [
+            c for c in secret_delete_calls if (c[1] or {}).get("name") == "sandbox-tls-tls-agent"
+        ]
+        assert len(tls_secret_calls) == 1
 
 
 class TestKubernetesSpawnerMCPSecretMounts:
@@ -507,24 +726,16 @@ class TestKubernetesSpawnerMCPSecretMounts:
         # Verify Secret volume was created for the MCP secret
         volume_calls = mock_k8s_client.V1Volume.call_args_list
         mcp_vol_calls = [
-            c
-            for c in volume_calls
-            if (c[1] or {}).get("name") == "mcp-secret-mcp-sn-token"
+            c for c in volume_calls if (c[1] or {}).get("name") == "mcp-secret-mcp-sn-token"
         ]
-        assert (
-            len(mcp_vol_calls) == 1
-        ), "Expected one V1Volume named 'mcp-secret-mcp-sn-token'"
+        assert len(mcp_vol_calls) == 1, "Expected one V1Volume named 'mcp-secret-mcp-sn-token'"
 
         # Verify SecretVolumeSource points to correct secret
         secret_vol_src_calls = mock_k8s_client.V1SecretVolumeSource.call_args_list
         mcp_src_calls = [
-            c
-            for c in secret_vol_src_calls
-            if (c[1] or {}).get("secret_name") == "mcp-sn-token"
+            c for c in secret_vol_src_calls if (c[1] or {}).get("secret_name") == "mcp-sn-token"
         ]
-        assert (
-            len(mcp_src_calls) == 1
-        ), "Expected V1SecretVolumeSource(secret_name='mcp-sn-token')"
+        assert len(mcp_src_calls) == 1, "Expected V1SecretVolumeSource(secret_name='mcp-sn-token')"
 
         # Verify VolumeMount at the correct path
         mount_calls = mock_k8s_client.V1VolumeMount.call_args_list
@@ -618,9 +829,7 @@ class TestKubernetesSpawnerMCPSecretMounts:
 
         volume_calls = mock_k8s_client.V1Volume.call_args_list
         mcp_vol_calls = [
-            c
-            for c in volume_calls
-            if (c[1] or {}).get("name", "").startswith("mcp-secret-")
+            c for c in volume_calls if (c[1] or {}).get("name", "").startswith("mcp-secret-")
         ]
         assert (
             len(mcp_vol_calls) == 0

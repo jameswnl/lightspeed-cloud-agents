@@ -32,6 +32,7 @@ AuditEventType = Literal[
     "schedule_created",
     "schedule_deleted",
     "schedule_triggered",
+    "tls_error",
 ]
 
 
