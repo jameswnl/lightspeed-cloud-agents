@@ -45,3 +45,63 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+---
+# Egress policy for workflow runner — restrict outbound to known services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workflow-runner-egress
+  labels:
+    environment: cloud-agents
+spec:
+  podSelector:
+    matchLabels:
+      app: workflow-runner
+  policyTypes:
+    - Egress
+  egress:
+    # Temporal Server (gRPC)
+    - ports:
+        - port: 7233
+          protocol: TCP
+    # Sandbox pods (HTTP)
+    - ports:
+        - port: 8080
+          protocol: TCP
+    # K8s API server
+    - ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Egress policy for sandbox pods — restrict outbound to DNS + LLM providers
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress
+  labels:
+    environment: cloud-agents
+spec:
+  podSelector:
+    matchLabels:
+      spawned-by: workflow-runner
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # LLM provider endpoints (HTTPS)
+    # In Kind dev environments, allow all HTTPS egress for simplicity.
+    # Production deployments should use Helm with explicit llmCidrs.
+    - ports:
+        - port: 443
+          protocol: TCP

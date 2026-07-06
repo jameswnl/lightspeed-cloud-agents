@@ -133,7 +133,7 @@ Temporal provides durable execution for workflow runs:
 | Ephemeral spawning | K8s Jobs + Services | Podman containers + port mapping |
 | Networking | K8s Services + ClusterIP DNS | Podman network + container DNS |
 | RBAC | ServiceAccounts + RoleBindings | OS-level access control |
-| NetworkPolicy | Enforced by CNI | Host firewall rules |
+| NetworkPolicy | Enforced by CNI (enabled by default) | Host firewall rules ([docs](DEPLOYMENT.md#podman)) |
 | Durable execution | Temporal deployment | Temporal deployment |
 | Config distribution | Env vars + K8s Secrets | Env vars |
 
@@ -151,12 +151,12 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **Concurrency cap** — `MAX_SPAWNED_PODS` prevents resource exhaustion
 - **MCP secret allowlist** — `MCP_ALLOWED_SECRETS` restricts which secrets can be mounted; file-reference headers keep secrets out of env vars
 - **Resource limits** — `SpawnConfig` enforces CPU (max 4 cores) and memory (max 4Gi) bounds with Pydantic validators
+- **Network egress enforcement** — NetworkPolicy restricts sandbox egress to DNS and explicitly configured LLM provider CIDRs (`llmCidrs`). Enabled by default in Helm. Podman deployments use host firewall rules. See [DEPLOYMENT.md](DEPLOYMENT.md#network-egress-policy).
 
 **TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
 - Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
 - Advisory mode tool filtering (blocked on T1)
 - Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
-- Cleanup failure metrics ([T3](gaps/gaps-implementation-plan.md#t3-cleanup-failure-metrics))
 
 ### Authorization (RBAC)
 
