@@ -202,6 +202,7 @@ class TestRateLimitMiddleware:
         start_msg = next(r for r in responses if r["type"] == "http.response.start")
         headers = dict(start_msg.get("headers", []))
         assert b"retry-after" in headers
+        assert int(headers[b"retry-after"]) >= 1
 
     @pytest.mark.asyncio
     async def test_health_endpoints_exempt(self) -> None:

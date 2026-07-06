@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -184,10 +185,16 @@ class RateLimitMiddleware:
             return
 
         key = self._extract_key(scope)
-        if not self.limiter.allow(key):
+        allowed = self.limiter.allow(key)
+
+        # Piggyback audit dict cleanup on bucket cleanup cycle
+        if self.limiter._call_count == 0 and self._audit_last_emitted:
+            self._prune_stale_audit()
+
+        if not allowed:
             ls_rate_limit_rejections_total.labels(path=path).inc()
             self._maybe_emit_audit(key, path, scope)
-            retry_after = str(int(1 / self.limiter.rate)) if self.limiter.rate > 0 else "60"
+            retry_after = str(max(1, math.ceil(1 / self.limiter.rate))) if self.limiter.rate > 0 else "60"
             response = JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again later."},
@@ -197,6 +204,12 @@ class RateLimitMiddleware:
             return
 
         await self.app(scope, receive, send)
+
+    def _prune_stale_audit(self) -> None:
+        """Remove audit entries whose rate-limit buckets have been cleaned up."""
+        stale = [k for k in self._audit_last_emitted if k not in self.limiter._buckets]
+        for k in stale:
+            del self._audit_last_emitted[k]
 
     def _extract_key(self, scope: dict) -> str:
         """Extract a rate limit key from the ASGI scope.
