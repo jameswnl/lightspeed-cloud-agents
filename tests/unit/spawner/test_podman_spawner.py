@@ -456,6 +456,79 @@ class TestPodmanSpawnerTLS:
             assert "test-agent" not in spawner._tls_temp_dirs
 
 
+class TestPodmanSpawnerIdempotentTLS:
+    """Tests for idempotent container reuse with TLS ports."""
+
+    @pytest.mark.asyncio
+    async def test_idempotent_reuse_with_tls_port_8443(self) -> None:
+        """Idempotent path detects 8443/tcp and returns https:// URL."""
+        existing_container = MagicMock()
+        existing_container.status = "running"
+        existing_container.reload.return_value = None
+        existing_container.ports = {"8443/tcp": [{"HostPort": "54321"}]}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.return_value = existing_container
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            endpoint = await spawner._do_spawn("tls-agent", "image:latest", {})
+
+            assert endpoint == "https://localhost:54321"
+
+    @pytest.mark.asyncio
+    async def test_idempotent_reuse_with_plain_port_8080(self) -> None:
+        """Idempotent path detects 8080/tcp and returns http:// URL."""
+        existing_container = MagicMock()
+        existing_container.status = "running"
+        existing_container.reload.return_value = None
+        existing_container.ports = {"8080/tcp": [{"HostPort": "12345"}]}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.return_value = existing_container
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            endpoint = await spawner._do_spawn("plain-agent", "image:latest", {})
+
+            assert endpoint == "http://localhost:12345"
+
+    @pytest.mark.asyncio
+    async def test_idempotent_reuse_tls_no_host_port(self) -> None:
+        """Idempotent path with 8443/tcp but no host port returns container name with https."""
+        existing_container = MagicMock()
+        existing_container.status = "running"
+        existing_container.reload.return_value = None
+        existing_container.ports = {"8443/tcp": []}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.return_value = existing_container
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            endpoint = await spawner._do_spawn("tls-agent", "image:latest", {})
+
+            assert endpoint == "https://agent-tls-agent:8443"
+
+
 class TestPodmanSpawnerDestroy:
     """Tests for PodmanSpawner destroy behavior."""
 

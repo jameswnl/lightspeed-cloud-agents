@@ -118,13 +118,20 @@ class PodmanSpawner(AgentSpawner):
                     existing.reload()
                     port_bindings = existing.ports or {}
                     host_port = None
-                    for binding in port_bindings.get("8080/tcp", []):
-                        host_port = binding.get("HostPort")
+                    is_tls = "8443/tcp" in port_bindings
+                    for port_key in ("8443/tcp", "8080/tcp"):
+                        for binding in port_bindings.get(port_key, []):
+                            host_port = binding.get("HostPort")
+                            if host_port:
+                                is_tls = port_key == "8443/tcp"
+                                break
                         if host_port:
                             break
+                    scheme = "https" if is_tls else "http"
+                    container_port = 8443 if is_tls else 8080
                     if host_port:
-                        return f"http://localhost:{host_port}"
-                    return f"http://{container_name}:8080"
+                        return f"{scheme}://localhost:{host_port}"
+                    return f"{scheme}://{container_name}:{container_port}"
                 existing.remove(force=True)
                 logger.info("Removed stale container '%s'", container_name)
             except Exception:

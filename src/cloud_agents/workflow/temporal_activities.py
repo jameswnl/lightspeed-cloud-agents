@@ -215,10 +215,18 @@ async def _run_sandbox_step_inner(
     tls_mode = get_tls_mode()
     tls_certs = None
     if tls_mode == TLSMode.APP:
-        san_dns = [pod_name, f"agent-{pod_name}"]
+        namespace = os.environ.get("NAMESPACE", "default")
+        san_dns = [
+            pod_name,
+            f"agent-{pod_name}",
+            f"agent-{pod_name}.{namespace}.svc",
+            f"agent-{pod_name}.{namespace}.svc.cluster.local",
+            "localhost",
+        ]
         tls_certs = generate_ephemeral_certs(
             common_name=pod_name,
             san_dns=san_dns,
+            san_ips=["127.0.0.1"],
         )
 
     endpoint = None
@@ -243,7 +251,11 @@ async def _run_sandbox_step_inner(
                 mcp_secret_mounts=mcp_secret_mounts or None,
                 tls_certs=tls_certs,
             )
-            ready = await spawner.wait_ready(endpoint, health_path="/health")
+            ready = await spawner.wait_ready(
+                endpoint,
+                health_path="/health",
+                ca_cert_pem=tls_certs.ca_cert_pem if tls_certs else None,
+            )
             if not ready:
                 _circuit_breaker.record_failure(provider_name)
                 raise RuntimeError(

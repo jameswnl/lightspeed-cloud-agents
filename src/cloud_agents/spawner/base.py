@@ -228,6 +228,7 @@ class AgentSpawner(ABC):
         endpoint: str,
         timeout: float = 60.0,
         health_path: str = "/healthz",
+        ca_cert_pem: bytes | None = None,
     ) -> bool:
         """Wait for a spawned pod to be ready.
 
@@ -237,16 +238,26 @@ class AgentSpawner(ABC):
             endpoint: HTTP endpoint of the pod.
             timeout: Maximum wait time in seconds.
             health_path: Health check path (default /healthz).
+            ca_cert_pem: PEM-encoded CA certificate for TLS verification.
+                When provided, creates an SSL context for HTTPS endpoints
+                using self-signed certificates.
 
         Returns:
             True if the pod became ready, False if timed out.
         """
+        import ssl
         import time
+
+        client_kwargs: dict[str, object] = {"timeout": 5.0}
+        if ca_cert_pem is not None:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(cadata=ca_cert_pem.decode())
+            client_kwargs["verify"] = ssl_ctx
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
+                async with httpx.AsyncClient(**client_kwargs) as client:
                     resp = await client.get(f"{endpoint}{health_path}")
                     if resp.status_code == 200:
                         return True
