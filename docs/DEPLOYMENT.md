@@ -48,6 +48,89 @@ helm install cloud-agents deploy/helm/ \
 
 ---
 
+## Network Egress Policy
+
+Sandbox containers are restricted to outbound DNS and explicitly configured LLM provider endpoints by default. This prevents a compromised or malicious agent from exfiltrating data to arbitrary hosts.
+
+### Kubernetes (Helm)
+
+Egress enforcement is **enabled by default** in the Helm chart. The chart creates two egress NetworkPolicies:
+
+1. **Workflow runner egress** — allows Temporal gRPC (7233), sandbox HTTP (8080), K8s API (443), and DNS (53).
+2. **Sandbox egress** — allows DNS (53) and HTTPS (443) to explicitly configured LLM provider CIDRs only.
+
+Configure `llmCidrs` with your LLM provider IP ranges:
+
+```yaml
+networkPolicy:
+  enabled: true
+  egress:
+    enabled: true
+    llmCidrs:
+      - "13.107.238.0/24"    # example: Azure OpenAI
+      - "35.199.224.0/19"    # example: Google Vertex AI
+```
+
+To find your provider's IP ranges:
+- **OpenAI**: check [OpenAI platform status](https://status.openai.com) or resolve `api.openai.com`
+- **Azure OpenAI**: use your endpoint's IP range from Azure IP ranges JSON
+- **Google Vertex AI**: use `us-central1-aiplatform.googleapis.com` resolved IPs
+
+If `llmCidrs` is empty, sandbox pods can only reach DNS — LLM calls will fail. This is intentional: deployers must explicitly configure which endpoints agents can reach.
+
+To disable egress enforcement (not recommended):
+
+```yaml
+networkPolicy:
+  egress:
+    enabled: false
+```
+
+### Kubernetes (Kind)
+
+Kind deployments apply `deploy/kind/network-policy.yaml` automatically via `make kind-up`. The Kind egress policy allows all HTTPS (port 443) egress from sandbox pods for development convenience. Production deployments should use Helm with explicit `llmCidrs`.
+
+### Podman
+
+Podman does not support NetworkPolicy. For equivalent egress protection, configure host firewall rules (iptables or nftables).
+
+**iptables example** — restrict the Podman network interface to DNS and specific LLM endpoints:
+
+```bash
+# Identify the Podman bridge interface (commonly cni-podman0 or podman0)
+PODMAN_IFACE="cni-podman0"
+
+# Allow DNS
+iptables -A FORWARD -i $PODMAN_IFACE -p udp --dport 53 -j ACCEPT
+iptables -A FORWARD -i $PODMAN_IFACE -p tcp --dport 53 -j ACCEPT
+
+# Allow HTTPS to specific LLM provider CIDRs
+iptables -A FORWARD -i $PODMAN_IFACE -p tcp --dport 443 -d 13.107.238.0/24 -j ACCEPT  # Azure OpenAI
+iptables -A FORWARD -i $PODMAN_IFACE -p tcp --dport 443 -d 35.199.224.0/19 -j ACCEPT  # Vertex AI
+
+# Allow traffic to other containers on the same network (Temporal, workflow runner)
+iptables -A FORWARD -i $PODMAN_IFACE -o $PODMAN_IFACE -j ACCEPT
+
+# Drop all other forwarded traffic from Podman containers
+iptables -A FORWARD -i $PODMAN_IFACE -j DROP
+```
+
+**nftables example**:
+
+```bash
+nft add table inet podman-egress
+nft add chain inet podman-egress forward { type filter hook forward priority 0 \; }
+nft add rule inet podman-egress forward iifname "cni-podman0" udp dport 53 accept
+nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 53 accept
+nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 443 ip daddr 13.107.238.0/24 accept
+nft add rule inet podman-egress forward iifname "cni-podman0" oifname "cni-podman0" accept
+nft add rule inet podman-egress forward iifname "cni-podman0" drop
+```
+
+Adjust the interface name and CIDRs for your environment. These rules apply to all containers on the Podman network — scope them further if running non-agent workloads on the same host.
+
+---
+
 ## Demo
 
 See [examples/DEMO.md](../examples/DEMO.md) for the interactive dashboard, demo recording, and terminal setup.
