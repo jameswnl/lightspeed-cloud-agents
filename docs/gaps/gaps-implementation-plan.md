@@ -537,7 +537,7 @@ Image signing attestation and software bill of materials.
 
 ### T39: Sandbox network egress enforcement by default [Phase 3a] -- DONE
 
-**Status**: Done (PR #25)
+**Status**: Done (PR #26)
 
 **Problem**: Sandbox containers can make outbound requests to any endpoint, not just the LLM provider. NetworkPolicy exists in Helm but is opt-in (`networkPolicy.egress.enabled: false`). A compromised or malicious agent could exfiltrate data to arbitrary hosts.
 
@@ -578,7 +578,7 @@ Image signing attestation and software bill of materials.
 
 ### T42: Token rotation and expiry for bearer auth [Phase 3a] -- DONE
 
-**Status**: Done (PR #25)
+**Status**: Done (PR #26)
 
 **Problem**: Bearer tokens are static (`AGENT_API_TOKEN` env var). No rotation mechanism, no expiry. A leaked token grants permanent access until the env var is manually changed and the runner restarted.
 

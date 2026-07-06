@@ -122,7 +122,8 @@ nft add table inet podman-egress
 nft add chain inet podman-egress forward { type filter hook forward priority 0 \; }
 nft add rule inet podman-egress forward iifname "cni-podman0" udp dport 53 accept
 nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 53 accept
-nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 443 ip daddr 13.107.238.0/24 accept
+nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 443 ip daddr 13.107.238.0/24 accept  # Azure OpenAI
+nft add rule inet podman-egress forward iifname "cni-podman0" tcp dport 443 ip daddr 35.199.224.0/19 accept  # Vertex AI
 nft add rule inet podman-egress forward iifname "cni-podman0" oifname "cni-podman0" accept
 nft add rule inet podman-egress forward iifname "cni-podman0" drop
 ```
