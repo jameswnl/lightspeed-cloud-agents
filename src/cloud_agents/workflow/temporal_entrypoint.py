@@ -326,6 +326,7 @@ def build_temporal_app(
             temporal_client=placeholder_client,  # type: ignore[arg-type]
             definition_store=definition_store,
             auth_dependency=auth_dep,
+            content_policy=content_policy,
         )
         app.include_router(schedule_router)
         logger.info("Schedule trigger enabled")

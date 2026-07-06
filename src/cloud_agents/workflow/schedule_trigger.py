@@ -12,7 +12,10 @@ import logging
 import re
 import uuid
 from datetime import timedelta
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from cloud_agents.workflow.content_policy import ContentPolicy
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -73,7 +76,8 @@ class ScheduleSpec(BaseModel):
 
         Accepts standard 5-field cron expressions and Temporal shorthand
         keywords (@daily, @hourly, etc.). Rejects empty strings, garbage,
-        and 6-field (seconds) expressions.
+        and 6-field (seconds) expressions. Bare ``@every`` without an
+        interval argument is rejected.
 
         Parameters:
             v: The cron expression string.
@@ -90,14 +94,18 @@ class ScheduleSpec(BaseModel):
 
         # Check for Temporal shorthands
         if stripped.startswith("@"):
-            # Accept @every with an argument too
             keyword = stripped.split()[0].lower()
-            if keyword in _CRON_SHORTHANDS:
-                return stripped
-            raise ValueError(
-                f"Unknown cron shorthand '{stripped}'. "
-                f"Supported: {', '.join(sorted(_CRON_SHORTHANDS))}"
-            )
+            if keyword not in _CRON_SHORTHANDS:
+                raise ValueError(
+                    f"Unknown cron shorthand '{stripped}'. "
+                    f"Supported: {', '.join(sorted(_CRON_SHORTHANDS))}"
+                )
+            # @every requires an interval argument (e.g. "@every 5m")
+            if keyword == "@every" and len(stripped.split()) < 2:
+                raise ValueError(
+                    "@every requires an interval argument, e.g. '@every 5m'"
+                )
+            return stripped
 
         # Must be exactly 5 fields
         fields = stripped.split()
@@ -177,6 +185,8 @@ def build_schedule_router(
     temporal_client: Any,
     definition_store: DefinitionStore,
     auth_dependency: Optional[Any] = None,
+    authorizer: Optional[Any] = None,
+    content_policy: Optional["ContentPolicy"] = None,
 ) -> APIRouter:
     """Build FastAPI router for schedule CRUD endpoints.
 
@@ -184,6 +194,11 @@ def build_schedule_router(
         temporal_client: Connected Temporal client instance.
         definition_store: Store for workflow definition lookup.
         auth_dependency: Optional FastAPI auth dependency.
+        authorizer: Optional WorkflowAuthorizer for fine-grained access
+            control. Defaults to NoopAuthorizer (permit all).
+        content_policy: Optional content policy for definition validation.
+            When provided, definitions are checked against the policy rules
+            at schedule creation time.
 
     Returns:
         APIRouter with schedule endpoints under /v1/schedules.
@@ -197,7 +212,15 @@ def build_schedule_router(
         ScheduleState,
     )
 
-    from cloud_agents.workflow.authorization import WorkflowAuthzContext
+    from cloud_agents.workflow.authorization import (
+        NoopAuthorizer,
+        WorkflowAction,
+        WorkflowAuthzContext,
+        WorkflowResource,
+        get_caller_identity,
+    )
+
+    authz = authorizer or NoopAuthorizer()
 
     dependencies = [Depends(auth_dependency)] if auth_dependency else []
     router = APIRouter(
@@ -209,6 +232,7 @@ def build_schedule_router(
     @router.post("", status_code=status.HTTP_201_CREATED)
     async def create_schedule(
         schedule_input: ScheduleInput,
+        caller=Depends(get_caller_identity),
     ) -> dict[str, str]:
         """Create a new cron schedule for a workflow.
 
@@ -217,14 +241,25 @@ def build_schedule_router(
 
         Parameters:
             schedule_input: Schedule creation request.
+            caller: Authenticated caller identity.
 
         Returns:
             Dict with the schedule_id.
 
         Raises:
-            HTTPException: 404 if workflow not found, 400 if no provider,
-                409 if schedule_id already exists.
+            HTTPException: 403 if unauthorized, 404 if workflow not found,
+                400 if no provider, 409 if schedule_id already exists,
+                422 if content policy violated.
         """
+        # Authorize schedule creation
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_CREATE,
+            WorkflowResource(workflow_name=schedule_input.workflow_name),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         # Look up workflow definition
         stored = await definition_store.get(schedule_input.workflow_name)
         if not stored:
@@ -249,16 +284,45 @@ def build_schedule_router(
 
         # Build workflow input that will be used on each trigger
         definition = stored.definition.model_dump()
+
+        # Validate definition against content policy
+        if content_policy is not None:
+            from cloud_agents.workflow.temporal_validation import validate_definition
+
+            validation_errors = validate_definition(
+                definition, content_policy=content_policy
+            )
+            if validation_errors:
+                policy_errors = [
+                    e for e in validation_errors if "content policy" in e.lower()
+                ]
+                if policy_errors:
+                    emit_audit(
+                        event_type="content_policy_violation",
+                        workflow_id="",
+                        details={
+                            "schedule_id": schedule_id,
+                            "definition_name": definition.get("metadata", {}).get(
+                                "name", ""
+                            ),
+                            "violations": policy_errors,
+                        },
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": validation_errors},
+                )
+
         authz_ctx = WorkflowAuthzContext(
-            owner_username="scheduler",
-            owner_groups=[],
+            owner_username=caller.username,
+            owner_groups=caller.groups,
             workflow_name=schedule_input.workflow_name,
         )
 
         workflow_input = WorkflowInput(
             definition=definition,
             input_prompt=schedule_input.input_prompt,
-            workflow_id=f"sched-{schedule_id}-placeholder",
+            workflow_id=f"sched-{schedule_id}-{uuid.uuid4().hex[:8]}",
             provider=provider,
             sandbox_image=schedule_input.sandbox_image,
             authz_context=authz_ctx,
@@ -282,7 +346,7 @@ def build_schedule_router(
                     action=ScheduleActionStartWorkflow(
                         AgentWorkflow.run,
                         args=[workflow_input],
-                        id=f"sched-{schedule_id}-{{{{workflow.now}}}}",
+                        id=f"sched-{schedule_id}-{{{{.Now}}}}",
                         task_queue=DEFAULT_TASK_QUEUE,
                     ),
                     spec=TemporalScheduleSpec(
@@ -316,6 +380,7 @@ def build_schedule_router(
         emit_audit(
             event_type="schedule_created",
             workflow_id="",
+            actor=caller.username,
             details={
                 "schedule_id": schedule_id,
                 "workflow_name": schedule_input.workflow_name,
@@ -325,17 +390,44 @@ def build_schedule_router(
             },
         )
 
+        emit_audit(
+            event_type="schedule_triggered",
+            workflow_id="",
+            actor=caller.username,
+            details={
+                "schedule_id": schedule_id,
+                "workflow_name": schedule_input.workflow_name,
+                "trigger": "schedule_registered",
+            },
+        )
+
         return {"schedule_id": schedule_id}
 
     @router.get("")
-    async def list_schedules() -> list[dict[str, Any]]:
+    async def list_schedules(
+        caller=Depends(get_caller_identity),
+    ) -> list[dict[str, Any]]:
         """List all schedules.
 
         Iterates Temporal schedules and returns schedule information.
 
+        Parameters:
+            caller: Authenticated caller identity.
+
         Returns:
             List of schedule info dicts.
+
+        Raises:
+            HTTPException: 403 if unauthorized.
         """
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_VIEW,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         results: list[dict[str, Any]] = []
         async for entry in await temporal_client.list_schedules():
             workflow_name = ""
@@ -385,18 +477,30 @@ def build_schedule_router(
         return results
 
     @router.get("/{schedule_id}")
-    async def get_schedule(schedule_id: str) -> dict[str, Any]:
+    async def get_schedule(
+        schedule_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, Any]:
         """Get details of a specific schedule.
 
         Parameters:
             schedule_id: The schedule identifier.
+            caller: Authenticated caller identity.
 
         Returns:
             Schedule info dict.
 
         Raises:
-            HTTPException: 404 if schedule not found.
+            HTTPException: 403 if unauthorized, 404 if schedule not found.
         """
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_VIEW,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         try:
             handle = temporal_client.get_schedule_handle(schedule_id)
             desc = await handle.describe()
@@ -445,18 +549,30 @@ def build_schedule_router(
         ).model_dump()
 
     @router.delete("/{schedule_id}")
-    async def delete_schedule(schedule_id: str) -> dict[str, str]:
+    async def delete_schedule(
+        schedule_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, str]:
         """Delete a schedule.
 
         Parameters:
             schedule_id: The schedule identifier.
+            caller: Authenticated caller identity.
 
         Returns:
             Status dict.
 
         Raises:
-            HTTPException: 404 if schedule not found.
+            HTTPException: 403 if unauthorized, 404 if schedule not found.
         """
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_DELETE,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         try:
             handle = temporal_client.get_schedule_handle(schedule_id)
             await handle.delete()
@@ -483,18 +599,30 @@ def build_schedule_router(
         return {"status": "deleted"}
 
     @router.post("/{schedule_id}/pause")
-    async def pause_schedule(schedule_id: str) -> dict[str, str]:
+    async def pause_schedule(
+        schedule_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, str]:
         """Pause a schedule.
 
         Parameters:
             schedule_id: The schedule identifier.
+            caller: Authenticated caller identity.
 
         Returns:
             Status dict.
 
         Raises:
-            HTTPException: 404 if schedule not found.
+            HTTPException: 403 if unauthorized, 404 if schedule not found.
         """
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_PAUSE,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         try:
             handle = temporal_client.get_schedule_handle(schedule_id)
             await handle.pause()
@@ -515,18 +643,30 @@ def build_schedule_router(
         return {"status": "paused"}
 
     @router.post("/{schedule_id}/resume")
-    async def resume_schedule(schedule_id: str) -> dict[str, str]:
+    async def resume_schedule(
+        schedule_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, str]:
         """Resume a paused schedule.
 
         Parameters:
             schedule_id: The schedule identifier.
+            caller: Authenticated caller identity.
 
         Returns:
             Status dict.
 
         Raises:
-            HTTPException: 404 if schedule not found.
+            HTTPException: 403 if unauthorized, 404 if schedule not found.
         """
+        decision = await authz.authorize(
+            caller,
+            WorkflowAction.SCHEDULE_RESUME,
+            WorkflowResource(),
+        )
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail=decision.reason)
+
         try:
             handle = temporal_client.get_schedule_handle(schedule_id)
             await handle.unpause()

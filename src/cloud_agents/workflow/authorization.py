@@ -42,6 +42,8 @@ class WorkflowAction(str, Enum):
     SCHEDULE_CREATE = "schedule_create"
     SCHEDULE_VIEW = "schedule_view"
     SCHEDULE_DELETE = "schedule_delete"
+    SCHEDULE_PAUSE = "schedule_pause"
+    SCHEDULE_RESUME = "schedule_resume"
 
 
 class WorkflowResource(BaseModel):

@@ -2,7 +2,7 @@
 
 Tests cover: schedule model validation, cron expression validation,
 CRUD endpoints, entrypoint wiring, Prometheus metrics, authorization
-actions, and audit event types.
+actions, audit event types, RBAC enforcement, and content policy.
 """
 
 from __future__ import annotations
@@ -58,6 +58,8 @@ def _build_schedule_app(
     mock_temporal: Any,
     definition_store: Any = None,
     auth_dependency: Any = None,
+    authorizer: Any = None,
+    content_policy: Any = None,
 ) -> FastAPI:
     """Build a FastAPI app with the schedule router for testing."""
     from cloud_agents.workflow.definition_store import DefinitionStore
@@ -69,6 +71,8 @@ def _build_schedule_app(
         temporal_client=mock_temporal,
         definition_store=store,
         auth_dependency=auth_dependency,
+        authorizer=authorizer,
+        content_policy=content_policy,
     )
     app.include_router(router)
     return app
@@ -223,6 +227,22 @@ class TestCronValidation:
         spec = ScheduleSpec(cron="@hourly")
         assert spec.cron == "@hourly"
 
+    def test_valid_at_every_with_interval(self) -> None:
+        """@every with interval argument accepted."""
+        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+
+        spec = ScheduleSpec(cron="@every 5m")
+        assert spec.cron == "@every 5m"
+
+    def test_bare_at_every_rejected(self) -> None:
+        """Bare @every without interval argument rejected."""
+        from pydantic import ValidationError
+
+        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+
+        with pytest.raises(ValidationError, match="@every requires an interval"):
+            ScheduleSpec(cron="@every")
+
     def test_empty_cron_rejected(self) -> None:
         """Empty string cron expression rejected."""
         from pydantic import ValidationError
@@ -242,14 +262,14 @@ class TestCronValidation:
             ScheduleSpec(cron="not a cron")
 
     def test_feb_30_accepted(self) -> None:
-        """Feb 30 edge case accepted — let Temporal handle it."""
+        """Feb 30 edge case accepted --- let Temporal handle it."""
         from cloud_agents.workflow.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="0 0 30 2 *")
         assert spec.cron == "0 0 30 2 *"
 
     def test_six_field_cron_rejected(self) -> None:
-        """Six-field (seconds) cron rejected — only 5-field supported."""
+        """Six-field (seconds) cron rejected --- only 5-field supported."""
         from pydantic import ValidationError
 
         from cloud_agents.workflow.schedule_trigger import ScheduleSpec
@@ -382,6 +402,32 @@ class TestScheduleCreateEndpoint:
         assert len(created_calls) == 1
         assert created_calls[0][1]["details"]["workflow_name"] == "nightly-report"
 
+    def test_create_emits_schedule_triggered_audit_event(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST emits schedule_triggered audit event on creation."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.create_schedule = mocker.AsyncMock()
+
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+
+        mock_emit = mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+
+        app = _build_schedule_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
+
+        triggered_calls = [
+            c
+            for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "schedule_triggered"
+        ]
+        assert len(triggered_calls) == 1
+        assert triggered_calls[0][1]["details"]["trigger"] == "schedule_registered"
+
     def test_create_with_no_provider_in_definition_returns_400(
         self,
         mocker: MockerFixture,
@@ -406,6 +452,30 @@ class TestScheduleCreateEndpoint:
 
         response = client.post("/v1/schedules", json=no_provider_input)
         assert response.status_code == 400
+
+    def test_create_workflow_id_not_static_placeholder(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Workflow ID in schedule action is not a static placeholder."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.create_schedule = mocker.AsyncMock()
+
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+
+        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+
+        app = _build_schedule_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+        client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
+
+        call_kwargs = mock_temporal.create_schedule.call_args
+        schedule_obj = call_kwargs.kwargs.get("schedule") or call_kwargs[1].get("schedule")
+        action = schedule_obj.action
+        # The workflow ID template should use Temporal's Go template syntax
+        assert "{{.Now}}" in action.id
+        assert "placeholder" not in action.id
 
 
 class TestScheduleListEndpoint:
@@ -696,6 +766,33 @@ class TestScheduleTriggerEntrypointWiring:
                 f"Schedule endpoint should be registered but got {response.status_code}"
             )
 
+    def test_entrypoint_passes_content_policy_to_schedule_router(
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Entrypoint passes content_policy to build_schedule_router."""
+        monkeypatch.setenv("SCHEDULE_TRIGGER_ENABLED", "true")
+
+        mock_build = mocker.patch(
+            "cloud_agents.workflow.schedule_trigger.build_schedule_router",
+        )
+        # Return a minimal router so include_router doesn't fail
+        from fastapi import APIRouter
+
+        mock_build.return_value = APIRouter()
+
+        import importlib
+
+        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+
+        importlib.reload(ep_mod)
+        ep_mod.build_temporal_app()
+
+        assert mock_build.called
+        call_kwargs = mock_build.call_args[1]
+        assert "content_policy" in call_kwargs
+
 
 # ===========================================================================
 # 5. Prometheus metrics
@@ -777,6 +874,8 @@ class TestScheduleAuthorizationActions:
         assert hasattr(WorkflowAction, "SCHEDULE_CREATE")
         assert hasattr(WorkflowAction, "SCHEDULE_VIEW")
         assert hasattr(WorkflowAction, "SCHEDULE_DELETE")
+        assert hasattr(WorkflowAction, "SCHEDULE_PAUSE")
+        assert hasattr(WorkflowAction, "SCHEDULE_RESUME")
 
     def test_schedule_actions_are_strings(self) -> None:
         """Schedule actions have string values."""
@@ -785,6 +884,8 @@ class TestScheduleAuthorizationActions:
         assert WorkflowAction.SCHEDULE_CREATE.value == "schedule_create"
         assert WorkflowAction.SCHEDULE_VIEW.value == "schedule_view"
         assert WorkflowAction.SCHEDULE_DELETE.value == "schedule_delete"
+        assert WorkflowAction.SCHEDULE_PAUSE.value == "schedule_pause"
+        assert WorkflowAction.SCHEDULE_RESUME.value == "schedule_resume"
 
 
 # ===========================================================================
@@ -812,3 +913,173 @@ class TestScheduleAuditEventTypes:
             event_type="schedule_triggered",
             workflow_id="test",
         )
+
+
+# ===========================================================================
+# 8. RBAC enforcement
+# ===========================================================================
+
+
+class TestScheduleRBACEnforcement:
+    """Tests for RBAC authorizer enforcement on schedule endpoints."""
+
+    def _make_deny_authorizer(self, mocker: MockerFixture) -> Any:
+        """Create an authorizer that denies all actions."""
+        from cloud_agents.workflow.authorization import AuthzDecision
+
+        authz = mocker.AsyncMock()
+        authz.authorize = mocker.AsyncMock(
+            return_value=AuthzDecision(allowed=False, reason="denied by policy")
+        )
+        return authz
+
+    def test_create_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /v1/schedules returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+
+        authz = self._make_deny_authorizer(mocker)
+        app = _build_schedule_app(
+            mock_temporal, definition_store=store, authorizer=authz
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
+        assert response.status_code == 403
+        assert "denied by policy" in response.json()["detail"]
+
+    def test_list_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /v1/schedules returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        authz = self._make_deny_authorizer(mocker)
+
+        app = _build_schedule_app(mock_temporal, authorizer=authz)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/v1/schedules")
+        assert response.status_code == 403
+
+    def test_get_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /v1/schedules/{id} returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        authz = self._make_deny_authorizer(mocker)
+
+        app = _build_schedule_app(mock_temporal, authorizer=authz)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/v1/schedules/sched-abc")
+        assert response.status_code == 403
+
+    def test_delete_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """DELETE /v1/schedules/{id} returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        authz = self._make_deny_authorizer(mocker)
+
+        app = _build_schedule_app(mock_temporal, authorizer=authz)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.delete("/v1/schedules/sched-abc")
+        assert response.status_code == 403
+
+    def test_pause_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /v1/schedules/{id}/pause returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        authz = self._make_deny_authorizer(mocker)
+
+        app = _build_schedule_app(mock_temporal, authorizer=authz)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/v1/schedules/sched-abc/pause")
+        assert response.status_code == 403
+
+    def test_resume_denied_by_authorizer(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST /v1/schedules/{id}/resume returns 403 when authorizer denies."""
+        mock_temporal = mocker.MagicMock()
+        authz = self._make_deny_authorizer(mocker)
+
+        app = _build_schedule_app(mock_temporal, authorizer=authz)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/v1/schedules/sched-abc/resume")
+        assert response.status_code == 403
+
+
+# ===========================================================================
+# 9. Content policy enforcement
+# ===========================================================================
+
+
+class TestScheduleContentPolicy:
+    """Tests for content policy validation on schedule creation."""
+
+    def test_create_rejected_by_content_policy(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST returns 422 when content policy rejects the definition."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.create_schedule = mocker.AsyncMock()
+
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+
+        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+
+        # Mock validate_definition to return errors
+        mocker.patch(
+            "cloud_agents.workflow.temporal_validation.validate_definition",
+            return_value=["content policy: prompt too long"],
+        )
+
+        from cloud_agents.workflow.content_policy import ContentPolicy
+
+        policy = ContentPolicy(max_prompt_length=5)
+
+        app = _build_schedule_app(
+            mock_temporal, definition_store=store, content_policy=policy
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
+        assert response.status_code == 422
+        body = response.json()
+        assert "validation_errors" in body.get("detail", {})
+
+    def test_create_passes_without_content_policy(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """POST succeeds when no content policy is configured."""
+        mock_temporal = mocker.MagicMock()
+        mock_temporal.create_schedule = mocker.AsyncMock()
+
+        store = mocker.AsyncMock()
+        store.get = mocker.AsyncMock(return_value=_make_stored_definition())
+
+        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+
+        # No content_policy passed --- should skip validation
+        app = _build_schedule_app(mock_temporal, definition_store=store)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
+        assert response.status_code == 201
