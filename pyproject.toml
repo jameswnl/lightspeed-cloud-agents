@@ -33,6 +33,11 @@ dev = [
     "black",
     "ruff",
 ]
+load = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.4",
+    "pytest-mock>=3.15",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

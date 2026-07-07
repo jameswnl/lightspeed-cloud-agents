@@ -165,10 +165,13 @@ clean:  ## Stop everything and clean up
 
 # ── Tests ──────────────────────────────────────────────
 
-.PHONY: test test-unit test-multi-replica
+.PHONY: test test-unit test-load test-multi-replica
 
 test-unit:  ## Run unit tests
 	uv run pytest tests/unit/ -q --tb=short
+
+test-load:  ## Run load tests (requires running stack for live mode)
+	uv run pytest tests/load/ -v --tb=short
 
 test-multi-replica:  ## Run multi-replica E2E tests (requires Kind + 2 replicas)
 	kubectl apply -f deploy/kind/workflow-runner-2-replicas.yaml
