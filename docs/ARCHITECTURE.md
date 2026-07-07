@@ -54,7 +54,7 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 | R9 | Runtime | Done | FastAPI + Temporal Worker + sandbox HTTP contract |
 | R10 | Deployment | Done | K8s Jobs, Podman containers, Helm chart |
 | R11 | Persistence | Done | Temporal Server provides durable execution and state |
-| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering TODO ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) |
+| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering: runner-side forwarding done ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)), sandbox-side enforcement pending |
 | R13 | Access control | Done | Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). See [rbac.md](rbac.md) |
 | R14 | Observability | Done | OTel tracing, Prometheus metrics, structured logging, health probes, audit events |
 | R15 | Triggers | Partial | API, alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), and schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) triggers done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)) TODO |
@@ -159,9 +159,11 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **App-level TLS** — ephemeral self-signed CA + per-sandbox certs generated at spawn time (`SANDBOX_TLS_MODE=app`). K8s: cert Secret mount. Podman: temp dir bind mount. Service mesh deployments (`SANDBOX_TLS_MODE=mesh`) skip app-level TLS.
 - **Sandbox heartbeat + timeout** — `activity.heartbeat()` during sandbox HTTP calls with 180s timeout. Cancellation detected via `asyncio.CancelledError`, ensures `destroy()` runs. `ls_sandbox_timeout_total` metric.
 
-**TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
-- Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
-- Advisory mode tool filtering (blocked on T1)
+**Partial** (see [implementation plan](gaps/gaps-implementation-plan.md)):
+- Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) — runner-side forwarding of `allowedTools`/`deniedTools` to the sandbox POST body is done. Sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox).
+- Advisory mode tool filtering (blocked on T1 sandbox-side)
+
+**TODO**:
 - Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
 
 ### Authorization (RBAC)

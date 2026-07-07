@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: k8s-realcluster-diagnose-fix
+spec:
+  steps:
+    - name: diagnose
+      type: agent
+      prompt: >
+        Use your kubectl MCP tools to investigate the current state of the
+        Kubernetes cluster. Check pod status, recent events, and deployment
+        health. Identify any issues — CrashLoopBackOff pods, failed
+        deployments, resource pressure, or error events. Report your findings
+        with the root cause.
+      output_key: diagnosis
+      output_schema:
+        type: object
+        properties:
+          summary:
+            type: string
+          issues_found:
+            type: integer
+          affected_resources:
+            type: array
+            items:
+              type: string
+          root_cause:
+            type: string
+        required: [summary, issues_found]
+      mcp_servers: [kubectl]
+      permissions:
+        allowed_tools:
+          - mcp__kubectl__get_pods
+          - mcp__kubectl__describe_pod
+          - mcp__kubectl__get_pod_logs
+          - mcp__kubectl__get_events
+          - mcp__kubectl__get_deployments
+          - mcp__kubectl__describe_deployment
+          - mcp__kubectl__get_nodes
+          - mcp__kubectl__get_services
+      timeout_seconds: 120
+
+    - name: approve-fix
+      type: human-approval
+      message: "Review the diagnosis and approve remediation: {{ steps.diagnosis.output.summary }}"
+      output_key: approval
+      risk_level: high
+
+    - name: fix
+      type: agent
+      prompt: >
+        Based on the diagnosis: {{ steps.diagnosis.output.summary }}.
+        Root cause: {{ steps.diagnosis.output.root_cause }}.
+        Use your kubectl tools to fix the identified issues. You may restart
+        deployments or scale them as needed. Do NOT delete any resources.
+      output_key: fix
+      condition: "steps.approval.output.approved == true"
+      mcp_servers: [kubectl]
+      permissions:
+        allowed_tools:
+          - mcp__kubectl__rollout_restart
+          - mcp__kubectl__scale_deployment
+          - mcp__kubectl__get_pods
+          - mcp__kubectl__get_deployments
+      timeout_seconds: 180
+
+    - name: verify
+      type: agent
+      prompt: >
+        The fix has been applied: {{ steps.fix.output.summary }}.
+        Verify the cluster is now healthy. Check pod status, events, and
+        deployment readiness. Confirm the issues are resolved.
+      output_key: verification
+      condition: "steps.fix.status == completed"
+      mcp_servers: [kubectl]
+      permissions:
+        allowed_tools:
+          - mcp__kubectl__get_pods
+          - mcp__kubectl__describe_pod
+          - mcp__kubectl__get_events
+          - mcp__kubectl__get_deployments
+          - mcp__kubectl__get_nodes
+      timeout_seconds: 120

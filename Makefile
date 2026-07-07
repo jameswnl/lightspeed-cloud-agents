@@ -11,11 +11,11 @@ export PODMAN_SOCK ?= /run/user/$(shell id -u)/podman/podman.sock
 
 # ── Build ──────────────────────────────────────────────
 
-.PHONY: build build-demo build-runner build-sandbox build-mcp
+.PHONY: build build-demo build-runner build-sandbox build-mcp build-mcp-kubectl
 
 build: build-runner build-sandbox  ## Build core images (runner + sandbox)
 
-build-demo: build build-mcp  ## Build all images including demo MCP server
+build-demo: build build-mcp build-mcp-kubectl  ## Build all images including MCP servers
 
 build-runner:  ## Build workflow runner image
 	podman build -f deploy/workflow-runner/Containerfile -t workflow-runner:latest .
@@ -30,6 +30,9 @@ build-sandbox:  ## Build sandbox image (from fork)
 
 build-mcp:  ## Build MCP filesystem server image (demo only)
 	podman build -f deploy/mcp-filesystem/Containerfile -t mcp-filesystem:latest .
+
+build-mcp-kubectl:  ## Build MCP kubectl server image (K8s cluster access)
+	podman build -f deploy/mcp-kubectl/Containerfile -t mcp-kubectl:latest .
 
 # ── Helpers ────────────────────────────────────────────
 
@@ -108,11 +111,16 @@ kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
 	podman save localhost/mcp-filesystem:latest -o /tmp/mcp-filesystem.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/mcp-filesystem.tar --name $(KIND_CLUSTER)
 	rm -f /tmp/mcp-filesystem.tar
+	podman save localhost/mcp-kubectl:latest -o /tmp/mcp-kubectl.tar
+	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/mcp-kubectl.tar --name $(KIND_CLUSTER)
+	rm -f /tmp/mcp-kubectl.tar
 	@echo "Tagging images inside Kind node..."
 	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
 		localhost/lightspeed-agentic-sandbox:latest docker.io/library/lightspeed-agentic-sandbox:latest
 	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
 		localhost/mcp-filesystem:latest docker.io/library/mcp-filesystem:latest
+	podman exec $(KIND_CLUSTER)-control-plane ctr --namespace k8s.io images tag \
+		localhost/mcp-kubectl:latest docker.io/library/mcp-kubectl:latest
 	kubectl apply -f deploy/kind/postgres.yaml
 	kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
 	kubectl apply -f deploy/kind/temporal.yaml
@@ -131,6 +139,8 @@ kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
 	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
 	kubectl apply -f examples/kind-mcp-filesystem.yaml
 	kubectl wait --for=condition=ready pod -l app=mcp-filesystem --timeout=60s
+	kubectl apply -f examples/kind-mcp-kubectl.yaml
+	kubectl wait --for=condition=ready pod -l app=mcp-kubectl --timeout=60s
 	@echo ""
 	@echo "Kind cluster '$(KIND_CLUSTER)' ready."
 	@echo "Run: kubectl port-forward svc/workflow-runner 8080:8080"

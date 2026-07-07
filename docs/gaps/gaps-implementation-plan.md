@@ -33,22 +33,24 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T1: Forward PermissionScope to sandbox contract [Phase 1] — DONE
 
-**Status**: Open
-**ARCHITECTURE.md ref**: Security TODO — per-step tool filtering
+**Status**: Done ([issue #44](https://github.com/jameswnl/lightspeed-cloud-agents/issues/44))
+**ARCHITECTURE.md ref**: Security — per-step tool filtering (R12 Partial)
 
-**Problem**: `allowed_tools` / `denied_tools` from `WorkflowStepSpec.permissions` are never passed to the sandbox. Per-step tool scoping is defined in the model but not enforced in the workflow path.
+**Problem**: `allowed_tools` / `denied_tools` from `WorkflowStepSpec.permissions` were never passed to the sandbox. Per-step tool scoping was defined in the model but not enforced in the workflow path.
 
-**What to build**:
-1. In `temporal_activities.py`, extract `allowed_tools` and `denied_tools` from `step.permissions` and include them in the `request_body` sent to the sandbox.
-2. Sandbox runtime must consume these fields — may require upstream contract extension.
+**What was built**:
+1. In `temporal_activities.py`, `allowed_tools` and `denied_tools` from `step.permissions` are extracted and included as `allowedTools`/`deniedTools` in the `request_body` sent to the sandbox.
+2. `PermissionScope.effective_tools()` method computes filtered tool sets from allowed/denied lists.
+3. K8s MCP kubectl server (`deploy/mcp-kubectl/Containerfile`) using `@anthropic-ai/mcp-server-kubernetes` + `supergateway` on port 8082.
+4. K8s manifests (`examples/kind-mcp-kubectl.yaml`) with ServiceAccount, scoped RBAC (read: pods, pods/log, events, deployments, services, nodes, replicasets; limited write: deployments patch, deployments/scale patch), Deployment, and Service.
+5. Network policy updated to allow sandbox egress to mcp-kubectl (port 8082).
+6. Real-cluster workflow definition (`examples/workflow-definitions/k8s-realcluster-workflow.yaml`) with per-step `permissions.allowed_tools` for tool filtering.
+7. Makefile: `build-mcp-kubectl` target, `build-demo` and `kind-up` wiring.
+8. 30+ unit tests validating Containerfile, K8s manifests, RBAC, network policy, workflow definition, tool filtering logic, and Makefile targets.
 
-**Tests**:
-- Unit: `allowed_tools` in step permissions → appears in sandbox POST body
-- Integration: workflow step with `denied_tools` → agent cannot call that tool
+**Remaining**: Sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox). The runner forwards the fields; the sandbox must consume them.
 
-**Effort**: 1 day (activity side) + TBD (sandbox side)
-
-**Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
+**Effort**: 1 day (runner + infrastructure)
 
 ### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b] — DONE
 

@@ -1,0 +1,103 @@
+# MCP kubectl server for Kind demo.
+# Provides K8s cluster access via MCP tools (get pods, describe, logs, events,
+# rollout restart, scale) over streamable HTTP.
+#
+# Prerequisites:
+#   MCP image loaded into Kind: podman save + kind load image-archive
+# See Makefile kind-up target for automated setup.
+#
+# Security:
+#   - ServiceAccount with scoped RBAC (read-only for most resources, limited write)
+#   - Per-step tool filtering via workflow permissions.allowed_tools
+#   - K8s credentials stay on this pod — never enter sandbox containers
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-kubectl
+  labels:
+    app: mcp-kubectl
+    environment: cloud-agents
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-kubectl-role
+  labels:
+    app: mcp-kubectl
+    environment: cloud-agents
+rules:
+  # Read access to diagnostic resources
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # Limited write: rollout restart (patch deployments) and scale
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-kubectl-binding
+  labels:
+    app: mcp-kubectl
+    environment: cloud-agents
+subjects:
+  - kind: ServiceAccount
+    name: mcp-kubectl
+roleRef:
+  kind: Role
+  name: mcp-kubectl-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubectl
+  labels:
+    app: mcp-kubectl
+    environment: cloud-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-kubectl
+  template:
+    metadata:
+      labels:
+        app: mcp-kubectl
+        environment: cloud-agents
+    spec:
+      serviceAccountName: mcp-kubectl
+      containers:
+        - name: mcp-kubectl
+          image: localhost/mcp-kubectl:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8082
+          readinessProbe:
+            tcpSocket:
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-kubectl
+  labels:
+    app: mcp-kubectl
+    environment: cloud-agents
+spec:
+  selector:
+    app: mcp-kubectl
+  ports:
+    - port: 8082
+      targetPort: 8082

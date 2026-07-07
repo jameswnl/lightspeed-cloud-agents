@@ -99,6 +99,10 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    # MCP kubectl server (streamable HTTP)
+    - ports:
+        - port: 8082
+          protocol: TCP
     # LLM provider endpoints (HTTPS)
     # In Kind dev environments, allow all HTTPS egress for simplicity.
     # Production deployments should use Helm with explicit llmCidrs.
