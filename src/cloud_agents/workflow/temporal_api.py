@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from temporalio.client import Client, WorkflowExecutionStatus
 
 from cloud_agents.workflow.audit import emit_audit
@@ -86,10 +87,68 @@ class ApproveRequest(BaseModel):
     selected_option_id: str | None = None
 
 
+# Maximum message size: 64KB (65536 bytes)
+MAX_MESSAGE_BYTES: int = 65536
+
+# Regex matching control characters except \t, \n, \r
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_message(text: str) -> str:
+    """Strip control characters from message text.
+
+    Preserves tab (\\t), newline (\\n), and carriage return (\\r).
+    All other C0 control characters and DEL are removed.
+
+    Parameters:
+        text: Raw message text.
+
+    Returns:
+        Sanitized message string.
+    """
+    return _CONTROL_CHAR_RE.sub("", text)
+
+
 class SendMessageRequest(BaseModel):
-    """Request body for sending a message to a CLI session."""
+    """Request body for sending a message to a CLI session.
+
+    Attributes:
+        message: Message text (1 to 65536 bytes, control chars stripped).
+    """
 
     message: str
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        """Validate and sanitize message content.
+
+        Strips control characters, validates UTF-8 encoding, enforces
+        non-empty content and 64KB size limit.
+
+        Parameters:
+            v: Raw message string.
+
+        Returns:
+            Sanitized message string.
+
+        Raises:
+            ValueError: If message is empty, whitespace-only, or exceeds 64KB.
+        """
+        # Sanitize control characters
+        sanitized = _sanitize_message(v)
+
+        # Check non-empty after sanitization and stripping
+        if not sanitized.strip():
+            raise ValueError("Message must not be empty or whitespace-only")
+
+        # Validate size (in bytes, UTF-8 encoded)
+        if len(sanitized.encode("utf-8")) > MAX_MESSAGE_BYTES:
+            raise ValueError(
+                f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes"
+            )
+
+        return sanitized
 
 
 def build_temporal_router(
@@ -750,17 +809,32 @@ def build_temporal_router(
             request: SendMessageRequest,
             caller=Depends(get_caller_identity),
         ) -> dict[str, str]:
-            """Send a message to a running CLI session."""
+            """Send a message to a running CLI session.
+
+            Returns 409 Conflict if the session is not in RUNNING state.
+            """
+            from cloud_agents.workflow.cli_session import CLISessionStatus
+
             decision = await authz.authorize(
                 caller, WorkflowAction.SESSION_MESSAGE, WorkflowResource()
             )
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
-            if cli_session_launcher.get_status(session_id) is None:
+            session_info = cli_session_launcher.get_status(session_id)
+            if session_info is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"CLI session '{session_id}' not found",
+                )
+
+            if session_info.status != CLISessionStatus.RUNNING:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Cannot send message to session '{session_id}': "
+                        f"session is {session_info.status.value}"
+                    ),
                 )
 
             await cli_session_launcher.send_message(
