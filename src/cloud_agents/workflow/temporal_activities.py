@@ -585,19 +585,38 @@ async def build_escalation_activity(
     steps: dict[str, Any],
     workflow_name: str = "workflow",
     escalation_config: dict[str, Any] | None = None,
+    definition: dict[str, Any] | None = None,
+    input_prompt: str | None = None,
+    events: list[dict[str, Any]] | None = None,
+    provider_name: str | None = None,
+    workflow_id: str | None = None,
 ) -> dict[str, Any]:
     """Package workflow context for escalation handoff."""
     with _tracer.start_as_current_span(
         "escalation.build",
         attributes={"workflow.name": workflow_name},
     ):
-        return await _build_escalation_inner(steps, workflow_name, escalation_config)
+        return await _build_escalation_inner(
+            steps,
+            workflow_name,
+            escalation_config,
+            definition=definition,
+            input_prompt=input_prompt,
+            events=events,
+            provider_name=provider_name,
+            workflow_id=workflow_id,
+        )
 
 
 async def _build_escalation_inner(
     steps: dict[str, Any],
     workflow_name: str = "workflow",
     escalation_config: dict[str, Any] | None = None,
+    definition: dict[str, Any] | None = None,
+    input_prompt: str | None = None,
+    events: list[dict[str, Any]] | None = None,
+    provider_name: str | None = None,
+    workflow_id: str | None = None,
 ) -> dict[str, Any]:
     """Inner implementation of build_escalation_activity."""
     failed_steps = [
@@ -623,6 +642,22 @@ async def _build_escalation_inner(
             ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
             url = os.environ.get(f"ESCALATION_WEBHOOK_{ref}_URL", "")
             packager = WebhookPackager(url=url)
+        elif config_type == "jira":
+            from cloud_agents.workflow.escalation import JiraPackager
+
+            ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
+            url = os.environ.get(f"ESCALATION_JIRA_{ref}_URL", "")
+            project_key = os.environ.get(f"ESCALATION_JIRA_{ref}_PROJECT_KEY", "")
+            packager = JiraPackager(url=url, project_key=project_key)
+        elif config_type == "cli_handoff":
+            from cloud_agents.workflow.escalation import CLIHandoffPackager
+
+            ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
+            output_dir = os.environ.get(
+                f"ESCALATION_CLI_HANDOFF_{ref}_DIR",
+                "/tmp/cloud-agents-handoff",
+            )
+            packager = CLIHandoffPackager(output_dir=output_dir)
         else:
             packager = LogPackager()
 
@@ -636,6 +671,11 @@ async def _build_escalation_inner(
             timestamp=datetime.now(tz=UTC).isoformat(),
             escalation=result["output"],
             workflow_snapshot=steps,
+            definition=definition,
+            input_prompt=input_prompt,
+            events=events,
+            provider_name=provider_name,
+            workflow_id=workflow_id,
         )
         await packager.package(pkg)
         emit_audit(

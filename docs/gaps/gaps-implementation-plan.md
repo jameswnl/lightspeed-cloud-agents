@@ -12,7 +12,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T34 ✓, T36, T51 ✓ |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15 ✓, T34 ✓, T36, T51 ✓ |
 | **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18 ✓, T20 ✓, T25-T27, T29-T33, T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
@@ -231,16 +231,20 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T15: Interactive CLI handoff (R5, R17) [Phase 4]
 
-**Status**: Open
+**Status**: Done
 **ARCHITECTURE.md ref**: Requirements table R17 — TODO; Design Principle R5 — TODO
 
-**Problem**: Escalation packages context but doesn't hand off to an interactive CLI session.
+**What was built** (Phase 1 — context serialization + launch command):
+- Enriched `EscalationPackage` with `definition`, `input_prompt`, `events`, `provider_name`, `workflow_id`
+- `serialize_handoff_context()` produces structured markdown for Claude Code consumption
+- `CLIHandoffPackager` writes context files and logs launch commands
+- `cli_handoff` and `jira` escalation types wired in `temporal_activities.py`
+- `GET /v1/workflows/{id}/handoff` endpoint with RBAC (`WorkflowAction.VIEW`)
+- `get_workflow_context` Temporal query for stashed definition/provider context
+- `workflow.escalated` SSE event emitted after escalation activity completes
+- Enriched context passed through workflow -> escalation activity pipeline
 
-**What to build**: Start with "generate a launch command with pre-loaded context" — a serialized context package that a human can load into Claude Code or Goose. NOT launching an interactive session programmatically (that's weeks with security implications).
-
-**Effort**: 2-3 days for launch command generation; 3-4 weeks for interactive session (deferred)
-
-**Scope recommendation**: Phase 1 of T15 = context serialization + launch command. Phase 2 = interactive session lifecycle. Ship the useful part first.
+**Phase 2 (deferred)**: Interactive session lifecycle (programmatic launch, monitoring, bi-directional communication). Estimated 3-4 weeks with security implications.
 
 ### T16: Conversational approval [Phase 4]
 

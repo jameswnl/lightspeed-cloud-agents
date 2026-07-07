@@ -743,6 +743,106 @@ class TestBuildEscalation:
         assert result["status"] == "escalated"
         assert result["output"]["failed_steps"][0]["step"] == "r1"
 
+    @pytest.mark.asyncio
+    async def test_cli_handoff_type_uses_cli_packager(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Escalation with type=cli_handoff uses CLIHandoffPackager."""
+        mock_packager_cls = mocker.patch(
+            "cloud_agents.workflow.escalation.CLIHandoffPackager",
+        )
+        mock_packager = mocker.AsyncMock()
+        mock_packager_cls.return_value = mock_packager
+
+        result = await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            workflow_name="test-wf",
+            escalation_config={"type": "cli_handoff", "config_ref": "DEFAULT"},
+        )
+
+        assert result["status"] == "escalated"
+        mock_packager_cls.assert_called_once()
+        mock_packager.package.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cli_handoff_output_dir_from_env(
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CLI handoff reads output_dir from env var."""
+        monkeypatch.setenv("ESCALATION_CLI_HANDOFF_DEFAULT_DIR", "/custom/handoff")
+        mock_packager_cls = mocker.patch(
+            "cloud_agents.workflow.escalation.CLIHandoffPackager",
+        )
+        mock_packager = mocker.AsyncMock()
+        mock_packager_cls.return_value = mock_packager
+
+        await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            escalation_config={"type": "cli_handoff", "config_ref": "DEFAULT"},
+        )
+
+        mock_packager_cls.assert_called_once_with(output_dir="/custom/handoff")
+
+    @pytest.mark.asyncio
+    async def test_jira_type_uses_jira_packager(
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Escalation with type=jira uses JiraPackager."""
+        monkeypatch.setenv("ESCALATION_JIRA_DEFAULT_URL", "https://jira.test.com")
+        monkeypatch.setenv("ESCALATION_JIRA_DEFAULT_PROJECT_KEY", "OPS")
+        mock_packager_cls = mocker.patch(
+            "cloud_agents.workflow.escalation.JiraPackager",
+        )
+        mock_packager = mocker.AsyncMock()
+        mock_packager_cls.return_value = mock_packager
+
+        result = await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            escalation_config={"type": "jira", "config_ref": "DEFAULT"},
+        )
+
+        assert result["status"] == "escalated"
+        mock_packager_cls.assert_called_once_with(
+            url="https://jira.test.com",
+            project_key="OPS",
+        )
+        mock_packager.package.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_enriched_fields_in_escalation_package(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """Escalation activity passes enriched fields to the package."""
+        mock_packager_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.LogPackager",
+        )
+        mock_packager = mocker.AsyncMock()
+        mock_packager_cls.return_value = mock_packager
+
+        await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            workflow_name="test-wf",
+            escalation_config=None,
+            definition={"metadata": {"name": "test-wf"}},
+            input_prompt="do the thing",
+            events=[{"type": "step.failed", "step": "r1", "timestamp": "t"}],
+            provider_name="openai",
+            workflow_id="wf-123",
+        )
+
+        pkg = mock_packager.package.call_args[0][0]
+        assert pkg.definition == {"metadata": {"name": "test-wf"}}
+        assert pkg.input_prompt == "do the thing"
+        assert pkg.events == [{"type": "step.failed", "step": "r1", "timestamp": "t"}]
+        assert pkg.provider_name == "openai"
+        assert pkg.workflow_id == "wf-123"
+
 
 class TestNormalizeConfigRef:
     """Tests for config ref normalization."""
