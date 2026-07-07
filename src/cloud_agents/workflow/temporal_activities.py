@@ -138,6 +138,7 @@ async def _progress_streaming_loop(
         spawner: An OpenShellSpawner instance with stream_progress().
         sandbox_id: The sandbox to stream progress from.
     """
+    # TODO: Add heartbeat debounce for production
     try:
         async for event in spawner.stream_progress(sandbox_id):
             payload = _truncate_heartbeat_payload(event)
@@ -403,6 +404,7 @@ async def _run_sandbox_step_inner(
             from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
             if isinstance(spawner, OpenShellSpawner):
+                # TODO: Add public get_sandbox_id() method for production
                 sandbox_id = spawner._sandbox_ids.get(pod_name)
                 if sandbox_id:
                     progress_task = asyncio.create_task(

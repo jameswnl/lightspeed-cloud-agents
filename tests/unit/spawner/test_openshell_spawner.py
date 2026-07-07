@@ -240,7 +240,7 @@ class TestOpenShellSpawnerStreamProgress:
         async for _ in spawner.stream_progress("sandbox-1"):
             pass
 
-        assert call_args["cmd"] == ["tail", "-f", "/var/log/agent-events.jsonl"]
+        assert call_args["cmd"] == ["tail", "-F", "/var/log/agent-events.jsonl"]
 
 
 class TestOpenShellSpawnerSpawn:
@@ -320,12 +320,25 @@ class TestOpenShellSpawnerDestroy:
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_ids["agent-1"] = "sb-123"
 
-        mock_task = mocker.MagicMock()
-        mock_task.cancel = mocker.MagicMock()
-        spawner._server_tasks["sandbox-1"] = mock_task
+        # Fake awaitable task that tracks cancel() calls
+        class FakeTask:
+            def __init__(self):
+                self.cancel_count = 0
+
+            def done(self):
+                return False
+
+            def cancel(self):
+                self.cancel_count += 1
+
+            def __await__(self):
+                yield
+        fake_task = FakeTask()
+        spawner._server_tasks["sb-123"] = fake_task
 
         await spawner.destroy("agent-1")
 
+        assert fake_task.cancel_count == 1
         mock_client.delete_sandbox.assert_called_once()
 
 

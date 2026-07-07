@@ -75,6 +75,7 @@ class OpenShellSpawner(AgentSpawner):
         env: dict[str, str],
         config: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
+        # TODO: Map to OpenShell equivalents for production
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
@@ -164,7 +165,7 @@ class OpenShellSpawner(AgentSpawner):
         Yields:
             Parsed JSONL event dicts from the agent event log.
         """
-        tail_cmd = ["tail", "-f", _EVENT_LOG_PATH]
+        tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
         try:
             async for chunk in self._client.exec_stream(sandbox_id, tail_cmd):
                 for line in chunk.split("\n"):
