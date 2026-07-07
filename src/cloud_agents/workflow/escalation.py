@@ -327,22 +327,54 @@ class CLIHandoffPackager:
     """Generate a markdown context file and CLI launch command.
 
     Writes a structured markdown document for human consumption
-    with pre-loaded context from a failed workflow.
+    with pre-loaded context from a failed workflow. Optionally
+    auto-launches a CLI session via the spawner when configured.
 
     Attributes:
         output_dir: Directory to write context files to.
+        launcher: Optional CLISessionLauncher for auto-launching sessions.
+        spawner: Optional AgentSpawner for container creation.
+        sandbox_image: Container image for CLI sessions.
     """
 
-    def __init__(self, output_dir: str = "/tmp/cloud-agents-handoff") -> None:
+    def __init__(
+        self,
+        output_dir: str = "/tmp/cloud-agents-handoff",
+        launcher: Optional[Any] = None,
+        spawner: Optional[Any] = None,
+        auto_launch: Optional[bool] = None,
+        sandbox_image: str = (
+            "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
+        ),
+    ) -> None:
         """Initialize the CLI handoff packager.
 
         Args:
             output_dir: Directory for writing context files.
+            launcher: Optional CLISessionLauncher for auto-launching.
+            spawner: Optional AgentSpawner for container creation.
+            auto_launch: Whether to auto-launch. When None, checks
+                CLI_HANDOFF_AUTO_LAUNCH env var.
+            sandbox_image: Container image for CLI sessions.
         """
         self.output_dir = output_dir
+        self.launcher = launcher
+        self.spawner = spawner
+        self._auto_launch = auto_launch
+        self.sandbox_image = sandbox_image
+
+    def _should_auto_launch(self) -> bool:
+        """Determine whether auto-launch is enabled.
+
+        Returns:
+            True if auto-launch is enabled by parameter or env var.
+        """
+        if self._auto_launch is not None:
+            return self._auto_launch
+        return os.environ.get("CLI_HANDOFF_AUTO_LAUNCH", "").lower() == "true"
 
     async def package(self, pkg: EscalationPackage) -> None:
-        """Write handoff context to file and log the launch command."""
+        """Write handoff context to file and optionally auto-launch a session."""
         try:
             context_md = serialize_handoff_context(pkg)
             out_dir = Path(self.output_dir)
@@ -362,6 +394,39 @@ class CLIHandoffPackager:
                 context_file,
                 launch_cmd,
             )
+
+            # Auto-launch CLI session if configured
+            if (
+                self.launcher is not None
+                and self.spawner is not None
+                and self._should_auto_launch()
+            ):
+                try:
+                    prompt = (
+                        f"Continue this investigation. "
+                        f"The workflow '{pkg.workflow_name}' "
+                        f"(ID: {wf_id}) needs attention. "
+                        f"Read the context above for details."
+                    )
+                    session_id = await self.launcher.launch(
+                        spawner=self.spawner,
+                        context_markdown=context_md,
+                        prompt=prompt,
+                        image=self.sandbox_image,
+                        workflow_id=wf_id,
+                    )
+                    logger.info(
+                        "CLI session auto-launched: session_id=%s, workflow=%s",
+                        session_id,
+                        wf_id,
+                    )
+                except Exception as launch_exc:
+                    logger.warning(
+                        "CLI session auto-launch failed for workflow '%s': %s",
+                        wf_id,
+                        launch_exc,
+                    )
+
         except Exception as exc:
             logger.warning(
                 "CLI handoff packaging failed for step '%s': %s",

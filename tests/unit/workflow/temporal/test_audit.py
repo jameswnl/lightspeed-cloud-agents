@@ -89,3 +89,60 @@ class TestEmitAudit:
             details={"error": "cert expired"},
         )
         assert event.event_type == "tls_error"
+
+
+class TestCLISessionAuditEvents:
+    """Tests for CLI session audit event types (T15 Phase 2, Task 4)."""
+
+    def test_cli_session_launched_is_valid_event_type(self) -> None:
+        """cli_session_launched is accepted as a valid AuditEventType."""
+        event = AuditEvent(
+            event_type="cli_session_launched",
+            workflow_id="wf-cli-1",
+            details={
+                "session_id": "sess-abc",
+                "agent_name": "cli-agent-abc",
+                "workflow_id": "wf-cli-1",
+            },
+        )
+        assert event.event_type == "cli_session_launched"
+        assert event.details["session_id"] == "sess-abc"
+
+    def test_cli_session_terminated_is_valid_event_type(self) -> None:
+        """cli_session_terminated is accepted as a valid AuditEventType."""
+        event = AuditEvent(
+            event_type="cli_session_terminated",
+            workflow_id="wf-cli-2",
+            details={
+                "session_id": "sess-def",
+                "reason": "user_request",
+            },
+        )
+        assert event.event_type == "cli_session_terminated"
+        assert event.details["reason"] == "user_request"
+
+    def test_cli_session_failed_is_valid_event_type(self) -> None:
+        """cli_session_failed is accepted as a valid AuditEventType."""
+        event = AuditEvent(
+            event_type="cli_session_failed",
+            workflow_id="wf-cli-3",
+            details={
+                "session_id": "sess-ghi",
+                "error": "spawner returned 500",
+            },
+        )
+        assert event.event_type == "cli_session_failed"
+        assert event.details["error"] == "spawner returned 500"
+
+    def test_emit_cli_session_launched(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """emit_audit with cli_session_launched logs correctly."""
+        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.audit"):
+            event = emit_audit(
+                event_type="cli_session_launched",
+                workflow_id="wf-launch-test",
+                details={"session_id": "sess-001", "agent_name": "cli-agent-001"},
+            )
+        assert event.event_type == "cli_session_launched"
+        assert any("cli_session_launched" in r.message for r in caplog.records)
