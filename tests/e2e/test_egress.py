@@ -117,9 +117,9 @@ class TestNetworkEgress:
                 "-o", "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
             ], timeout=60)
 
-            # Wait for the pod to terminate
+            # Wait for the pod to terminate (Failed phase because egress is blocked)
             _kubectl_run([
-                "wait", "--for=condition=Complete",
+                "wait", "--for=jsonpath={.status.phase}=Failed",
                 f"pod/{pod_name}", "--namespace", namespace,
                 "--timeout=60s",
             ])
@@ -131,8 +131,8 @@ class TestNetworkEgress:
             ])
 
             exit_code = result.stdout.strip()
-            assert exit_code != "0", (
-                f"Expected curl to fail (egress blocked), but got exit code {exit_code}"
+            assert exit_code and exit_code != "0", (
+                f"Expected curl to fail (egress blocked), but got exit code {exit_code!r}"
             )
         finally:
             _kubectl_run(["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"])

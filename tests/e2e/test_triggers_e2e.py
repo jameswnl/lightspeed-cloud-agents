@@ -32,13 +32,9 @@ TEMPORAL_URL = os.environ.get("TEMPORAL_E2E_URL", "localhost:7233")
 def _temporal_available() -> bool:
     """Check if Temporal server is reachable."""
     try:
-        import asyncio
-
         from temporalio.client import Client
 
-        asyncio.get_event_loop().run_until_complete(
-            Client.connect(TEMPORAL_URL)
-        )
+        asyncio.run(Client.connect(TEMPORAL_URL))
         return True
     except Exception:
         return False
@@ -399,14 +395,15 @@ class TestScheduleTriggerE2E:
         }
 
         with TestClient(app) as test_client:
-            resp1 = test_client.post("/v1/schedules", json=body)
-            assert resp1.status_code == 201
+            try:
+                resp1 = test_client.post("/v1/schedules", json=body)
+                assert resp1.status_code == 201
 
-            resp2 = test_client.post("/v1/schedules", json=body)
-            assert resp2.status_code == 409
-
-            # Cleanup
-            test_client.delete(f"/v1/schedules/{schedule_id}")
+                resp2 = test_client.post("/v1/schedules", json=body)
+                assert resp2.status_code == 409
+            finally:
+                # Cleanup even if assertions fail
+                test_client.delete(f"/v1/schedules/{schedule_id}")
 
     async def test_schedule_nonexistent_workflow_rejected(self) -> None:
         """Creating a schedule for a nonexistent workflow returns 404."""
