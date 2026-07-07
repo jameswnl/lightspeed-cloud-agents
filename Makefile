@@ -1,7 +1,7 @@
 # Cloud Agents — build and run targets
 
 SANDBOX_REPO ?= ../lightspeed-agentic-sandbox
-SANDBOX_BRANCH ?= temporal-integration
+SANDBOX_BRANCH ?= lcs-main
 COMPOSE_FILE = deploy/podman/docker-compose.yaml
 DEMO_COMPOSE_FILE = deploy/podman/docker-compose.demo.yaml
 export PODMAN_SOCK ?= /run/user/$(shell id -u)/podman/podman.sock

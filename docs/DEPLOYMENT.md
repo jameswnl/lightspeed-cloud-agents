@@ -16,7 +16,7 @@ make build-mcp          # just the MCP filesystem server (demo only)
 make build-mcp-kubectl  # just the MCP kubectl server (K8s cluster access)
 ```
 
-The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sandbox @ temporal-integration](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/temporal-integration)) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
+The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sandbox @ lcs-main](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/lcs-main)) which has MCP streamable HTTP support and JSONL event file output. `make build-sandbox` handles cloning and checkout automatically.
 
 ---
 
