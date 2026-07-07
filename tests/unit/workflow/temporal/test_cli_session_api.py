@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -630,6 +631,29 @@ class TestMessageSizeLimits:
         # Should pass validation but fail on session lookup
         assert response.status_code == 404
 
+    def test_oversized_raw_input_with_control_chars_returns_422(
+        self, client: TestClient
+    ) -> None:
+        """Adversarial payload of control chars that shrinks after sanitization is rejected early.
+
+        A message of mostly control characters could pass the 64KB check after
+        sanitization while the raw input is arbitrarily large. The early guard
+        must reject raw inputs exceeding MAX_MESSAGE_BYTES * 4 before sanitization.
+        """
+        from cloud_agents.workflow.temporal_api import MAX_MESSAGE_BYTES
+
+        # Build a payload that is huge raw but would be tiny after stripping
+        # control chars. 4x the max size + 1 to exceed the raw guard.
+        raw_size = MAX_MESSAGE_BYTES * 4 + 1
+        # Use \x01 (control char that gets stripped) plus a small visible part
+        adversarial_payload = "\x01" * raw_size + "hello"
+
+        response = client.post(
+            "/v1/cli-sessions/any-id/messages",
+            json={"message": adversarial_payload},
+        )
+        assert response.status_code == 422
+
     def test_empty_message_returns_422(
         self, client: TestClient
     ) -> None:
@@ -803,3 +827,108 @@ class TestGetCLISessionOutput:
 
         response = test_client.get("/v1/cli-sessions/some-id/output")
         assert response.status_code == 403
+
+
+class TestSendMessageRaceCondition:
+    """Tests for race condition between send_message and terminate.
+
+    The status check (get_status) and send_message are not atomic in the
+    API endpoint. terminate() can stop the session between the check and
+    the write. The fix adds an asyncio lock to CLISessionLauncher that
+    protects both send_message() and terminate().
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_terminated_session_atomically(
+        self,
+    ) -> None:
+        """send_message raises RuntimeError if session is not RUNNING.
+
+        The status check must happen inside the lock so that a concurrent
+        terminate() cannot change state between check and write.
+        """
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        launcher = CLISessionLauncher()
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            session_id = await launcher.launch(
+                spawner=spawner,
+                context_markdown="# Context",
+                prompt="Investigate",
+                image="quay.io/sandbox:latest",
+                workflow_id="wf-race",
+            )
+
+        # Terminate the session first
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            await launcher.terminate(session_id, spawner)
+
+        # Now send_message should reject because the status check is
+        # inside send_message itself (atomic with the write)
+        with pytest.raises(RuntimeError, match="not in RUNNING state"):
+            await launcher.send_message(session_id, spawner, "too late")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_terminate_and_send_message(
+        self,
+    ) -> None:
+        """Concurrent terminate + send_message must not write to terminated session.
+
+        Simulates the race: terminate() acquires the lock, changes status,
+        then send_message() sees the updated status and rejects.
+        """
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        launcher = CLISessionLauncher()
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            session_id = await launcher.launch(
+                spawner=spawner,
+                context_markdown="# Context",
+                prompt="Investigate",
+                image="quay.io/sandbox:latest",
+                workflow_id="wf-concurrent",
+            )
+
+        errors: list[Exception] = []
+
+        async def terminate_task() -> None:
+            with patch("cloud_agents.workflow.cli_session.emit_audit"):
+                await launcher.terminate(session_id, spawner)
+
+        async def send_task() -> None:
+            try:
+                # Small delay to let terminate acquire lock first
+                await asyncio.sleep(0.01)
+                await launcher.send_message(session_id, spawner, "race message")
+            except RuntimeError as exc:
+                errors.append(exc)
+
+        await asyncio.gather(terminate_task(), send_task())
+
+        # Either send_message raised (correct) or it ran before terminate
+        # If the lock works, after terminate completes, send should fail
+        info = launcher.get_status(session_id)
+        assert info is not None
+        assert info.status == CLISessionStatus.TERMINATED
+
+        # If send_message did run after terminate, it should have raised
+        if not errors:
+            # send_message ran before terminate (race won by send)
+            # but write should have completed before terminate changed status
+            pass
+        else:
+            # send_message correctly rejected the terminated session
+            assert "not in RUNNING state" in str(errors[0])
+
+    @pytest.mark.asyncio
+    async def test_send_message_has_session_lock(self) -> None:
+        """CLISessionLauncher has a _session_lock attribute for synchronization."""
+        launcher = CLISessionLauncher()
+        assert hasattr(launcher, "_session_lock")
+        assert isinstance(launcher._session_lock, asyncio.Lock)

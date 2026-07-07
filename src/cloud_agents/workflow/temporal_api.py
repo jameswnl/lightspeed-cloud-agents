@@ -126,6 +126,10 @@ class SendMessageRequest(BaseModel):
         Strips control characters, validates UTF-8 encoding, enforces
         non-empty content and 64KB size limit.
 
+        An early raw-size guard rejects inputs exceeding 4x the max size
+        before sanitization, preventing adversarial payloads of mostly
+        control characters from consuming CPU during regex processing.
+
         Parameters:
             v: Raw message string.
 
@@ -133,8 +137,17 @@ class SendMessageRequest(BaseModel):
             Sanitized message string.
 
         Raises:
-            ValueError: If message is empty, whitespace-only, or exceeds 64KB.
+            ValueError: If message is empty, whitespace-only, or exceeds size limits.
         """
+        # Early guard: reject oversized raw input before sanitization.
+        # An adversarial payload of mostly control characters could shrink
+        # dramatically after sanitization while still being arbitrarily large
+        # as raw input. The 4x multiplier accounts for UTF-8 expansion.
+        if len(v.encode("utf-8")) > MAX_MESSAGE_BYTES * 4:
+            raise ValueError(
+                f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes"
+            )
+
         # Sanitize control characters
         sanitized = _sanitize_message(v)
 
