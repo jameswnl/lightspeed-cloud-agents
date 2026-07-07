@@ -39,7 +39,7 @@ podman logs workflow-runner 2>&1 | grep -i "cannot connect to temporal"
 ```
 
 **Recovery**:
-1. Verify Temporal server is running: `kubectl get pods -l app=temporal`
+1. Verify Temporal server is running: `kubectl get pods -l app=temporal-server`
 2. Check the `TEMPORAL_URL` env var points to the correct address (default: `localhost:7233`)
 3. Check the `TEMPORAL_NAMESPACE` env var (default: `default`)
 4. If TLS is enabled (`TEMPORAL_TLS_ENABLED=true`), verify cert paths:
@@ -97,7 +97,7 @@ curl -s http://localhost:8080/metrics | grep ls_sandbox_orphans_cleaned_total
 
 ```bash
 # Kubernetes
-kubectl delete pods -l spawned-by=workflow-runner
+kubectl delete jobs -l spawned-by=workflow-runner
 
 # Podman
 make clean-sandboxes
