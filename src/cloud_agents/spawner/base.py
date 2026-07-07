@@ -223,6 +223,25 @@ class AgentSpawner(ABC):
     ) -> list[str]:
         """Implementation-specific listing of active agents."""
 
+    async def read_file(self, agent_name: str, path: str) -> str:
+        """Read a file from a spawned agent container.
+
+        Parameters:
+            agent_name: Name of the agent container.
+            path: Absolute file path inside the container.
+
+        Returns:
+            File contents as a string.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        return await self._do_read_file(agent_name, path)
+
+    @abstractmethod
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        """Implementation-specific file read from container."""
+
     async def wait_ready(
         self,
         endpoint: str,

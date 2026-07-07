@@ -219,6 +219,39 @@ class OpenShellSpawner(AgentSpawner):
                 exc_info=True,
             )
 
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        """Read a file from an OpenShell sandbox via exec.
+
+        Uses exec_stream to run `cat` on the given path inside the sandbox.
+
+        Args:
+            agent_name: Name of the agent.
+            path: Absolute file path inside the sandbox.
+
+        Returns:
+            File contents as a string.
+
+        Raises:
+            FileNotFoundError: If the sandbox or file is not found.
+        """
+        sandbox_id = self._sandbox_ids.get(agent_name)
+        if not sandbox_id:
+            raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
+
+        chunks: list[str] = []
+        try:
+            async for chunk in self._client.exec_stream(sandbox_id, ["cat", path]):
+                chunks.append(chunk)
+        except Exception as exc:
+            if "no such file" in str(exc).lower() or "not found" in str(exc).lower():
+                raise FileNotFoundError(f"File not found: {path}") from exc
+            raise
+
+        content = "".join(chunks)
+        if not content and not chunks:
+            raise FileNotFoundError(f"File not found or empty: {path}")
+        return content
+
     async def _do_destroy(self, agent_name: str) -> None:
         """Delete the OpenShell sandbox and clean up background tasks.
 

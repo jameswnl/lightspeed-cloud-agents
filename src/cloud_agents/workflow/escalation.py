@@ -47,6 +47,7 @@ class EscalationPackage(BaseModel):
     events: Optional[list[dict[str, Any]]] = None
     provider_name: Optional[str] = None
     workflow_id: Optional[str] = None
+    step_transcripts: Optional[dict[str, Any]] = None
 
 
 class EscalationPackager(Protocol):
@@ -160,6 +161,7 @@ def build_escalation_package(
     events: Optional[list[dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
     workflow_id: Optional[str] = None,
+    step_transcripts: Optional[dict[str, Any]] = None,
 ) -> EscalationPackage:
     """Build an escalation package from workflow state.
 
@@ -174,6 +176,7 @@ def build_escalation_package(
         events: Workflow event timeline.
         provider_name: LLM provider name.
         workflow_id: Unique workflow execution ID.
+        step_transcripts: Optional step transcript data keyed by output_key.
 
     Returns:
         Complete EscalationPackage ready for delivery.
@@ -190,6 +193,7 @@ def build_escalation_package(
         events=events,
         provider_name=provider_name,
         workflow_id=workflow_id,
+        step_transcripts=step_transcripts,
     )
 
 
@@ -258,6 +262,36 @@ def serialize_handoff_context(pkg: EscalationPackage) -> str:
     if pkg.escalation.get("failure_history"):
         last_error = pkg.escalation["failure_history"][-1].get("error", "unknown")
         sections.append(f"Last error: {last_error}")
+
+    # Render agent tool call chain from transcript (if available)
+    if pkg.step_transcripts:
+        for step_key, step_data in pkg.workflow_snapshot.items():
+            if isinstance(step_data, dict) and step_data.get("status") == "failed":
+                transcript = pkg.step_transcripts.get(step_key)
+                if transcript and transcript.get("events"):
+                    sections.append("")
+                    sections.append(f"### Agent reasoning for {step_key}")
+                    for event in transcript["events"]:
+                        event_type = event.get("type", "unknown")
+                        data = event.get("data", {})
+                        ts = event.get("ts", "")
+                        if event_type in ("tool_call", "tool_result"):
+                            name = data.get("name", "unknown")
+                            duration = data.get("duration_ms")
+                            input_val = data.get("input", "")
+                            duration_str = f" ({duration}ms)" if duration else ""
+                            input_summary = (
+                                str(input_val)[:100] if input_val else ""
+                            )
+                            sections.append(
+                                f"- [{ts}] **{name}**{duration_str}: {input_summary}"
+                            )
+                        elif event_type == "error":
+                            msg = data.get("message", "unknown error")
+                            sections.append(f"- [{ts}] ERROR: {msg}")
+                        elif event_type == "thinking":
+                            text = data.get("text", "")
+                            sections.append(f"- [{ts}] Thinking: {text[:200]}")
     sections.append("")
 
     # Provider info

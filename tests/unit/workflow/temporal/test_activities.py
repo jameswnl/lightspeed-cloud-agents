@@ -2949,3 +2949,163 @@ class TestCancellationHandling:
         assert len(timeout_calls) == 1
         assert timeout_calls[0][1]["step_name"] == "cancel-step"
         assert timeout_calls[0][1]["details"]["reason"] == "cancelled"
+
+
+class TestTranscriptCollection:
+    """Tests for transcript collection from sandbox event log."""
+
+    def _make_success_input(self) -> dict:
+        """Build a standard successful sandbox step input dict."""
+        return {
+            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4",
+                "credentials_secret": "k",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    def _mock_http_success(self, mocker: MockerFixture) -> Any:
+        """Set up httpx.AsyncClient mock returning success=True."""
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+        return mock_http
+
+    @pytest.mark.asyncio
+    async def test_transcript_collected_on_success(self, mocker: MockerFixture) -> None:
+        """Transcript is collected from sandbox event log after successful step."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        event_log = (
+            '{"ts":"2026-01-01T00:00:00Z","type":"tool_call","data":{"name":"kubectl"}}\n'
+            '{"ts":"2026-01-01T00:00:01Z","type":"result","data":{"output":"ok"}}\n'
+        )
+        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert "transcript" in result
+        transcript = result["transcript"]
+        assert transcript["step_name"] == "diag"
+        assert len(transcript["events"]) == 2
+        assert transcript["events"][0]["type"] == "tool_call"
+
+    @pytest.mark.asyncio
+    async def test_transcript_empty_when_file_missing(self, mocker: MockerFixture) -> None:
+        """Transcript is empty when event log file doesn't exist (graceful degradation)."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        mock_spawner.read_file = mocker.AsyncMock(side_effect=FileNotFoundError("not found"))
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert "transcript" in result
+        assert result["transcript"]["events"] == []
+
+    @pytest.mark.asyncio
+    async def test_transcript_empty_when_read_fails(self, mocker: MockerFixture) -> None:
+        """Transcript is empty when read_file raises an exception."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        mock_spawner.read_file = mocker.AsyncMock(side_effect=RuntimeError("exec failed"))
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert result["transcript"]["events"] == []
+
+    @pytest.mark.asyncio
+    async def test_transcript_collected_on_failure(self, mocker: MockerFixture) -> None:
+        """Transcript is collected even when the step fails."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        event_log = '{"ts":"t","type":"error","data":{"message":"API timeout"}}\n'
+        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": False, "error": "agent failed"}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "failed"
+        assert "transcript" in result
+        assert len(result["transcript"]["events"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_transcript_skips_invalid_jsonl(self, mocker: MockerFixture) -> None:
+        """Invalid JSONL lines in event log are skipped gracefully."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        event_log = (
+            '{"ts":"t","type":"tool_call","data":{"name":"kubectl"}}\n'
+            'not valid json\n'
+            '{"ts":"t2","type":"result","data":{}}\n'
+        )
+        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert len(result["transcript"]["events"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_transcript_not_collected_without_spawner(self, mocker: MockerFixture) -> None:
+        """No transcript when spawner is None (stub mode)."""
+        result = await run_sandbox_step(self._make_success_input(), spawner=None)
+
+        assert result["status"] == "completed"
+        assert "transcript" not in result
+
+    @pytest.mark.asyncio
+    async def test_transcript_empty_when_no_read_file_method(self, mocker: MockerFixture) -> None:
+        """Transcript is empty when spawner lacks read_file method."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        # Remove read_file to simulate a spawner without it
+        del mock_spawner.read_file
+        self._mock_http_success(mocker)
+
+        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert result["transcript"]["events"] == []

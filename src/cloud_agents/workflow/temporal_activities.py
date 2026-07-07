@@ -28,7 +28,7 @@ from cloud_agents.workflow.notifier import NullNotifier
 from cloud_agents.workflow.redact import redact_secrets
 from cloud_agents.workflow.temporal_context import build_sandbox_context
 from cloud_agents.workflow.temporal_metrics import ls_sandbox_tls_errors_total
-from cloud_agents.workflow.temporal_models import StepResult
+from cloud_agents.workflow.temporal_models import StepResult, StepTranscript, TranscriptEvent
 from cloud_agents.workflow.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
@@ -151,6 +151,69 @@ async def _progress_streaming_loop(
             sandbox_id,
             exc_info=True,
         )
+
+
+# Path where the sandbox agent writes structured JSONL events
+_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
+
+
+async def _collect_transcript(
+    spawner: Any,
+    pod_name: str,
+    step_name: str,
+) -> StepTranscript:
+    """Collect the agent event transcript from the sandbox container.
+
+    Reads /var/log/agent-events.jsonl from the sandbox via spawner.read_file(),
+    parses each line into a TranscriptEvent, and returns a StepTranscript.
+
+    Graceful degradation: returns an empty transcript if the file doesn't
+    exist (Task 5 not shipped yet) or if any error occurs during collection.
+
+    Parameters:
+        spawner: Agent spawner instance (must have read_file method).
+        pod_name: Name of the sandbox pod/container.
+        step_name: Name of the workflow step (for the transcript).
+
+    Returns:
+        StepTranscript with parsed events, or empty transcript on failure.
+    """
+    empty = StepTranscript(step_name=step_name)
+
+    read_file = getattr(spawner, "read_file", None)
+    if read_file is None or not callable(read_file):
+        return empty
+
+    try:
+        content = await read_file(pod_name, _EVENT_LOG_PATH)
+    except (FileNotFoundError, OSError):
+        logger.debug("Event log not found for step '%s' (graceful degradation)", step_name)
+        return empty
+    except Exception:
+        logger.warning("Failed to read event log for step '%s'", step_name, exc_info=True)
+        return empty
+
+    if not isinstance(content, str):
+        return empty
+
+    events: list[TranscriptEvent] = []
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            raw = json.loads(line)
+            event = TranscriptEvent(
+                ts=raw.get("ts", ""),
+                type=raw.get("type", "result"),
+                data=raw.get("data", {}),
+            )
+            events.append(event)
+        except (json.JSONDecodeError, Exception):
+            logger.debug("Skipping invalid JSONL line in event log: %s", line[:200])
+            continue
+
+    return StepTranscript(step_name=step_name, events=events)
 
 
 @activity.defn
@@ -447,6 +510,10 @@ async def _run_sandbox_step_inner(
 
             data = response.json()
 
+            # Collect transcript from sandbox event log (before destroy)
+            transcript = await _collect_transcript(spawner, pod_name, step_name)
+            transcript_dict = transcript.model_dump()
+
             if not data.get("success", False):
                 _circuit_breaker.record_failure(provider_name)
                 error_msg = data.get("error", "agent returned success=false")
@@ -461,6 +528,7 @@ async def _run_sandbox_step_inner(
                     "status": "failed",
                     "error": error_msg,
                     "output": output_val,
+                    "transcript": transcript_dict,
                 }
 
             _circuit_breaker.record_success(provider_name)
@@ -473,6 +541,7 @@ async def _run_sandbox_step_inner(
             return {
                 "status": "completed",
                 "output": output,
+                "transcript": transcript_dict,
             }
         except asyncio.CancelledError:
             was_cancelled = True

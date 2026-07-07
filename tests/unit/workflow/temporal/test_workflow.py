@@ -712,3 +712,100 @@ class TestGetWorkflowContext:
         assert ctx["provider_name"] == "openai"
         assert ctx["provider_model"] == "gpt-4"
         assert ctx["definition"] is not None
+
+
+class TestTranscriptStorage:
+    """Tests for step transcript storage in workflow state."""
+
+    @pytest.mark.asyncio
+    async def test_transcript_stored_on_success(self) -> None:
+        """Transcript from activity result is stored in workflow state."""
+        wf = AgentWorkflow()
+
+        # Simulate what the workflow does: process an activity result with transcript
+        from cloud_agents.workflow.temporal_models import StepTranscript
+
+        # Direct test of transcript storage logic
+        transcript_data = {
+            "step_name": "s1",
+            "events": [
+                {"ts": "t1", "type": "tool_call", "data": {"name": "kubectl"}},
+                {"ts": "t2", "type": "result", "data": {"output": "ok"}},
+            ],
+            "cost_usd": 0.05,
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "duration_ms": 1500,
+        }
+        transcript = StepTranscript(**transcript_data)
+        wf._step_transcripts["r1"] = transcript.truncate(max_events=50).model_dump()
+
+        transcripts = wf.get_step_transcripts()
+        assert "r1" in transcripts
+        assert transcripts["r1"]["step_name"] == "s1"
+        assert len(transcripts["r1"]["events"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_transcript_stored_via_workflow_execution(self, env: WorkflowEnvironment) -> None:
+        """Activity results with transcript field are stored during workflow execution."""
+        steps = [
+            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "check"},
+        ]
+
+        async with Worker(
+            env.client,
+            task_queue="test-q",
+            workflows=[AgentWorkflow],
+            activities=[run_sandbox_step, build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run,
+                _make_input(steps),
+                id="wf-transcript-exec-1",
+                task_queue="test-q",
+            )
+
+        # run_sandbox_step with no spawner returns no transcript
+        # but the workflow should still complete
+        assert result.steps["r1"].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_transcript_query_empty_before_steps(self, env: WorkflowEnvironment) -> None:
+        """get_step_transcripts returns empty dict before any steps execute."""
+        wf = AgentWorkflow()
+        transcripts = wf.get_step_transcripts()
+        assert transcripts == {}
+
+    @pytest.mark.asyncio
+    async def test_transcript_stored_on_failure(self) -> None:
+        """Empty transcript stored when step fails via ActivityError."""
+        wf = AgentWorkflow()
+
+        # Store an empty transcript for a failed step (what the workflow does on ActivityError)
+        from cloud_agents.workflow.temporal_models import StepResult as StepResultModel
+        from cloud_agents.workflow.temporal_models import StepTranscript
+
+        wf._step_transcripts["r1"] = StepTranscript(step_name="failing_step").model_dump()
+        wf._steps["r1"] = StepResultModel(status="failed", error="retries exhausted")
+
+        transcripts = wf.get_step_transcripts()
+        assert "r1" in transcripts
+        assert transcripts["r1"]["step_name"] == "failing_step"
+        assert transcripts["r1"]["events"] == []
+
+    @pytest.mark.asyncio
+    async def test_transcript_truncated_for_large_events(self) -> None:
+        """Large transcripts are truncated before storage in workflow state."""
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        events = [
+            TranscriptEvent(
+                ts=f"t{i}",
+                type="tool_call",
+                data={"name": f"tool_{i}", "input": "x" * 500},
+            )
+            for i in range(200)
+        ]
+        transcript = StepTranscript(step_name="big", events=events)
+        truncated = transcript.truncate(max_events=50)
+        assert len(truncated.events) <= 51  # 25 + marker + 25

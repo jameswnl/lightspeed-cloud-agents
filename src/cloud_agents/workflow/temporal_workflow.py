@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
     from cloud_agents.workflow.state import WorkflowState
     from cloud_agents.workflow.temporal_models import (
         StepResult,
+        StepTranscript,
         WorkflowEvent,
         WorkflowInput,
         WorkflowOutput,
@@ -43,6 +44,7 @@ class AgentWorkflow:
         self._events: list[WorkflowEvent] = []
         self._authz_context: Optional[dict[str, Any]] = None
         self._workflow_context: Optional[dict[str, Any]] = None
+        self._step_transcripts: dict[str, dict[str, Any]] = {}
 
     @workflow.signal
     async def approve(
@@ -70,6 +72,15 @@ class AgentWorkflow:
     def get_authz_context(self) -> dict[str, Any] | None:
         """Return the workflow's authorization context."""
         return self._authz_context
+
+    @workflow.query
+    def get_step_transcripts(self) -> dict[str, dict[str, Any]]:
+        """Return stored step transcripts keyed by output_key.
+
+        Returns:
+            Dict mapping output_key to truncated transcript dicts.
+        """
+        return dict(self._step_transcripts)
 
     @workflow.query
     def get_workflow_context(self) -> dict[str, Any] | None:
@@ -277,7 +288,24 @@ class AgentWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=max_retries + 1),
             )
 
-            step_result = StepResult(**result) if isinstance(result, dict) else result
+            if isinstance(result, dict):
+                # Extract and store transcript before constructing StepResult
+                transcript_data = result.pop("transcript", None)
+                step_result = StepResult(**result)
+                if transcript_data:
+                    transcript = StepTranscript(**transcript_data)
+                    self._step_transcripts[output_key] = transcript.truncate(
+                        max_events=50,
+                    ).model_dump()
+                else:
+                    self._step_transcripts[output_key] = StepTranscript(
+                        step_name=step_name,
+                    ).model_dump()
+            else:
+                step_result = result
+                self._step_transcripts[output_key] = StepTranscript(
+                    step_name=step_name,
+                ).model_dump()
             if enforcer.enabled and step_result.output:
                 step_result = StepResult(
                     status=step_result.status,
@@ -288,6 +316,9 @@ class AgentWorkflow:
         except ActivityError:
             step_result = StepResult(status="failed", error="retries exhausted")
             self._steps[output_key] = step_result
+            self._step_transcripts[output_key] = StepTranscript(
+                step_name=step_name,
+            ).model_dump()
             self._emit("step.failed", step_name)
 
             escalation = await workflow.execute_activity(

@@ -26,6 +26,9 @@ class MockSpawner(AgentSpawner):
     async def _do_list_active(self, labels=None):
         return list(self.spawned)
 
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        raise FileNotFoundError(f"No such file: {path}")
+
 
 class FailingSpawner(AgentSpawner):
     """Spawner that always fails."""
@@ -40,6 +43,9 @@ class FailingSpawner(AgentSpawner):
 
     async def _do_list_active(self, labels=None):
         return []
+
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        raise FileNotFoundError(f"No such file: {path}")
 
 
 class TestAgentSpawner:
@@ -172,6 +178,58 @@ class TestWaitReadyTLS:
             assert result is True
             init_call = mock_client_cls.call_args
             assert "verify" not in init_call[1]
+
+
+class ReadFileSpawner(AgentSpawner):
+    """Spawner with read_file implementation for testing."""
+
+    def __init__(self, file_contents: dict[str, str] | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self._file_contents = file_contents or {}
+
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
+        return f"http://{agent_name}:8080"
+
+    async def _do_destroy(self, agent_name):
+        pass
+
+    async def _do_list_active(self, labels=None):
+        return []
+
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        key = f"{agent_name}:{path}"
+        if key not in self._file_contents:
+            raise FileNotFoundError(f"No such file: {path}")
+        return self._file_contents[key]
+
+
+class TestReadFile:
+    """Tests for AgentSpawner.read_file() method."""
+
+    @pytest.mark.asyncio
+    async def test_read_file_returns_content(self) -> None:
+        """read_file returns content from the container."""
+        spawner = ReadFileSpawner(
+            file_contents={"pod-1:/var/log/agent-events.jsonl": '{"ts":"t","type":"tool_call"}\n'}
+        )
+        content = await spawner.read_file("pod-1", "/var/log/agent-events.jsonl")
+        assert "tool_call" in content
+
+    @pytest.mark.asyncio
+    async def test_read_file_not_found_raises(self) -> None:
+        """read_file raises FileNotFoundError when file doesn't exist."""
+        spawner = ReadFileSpawner()
+        with pytest.raises(FileNotFoundError):
+            await spawner.read_file("pod-1", "/nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_read_file_is_abstract_method(self) -> None:
+        """read_file on the ABC delegates to _do_read_file."""
+        spawner = ReadFileSpawner(
+            file_contents={"agent-1:/tmp/test.txt": "hello"}
+        )
+        result = await spawner.read_file("agent-1", "/tmp/test.txt")
+        assert result == "hello"
 
 
 class TestSpawnConfig:

@@ -319,3 +319,98 @@ class TestCLIHandoffPackager:
         pkg = _make_enriched_package()
         # Should not raise
         await packager.package(pkg)
+
+
+class TestTranscriptInHandoff:
+    """Tests for step transcript integration in handoff context (Task 4b)."""
+
+    def _make_transcript_package(self) -> EscalationPackage:
+        """Create a package with step_transcripts for testing."""
+        return build_escalation_package(
+            workflow_name="diagnose-fix",
+            step_name="fix-hosts",
+            escalation_data={
+                "failure_history": [{"error": "timeout"}],
+            },
+            workflow_snapshot={
+                "r1": {"status": "completed", "output": {"summary": "found issues"}},
+                "r2": {"status": "failed", "error": "retries exhausted"},
+            },
+            definition={"metadata": {"name": "diagnose-fix"}, "spec": {"steps": []}},
+            input_prompt="Fix broken hosts",
+            events=[
+                {"type": "step.failed", "step": "fix-hosts", "timestamp": "t"},
+            ],
+            provider_name="openai",
+            workflow_id="wf-123",
+            step_transcripts={
+                "r2": {
+                    "step_name": "fix-hosts",
+                    "events": [
+                        {
+                            "ts": "2026-01-01T00:00:00Z",
+                            "type": "tool_call",
+                            "data": {"name": "kubectl", "input": "get pods", "duration_ms": 150},
+                        },
+                        {
+                            "ts": "2026-01-01T00:00:01Z",
+                            "type": "tool_call",
+                            "data": {"name": "ssh_exec", "input": "restart service", "duration_ms": 3000},
+                        },
+                        {
+                            "ts": "2026-01-01T00:00:04Z",
+                            "type": "error",
+                            "data": {"message": "Connection timed out"},
+                        },
+                    ],
+                    "cost_usd": 0.05,
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "duration_ms": 4500,
+                },
+            },
+        )
+
+    def test_step_transcripts_field_accepted(self) -> None:
+        """EscalationPackage accepts optional step_transcripts field."""
+        pkg = self._make_transcript_package()
+        assert pkg.step_transcripts is not None
+        assert "r2" in pkg.step_transcripts
+
+    def test_step_transcripts_defaults_none(self) -> None:
+        """step_transcripts defaults to None when not provided."""
+        pkg = _make_package()
+        assert pkg.step_transcripts is None
+
+    def test_serialize_includes_tool_call_chain(self) -> None:
+        """serialize_handoff_context renders tool call chain for failed steps."""
+        pkg = self._make_transcript_package()
+        md = serialize_handoff_context(pkg)
+        # Should contain agent reasoning section
+        assert "kubectl" in md
+        assert "ssh_exec" in md
+        assert "Connection timed out" in md
+
+    def test_serialize_shows_tool_duration(self) -> None:
+        """Tool call chain includes duration information."""
+        pkg = self._make_transcript_package()
+        md = serialize_handoff_context(pkg)
+        assert "150" in md or "150ms" in md
+
+    def test_serialize_without_transcripts_still_works(self) -> None:
+        """Serialization works when step_transcripts is None."""
+        pkg = _make_enriched_package()
+        md = serialize_handoff_context(pkg)
+        assert "# Investigation Handoff: diagnose-fix" in md
+
+    def test_build_escalation_package_accepts_transcripts(self) -> None:
+        """build_escalation_package passes through step_transcripts."""
+        pkg = build_escalation_package(
+            workflow_name="test",
+            step_name="s1",
+            escalation_data={},
+            workflow_snapshot={},
+            step_transcripts={"r1": {"step_name": "s1", "events": []}},
+        )
+        assert pkg.step_transcripts is not None
+        assert "r1" in pkg.step_transcripts
