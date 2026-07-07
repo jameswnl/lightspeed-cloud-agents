@@ -80,6 +80,7 @@ demo-up: ensure-podman build-demo  ## Start demo stack (core + MCP server + CORS
 	@echo "  Workflow Runner API: http://localhost:8080"
 	@echo "  Temporal UI:        http://localhost:8233"
 	@echo "  MCP Filesystem:     http://localhost:8081"
+	@echo "  MCP Kubectl:        http://localhost:8082"
 	@echo ""
 	@echo "Run 'make dashboard' to start the demo dashboard."
 
