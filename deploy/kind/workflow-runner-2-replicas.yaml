@@ -1,0 +1,105 @@
+# 2-replica workflow runner overlay for multi-replica E2E testing.
+#
+# Use instead of workflow-runner.yaml to deploy 2 replicas sharing
+# the same Temporal task queue. Temporal distributes activities across
+# both replicas; killing one proves crash recovery (R7).
+#
+# Usage:
+#   kubectl apply -f deploy/kind/workflow-runner-2-replicas.yaml
+#
+# Replaces the default 1-replica deployment. Same container spec,
+# same service account, same task queue — only replicas differ.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-runner
+  labels:
+    app: workflow-runner
+    environment: cloud-agents
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workflow-runner
+  template:
+    metadata:
+      labels:
+        app: workflow-runner
+        environment: cloud-agents
+    spec:
+      serviceAccountName: workflow-runner
+      containers:
+        - name: workflow-runner
+          image: localhost/workflow-runner:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "uvicorn", "cloud_agents.workflow.temporal_entrypoint:app", "--host", "0.0.0.0", "--port", "8080"]
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TEMPORAL_URL
+              value: "temporal:7233"
+            - name: TEMPORAL_NAMESPACE
+              value: "default"
+            - name: WORKFLOW_SPAWNER
+              value: "kubernetes"
+            - name: SPAWNER_NAMESPACE
+              value: "default"
+            - name: SPAWNER_SERVICE_ACCOUNT
+              value: "workflow-runner"
+            - name: AUTH_REQUIRED
+              value: "false"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-key
+                  key: OPENAI_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: tmp-scratch
+              mountPath: /tmp
+            - name: sa-token
+              mountPath: /var/run/secrets/cloud-agents
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: tmp-scratch
+          emptyDir:
+            medium: Memory
+        - name: sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: cloud-agents
+                  expirationSeconds: 3600
+                  path: token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-runner
+  labels:
+    app: workflow-runner
+    environment: cloud-agents
+spec:
+  selector:
+    app: workflow-runner
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
