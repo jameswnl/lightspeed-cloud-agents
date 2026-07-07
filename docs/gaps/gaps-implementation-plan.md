@@ -746,3 +746,28 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 6. **ARCHITECTURE.md** — documented `AGENT_API_TOKEN` env var in config table.
 
 **Effort**: 1 day
+
+### T53: OpenShell Gateway spawner [Phase 4]
+
+**Status**: Open (spike: [issue #50](https://github.com/jameswnl/lightspeed-cloud-agents/issues/50))
+**ARCHITECTURE.md ref**: Spawner — unified backend
+
+**Problem**: We maintain two spawner implementations (KubernetesSpawner and PodmanSpawner) with duplicated logic. Sandbox isolation is limited to container securityContext with no Landlock, seccomp, L7 network policy, or SSRF protection.
+
+**Spike findings**: OpenShellSpawner prototype implements AgentSpawner ABC via OpenShell gRPC API. Single `_do_spawn` replaces both K8s and Podman paths. Gateway handles sandbox lifecycle, network isolation, and credential management. Service exposure via `ExposeService` RPC preserves the `POST /v1/agent/run` contract. Full findings: `docs/spikes/openshell-spawner-spike.md`.
+
+**What to build** (if spike -> go):
+1. Production-harden the `OpenShellSpawner` prototype
+2. Add skills_image support (init container equivalent via OpenShell exec)
+3. Add credential provider integration (replace K8s Secret env vars)
+4. L7 network policy configuration via SandboxPolicy
+5. Integration tests with a running OpenShell gateway
+6. Deployment guide: gateway setup for K8s and Podman modes
+
+**Effort**: 2-3 weeks (production), 1 week (spike done)
+
+**Risks**:
+- OpenShell is alpha software — API may change
+- Python SDK lacks `ExposeService` wrapper (using raw gRPC stub)
+- `SandboxClient.list()` has no label filter — relies on naming convention
+- Gateway is a new infrastructure dependency to operate
