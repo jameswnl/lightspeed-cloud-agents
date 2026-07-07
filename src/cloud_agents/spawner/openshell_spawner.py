@@ -1,279 +1,240 @@
-"""OpenShell Gateway agent spawner -- creates sandboxes via OpenShell gRPC API.
+"""OpenShell agent spawner — hybrid exec+HTTP communication.
 
-Spike prototype (issue #50). Uses the OpenShell Python SDK to create
-sandboxes through the OpenShell Gateway, which provides a unified
-backend for Docker, Podman, K8s, and MicroVM runtimes with built-in
-Landlock + seccomp + network namespace isolation.
+Uses OpenShift sandbox (OpenShell) API to create ephemeral sandboxes,
+start HTTP servers via exec, and stream progress events via tail.
+
+Key design: HTTP contract is source of truth for results. The
+stream_progress() async generator provides best-effort streaming of
+agent work-in-progress events — dropped events are acceptable.
+
+This is OpenShell-specific; other spawners (Podman, K8s) do not
+support progress streaming. The caller should check isinstance()
+before calling stream_progress().
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import os
-from typing import TYPE_CHECKING, Any
+from typing import Any, AsyncIterator
 
-from cloud_agents.spawner.base import AgentSpawner, SpawnConfig
-
-if TYPE_CHECKING:
-    from cloud_agents.workflow.tls import EphemeralCerts
+from cloud_agents.spawner.base import AgentSpawner
 
 logger = logging.getLogger(__name__)
 
-# All sandboxes created by this spawner use this name prefix.
-# Used for filtering in _do_list_active since SandboxRef has no labels.
-SANDBOX_NAME_PREFIX = "ca-agent-"
+# Default command to start the HTTP server inside the sandbox
+_DEFAULT_SERVER_COMMAND = [
+    "uvicorn",
+    "lightspeed_agentic.app:create_app",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8080",
+]
 
-# Default port for the sandbox HTTP server.
-SANDBOX_HTTP_PORT = 8080
-
-# Service name used when registering with ExposeService.
-SANDBOX_SERVICE_NAME = "agent-http"
+# Path where the sandbox agent writes structured JSONL events
+_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
 class OpenShellSpawner(AgentSpawner):
-    """Spawns sandboxes via the OpenShell Gateway gRPC API.
+    """Spawns sandboxes via OpenShell exec-based communication.
 
-    This is a spike prototype that replaces both KubernetesSpawner and
-    PodmanSpawner with a single implementation backed by OpenShell Gateway.
-
-    The spawner uses Option C from the spike design: start the sandbox with
-    our sandbox image (lightspeed-agentic-sandbox), expose its HTTP port
-    via OpenShell's ExposeService, and communicate through the gateway-
-    provided URL to preserve the POST /v1/agent/run contract.
+    Hybrid approach: exec to start the HTTP server (fire-and-forget),
+    expose the service port for HTTP result contract, and optionally
+    stream progress events via tail -f on the event log.
 
     Attributes:
-        _gateway_url: OpenShell gateway gRPC endpoint (host:port).
-        _cluster: Optional cluster name for from_active_cluster resolution.
+        _client: OpenShell SDK client instance.
+        _sandbox_ids: Map of agent_name -> sandbox_id for cleanup.
+        _server_tasks: Map of sandbox_id -> background asyncio.Task
+            for the exec'd server process.
     """
 
     def __init__(
         self,
-        gateway_url: str | None = None,
-        cluster: str | None = None,
+        openshell_client: Any = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
 
         Args:
-            gateway_url: OpenShell gateway gRPC endpoint (host:port).
-                Falls back to OPENSHELL_GATEWAY_URL env var.
-                If neither is set, uses from_active_cluster auto-resolution.
-            cluster: Optional cluster name for from_active_cluster.
-                Only used when gateway_url is not set.
-            **kwargs: Forwarded to AgentSpawner (e.g. max_pods).
+            openshell_client: OpenShell SDK client for sandbox operations.
+                Must implement create_sandbox(), exec_stream(),
+                expose_service(), and delete_sandbox().
         """
         super().__init__(**kwargs)
-        self._gateway_url = gateway_url or os.environ.get("OPENSHELL_GATEWAY_URL")
-        self._cluster = cluster
-
-    def _get_client(self) -> Any:
-        """Create a SandboxClient connected to the OpenShell gateway.
-
-        Returns:
-            Connected SandboxClient instance. Caller must close it.
-        """
-        from openshell import SandboxClient
-
-        if self._gateway_url:
-            return SandboxClient(endpoint=self._gateway_url)
-        return SandboxClient.from_active_cluster(cluster=self._cluster)
+        self._client = openshell_client
+        self._sandbox_ids: dict[str, str] = {}
+        self._server_tasks: dict[str, asyncio.Task] = {}
 
     async def _do_spawn(
         self,
         agent_name: str,
         image: str,
         env: dict[str, str],
-        config_override: SpawnConfig | None = None,
+        config: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
+        # TODO: Map to OpenShell equivalents for production
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
-        tls_certs: EphemeralCerts | None = None,
+        tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
-        """Create an OpenShell sandbox for the agent.
+        """Create an OpenShell sandbox, start HTTP server, return endpoint.
 
-        Builds a SandboxSpec with the given image and env vars, creates
-        the sandbox via the gateway, waits for it to become ready, then
-        exposes the HTTP port via ExposeService and returns the URL.
-
-        Args:
-            agent_name: Name for the spawned sandbox.
-            image: Container image to use.
-            env: Environment variables for the sandbox.
-            config_override: Optional per-step resource configuration.
-            labels: Ignored (OpenShell has no label support on SandboxRef).
-            skills_image: Not yet supported; logs a warning.
-            skills_paths: Not yet supported.
-            service_account: Ignored (OpenShell manages identity).
-            read_only: Ignored (OpenShell manages filesystem isolation).
-            credential_secret_name: Not supported; logs a warning.
-            mcp_secret_mounts: Not supported; logs a warning.
-            tls_certs: Logs a warning; OpenShell manages network security.
+        1. Create sandbox with the given image and env vars.
+        2. Exec the HTTP server command (fire-and-forget background task).
+        3. Expose the service port and return the routable URL.
 
         Returns:
-            HTTP endpoint URL of the sandbox (from ExposeService).
-
-        Raises:
-            RuntimeError: If sandbox creation, readiness, or service
-                exposure fails.
+            HTTP endpoint URL of the sandbox service.
         """
-        from openshell._proto import openshell_pb2
-
-        cfg = config_override or SpawnConfig()
-        sandbox_name = f"{SANDBOX_NAME_PREFIX}{agent_name}"
-
-        if tls_certs is not None:
-            logger.warning(
-                "TLS certs provided for '%s' but OpenShell Gateway manages "
-                "network security via its own TLS and network policies. "
-                "App-level TLS certs will be ignored. Consider using "
-                "SANDBOX_TLS_MODE=mesh when deploying with OpenShell.",
-                agent_name,
-            )
-
-        if skills_image:
-            logger.warning(
-                "skills_image '%s' is not yet supported by OpenShellSpawner; "
-                "skills must be baked into the sandbox image for now.",
-                skills_image,
-            )
-
-        if credential_secret_name:
-            logger.warning(
-                "credential_secret_name '%s' is not supported by OpenShellSpawner; "
-                "use OpenShell credential providers instead.",
-                credential_secret_name,
-            )
-
-        if mcp_secret_mounts:
-            logger.warning(
-                "mcp_secret_mounts are not supported by OpenShellSpawner; "
-                "MCP server credentials must be provided via env vars or "
-                "OpenShell credential providers.",
-            )
-
-        # Build SandboxSpec with image and environment
-        template = openshell_pb2.SandboxTemplate(image=image)
-        spec = openshell_pb2.SandboxSpec(
-            name=sandbox_name,
-            environment=env,
-            template=template,
+        sandbox_id = await self._client.create_sandbox(
+            image=image,
+            env=env,
+            labels=labels,
         )
+        self._sandbox_ids[agent_name] = sandbox_id
 
-        client = self._get_client()
-        try:
-            # Create sandbox
-            sandbox_ref = await asyncio.to_thread(client.create, spec=spec)
-            logger.info(
-                "Created OpenShell sandbox '%s' (id=%s) for agent '%s'",
-                sandbox_ref.name,
-                sandbox_ref.id,
-                agent_name,
-            )
+        # Start HTTP server via exec (fire-and-forget)
+        await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
 
-            # Wait for sandbox to be ready
-            try:
-                await asyncio.to_thread(
-                    client.wait_ready,
-                    sandbox_ref.name,
-                    timeout_seconds=cfg.timeout_seconds,
-                )
-            except Exception as exc:
-                # Clean up the sandbox if it fails to become ready
-                logger.error(
-                    "Sandbox '%s' failed to become ready: %s",
-                    sandbox_ref.name,
-                    exc,
-                )
-                try:
-                    await asyncio.to_thread(client.delete, sandbox_ref.name)
-                except Exception:
-                    pass
-                raise
+        # Expose service port and get routable endpoint
+        endpoint = await self._client.expose_service(sandbox_id, port=8080)
 
-            # Expose the sandbox HTTP service via the gateway
-            target_port = SANDBOX_HTTP_PORT
-            expose_request = openshell_pb2.ExposeServiceRequest(
-                sandbox=sandbox_ref.name,
-                service=SANDBOX_SERVICE_NAME,
-                target_port=target_port,
-                domain=False,
-            )
-            try:
-                response = await asyncio.to_thread(client._stub.ExposeService, expose_request)
-                endpoint = response.url
-            except Exception as exc:
-                logger.error(
-                    "Failed to expose service for sandbox '%s': %s",
-                    sandbox_ref.name,
-                    exc,
-                )
-                # Clean up the sandbox if service exposure fails
-                try:
-                    await asyncio.to_thread(client.delete, sandbox_ref.name)
-                except Exception:
-                    pass
-                raise
+        logger.info(
+            "Spawned OpenShell sandbox '%s' (id=%s) at %s",
+            agent_name,
+            sandbox_id,
+            endpoint,
+        )
+        return endpoint
 
-            logger.info(
-                "OpenShell sandbox '%s' ready at %s",
-                sandbox_ref.name,
-                endpoint,
-            )
-            return endpoint
-        finally:
-            client.close()
+    async def start_server(
+        self,
+        sandbox_id: str,
+        command: list[str],
+        env: dict[str, str] | None = None,
+    ) -> None:
+        """Start the HTTP server inside a sandbox via exec_stream.
 
-    async def _do_destroy(self, agent_name: str) -> None:
-        """Delete the OpenShell sandbox.
+        Fire-and-forget: the exec output is consumed in a background
+        asyncio task. The method returns immediately.
 
         Args:
-            agent_name: Name of the agent (without the ca-agent- prefix).
+            sandbox_id: OpenShell sandbox identifier.
+            command: Command to execute (e.g. uvicorn invocation).
+            env: Optional environment variables for the exec.
         """
-        sandbox_name = f"{SANDBOX_NAME_PREFIX}{agent_name}"
-        client = self._get_client()
+
+        async def _consume_exec() -> None:
+            """Consume exec_stream output in background (fire-and-forget)."""
+            try:
+                async for chunk in self._client.exec_stream(sandbox_id, command, env=env):
+                    # Log server output at debug level
+                    logger.debug("Server output [%s]: %s", sandbox_id, chunk.rstrip())
+            except asyncio.CancelledError:
+                logger.info("Server exec cancelled for sandbox '%s'", sandbox_id)
+            except Exception:
+                logger.warning(
+                    "Server exec ended for sandbox '%s'",
+                    sandbox_id,
+                    exc_info=True,
+                )
+
+        task = asyncio.create_task(_consume_exec())
+        self._server_tasks[sandbox_id] = task
+
+    async def stream_progress(self, sandbox_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Stream agent progress events from the sandbox event log.
+
+        Calls exec_stream with tail -f on the JSONL event log file.
+        Yields parsed event dicts as they arrive. Best-effort: connection
+        drops are caught and logged, and the generator stops yielding.
+
+        This method is OpenShell-specific. Callers should check
+        isinstance(spawner, OpenShellSpawner) before calling.
+
+        Args:
+            sandbox_id: OpenShell sandbox identifier.
+
+        Yields:
+            Parsed JSONL event dicts from the agent event log.
+        """
+        tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
         try:
-            await asyncio.to_thread(client.delete, sandbox_name)
-            logger.info("Destroyed OpenShell sandbox '%s'", sandbox_name)
-        except Exception as exc:
+            async for chunk in self._client.exec_stream(sandbox_id, tail_cmd):
+                for line in chunk.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        yield event
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Invalid JSON in event stream [%s]: %s",
+                            sandbox_id,
+                            line[:200],
+                        )
+        except (ConnectionError, OSError) as exc:
             logger.warning(
-                "Failed to destroy OpenShell sandbox '%s': %s",
-                sandbox_name,
+                "Progress stream disconnected for sandbox '%s': %s",
+                sandbox_id,
                 exc,
             )
-        finally:
-            client.close()
+        except Exception:
+            logger.warning(
+                "Progress stream error for sandbox '%s'",
+                sandbox_id,
+                exc_info=True,
+            )
+
+    async def _do_destroy(self, agent_name: str) -> None:
+        """Delete the OpenShell sandbox and clean up background tasks.
+
+        Args:
+            agent_name: Name of the agent to destroy.
+        """
+        sandbox_id = self._sandbox_ids.pop(agent_name, None)
+        if not sandbox_id:
+            logger.warning("No sandbox ID found for agent '%s'", agent_name)
+            return
+
+        # Cancel server background task if running
+        task = self._server_tasks.pop(sandbox_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        try:
+            await self._client.delete_sandbox(sandbox_id)
+            logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_id, agent_name)
+        except Exception:
+            logger.warning(
+                "Failed to destroy sandbox '%s' (agent=%s)",
+                sandbox_id,
+                agent_name,
+                exc_info=True,
+            )
 
     async def _do_list_active(
         self,
         labels: dict[str, str] | None = None,
     ) -> list[str]:
-        """List active OpenShell sandboxes created by this spawner.
-
-        Filters by the ca-agent- naming prefix since SandboxRef does not
-        include labels.
+        """List active sandbox agent names.
 
         Args:
-            labels: Ignored (OpenShell list API has no label filter).
-                Included for interface compatibility.
+            labels: Optional label filter (not used for in-memory tracking).
 
         Returns:
-            List of agent names (without the ca-agent- prefix).
+            List of agent names with active sandboxes.
         """
-        client = self._get_client()
-        try:
-            all_sandboxes = await asyncio.to_thread(client.list)
-            return [
-                ref.name.removeprefix(SANDBOX_NAME_PREFIX)
-                for ref in all_sandboxes
-                if ref.name.startswith(SANDBOX_NAME_PREFIX)
-            ]
-        except Exception as exc:
-            logger.warning("Cannot list OpenShell sandboxes: %s", exc)
-            return []
-        finally:
-            client.close()
+        return list(self._sandbox_ids.keys())

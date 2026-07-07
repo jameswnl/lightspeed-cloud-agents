@@ -1,639 +1,362 @@
-"""Unit tests for OpenShellSpawner."""
+"""Unit tests for OpenShellSpawner hybrid communication (TDD).
+
+Tests the start_server() fire-and-forget method and the
+stream_progress() async generator for event streaming.
+"""
 
 from __future__ import annotations
 
-import sys
-import types
-from unittest.mock import MagicMock, patch
+import asyncio
+import json
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# We mock the openshell imports, so import our spawner after patching
-SANDBOX_NAME_PREFIX = "ca-agent-"
+from pytest_mock import MockerFixture
 
 
-def _make_mock_openshell():
-    """Create mock openshell module and its submodules.
+class TestOpenShellSpawnerStartServer:
+    """Tests for start_server() fire-and-forget exec."""
 
-    Returns:
-        Tuple of (mock_openshell, mock_pb2, mock_pb2_grpc).
-    """
-    mock_pb2 = MagicMock()
-    mock_pb2.SANDBOX_PHASE_READY = 2
-    mock_pb2.SANDBOX_PHASE_ERROR = 3
-    mock_pb2.SANDBOX_PHASE_PROVISIONING = 1
+    @pytest.mark.asyncio
+    async def test_start_server_calls_exec_stream(self, mocker: MockerFixture) -> None:
+        """start_server calls exec_stream with the given command."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-    mock_pb2_grpc = MagicMock()
+        mock_client = mocker.AsyncMock()
+        # exec_stream returns an async iterator that we consume in a background task
+        mock_client.exec_stream.return_value = mocker.AsyncMock(
+            __aiter__=mocker.MagicMock(return_value=mocker.AsyncMock(
+                __anext__=mocker.AsyncMock(side_effect=StopAsyncIteration)
+            ))
+        )
 
-    mock_proto = types.ModuleType("openshell._proto")
-    mock_proto.openshell_pb2 = mock_pb2
-    mock_proto.openshell_pb2_grpc = mock_pb2_grpc
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        command = ["uvicorn", "lightspeed_agentic.app:create_app", "--host", "0.0.0.0"]
+        await spawner.start_server("sandbox-1", command, env={"KEY": "val"})
 
-    mock_openshell = types.ModuleType("openshell")
-    mock_openshell.SandboxClient = MagicMock()
-    mock_openshell.SandboxRef = MagicMock()
-    mock_openshell.SandboxError = type("SandboxError", (RuntimeError,), {})
-    mock_openshell._proto = mock_proto
+        # Give background task a chance to start
+        await asyncio.sleep(0.05)
 
-    return mock_openshell, mock_pb2, mock_pb2_grpc
+        mock_client.exec_stream.assert_called_once_with(
+            "sandbox-1", command, env={"KEY": "val"}
+        )
 
+    @pytest.mark.asyncio
+    async def test_start_server_returns_immediately(self, mocker: MockerFixture) -> None:
+        """start_server returns immediately without blocking on exec output."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-def _make_sandbox_ref(name="ca-agent-test", sandbox_id="sb-123", phase=2):
-    """Create a mock SandboxRef."""
-    ref = MagicMock()
-    ref.id = sandbox_id
-    ref.name = name
-    ref.status = MagicMock()
-    ref.status.phase = phase
-    return ref
+        # Make exec_stream block indefinitely
+        async def slow_exec(*args, **kwargs):
+            async def slow_gen():
+                await asyncio.sleep(100)
+                yield "never"
+            return slow_gen()
 
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = slow_exec
 
-def _patch_openshell():
-    """Patch openshell modules into sys.modules.
+        spawner = OpenShellSpawner(openshell_client=mock_client)
 
-    Returns:
-        Tuple of (patcher, mock_openshell, mock_pb2).
-    """
-    mock_openshell, mock_pb2, mock_pb2_grpc = _make_mock_openshell()
-    modules = {
-        "openshell": mock_openshell,
-        "openshell._proto": mock_openshell._proto,
-        "openshell._proto.openshell_pb2": mock_pb2,
-        "openshell._proto.openshell_pb2_grpc": mock_pb2_grpc,
-    }
-    return patch.dict(sys.modules, modules), mock_openshell, mock_pb2
+        # This should return within a short time, not block
+        await asyncio.wait_for(
+            spawner.start_server("sandbox-1", ["uvicorn"]),
+            timeout=1.0,
+        )
 
+    @pytest.mark.asyncio
+    async def test_start_server_tracks_task(self, mocker: MockerFixture) -> None:
+        """start_server stores the background task for later cleanup."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-class TestOpenShellSpawnerInit:
-    """Tests for OpenShellSpawner initialization."""
+        async def forever_exec(*args, **kwargs):
+            async def gen():
+                await asyncio.sleep(100)
+                yield "data"
+            return gen()
 
-    def test_default_gateway_url_from_env(self) -> None:
-        """Gateway URL read from OPENSHELL_GATEWAY_URL env var."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher, patch.dict("os.environ", {"OPENSHELL_GATEWAY_URL": "localhost:50051"}):
-            # Remove cached module to force re-import
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = forever_exec
 
-            spawner = OpenShellSpawner()
-            assert spawner._gateway_url == "localhost:50051"
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        await spawner.start_server("sandbox-1", ["uvicorn"])
 
-    def test_explicit_gateway_url(self) -> None:
-        """Explicit gateway_url parameter takes precedence."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+        assert "sandbox-1" in spawner._server_tasks
 
-            spawner = OpenShellSpawner(gateway_url="myhost:9090")
-            assert spawner._gateway_url == "myhost:9090"
-
-    def test_cluster_name_stored(self) -> None:
-        """Cluster name stored for from_active_cluster fallback."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            spawner = OpenShellSpawner(cluster="my-cluster")
-            assert spawner._cluster == "my-cluster"
-
-    def test_no_gateway_url_no_cluster(self) -> None:
-        """No gateway URL and no cluster -> both are None."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher, patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("OPENSHELL_GATEWAY_URL", None)
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            spawner = OpenShellSpawner()
-            assert spawner._gateway_url is None
-            assert spawner._cluster is None
-
-    def test_max_pods_passed_to_base(self) -> None:
-        """max_pods kwarg forwarded to AgentSpawner base."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            spawner = OpenShellSpawner(gateway_url="host:50051", max_pods=5)
-            assert spawner._max_pods == 5
+        # Cleanup
+        spawner._server_tasks["sandbox-1"].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await spawner._server_tasks["sandbox-1"]
 
 
-class TestOpenShellSpawnerGetClient:
-    """Tests for _get_client() connection logic."""
+class TestOpenShellSpawnerStreamProgress:
+    """Tests for stream_progress() async generator."""
 
-    def test_get_client_with_gateway_url(self) -> None:
-        """When gateway_url is set, SandboxClient is created with endpoint."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    @pytest.mark.asyncio
+    async def test_stream_progress_yields_parsed_events(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress yields parsed JSONL events from exec_stream."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            spawner = OpenShellSpawner(gateway_url="myhost:50051")
-            spawner._get_client()
-            mock_os.SandboxClient.assert_called_once_with(endpoint="myhost:50051")
+        events = [
+            '{"type": "tool_call", "name": "get_pods", "ts": "2024-01-01T00:00:00Z"}\n',
+            '{"type": "tool_result", "name": "get_pods", "ts": "2024-01-01T00:00:01Z"}\n',
+        ]
 
-    def test_get_client_without_gateway_url(self) -> None:
-        """When no gateway_url, falls back to from_active_cluster."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher, patch.dict("os.environ", {}, clear=False):
-            import os
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            for event in events:
+                yield event
 
-            os.environ.pop("OPENSHELL_GATEWAY_URL", None)
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
 
-            spawner = OpenShellSpawner(cluster="dev-cluster")
-            spawner._get_client()
-            mock_os.SandboxClient.from_active_cluster.assert_called_once_with(cluster="dev-cluster")
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 2
+        assert collected[0]["type"] == "tool_call"
+        assert collected[0]["name"] == "get_pods"
+        assert collected[1]["type"] == "tool_result"
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_handles_multi_line_chunks(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress handles chunks containing multiple JSONL lines."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        chunk = (
+            '{"type": "tool_call", "name": "a"}\n'
+            '{"type": "tool_result", "name": "a"}\n'
+        )
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield chunk
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_skips_empty_lines(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress skips empty lines in the stream."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield '\n\n{"type": "tool_call", "name": "a"}\n\n'
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_handles_invalid_json(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress logs warning and skips invalid JSON lines."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield 'not valid json\n'
+            yield '{"type": "tool_call", "name": "a"}\n'
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        # Invalid JSON skipped, valid event collected
+        assert len(collected) == 1
+        assert collected[0]["type"] == "tool_call"
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_handles_disconnect(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress catches gRPC/connection errors and stops yielding."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield '{"type": "tool_call", "name": "a"}\n'
+            raise ConnectionError("gRPC stream disconnected")
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        # Should yield what it got before disconnect, then stop
+        assert len(collected) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_uses_tail_command(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress calls exec_stream with tail -f on event log."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        call_args = {}
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            call_args["sandbox_id"] = sandbox_id
+            call_args["cmd"] = cmd
+            return
+            yield  # Make it an async generator
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        async for _ in spawner.stream_progress("sandbox-1"):
+            pass
+
+        assert call_args["cmd"] == ["tail", "-F", "/var/log/agent-events.jsonl"]
 
 
 class TestOpenShellSpawnerSpawn:
-    """Tests for _do_spawn() lifecycle."""
+    """Tests for _do_spawn using exec-based server startup."""
 
     @pytest.mark.asyncio
-    async def test_spawn_creates_sandbox_and_returns_endpoint(self) -> None:
-        """Spawn creates a sandbox with image and env vars, returns endpoint URL."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    async def test_spawn_creates_sandbox_and_returns_endpoint(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_do_spawn creates sandbox, starts server, exposes service."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-123"
+        mock_client.expose_service.return_value = "http://sb-123.example.com:8080"
 
-            expose_response = MagicMock()
-            expose_response.url = "http://gateway:8080/sandbox/ca-agent-test/agent-http"
-            mock_client._stub.ExposeService.return_value = expose_response
+        async def noop_exec(*args, **kwargs):
+            return
+            yield
 
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+        mock_client.exec_stream = noop_exec
 
-            endpoint = await spawner._do_spawn(
-                "test",
-                "sandbox-image:latest",
-                {"MODEL_API_KEY": "sk-123"},
-            )
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
 
-            # Verify create was called
-            mock_client.create.assert_called_once()
-
-            # Verify wait_ready was called
-            mock_client.wait_ready.assert_called_once_with(sandbox_ref.name, timeout_seconds=60)
-
-            # Verify ExposeService was called
-            mock_client._stub.ExposeService.assert_called_once()
-
-            assert endpoint == "http://gateway:8080/sandbox/ca-agent-test/agent-http"
+        assert endpoint == "http://sb-123.example.com:8080"
+        mock_client.create_sandbox.assert_called_once()
+        mock_client.expose_service.assert_called_once_with("sb-123", port=8080)
 
     @pytest.mark.asyncio
-    async def test_spawn_uses_sandbox_name_prefix(self) -> None:
-        """Sandbox name follows ca-agent-{agent_name} convention."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    async def test_spawn_passes_env_to_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_do_spawn passes environment variables to sandbox creation."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref(name="ca-agent-my-agent")
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-123"
+        mock_client.expose_service.return_value = "http://sb-123:8080"
 
-            expose_response = MagicMock()
-            expose_response.url = "http://gateway:8080/service"
-            mock_client._stub.ExposeService.return_value = expose_response
+        async def noop_exec(*args, **kwargs):
+            return
+            yield
 
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+        mock_client.exec_stream = noop_exec
 
-            await spawner._do_spawn("my-agent", "image:latest", {})
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4"}
+        await spawner.spawn("agent-1", "sandbox:latest", env=env)
 
-            # Verify create was called (the spec should have the naming)
-            mock_client.create.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_spawn_exposes_port_8080_by_default(self) -> None:
-        """ExposeService targets port 8080."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://gateway:8080/svc"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            await spawner._do_spawn("test", "image:latest", {})
-
-            # Verify ExposeServiceRequest was constructed with target_port=8080
-            mock_pb2.ExposeServiceRequest.assert_called_once()
-            req_kwargs = mock_pb2.ExposeServiceRequest.call_args[1]
-            assert req_kwargs["target_port"] == 8080
-
-    @pytest.mark.asyncio
-    async def test_spawn_closes_client(self) -> None:
-        """Client is closed after spawn completes."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://url"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            await spawner._do_spawn("test", "image:latest", {})
-
-            mock_client.close.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_spawn_uses_custom_timeout(self) -> None:
-        """SpawnConfig.timeout_seconds is forwarded to wait_ready."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.base import SpawnConfig
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://url"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            cfg = SpawnConfig(timeout_seconds=120)
-            await spawner._do_spawn("test", "image:latest", {}, config_override=cfg)
-
-            mock_client.wait_ready.assert_called_once_with(sandbox_ref.name, timeout_seconds=120)
+        create_call = mock_client.create_sandbox.call_args
+        assert create_call[1].get("env") == env or create_call.kwargs.get("env") == env
 
 
 class TestOpenShellSpawnerDestroy:
-    """Tests for _do_destroy()."""
+    """Tests for _do_destroy cleanup."""
 
     @pytest.mark.asyncio
-    async def test_destroy_deletes_sandbox(self) -> None:
-        """Destroy calls client.delete with correct sandbox name."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    async def test_destroy_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """destroy deletes the OpenShell sandbox."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            mock_client = MagicMock()
-            mock_client.delete.return_value = True
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
 
-            await spawner._do_destroy("my-agent")
+        await spawner.destroy("agent-1")
 
-            mock_client.delete.assert_called_once_with("ca-agent-my-agent")
-            mock_client.close.assert_called_once()
+        mock_client.delete_sandbox.assert_called_once_with("sb-123")
 
     @pytest.mark.asyncio
-    async def test_destroy_handles_not_found(self) -> None:
-        """Destroy logs warning but does not raise when sandbox is gone."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    async def test_destroy_cancels_server_task(self, mocker: MockerFixture) -> None:
+        """destroy cancels the background server task if running."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            mock_client = MagicMock()
-            mock_client.delete.side_effect = RuntimeError("NOT_FOUND")
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
 
-            # Should not raise
-            await spawner._do_destroy("missing-agent")
+        # Fake awaitable task that tracks cancel() calls
+        class FakeTask:
+            def __init__(self):
+                self.cancel_count = 0
 
-    @pytest.mark.asyncio
-    async def test_destroy_closes_client_on_error(self) -> None:
-        """Client is closed even when delete raises."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+            def done(self):
+                return False
 
-            mock_client = MagicMock()
-            mock_client.delete.side_effect = RuntimeError("oops")
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+            def cancel(self):
+                self.cancel_count += 1
 
-            await spawner._do_destroy("err-agent")
+            def __await__(self):
+                yield
+        fake_task = FakeTask()
+        spawner._server_tasks["sb-123"] = fake_task
 
-            mock_client.close.assert_called_once()
+        await spawner.destroy("agent-1")
+
+        assert fake_task.cancel_count == 1
+        mock_client.delete_sandbox.assert_called_once()
 
 
 class TestOpenShellSpawnerListActive:
-    """Tests for _do_list_active()."""
+    """Tests for _do_list_active."""
 
     @pytest.mark.asyncio
-    async def test_list_active_filters_by_prefix(self) -> None:
-        """Only sandboxes with ca-agent- prefix are returned."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+    async def test_list_active_returns_sandbox_names(
+        self, mocker: MockerFixture
+    ) -> None:
+        """list_active returns tracked sandbox agent names."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-            mock_client = MagicMock()
-            mock_client.list.return_value = [
-                _make_sandbox_ref(name="ca-agent-agent1"),
-                _make_sandbox_ref(name="ca-agent-agent2"),
-                _make_sandbox_ref(name="other-sandbox"),
-                _make_sandbox_ref(name="ca-agent-agent3"),
-            ]
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-2"] = "sb-2"
 
-            result = await spawner._do_list_active()
+        result = await spawner.list_active()
 
-            assert result == ["agent1", "agent2", "agent3"]
-
-    @pytest.mark.asyncio
-    async def test_list_active_returns_empty_on_no_matches(self) -> None:
-        """Returns empty list when no sandboxes match prefix."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            mock_client.list.return_value = [
-                _make_sandbox_ref(name="other-1"),
-                _make_sandbox_ref(name="other-2"),
-            ]
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            result = await spawner._do_list_active()
-
-            assert result == []
-
-    @pytest.mark.asyncio
-    async def test_list_active_handles_connection_error(self) -> None:
-        """Returns empty list when gateway is unreachable."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            mock_client.list.side_effect = RuntimeError("gateway unavailable")
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            result = await spawner._do_list_active()
-
-            assert result == []
-
-    @pytest.mark.asyncio
-    async def test_list_active_closes_client(self) -> None:
-        """Client is closed after listing."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            mock_client.list.return_value = []
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            await spawner._do_list_active()
-
-            mock_client.close.assert_called_once()
-
-
-class TestOpenShellSpawnerEnvInjection:
-    """Tests for environment variable injection."""
-
-    @pytest.mark.asyncio
-    async def test_env_vars_passed_to_sandbox_spec(self) -> None:
-        """Environment variables are included in the SandboxSpec."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://url"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            env = {
-                "MODEL_API_KEY": "sk-test",
-                "LIGHTSPEED_MODEL": "gpt-4",
-                "CUSTOM_VAR": "value",
-            }
-            await spawner._do_spawn("test", "image:latest", env)
-
-            # Verify create was called and the spec has environment
-            mock_pb2.SandboxSpec.assert_called()
-            spec_call = mock_pb2.SandboxSpec.call_args
-            assert "environment" in spec_call[1]
-            assert spec_call[1]["environment"] == env
-
-
-class TestOpenShellSpawnerErrors:
-    """Tests for error handling."""
-
-    @pytest.mark.asyncio
-    async def test_spawn_raises_on_create_failure(self) -> None:
-        """Spawn raises RuntimeError when sandbox creation fails."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            mock_client.create.side_effect = RuntimeError("gateway unavailable")
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with pytest.raises(RuntimeError, match="gateway unavailable"):
-                await spawner._do_spawn("test", "image:latest", {})
-
-            mock_client.close.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_spawn_raises_on_error_phase(self) -> None:
-        """Spawn raises when sandbox enters SANDBOX_PHASE_ERROR."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.side_effect = RuntimeError("sandbox entered error phase")
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with pytest.raises(RuntimeError, match="error phase"):
-                await spawner._do_spawn("test", "image:latest", {})
-
-    @pytest.mark.asyncio
-    async def test_spawn_raises_on_expose_service_failure(self) -> None:
-        """Spawn raises when ExposeService call fails."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-            mock_client._stub.ExposeService.side_effect = RuntimeError("service exposure failed")
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with pytest.raises(RuntimeError, match="service exposure failed"):
-                await spawner._do_spawn("test", "image:latest", {})
-
-    @pytest.mark.asyncio
-    async def test_spawn_cleans_up_on_expose_failure(self) -> None:
-        """Sandbox is deleted if ExposeService fails after creation."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-            mock_client._stub.ExposeService.side_effect = RuntimeError("fail")
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with pytest.raises(RuntimeError):
-                await spawner._do_spawn("test", "image:latest", {})
-
-            # Sandbox should be cleaned up
-            mock_client.delete.assert_called_once_with(sandbox_ref.name)
-
-    @pytest.mark.asyncio
-    async def test_spawn_cleans_up_on_wait_ready_failure(self) -> None:
-        """Sandbox is deleted if wait_ready fails after creation."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.side_effect = RuntimeError("timeout")
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with pytest.raises(RuntimeError, match="timeout"):
-                await spawner._do_spawn("test", "image:latest", {})
-
-            # Sandbox should be cleaned up
-            mock_client.delete.assert_called_once_with(sandbox_ref.name)
-
-
-class TestOpenShellSpawnerTLS:
-    """Tests for TLS certificate handling."""
-
-    @pytest.mark.asyncio
-    async def test_tls_certs_logs_warning(self) -> None:
-        """Passing tls_certs logs a warning about OpenShell managing TLS."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-            from cloud_agents.workflow.tls import EphemeralCerts
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://url"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            tls_certs = EphemeralCerts(
-                ca_cert_pem=b"ca",
-                server_cert_pem=b"cert",
-                server_key_pem=b"key",
-                valid_seconds=600,
-            )
-
-            with patch("cloud_agents.spawner.openshell_spawner.logger") as mock_logger:
-                await spawner._do_spawn("test", "image:latest", {}, tls_certs=tls_certs)
-                mock_logger.warning.assert_called()
-                warning_msg = mock_logger.warning.call_args[0][0]
-                assert "TLS" in warning_msg or "tls" in warning_msg
-
-    @pytest.mark.asyncio
-    async def test_no_tls_certs_no_warning(self) -> None:
-        """No warning when tls_certs is None."""
-        patcher, mock_os, mock_pb2 = _patch_openshell()
-        with patcher:
-            sys.modules.pop("cloud_agents.spawner.openshell_spawner", None)
-            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-            mock_client = MagicMock()
-            sandbox_ref = _make_sandbox_ref()
-            mock_client.create.return_value = sandbox_ref
-            mock_client.wait_ready.return_value = sandbox_ref
-
-            expose_response = MagicMock()
-            expose_response.url = "http://url"
-            mock_client._stub.ExposeService.return_value = expose_response
-
-            spawner = OpenShellSpawner(gateway_url="host:50051")
-            spawner._get_client = MagicMock(return_value=mock_client)
-
-            with patch("cloud_agents.spawner.openshell_spawner.logger") as mock_logger:
-                await spawner._do_spawn("test", "image:latest", {})
-                # No TLS warning should be logged
-                for call in mock_logger.warning.call_args_list:
-                    msg = call[0][0] if call[0] else ""
-                    assert "TLS" not in msg
+        assert set(result) == {"agent-1", "agent-2"}

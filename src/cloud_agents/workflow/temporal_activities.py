@@ -33,6 +33,10 @@ from cloud_agents.workflow.tls import TLSMode, generate_ephemeral_certs, get_tls
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
 
+# Maximum heartbeat payload size in bytes for progress events.
+# Temporal has payload limits; we truncate to a summary.
+_MAX_HEARTBEAT_BYTES = 1024
+
 _circuit_breaker = ProviderCircuitBreaker(
     failure_threshold=int(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "5")),
     reset_seconds=float(os.environ.get("CIRCUIT_BREAKER_RESET_SECONDS", "60")),
@@ -93,6 +97,64 @@ async def _heartbeat_loop(interval_seconds: float = 30) -> None:
         except Exception:
             logger.debug("Heartbeat failed (best-effort)", exc_info=True)
         await asyncio.sleep(interval_seconds)
+
+
+def _truncate_heartbeat_payload(event: dict[str, Any]) -> dict[str, Any]:
+    """Truncate a progress event to a heartbeat-safe summary.
+
+    Temporal heartbeat payloads have size limits. This function extracts
+    only the event type and tool name, keeping the payload under 1KB.
+
+    Parameters:
+        event: Raw JSONL event from the agent event log.
+
+    Returns:
+        Truncated summary dict suitable for activity.heartbeat().
+    """
+    summary: dict[str, Any] = {
+        "event_type": event.get("type", "unknown"),
+    }
+    if name := event.get("name"):
+        summary["tool"] = name
+    # Ensure total size stays under limit
+    encoded = json.dumps(summary)
+    if len(encoded) > _MAX_HEARTBEAT_BYTES:
+        # Extreme case: tool name itself is huge — truncate it
+        summary["tool"] = summary.get("tool", "")[:100]
+    return summary
+
+
+async def _progress_streaming_loop(
+    spawner: Any,
+    sandbox_id: str,
+) -> None:
+    """Stream progress events from an OpenShellSpawner and heartbeat them.
+
+    Best-effort: errors are logged and the loop exits gracefully.
+    The caller is responsible for cancelling this task when the HTTP
+    result returns.
+
+    Parameters:
+        spawner: An OpenShellSpawner instance with stream_progress().
+        sandbox_id: The sandbox to stream progress from.
+    """
+    # TODO: Add heartbeat debounce for production
+    try:
+        async for event in spawner.stream_progress(sandbox_id):
+            payload = _truncate_heartbeat_payload(event)
+            try:
+                activity.heartbeat(payload)
+            except Exception:
+                logger.debug("Progress heartbeat failed (best-effort)", exc_info=True)
+    except asyncio.CancelledError:
+        logger.debug("Progress streaming cancelled for sandbox '%s'", sandbox_id)
+        raise
+    except Exception:
+        logger.warning(
+            "Progress streaming error for sandbox '%s'",
+            sandbox_id,
+            exc_info=True,
+        )
 
 
 @activity.defn
@@ -337,6 +399,18 @@ async def _run_sandbox_step_inner(
             if sandbox_auth_enabled and sandbox_auth_token:
                 http_headers["Authorization"] = f"Bearer {sandbox_auth_token}"
 
+            # Start progress streaming for OpenShell spawners (best-effort)
+            progress_task: asyncio.Task | None = None
+            from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+            if isinstance(spawner, OpenShellSpawner):
+                # TODO: Add public get_sandbox_id() method for production
+                sandbox_id = spawner._sandbox_ids.get(pod_name)
+                if sandbox_id:
+                    progress_task = asyncio.create_task(
+                        _progress_streaming_loop(spawner, sandbox_id)
+                    )
+
             heartbeat_task = asyncio.create_task(_heartbeat_loop())
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
@@ -365,6 +439,10 @@ async def _run_sandbox_step_inner(
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
+                if progress_task is not None:
+                    progress_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await progress_task
 
             if response.status_code == 502:
                 _circuit_breaker.record_failure(provider_name)
