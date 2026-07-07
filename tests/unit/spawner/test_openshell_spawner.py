@@ -243,6 +243,78 @@ class TestOpenShellSpawnerStreamProgress:
         assert call_args["cmd"] == ["tail", "-F", "/var/log/agent-events.jsonl"]
 
 
+class TestOpenShellSpawnerWriteFile:
+    """Tests for OpenShellSpawner._do_write_file()."""
+
+    @pytest.mark.asyncio
+    async def test_write_file_calls_exec_stream_with_base64(
+        self, mocker: MockerFixture
+    ) -> None:
+        """write_file encodes content as base64 and pipes through exec."""
+        import base64
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        call_args: dict[str, Any] = {}
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            call_args["sandbox_id"] = sandbox_id
+            call_args["cmd"] = cmd
+            return
+            yield  # Make it an async generator
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+
+        await spawner._do_write_file("agent-1", "/tmp/test.txt", "hello world")
+
+        assert call_args["sandbox_id"] == "sb-123"
+        cmd = call_args["cmd"]
+        assert cmd[0] == "sh"
+        assert cmd[1] == "-c"
+        # Verify base64 encoding is used
+        expected_b64 = base64.b64encode(b"hello world").decode()
+        assert expected_b64 in cmd[2]
+        assert "base64 -d" in cmd[2]
+        assert "/tmp/test.txt" in cmd[2]
+
+    @pytest.mark.asyncio
+    async def test_write_file_raises_for_untracked_agent(
+        self, mocker: MockerFixture
+    ) -> None:
+        """write_file raises RuntimeError for unknown agent."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        with pytest.raises(RuntimeError, match="No sandbox tracked"):
+            await spawner._do_write_file("unknown", "/tmp/test.txt", "content")
+
+    @pytest.mark.asyncio
+    async def test_write_file_raises_on_exec_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """write_file raises RuntimeError when exec_stream fails."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def failing_exec(sandbox_id, cmd, **kwargs):
+            raise ConnectionError("sandbox unreachable")
+            yield  # pragma: no cover
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = failing_exec
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner._do_write_file("agent-1", "/tmp/test.txt", "content")
+
+
 class TestOpenShellSpawnerSpawn:
     """Tests for _do_spawn using exec-based server startup."""
 

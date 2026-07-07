@@ -264,13 +264,19 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T56: Bi-directional CLI session communication [Phase 5]
 
-**Status**: Open ([issue #66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66))
+**Status**: Done (PR #TBD) ([issue #66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66))
 
-**Problem**: CLI sessions are fire-and-forget. No mechanism to monitor output, feed results back to workflow state, or send additional context to a running session.
+**What was built**:
+- `write_file(agent_name, path, content)` on `AgentSpawner` ABC with `_do_write_file()` abstract + 3 implementations (K8s: kubectl exec stdin, Podman: podman exec stdin, OpenShell: base64 via exec_stream)
+- `SessionOutputEvent` model + `monitor_output()` async generator with byte offset tracking (polls `read_file()` every 2s)
+- `send_message(session_id, message)` writes JSONL to `/var/run/cli-session/messages.jsonl` via `spawner.write_file()`
+- `session_result` Temporal signal + `get_session_results` query on `AgentWorkflow`
+- `POST /v1/cli-sessions/{id}/messages` endpoint with RBAC (`SESSION_MESSAGE`)
+- `GET /v1/cli-sessions/{id}/output` SSE streaming endpoint with RBAC (`VIEW`)
+- `SESSION_MESSAGE` added to `WorkflowAction` enum
+- `cli_session_message_sent` audit event type
 
-**What to build**: Session output monitoring, result feedback to workflow state, message sending to running sessions, API endpoints for communication.
-
-**Effort**: 3-4 weeks
+**Effort**: 1 day
 
 ### T16: Conversational approval [Phase 4]
 

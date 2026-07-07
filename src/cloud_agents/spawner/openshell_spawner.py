@@ -219,6 +219,38 @@ class OpenShellSpawner(AgentSpawner):
                 exc_info=True,
             )
 
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        """Write content to a file inside an OpenShell sandbox via exec.
+
+        Uses base64 encoding to safely pipe arbitrary content through
+        the exec command without shell escaping issues. The path is
+        shell-quoted to prevent injection.
+
+        Args:
+            agent_name: Name of the agent.
+            path: Absolute file path inside the sandbox.
+            content: String content to write.
+
+        Raises:
+            RuntimeError: If the sandbox is not tracked or write fails.
+        """
+        import base64
+        import shlex
+
+        sandbox_id = self._sandbox_ids.get(agent_name)
+        if not sandbox_id:
+            raise RuntimeError(f"No sandbox tracked for agent '{agent_name}'")
+
+        encoded = base64.b64encode(content.encode()).decode()
+        cmd = ["sh", "-c", f"echo '{encoded}' | base64 -d > {shlex.quote(path)}"]
+        try:
+            async for _ in self._client.exec_stream(sandbox_id, cmd):
+                pass  # consume output
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to write {path} to sandbox {sandbox_id}: {exc}"
+            ) from exc
+
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Read a file from an OpenShell sandbox via exec.
 

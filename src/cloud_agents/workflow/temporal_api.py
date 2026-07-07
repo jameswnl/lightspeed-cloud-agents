@@ -86,6 +86,12 @@ class ApproveRequest(BaseModel):
     selected_option_id: str | None = None
 
 
+class SendMessageRequest(BaseModel):
+    """Request body for sending a message to a CLI session."""
+
+    message: str
+
+
 def build_temporal_router(
     temporal_client: Client,
     auth_dependency: Optional[Any] = None,
@@ -737,6 +743,64 @@ def build_temporal_router(
 
             await cli_session_launcher.terminate(session_id, cli_session_spawner)
             return {"status": "terminated"}
+
+        @session_router.post("/{session_id}/messages")
+        async def send_cli_session_message(
+            session_id: str,
+            request: SendMessageRequest,
+            caller=Depends(get_caller_identity),
+        ) -> dict[str, str]:
+            """Send a message to a running CLI session."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.SESSION_MESSAGE, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
+            if cli_session_launcher.get_status(session_id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"CLI session '{session_id}' not found",
+                )
+
+            await cli_session_launcher.send_message(
+                session_id, cli_session_spawner, request.message
+            )
+            return {"status": "sent"}
+
+        @session_router.get("/{session_id}/output")
+        async def get_cli_session_output(
+            session_id: str,
+            caller=Depends(get_caller_identity),
+        ) -> StreamingResponse:
+            """Stream CLI session output via SSE."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.VIEW, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
+            if cli_session_launcher.get_status(session_id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"CLI session '{session_id}' not found",
+                )
+
+            async def output_generator():
+                try:
+                    async for event in cli_session_launcher.monitor_output(
+                        session_id, cli_session_spawner
+                    ):
+                        data = event.model_dump()
+                        yield f"data: {json.dumps(data)}\n\n"
+                except Exception:
+                    yield 'data: {"event_type": "error", "data": "stream ended"}\n\n'
+                yield 'data: {"event_type": "done", "data": ""}\n\n'
+
+            return StreamingResponse(
+                output_generator(),
+                media_type="text/event-stream",
+            )
 
         # Wrap both routers in a parent so they share auth dependencies
         # but have independent prefixes.

@@ -3,16 +3,20 @@
 Launches interactive Claude Code sessions as sandbox containers through
 the existing spawner infrastructure. Each session gets its own container
 with scoped credentials and a mounted context file.
+
+Supports bi-directional communication: output monitoring via polling
+with byte offset tracking, and message injection via JSONL file writes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from pydantic import BaseModel
 
@@ -25,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_SESSION_SECONDS: int = 3600
 DEFAULT_CHECK_INTERVAL: float = 30.0
+DEFAULT_POLL_INTERVAL: float = 2.0
+
+# Path inside the container for message exchange
+_MESSAGE_FILE_PATH = "/var/run/cli-session/messages.jsonl"
+# Path inside the container for session output
+_OUTPUT_FILE_PATH = "/var/log/agent-events.jsonl"
 
 
 class CLISessionStatus(str, Enum):
@@ -41,6 +51,20 @@ class CLISessionStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TERMINATED = "terminated"
+
+
+class SessionOutputEvent(BaseModel):
+    """A chunk of output from a CLI session.
+
+    Attributes:
+        event_type: Type of event (e.g. "output", "error", "done").
+        data: The output data content.
+        offset: Byte offset in the output file after this event.
+    """
+
+    event_type: str
+    data: str
+    offset: int
 
 
 class CLISessionInfo(BaseModel):
@@ -261,6 +285,124 @@ class CLISessionLauncher:
         if workflow_id is not None:
             sessions = [s for s in sessions if s.workflow_id == workflow_id]
         return sessions
+
+    async def monitor_output(
+        self,
+        session_id: str,
+        spawner: AgentSpawner,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
+    ) -> AsyncIterator[SessionOutputEvent]:
+        """Monitor session output via polling with byte offset tracking.
+
+        Polls the session's output file at the given interval, yielding
+        new content as ``SessionOutputEvent`` objects. Stops when the
+        session is no longer RUNNING or when the output file disappears.
+
+        Parameters:
+            session_id: The session identifier to monitor.
+            spawner: AgentSpawner for reading container files.
+            poll_interval: Seconds between poll attempts (default 2.0).
+
+        Yields:
+            SessionOutputEvent for each new chunk of output.
+
+        Raises:
+            KeyError: If the session ID is not found.
+        """
+        info = self._sessions.get(session_id)
+        if info is None:
+            raise KeyError(f"CLI session '{session_id}' not found")
+
+        offset = 0
+
+        while True:
+            # Check if session is still running
+            current = self._sessions.get(session_id)
+            if current is None or current.status != CLISessionStatus.RUNNING:
+                break
+
+            try:
+                content = await spawner.read_file(info.agent_name, _OUTPUT_FILE_PATH)
+                content_bytes = len(content.encode())
+
+                if content_bytes > offset:
+                    # Extract only new content
+                    new_data = content.encode()[offset:].decode()
+                    yield SessionOutputEvent(
+                        event_type="output",
+                        data=new_data,
+                        offset=content_bytes,
+                    )
+                    offset = content_bytes
+
+            except FileNotFoundError:
+                # File doesn't exist yet or session ended
+                break
+            except Exception as exc:
+                logger.warning(
+                    "Output monitor error for session '%s': %s",
+                    session_id,
+                    exc,
+                )
+                break
+
+            await asyncio.sleep(poll_interval)
+
+    async def send_message(
+        self,
+        session_id: str,
+        spawner: AgentSpawner,
+        message: str,
+    ) -> None:
+        """Send a message to a running CLI session.
+
+        Writes a JSONL line to the session's message file inside the
+        container. The agent is expected to read from this file.
+
+        Parameters:
+            session_id: The session identifier to message.
+            spawner: AgentSpawner for writing container files.
+            message: The message text to send.
+
+        Raises:
+            KeyError: If the session ID is not found.
+            RuntimeError: If the write operation fails.
+        """
+        info = self._sessions.get(session_id)
+        if info is None:
+            raise KeyError(f"CLI session '{session_id}' not found")
+
+        msg_line = json.dumps({
+            "message": message,
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+        })
+
+        # Read existing content, append new message.
+        # Note: read-then-write is non-atomic. Acceptable for current
+        # single-writer design; revisit if concurrent senders are needed.
+        try:
+            existing = await spawner.read_file(info.agent_name, _MESSAGE_FILE_PATH)
+        except FileNotFoundError:
+            existing = ""
+
+        new_content = existing + msg_line + "\n"
+        await spawner.write_file(info.agent_name, _MESSAGE_FILE_PATH, new_content)
+
+        emit_audit(
+            event_type="cli_session_message_sent",
+            workflow_id=info.workflow_id,
+            details={
+                "session_id": session_id,
+                "agent_name": info.agent_name,
+                "message_length": len(message),
+            },
+        )
+
+        logger.info(
+            "Message sent to CLI session: session_id=%s, length=%d",
+            session_id,
+            len(message),
+        )
 
     def start_timeout_monitor(self, spawner: AgentSpawner) -> None:
         """Start the background timeout enforcement task.

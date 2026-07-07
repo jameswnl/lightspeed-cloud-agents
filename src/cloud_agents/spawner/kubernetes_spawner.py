@@ -411,6 +411,45 @@ class KubernetesSpawner(AgentSpawner):
             return f"https://{job_name}.{self._namespace}.svc:8443"
         return f"http://{job_name}.{self._namespace}.svc:8080"
 
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        """Write content to a file inside a K8s pod via kubectl exec.
+
+        Uses stdin piping with ``cat`` to write arbitrary content safely.
+        The path is shell-quoted to prevent injection.
+
+        Args:
+            agent_name: Name of the agent (without "agent-" prefix).
+            path: Absolute file path inside the pod.
+            content: String content to write.
+
+        Raises:
+            RuntimeError: If the write operation fails.
+        """
+        import shlex
+        import subprocess
+
+        pod_name = f"agent-{agent_name}"
+        try:
+            subprocess.run(
+                [
+                    "kubectl", "exec", "-i", pod_name,
+                    "-n", self._namespace,
+                    "--", "sh", "-c", f"cat > {shlex.quote(path)}",
+                ],
+                input=content.encode(),
+                capture_output=True,
+                timeout=30,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to write {path} to pod {pod_name}: {exc.stderr}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot write file to pod {pod_name}: {exc}"
+            ) from exc
+
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Read a file from a K8s pod via kubectl exec cat.
 

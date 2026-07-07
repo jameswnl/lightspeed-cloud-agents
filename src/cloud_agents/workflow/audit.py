@@ -36,6 +36,7 @@ AuditEventType = Literal[
     "cli_session_launched",
     "cli_session_terminated",
     "cli_session_failed",
+    "cli_session_message_sent",
 ]
 
 

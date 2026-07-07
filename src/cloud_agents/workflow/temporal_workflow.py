@@ -45,6 +45,21 @@ class AgentWorkflow:
         self._authz_context: Optional[dict[str, Any]] = None
         self._workflow_context: Optional[dict[str, Any]] = None
         self._step_transcripts: dict[str, dict[str, Any]] = {}
+        self._session_results: dict[str, dict[str, Any]] = {}
+
+    @workflow.signal
+    async def session_result(
+        self,
+        session_id: str,
+        result_data: dict[str, Any],
+    ) -> None:
+        """Receive output from a CLI session.
+
+        Parameters:
+            session_id: The CLI session identifier.
+            result_data: Result data from the session.
+        """
+        self._session_results[session_id] = result_data
 
     @workflow.signal
     async def approve(
@@ -81,6 +96,15 @@ class AgentWorkflow:
             Dict mapping output_key to truncated transcript dicts.
         """
         return dict(self._step_transcripts)
+
+    @workflow.query
+    def get_session_results(self) -> dict[str, dict[str, Any]]:
+        """Return stored CLI session results.
+
+        Returns:
+            Dict mapping session_id to result data dicts.
+        """
+        return dict(self._session_results)
 
     @workflow.query
     def get_workflow_context(self) -> dict[str, Any] | None:

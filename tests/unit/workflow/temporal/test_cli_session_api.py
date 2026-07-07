@@ -1,7 +1,8 @@
-"""Unit tests for CLI session status API endpoints (T15 Phase 2, Task 3)."""
+"""Unit tests for CLI session API endpoints (T15 Phase 2 + Phase 3)."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -405,3 +406,160 @@ class TestWorkflowRoutesUnaffectedByLauncher:
 
         response = test_client.get("/v1/workflows/wf-test-1")
         assert response.status_code == 200
+
+
+class TestPostCLISessionMessage:
+    """Tests for POST /v1/cli-sessions/{id}/messages."""
+
+    @pytest.mark.asyncio
+    async def test_send_message_returns_200(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message to existing session returns 200."""
+        session_id = await _launch_session(launcher, spawner)
+
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            response = client.post(
+                f"/v1/cli-sessions/{session_id}/messages",
+                json={"message": "Hello agent!"},
+            )
+        assert response.status_code == 200
+        assert response.json()["status"] == "sent"
+
+    @pytest.mark.asyncio
+    async def test_send_message_calls_launcher(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message calls launcher.send_message with correct args."""
+        session_id = await _launch_session(launcher, spawner)
+
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            client.post(
+                f"/v1/cli-sessions/{session_id}/messages",
+                json={"message": "Test message"},
+            )
+
+        spawner.write_file.assert_called_once()
+
+    def test_send_message_nonexistent_session_returns_404(
+        self, client: TestClient
+    ) -> None:
+        """POST to nonexistent session returns 404."""
+        response = client.post(
+            "/v1/cli-sessions/nonexistent/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 404
+
+    def test_send_message_denied_returns_403(
+        self, mock_temporal: Any, launcher: CLISessionLauncher, spawner: AsyncMock
+    ) -> None:
+        """POST message with deny-all authorizer returns 403."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            CallerIdentity,
+            WorkflowAction,
+            WorkflowAuthorizer,
+            WorkflowResource,
+        )
+
+        class DenyAllAuthorizer(WorkflowAuthorizer):
+            async def authorize(self, identity, action, resource):
+                return AuthzDecision(allowed=False, reason="denied")
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal,
+            authorizer=DenyAllAuthorizer(),
+            cli_session_launcher=launcher,
+            cli_session_spawner=spawner,
+        )
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/cli-sessions/some-id/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 403
+
+
+class TestGetCLISessionOutput:
+    """Tests for GET /v1/cli-sessions/{id}/output (SSE stream)."""
+
+    @pytest.mark.asyncio
+    async def test_output_stream_returns_sse(
+        self,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+        mock_temporal: Any,
+    ) -> None:
+        """GET output returns SSE media type."""
+        session_id = await _launch_session(launcher, spawner)
+
+        # Make read_file return content then end
+        spawner.read_file = AsyncMock(
+            side_effect=[
+                '{"event": "test"}\n',
+                FileNotFoundError("done"),
+            ]
+        )
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal,
+            cli_session_launcher=launcher,
+            cli_session_spawner=spawner,
+        )
+        app.include_router(router)
+        test_client = TestClient(app)
+
+        response = test_client.get(f"/v1/cli-sessions/{session_id}/output")
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        assert "data:" in response.text
+
+    def test_output_nonexistent_session_returns_404(
+        self, client: TestClient
+    ) -> None:
+        """GET output for nonexistent session returns 404."""
+        response = client.get("/v1/cli-sessions/nonexistent/output")
+        assert response.status_code == 404
+
+    def test_output_denied_returns_403(
+        self, mock_temporal: Any, launcher: CLISessionLauncher, spawner: AsyncMock
+    ) -> None:
+        """GET output with deny-all authorizer returns 403."""
+        from cloud_agents.workflow.authorization import (
+            AuthzDecision,
+            WorkflowAuthorizer,
+        )
+
+        class DenyAllAuthorizer(WorkflowAuthorizer):
+            async def authorize(self, identity, action, resource):
+                return AuthzDecision(allowed=False, reason="denied")
+
+        app = FastAPI()
+        router = build_temporal_router(
+            mock_temporal,
+            authorizer=DenyAllAuthorizer(),
+            cli_session_launcher=launcher,
+            cli_session_spawner=spawner,
+        )
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.get("/v1/cli-sessions/some-id/output")
+        assert response.status_code == 403
