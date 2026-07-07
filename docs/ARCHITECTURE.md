@@ -57,7 +57,7 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 | R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering TODO ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) |
 | R13 | Access control | Done | Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). See [rbac.md](rbac.md) |
 | R14 | Observability | Done | OTel tracing, Prometheus metrics, structured logging, health probes, audit events |
-| R15 | Triggers | Partial | API trigger done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)), alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) TODO |
+| R15 | Triggers | Partial | API, alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), and schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) triggers done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)) TODO |
 | R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions ([T11](gaps/gaps-implementation-plan.md#t11-agents-as-tools-r16)) |
 | R17 | Escalation | Partial | Context packaging + delivery done. CLI handoff TODO ([T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17)) |
 
@@ -121,7 +121,7 @@ The architecture treats the runtime interface generically: the workflow engine s
 Temporal provides durable execution for workflow runs:
 
 - **Workflow state** — step results, approval decisions, and event history are stored as workflow state within Temporal, not in an external database.
-- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. *(TODO: explicit sandbox termination on timeout — see [T2](gaps/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation))*
+- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. Heartbeat-based cancellation detection ensures sandbox cleanup on timeout ([T2](gaps/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation)).
 - **Approval signals** — human approval is implemented as a Temporal signal (`AgentWorkflow.approve`), with `wait_condition` blocking until the signal arrives or times out.
 - **Parallel execution** — steps sharing a `parallel_group` are dispatched via `asyncio.gather` within the workflow.
 - **Crash recovery** — content-hash pod naming for idempotent retries + startup orphan reconciliation for leaked containers.
@@ -152,6 +152,9 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **MCP secret allowlist** — `MCP_ALLOWED_SECRETS` restricts which secrets can be mounted; file-reference headers keep secrets out of env vars
 - **Resource limits** — `SpawnConfig` enforces CPU (max 4 cores) and memory (max 4Gi) bounds with Pydantic validators
 - **Network egress enforcement** — NetworkPolicy restricts sandbox egress to DNS and explicitly configured LLM provider CIDRs (`llmCidrs`). Enabled by default in Helm. Podman deployments use host firewall rules. See [DEPLOYMENT.md](DEPLOYMENT.md#network-egress-policy).
+- **Per-user rate limiting** — token bucket middleware (`RATE_LIMIT_ENABLED`) with sha256-hashed bearer token keys, 429 + Retry-After header, Prometheus counter. Health/metrics endpoints exempt.
+- **App-level TLS** — ephemeral self-signed CA + per-sandbox certs generated at spawn time (`SANDBOX_TLS_MODE=app`). K8s: cert Secret mount. Podman: temp dir bind mount. Service mesh deployments (`SANDBOX_TLS_MODE=mesh`) skip app-level TLS.
+- **Sandbox heartbeat + timeout** — `activity.heartbeat()` during sandbox HTTP calls with 180s timeout. Cancellation detected via `asyncio.CancelledError`, ensures `destroy()` runs. `ls_sandbox_timeout_total` metric.
 
 **TODO** (see [implementation plan](gaps/gaps-implementation-plan.md)):
 - Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract))
@@ -174,6 +177,15 @@ See [rbac.md](rbac.md) for full documentation including policy file format and q
 **RBAC TODO:**
 - Risk-level scoped approval — `conditions.risk_levels` in policy rules (requires querying step risk during authorization)
 - K8s SubjectAccessReview backend — delegates to K8s RBAC (requires resource model design)
+
+### Triggers
+
+Workflows can be started from multiple entry points:
+
+- **API trigger** — `POST /v1/workflows/run` with embedded or stored definition. Primary trigger for programmatic and UI-driven workflows.
+- **Alert trigger** — `POST /v1/webhooks/alertmanager` accepts Alertmanager webhook payloads and maps alerts to workflow definitions. Configurable via `ALERT_TRIGGER_ENABLED`, `ALERT_TRIGGER_DEFAULT_WORKFLOW`. Includes dedup, RBAC enforcement, content policy validation, and prompt sanitization.
+- **Schedule trigger** — `POST /v1/schedules` CRUD endpoints backed by Temporal's native Schedules API. Supports standard 5-field cron and shorthands (`@daily`, `@hourly`, `@every 5m`). Configurable via `SCHEDULE_TRIGGER_ENABLED`.
+- **Chatbot trigger** — TODO ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15))
 
 ### Observability
 
