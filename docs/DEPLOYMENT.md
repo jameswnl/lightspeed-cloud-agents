@@ -8,11 +8,12 @@ For day-2 operations and troubleshooting, see the [Operational Runbook](operatio
 ## Building Images
 
 ```bash
-make build          # builds 2 core images (runner + sandbox)
-make build-demo     # builds all 3 images (adds MCP server for demo)
-make build-runner   # just the workflow runner
-make build-sandbox  # just the sandbox (clones fork if needed)
-make build-mcp      # just the MCP filesystem server (demo only)
+make build              # builds 2 core images (runner + sandbox)
+make build-demo         # builds all images (adds MCP servers for demo)
+make build-runner       # just the workflow runner
+make build-sandbox      # just the sandbox (clones fork if needed)
+make build-mcp          # just the MCP filesystem server (demo only)
+make build-mcp-kubectl  # just the MCP kubectl server (K8s cluster access)
 ```
 
 The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sandbox @ temporal-integration](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/temporal-integration)) which has MCP streamable HTTP support. `make build-sandbox` handles cloning and checkout automatically.
@@ -290,6 +291,8 @@ See `examples/workflow-definitions/` for working workflow YAMLs:
 - `mcp-filesystem-workflow.yaml` — gather context via MCP tools → recommend
 - `security-audit-workflow.yaml` — audit → approve (critical) → remediate
 - `ephemeral-diagnose-workflow.yaml` — single diagnostic step
+
+- `k8s-realcluster-workflow.yaml` — real-cluster diagnose → approve → fix → verify with per-step tool filtering
 
 These are validated by CI against the Pydantic schema.
 

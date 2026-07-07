@@ -115,7 +115,7 @@ When updating documentation:
 
 - Using `spawn: ephemeral` or `agent: some-agent` in YAML examples — these fields are dead
 - Referencing `pydantic-ai` in the workflow context — pydantic-ai is not used in this repo; the sandbox uses OpenAI agents SDK
-- Claiming `PermissionScope` (allowed_tools/denied_tools) works in the workflow path — it is defined in the model but not enforced through the sandbox HTTP contract
+- Claiming `PermissionScope` (allowed_tools/denied_tools) is fully enforced — the runner forwards `allowedTools`/`deniedTools` in the sandbox POST body, but sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox)
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`
 - Podman `list_active` filter as a list instead of string — silently returns empty
