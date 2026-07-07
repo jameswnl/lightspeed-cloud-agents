@@ -264,7 +264,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T56: Bi-directional CLI session communication [Phase 5]
 
-**Status**: Done (PR #TBD) ([issue #66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66))
+**Status**: Done (PR #69) ([issue #66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66))
 
 **What was built**:
 - `write_file(agent_name, path, content)` on `AgentSpawner` ABC with `_do_write_file()` abstract + 3 implementations (K8s: kubectl exec stdin, Podman: podman exec stdin, OpenShell: base64 via exec_stream)
