@@ -6,6 +6,7 @@ collection utilities used across all load test scenarios.
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -53,8 +54,7 @@ class LatencyTracker:
         if not self._latencies:
             raise ValueError("No latencies recorded")
         sorted_vals = sorted(self._latencies)
-        idx = int(len(sorted_vals) * pct / 100)
-        idx = min(idx, len(sorted_vals) - 1)
+        idx = min(math.ceil(len(sorted_vals) * pct / 100) - 1, len(sorted_vals) - 1)
         return sorted_vals[idx]
 
     def summary(self) -> dict[str, float]:
@@ -145,11 +145,16 @@ class WorkflowFactory:
                 "prompt": "Analyze the system.",
             },
             {
+                "name": "approve-remediation",
+                "type": "human-approval",
+                "output_key": "approval",
+                "message": "Approve the remediation action?",
+            },
+            {
                 "name": "remediate",
                 "type": "agent",
                 "output_key": "fix",
                 "prompt": "Apply the fix.",
-                "approval_required": True,
             },
         ]
         return payload

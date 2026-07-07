@@ -87,14 +87,18 @@ class TestWorkflowFactory:
         assert payload["workflow_id"].startswith("load-test-")
 
     def test_with_approval_step(self) -> None:
-        """run_request_with_approval includes an approval step."""
+        """run_request_with_approval includes a human-approval step."""
         from tests.load.helpers import WorkflowFactory
 
         factory = WorkflowFactory()
         payload = factory.run_request_with_approval()
         steps = payload["definition"]["spec"]["steps"]
-        approval_steps = [s for s in steps if s.get("approval_required")]
-        assert len(approval_steps) >= 1
+        approval_steps = [s for s in steps if s.get("type") == "human-approval"]
+        assert len(approval_steps) == 1
+        step = approval_steps[0]
+        assert step["name"] == "approve-remediation"
+        assert "message" in step
+        assert "output_key" in step
 
 
 class TestResponseCollector:
