@@ -165,10 +165,13 @@ clean:  ## Stop everything and clean up
 
 # ── Tests ──────────────────────────────────────────────
 
-.PHONY: test test-unit
+.PHONY: test test-unit test-load
 
 test-unit:  ## Run unit tests
 	uv run pytest tests/unit/ -q --tb=short
+
+test-load:  ## Run load tests (requires running stack for live mode)
+	uv run pytest tests/load/ -v --tb=short
 
 test: test-unit  ## Run all tests
 

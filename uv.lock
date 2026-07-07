@@ -669,6 +669,12 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
 ]
+load = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-mock" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -698,6 +704,12 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4" },
     { name = "pytest-mock", specifier = ">=3.15" },
     { name = "ruff" },
+]
+load = [
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-asyncio", specifier = ">=1.4" },
+    { name = "pytest-mock", specifier = ">=3.15" },
 ]
 
 [[package]]
