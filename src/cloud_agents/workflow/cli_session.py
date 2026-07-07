@@ -110,6 +110,7 @@ class CLISessionLauncher:
         self._sessions: dict[str, CLISessionInfo] = {}
         self._timeout_task: asyncio.Task[None] | None = None
         self._check_interval: float = DEFAULT_CHECK_INTERVAL
+        self._session_lock: asyncio.Lock = asyncio.Lock()
 
     async def launch(
         self,
@@ -226,7 +227,9 @@ class CLISessionLauncher:
         """Terminate a running CLI session.
 
         Calls ``spawner.destroy()`` on the session's container and
-        updates the tracked status.
+        updates the tracked status. Holds ``_session_lock`` to prevent
+        a concurrent ``send_message()`` from writing to a session that
+        is being terminated.
 
         Parameters:
             session_id: The session identifier to terminate.
@@ -236,39 +239,40 @@ class CLISessionLauncher:
             KeyError: If the session ID is not found.
             RuntimeError: If the spawner fails to destroy the container.
         """
-        info = self._sessions.get(session_id)
-        if info is None:
-            raise KeyError(f"CLI session '{session_id}' not found")
+        async with self._session_lock:
+            info = self._sessions.get(session_id)
+            if info is None:
+                raise KeyError(f"CLI session '{session_id}' not found")
 
-        try:
-            await spawner.destroy(info.agent_name)
-            info.status = CLISessionStatus.TERMINATED
+            try:
+                await spawner.destroy(info.agent_name)
+                info.status = CLISessionStatus.TERMINATED
 
-            emit_audit(
-                event_type="cli_session_terminated",
-                workflow_id=info.workflow_id,
-                details={
-                    "session_id": session_id,
-                    "agent_name": info.agent_name,
-                    "reason": "user_request",
-                },
-            )
+                emit_audit(
+                    event_type="cli_session_terminated",
+                    workflow_id=info.workflow_id,
+                    details={
+                        "session_id": session_id,
+                        "agent_name": info.agent_name,
+                        "reason": "user_request",
+                    },
+                )
 
-            logger.info(
-                "CLI session terminated: session_id=%s, agent=%s",
-                session_id,
-                info.agent_name,
-            )
+                logger.info(
+                    "CLI session terminated: session_id=%s, agent=%s",
+                    session_id,
+                    info.agent_name,
+                )
 
-        except Exception as exc:
-            info.status = CLISessionStatus.FAILED
-            info.error = str(exc)
-            logger.error(
-                "CLI session terminate failed: session_id=%s, error=%s",
-                session_id,
-                exc,
-            )
-            raise
+            except Exception as exc:
+                info.status = CLISessionStatus.FAILED
+                info.error = str(exc)
+                logger.error(
+                    "CLI session terminate failed: session_id=%s, error=%s",
+                    session_id,
+                    exc,
+                )
+                raise
 
     def list_sessions(
         self, workflow_id: str | None = None
@@ -357,7 +361,9 @@ class CLISessionLauncher:
         """Send a message to a running CLI session.
 
         Writes a JSONL line to the session's message file inside the
-        container. The agent is expected to read from this file.
+        container. The status check and write are performed under
+        ``_session_lock`` so that a concurrent ``terminate()`` cannot
+        change the session state between check and write.
 
         Parameters:
             session_id: The session identifier to message.
@@ -366,27 +372,36 @@ class CLISessionLauncher:
 
         Raises:
             KeyError: If the session ID is not found.
-            RuntimeError: If the write operation fails.
+            RuntimeError: If the session is not RUNNING or the write fails.
         """
-        info = self._sessions.get(session_id)
-        if info is None:
-            raise KeyError(f"CLI session '{session_id}' not found")
+        async with self._session_lock:
+            info = self._sessions.get(session_id)
+            if info is None:
+                raise KeyError(f"CLI session '{session_id}' not found")
 
-        msg_line = json.dumps({
-            "message": message,
-            "timestamp": datetime.now(tz=UTC).isoformat(),
-        })
+            if info.status != CLISessionStatus.RUNNING:
+                raise RuntimeError(
+                    f"CLI session '{session_id}' is not in RUNNING state "
+                    f"(current: {info.status.value})"
+                )
 
-        # Read existing content, append new message.
-        # Note: read-then-write is non-atomic. Acceptable for current
-        # single-writer design; revisit if concurrent senders are needed.
-        try:
-            existing = await spawner.read_file(info.agent_name, _MESSAGE_FILE_PATH)
-        except FileNotFoundError:
-            existing = ""
+            msg_line = json.dumps({
+                "message": message,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+            })
 
-        new_content = existing + msg_line + "\n"
-        await spawner.write_file(info.agent_name, _MESSAGE_FILE_PATH, new_content)
+            # Read existing content, append new message.
+            try:
+                existing = await spawner.read_file(
+                    info.agent_name, _MESSAGE_FILE_PATH
+                )
+            except FileNotFoundError:
+                existing = ""
+
+            new_content = existing + msg_line + "\n"
+            await spawner.write_file(
+                info.agent_name, _MESSAGE_FILE_PATH, new_content
+            )
 
         emit_audit(
             event_type="cli_session_message_sent",
