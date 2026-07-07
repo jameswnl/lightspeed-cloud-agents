@@ -12,8 +12,10 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15 ✓, T34 ✓, T36, T51 ✓, T55 ✓ |
-| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18 ✓, T20 ✓, T25-T27, T29-T33, T35, T40, T41 |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15 ✓*, T34 ✓, T36, T51 ✓, T52 ✓, T53, T54 ✓, T55 |
+| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18 ✓, T20 ✓, T25-T27, T29-T33, T35, T40, T41, T56 |
+
+*T15 Phase 1+2 done, follow-ups T55 (timeout) and T56 (bi-directional) pending
 
 ### Immediate actions (before Phase 3a)
 1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
@@ -231,7 +233,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T15: Interactive CLI handoff (R5, R17) [Phase 4]
 
-**Status**: Done
+**Status**: Partial (Phase 1 + Phase 2 done, follow-ups pending)
 **ARCHITECTURE.md ref**: Requirements table R17 — TODO; Design Principle R5 — TODO
 
 **What was built** (Phase 1 — context serialization + launch command):
@@ -250,22 +252,25 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 - `GET/DELETE /v1/cli-sessions` API endpoints with RBAC (VIEW/CANCEL)
 - `cli_session_launched`, `cli_session_terminated`, `cli_session_failed` audit events
 - Bi-directional communication deferred to separate issue (Task 5 split out)
+### T55: Session timeout enforcement [Phase 4]
 
-### T55: Session timeout enforcement [Phase 4] — DONE
-
-**Status**: Done ([issue #65](https://github.com/jameswnl/lightspeed-cloud-agents/issues/65))
+**Status**: Open ([issue #65](https://github.com/jameswnl/lightspeed-cloud-agents/issues/65))
 
 **Problem**: `CLISessionLauncher.max_session_seconds` is stored but never enforced. Sessions run indefinitely.
 
-**What was built**:
-- `start_timeout_monitor(spawner)` launches background asyncio task that periodically checks session age
-- `_timeout_loop()` auto-terminates expired RUNNING sessions via `spawner.destroy()`
-- Emits `cli_session_terminated` audit event with `reason=timeout`
-- `shutdown()` cancels background task (idempotent)
-- Graceful handling of destroy failures (marks session FAILED with error)
-- 8 unit tests covering enforcement, audit events, edge cases
+**What to build**: Background asyncio task in `CLISessionLauncher` that periodically checks session age, auto-terminates expired sessions via `spawner.destroy()`, emits `cli_session_terminated` audit event with reason `timeout`.
 
 **Effort**: 1 day
+
+### T56: Bi-directional CLI session communication [Phase 5]
+
+**Status**: Open ([issue #66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66))
+
+**Problem**: CLI sessions are fire-and-forget. No mechanism to monitor output, feed results back to workflow state, or send additional context to a running session.
+
+**What to build**: Session output monitoring, result feedback to workflow state, message sending to running sessions, API endpoints for communication.
+
+**Effort**: 3-4 weeks
 
 ### T16: Conversational approval [Phase 4]
 
