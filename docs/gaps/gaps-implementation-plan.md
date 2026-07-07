@@ -244,7 +244,12 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 - `workflow.escalated` SSE event emitted after escalation activity completes
 - Enriched context passed through workflow -> escalation activity pipeline
 
-**Phase 2 (deferred)**: Interactive session lifecycle (programmatic launch, monitoring, bi-directional communication). Estimated 3-4 weeks with security implications.
+**Phase 2** (Done — [issue #59](https://github.com/jameswnl/lightspeed-cloud-agents/issues/59)):
+- `CLISessionLauncher` wraps `spawner.spawn()` with CLI entrypoint (credential-scoped, container-isolated)
+- `CLIHandoffPackager` auto-launches sessions when `CLI_HANDOFF_AUTO_LAUNCH=true`
+- `GET/DELETE /v1/cli-sessions` API endpoints with RBAC (VIEW/CANCEL)
+- `cli_session_launched`, `cli_session_terminated`, `cli_session_failed` audit events
+- Bi-directional communication deferred to separate issue (Task 5 split out)
 
 ### T16: Conversational approval [Phase 4]
 

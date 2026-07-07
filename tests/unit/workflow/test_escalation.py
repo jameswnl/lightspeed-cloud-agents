@@ -414,3 +414,150 @@ class TestTranscriptInHandoff:
         )
         assert pkg.step_transcripts is not None
         assert "r1" in pkg.step_transcripts
+
+
+class TestCLIHandoffAutoLaunch:
+    """Tests for CLIHandoffPackager auto-launch integration (T15 Phase 2, Task 2)."""
+
+    @pytest.mark.asyncio
+    async def test_auto_launch_spawns_session(self, tmp_path: str) -> None:
+        """When launcher is set and auto-launch enabled, spawns a CLI session."""
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.cli_session import CLISessionLauncher
+
+        launcher = CLISessionLauncher()
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        packager = CLIHandoffPackager(
+            output_dir=str(tmp_path),
+            launcher=launcher,
+            spawner=spawner,
+            auto_launch=True,
+            sandbox_image="quay.io/sandbox:latest",
+        )
+
+        pkg = _make_enriched_package()
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            await packager.package(pkg)
+
+        # Session should have been launched
+        sessions = launcher.list_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].workflow_id == "wf-abc123"
+
+    @pytest.mark.asyncio
+    async def test_auto_launch_disabled_does_not_spawn(self, tmp_path: str) -> None:
+        """When auto-launch is disabled, no session is spawned."""
+        from cloud_agents.workflow.cli_session import CLISessionLauncher
+
+        launcher = CLISessionLauncher()
+        spawner = AsyncMock()
+
+        packager = CLIHandoffPackager(
+            output_dir=str(tmp_path),
+            launcher=launcher,
+            spawner=spawner,
+            auto_launch=False,
+            sandbox_image="quay.io/sandbox:latest",
+        )
+
+        pkg = _make_enriched_package()
+        await packager.package(pkg)
+
+        # No session should have been launched
+        sessions = launcher.list_sessions()
+        assert len(sessions) == 0
+
+    @pytest.mark.asyncio
+    async def test_auto_launch_still_writes_context_file(self, tmp_path: str) -> None:
+        """Auto-launch still writes the context file (existing behavior preserved)."""
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.cli_session import CLISessionLauncher
+
+        launcher = CLISessionLauncher()
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        packager = CLIHandoffPackager(
+            output_dir=str(tmp_path),
+            launcher=launcher,
+            spawner=spawner,
+            auto_launch=True,
+            sandbox_image="quay.io/sandbox:latest",
+        )
+
+        pkg = _make_enriched_package()
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            await packager.package(pkg)
+
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+        assert files[0].suffix == ".md"
+
+    @pytest.mark.asyncio
+    async def test_no_launcher_uses_existing_behavior(self, tmp_path: str) -> None:
+        """Without launcher, existing file+log behavior works unchanged."""
+        packager = CLIHandoffPackager(output_dir=str(tmp_path))
+        pkg = _make_enriched_package()
+        await packager.package(pkg)
+
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_launch_failure_does_not_raise(self, tmp_path: str) -> None:
+        """Auto-launch failure is logged but does not raise."""
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.cli_session import CLISessionLauncher
+
+        launcher = CLISessionLauncher()
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(side_effect=RuntimeError("spawn failed"))
+
+        packager = CLIHandoffPackager(
+            output_dir=str(tmp_path),
+            launcher=launcher,
+            spawner=spawner,
+            auto_launch=True,
+            sandbox_image="quay.io/sandbox:latest",
+        )
+
+        pkg = _make_enriched_package()
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            # Should not raise even though spawn fails
+            await packager.package(pkg)
+
+        # Context file should still be written
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_launch_env_var_override(self, tmp_path: str) -> None:
+        """CLI_HANDOFF_AUTO_LAUNCH=true env var enables auto-launch."""
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.cli_session import CLISessionLauncher
+
+        launcher = CLISessionLauncher()
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        # auto_launch not set, but env var is true
+        packager = CLIHandoffPackager(
+            output_dir=str(tmp_path),
+            launcher=launcher,
+            spawner=spawner,
+            sandbox_image="quay.io/sandbox:latest",
+        )
+
+        pkg = _make_enriched_package()
+        with patch.dict(os.environ, {"CLI_HANDOFF_AUTO_LAUNCH": "true"}):
+            with patch("cloud_agents.workflow.cli_session.emit_audit"):
+                await packager.package(pkg)
+
+        sessions = launcher.list_sessions()
+        assert len(sessions) == 1

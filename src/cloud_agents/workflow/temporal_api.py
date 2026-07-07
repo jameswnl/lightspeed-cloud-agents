@@ -92,6 +92,8 @@ def build_temporal_router(
     authorizer: Optional[Any] = None,
     definition_store: Optional[DefinitionStore] = None,
     content_policy: Optional["ContentPolicy"] = None,
+    cli_session_launcher: Optional[Any] = None,
+    cli_session_spawner: Optional[Any] = None,
 ) -> APIRouter:
     """Build FastAPI router with Temporal workflow endpoints.
 
@@ -105,6 +107,10 @@ def build_temporal_router(
         content_policy: Optional content policy for definition validation.
             When provided, definitions are checked against the policy rules
             at both /run and /definitions submission time.
+        cli_session_launcher: Optional CLISessionLauncher for CLI session
+            management. When provided, CLI session endpoints are registered.
+        cli_session_spawner: Optional AgentSpawner for CLI session containers.
+            Required when cli_session_launcher is provided.
 
     Returns:
         APIRouter with workflow endpoints.
@@ -665,5 +671,78 @@ def build_temporal_router(
         handle = temporal_client.get_workflow_handle(workflow_id)
         await handle.cancel()
         return {"status": "cancelled"}
+
+    # -- CLI session endpoints -------------------------------------------------
+    # Session endpoints live at /v1/cli-sessions (separate prefix from
+    # /v1/workflows), so they use a sibling router included via a
+    # shared parent.
+    if cli_session_launcher is not None:
+        session_router = APIRouter(
+            prefix="/v1/cli-sessions",
+            tags=["cli-sessions"],
+            dependencies=dependencies,
+        )
+
+        @session_router.get("")
+        async def list_cli_sessions(
+            caller=Depends(get_caller_identity),
+        ) -> list[dict[str, Any]]:
+            """List all active CLI sessions."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.VIEW, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
+            sessions = cli_session_launcher.list_sessions()
+            return [s.model_dump() for s in sessions]
+
+        @session_router.get("/{session_id}")
+        async def get_cli_session(
+            session_id: str,
+            caller=Depends(get_caller_identity),
+        ) -> dict[str, Any]:
+            """Get status of a specific CLI session."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.VIEW, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
+            info = cli_session_launcher.get_status(session_id)
+            if info is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"CLI session '{session_id}' not found",
+                )
+            return info.model_dump()
+
+        @session_router.delete("/{session_id}")
+        async def delete_cli_session(
+            session_id: str,
+            caller=Depends(get_caller_identity),
+        ) -> dict[str, str]:
+            """Terminate a running CLI session."""
+            decision = await authz.authorize(
+                caller, WorkflowAction.CANCEL, WorkflowResource()
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=403, detail=decision.reason)
+
+            if cli_session_launcher.get_status(session_id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"CLI session '{session_id}' not found",
+                )
+
+            await cli_session_launcher.terminate(session_id, cli_session_spawner)
+            return {"status": "terminated"}
+
+        # Wrap both routers in a parent so they share auth dependencies
+        # but have independent prefixes.
+        parent = APIRouter()
+        parent.include_router(router)
+        parent.include_router(session_router)
+        return parent
 
     return router
