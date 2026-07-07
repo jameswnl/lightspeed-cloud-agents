@@ -444,6 +444,102 @@ def build_temporal_router(
             return status_result.model_dump()
         return {"steps": {}, "events": []}
 
+    @router.get("/{workflow_id}/handoff")
+    async def get_workflow_handoff(
+        workflow_id: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, Any]:
+        """Generate a CLI handoff context package for any workflow.
+
+        Returns the workflow context serialized as markdown, a launch
+        command for Claude Code, and the workflow ID. The context_markdown
+        field is the primary interface for API consumers.
+        """
+        resource = await _get_workflow_authz(workflow_id)
+        handoff_decision = await authz.authorize(
+            caller,
+            WorkflowAction.VIEW,
+            resource,
+        )
+        if not handoff_decision.allowed:
+            raise HTTPException(status_code=403, detail=handoff_decision.reason)
+
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        try:
+            status_result = await handle.query(AgentWorkflow.get_status)
+            workflow_context = await handle.query(AgentWorkflow.get_workflow_context)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workflow '{workflow_id}' not found or not queryable: {exc}",
+            ) from exc
+
+        from cloud_agents.workflow.escalation import (
+            EscalationPackage,
+            serialize_handoff_context,
+        )
+
+        # Build step snapshot from status query
+        steps_snapshot: dict[str, Any] = {}
+        if hasattr(status_result, "steps"):
+            for k, v in status_result.steps.items():
+                steps_snapshot[k] = (
+                    v.model_dump() if hasattr(v, "model_dump") else v
+                )
+
+        events_list: list[dict[str, Any]] = []
+        if hasattr(status_result, "events"):
+            for e in status_result.events:
+                events_list.append(
+                    e.model_dump() if hasattr(e, "model_dump") else e
+                )
+
+        # Find the failed step
+        failed_step = "unknown"
+        for k, v in steps_snapshot.items():
+            if isinstance(v, dict) and v.get("status") == "failed":
+                failed_step = k
+                break
+
+        wf_name = "workflow"
+        definition = None
+        input_prompt = None
+        provider_name = None
+        if workflow_context:
+            definition = workflow_context.get("definition")
+            input_prompt = workflow_context.get("input_prompt")
+            provider_name = workflow_context.get("provider_name")
+            if definition:
+                wf_name = definition.get("metadata", {}).get("name", "workflow")
+
+        from datetime import UTC, datetime
+
+        pkg = EscalationPackage(
+            workflow_name=wf_name,
+            step_name=failed_step,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            escalation={"type": "handoff_request"},
+            workflow_snapshot=steps_snapshot,
+            definition=definition,
+            input_prompt=input_prompt,
+            events=events_list or None,
+            provider_name=provider_name,
+            workflow_id=workflow_id,
+        )
+
+        context_md = serialize_handoff_context(pkg)
+        launch_cmd = (
+            f'claude -p "Continue this investigation. '
+            f"The workflow '{wf_name}' (ID: {workflow_id}) needs attention. "
+            f'Read the context above for details."'
+        )
+
+        return {
+            "workflow_id": workflow_id,
+            "context_markdown": context_md,
+            "launch_command": launch_cmd,
+        }
+
     @router.get("/{workflow_id}/events")
     async def get_workflow_events(
         workflow_id: str,

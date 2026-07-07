@@ -560,3 +560,155 @@ class TestHeartbeatTimeoutConfig:
         assert mock_execute.call_count >= 1
         sandbox_call = mock_execute.call_args_list[0]
         assert sandbox_call.kwargs.get("heartbeat_timeout") == timedelta(seconds=180)
+
+
+class TestWorkflowEscalatedEvent:
+    """Tests for workflow.escalated event emission (T15 Task 5)."""
+
+    @staticmethod
+    def _make_activity_error() -> "ActivityError":
+        """Create a valid ActivityError for testing."""
+        from temporalio.exceptions import ActivityError
+
+        return ActivityError(
+            "retries exhausted",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test",
+            activity_type="run_sandbox_step",
+            activity_id="1",
+            retry_state=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_escalation_emits_workflow_escalated_event(self) -> None:
+        """When escalation triggers, a workflow.escalated event is emitted."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        # First call (run_sandbox_step) raises ActivityError
+        # Second call (build_escalation_activity) returns escalation result
+        call_count = 0
+
+        async def mock_execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise self._make_activity_error()
+            return {"status": "escalated", "output": {"type": "escalation_handoff"}}
+
+        mock_execute = AsyncMock(side_effect=mock_execute_side_effect)
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "failing-step",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+            }
+
+            wf_input = _make_input([step])
+            await wf._handle_agent_step(step, wf_input)
+
+        event_types = [e.type for e in wf._events]
+        assert "workflow.escalated" in event_types
+
+    @pytest.mark.asyncio
+    async def test_escalation_passes_enriched_context(self) -> None:
+        """Escalation activity receives definition, input_prompt, events, provider_name, workflow_id."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        call_count = 0
+        captured_args: list[Any] = []
+
+        async def mock_execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise self._make_activity_error()
+            # Capture the escalation activity args
+            captured_args.append(kwargs.get("args", args))
+            return {"status": "escalated", "output": {"type": "escalation_handoff"}}
+
+        mock_execute = AsyncMock(side_effect=mock_execute_side_effect)
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "failing-step",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+            }
+
+            wf_input = _make_input([step], input_prompt="investigate issue")
+            await wf._handle_agent_step(step, wf_input)
+
+        # The second execute_activity call is for build_escalation_activity
+        assert len(captured_args) >= 1
+        esc_args = captured_args[0]
+        # args order: steps, workflow_name, escalation_config, definition,
+        #             input_prompt, events, provider_name, workflow_id
+        assert len(esc_args) == 8
+        steps_arg, wf_name_arg, esc_config_arg, definition_arg, prompt_arg, events_arg, provider_arg, wf_id_arg = esc_args
+        assert wf_name_arg == "test-wf"
+        assert definition_arg == wf_input.definition
+        assert prompt_arg == "investigate issue"
+        assert isinstance(events_arg, list)
+        assert provider_arg == "openai"
+        assert wf_id_arg == "wf-test-1"
+
+
+class TestGetWorkflowContext:
+    """Tests for get_workflow_context query (T15 Task 4)."""
+
+    @pytest.mark.asyncio
+    async def test_workflow_context_query_returns_none_before_run(self) -> None:
+        """get_workflow_context returns None before workflow runs."""
+        wf = AgentWorkflow()
+        ctx = wf.get_workflow_context()
+        assert ctx is None
+
+    @pytest.mark.asyncio
+    async def test_workflow_context_query_after_run(self) -> None:
+        """get_workflow_context returns stashed context after run starts."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {
+            "status": "completed",
+            "output": {"summary": "ok"},
+        }
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+            }
+            wf_input = _make_input([step], input_prompt="do the thing")
+            await wf.run(wf_input)
+
+        ctx = wf.get_workflow_context()
+        assert ctx is not None
+        assert ctx["input_prompt"] == "do the thing"
+        assert ctx["provider_name"] == "openai"
+        assert ctx["provider_model"] == "gpt-4"
+        assert ctx["definition"] is not None

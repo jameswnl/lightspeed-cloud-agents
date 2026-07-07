@@ -42,6 +42,7 @@ class AgentWorkflow:
         self._approval_decisions: dict[str, dict[str, Any]] = {}
         self._events: list[WorkflowEvent] = []
         self._authz_context: Optional[dict[str, Any]] = None
+        self._workflow_context: Optional[dict[str, Any]] = None
 
     @workflow.signal
     async def approve(
@@ -70,11 +71,29 @@ class AgentWorkflow:
         """Return the workflow's authorization context."""
         return self._authz_context
 
+    @workflow.query
+    def get_workflow_context(self) -> dict[str, Any] | None:
+        """Return the workflow's definition, input prompt, and provider context.
+
+        Returns:
+            Dict with definition, input_prompt, provider_name, provider_model,
+            or None if the workflow hasn't started yet.
+        """
+        return self._workflow_context
+
     @workflow.run
     async def run(self, input: WorkflowInput) -> WorkflowOutput:
         """Execute the workflow by interpreting the YAML definition."""
         if input.authz_context:
             self._authz_context = input.authz_context.model_dump()
+
+        self._workflow_context = {
+            "definition": input.definition,
+            "input_prompt": input.input_prompt,
+            "provider_name": input.provider.name,
+            "provider_model": input.provider.model,
+        }
+
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
@@ -277,12 +296,18 @@ class AgentWorkflow:
                     {k: v.model_dump() for k, v in self._steps.items()},
                     input.definition.get("metadata", {}).get("name", "workflow"),
                     input.escalation_config,
+                    input.definition,
+                    input.input_prompt,
+                    [e.model_dump() for e in self._events],
+                    input.provider.name,
+                    input.workflow_id,
                 ],
                 start_to_close_timeout=timedelta(seconds=60),
             )
             self._steps["escalation"] = (
                 StepResult(**escalation) if isinstance(escalation, dict) else escalation
             )
+            self._emit("workflow.escalated", step_name)
             return step_result
 
         self._steps[output_key] = step_result

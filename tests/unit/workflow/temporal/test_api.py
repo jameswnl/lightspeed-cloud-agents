@@ -822,6 +822,21 @@ class TestAuthorizationWiring:
         response = test_client.post("/v1/workflows/wf-test-1/cancel")
         assert response.status_code == 403
 
+    def test_unauthorized_handoff_returns_403(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /{workflow_id}/handoff with deny-all authorizer returns 403."""
+        mock_temporal = mocker.MagicMock()
+        handle = mocker.AsyncMock()
+        mock_temporal.get_workflow_handle.return_value = handle
+
+        app = _build_deny_app(mock_temporal)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.get("/v1/workflows/wf-test-1/handoff")
+        assert response.status_code == 403
+
     def test_unauthorized_definitions_get_returns_403(
         self,
         mocker: MockerFixture,
@@ -1520,3 +1535,143 @@ class TestAuthzContextLoadedForLaterOperations:
 
         response = test_client.post("/v1/workflows/wf-owned/cancel")
         assert response.status_code == 403
+
+
+class TestGetWorkflowHandoff:
+    """Tests for GET /v1/workflows/{id}/handoff (T15 Task 4)."""
+
+    def _mock_workflow_context(self, mock_client: Any, mocker: MockerFixture) -> None:
+        """Set up mock to return both status and workflow context."""
+        handle = mock_client.get_workflow_handle.return_value
+
+        status_result = mocker.MagicMock()
+        status_result.model_dump = lambda: {
+            "steps": {
+                "r1": {
+                    "status": "completed",
+                    "output": {"summary": "found issues"},
+                    "error": None,
+                },
+                "r2": {
+                    "status": "failed",
+                    "output": None,
+                    "error": "retries exhausted",
+                },
+            },
+            "events": [
+                {"type": "step.started", "step": "diagnose", "timestamp": "2026-01-01T00:00:00"},
+                {"type": "step.failed", "step": "fix-hosts", "timestamp": "2026-01-01T00:01:00"},
+            ],
+        }
+        status_result.steps = {
+            "r1": mocker.MagicMock(
+                status="completed",
+                output={"summary": "found issues"},
+                error=None,
+                model_dump=lambda: {"status": "completed", "output": {"summary": "found issues"}, "error": None},
+            ),
+            "r2": mocker.MagicMock(
+                status="failed",
+                output=None,
+                error="retries exhausted",
+                model_dump=lambda: {"status": "failed", "output": None, "error": "retries exhausted"},
+            ),
+        }
+        status_result.events = [
+            mocker.MagicMock(
+                type="step.started",
+                step="diagnose",
+                timestamp="2026-01-01T00:00:00",
+                model_dump=lambda: {"type": "step.started", "step": "diagnose", "timestamp": "2026-01-01T00:00:00"},
+            ),
+            mocker.MagicMock(
+                type="step.failed",
+                step="fix-hosts",
+                timestamp="2026-01-01T00:01:00",
+                model_dump=lambda: {"type": "step.failed", "step": "fix-hosts", "timestamp": "2026-01-01T00:01:00"},
+            ),
+        ]
+
+        workflow_context = {
+            "definition": {"metadata": {"name": "diagnose-fix"}, "spec": {"steps": []}},
+            "input_prompt": "Fix the broken hosts",
+            "provider_name": "openai",
+            "provider_model": "gpt-4",
+        }
+
+        def side_effect(query_fn):
+            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            if query_fn == AgentWorkflow.get_status:
+                return status_result
+            if query_fn == AgentWorkflow.get_workflow_context:
+                return workflow_context
+            if query_fn == AgentWorkflow.get_authz_context:
+                return None
+            return None
+
+        handle.query = mocker.AsyncMock(side_effect=side_effect)
+
+    def test_handoff_returns_200(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /handoff returns 200 with context."""
+        self._mock_workflow_context(mock_client, mocker)
+        response = client.get("/v1/workflows/wf-test-1/handoff")
+        assert response.status_code == 200
+
+    def test_handoff_contains_context_markdown(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Response includes context_markdown as primary interface."""
+        self._mock_workflow_context(mock_client, mocker)
+        response = client.get("/v1/workflows/wf-test-1/handoff")
+        data = response.json()
+        assert "context_markdown" in data
+        assert "Investigation Handoff" in data["context_markdown"]
+
+    def test_handoff_contains_launch_command(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Response includes a launch_command."""
+        self._mock_workflow_context(mock_client, mocker)
+        response = client.get("/v1/workflows/wf-test-1/handoff")
+        data = response.json()
+        assert "launch_command" in data
+        assert "claude" in data["launch_command"]
+
+    def test_handoff_contains_workflow_id(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """Response includes the workflow_id."""
+        self._mock_workflow_context(mock_client, mocker)
+        response = client.get("/v1/workflows/wf-test-1/handoff")
+        data = response.json()
+        assert data["workflow_id"] == "wf-test-1"
+
+    def test_handoff_nonexistent_workflow_returns_404(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /handoff for non-existent workflow returns 404."""
+        handle = mock_client.get_workflow_handle.return_value
+        handle.query = mocker.AsyncMock(
+            side_effect=Exception("workflow not found")
+        )
+
+        response = client.get("/v1/workflows/wf-nonexistent/handoff")
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()

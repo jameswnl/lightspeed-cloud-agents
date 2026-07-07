@@ -1,14 +1,16 @@
 """Escalation packaging for workflow failures.
 
 Packages escalation handoff documents and sends them to external
-systems (Jira, webhook, or structured log).
+systems (Jira, webhook, CLI handoff, or structured log).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Optional, Protocol
 
 import httpx
@@ -27,6 +29,11 @@ class EscalationPackage(BaseModel):
         timestamp: When the escalation was generated.
         escalation: The raw escalation handoff data.
         workflow_snapshot: Current state of all workflow steps.
+        definition: Original workflow definition dict.
+        input_prompt: User-provided input prompt for the workflow.
+        events: Workflow event timeline.
+        provider_name: LLM provider name used by the workflow.
+        workflow_id: Unique workflow execution identifier.
     """
 
     workflow_name: str
@@ -35,6 +42,11 @@ class EscalationPackage(BaseModel):
     timestamp: str
     escalation: dict[str, Any]
     workflow_snapshot: dict[str, Any]
+    definition: Optional[dict[str, Any]] = None
+    input_prompt: Optional[str] = None
+    events: Optional[list[dict[str, Any]]] = None
+    provider_name: Optional[str] = None
+    workflow_id: Optional[str] = None
 
 
 class EscalationPackager(Protocol):
@@ -143,6 +155,11 @@ def build_escalation_package(
     escalation_data: dict[str, Any],
     workflow_snapshot: dict[str, Any],
     correlation_id: Optional[str] = None,
+    definition: Optional[dict[str, Any]] = None,
+    input_prompt: Optional[str] = None,
+    events: Optional[list[dict[str, Any]]] = None,
+    provider_name: Optional[str] = None,
+    workflow_id: Optional[str] = None,
 ) -> EscalationPackage:
     """Build an escalation package from workflow state.
 
@@ -152,6 +169,11 @@ def build_escalation_package(
         escalation_data: Raw escalation handoff dict.
         workflow_snapshot: Current workflow state snapshot.
         correlation_id: Optional trace correlation ID.
+        definition: Original workflow definition dict.
+        input_prompt: User-provided input prompt.
+        events: Workflow event timeline.
+        provider_name: LLM provider name.
+        workflow_id: Unique workflow execution ID.
 
     Returns:
         Complete EscalationPackage ready for delivery.
@@ -163,4 +185,152 @@ def build_escalation_package(
         timestamp=datetime.now(UTC).isoformat(),
         escalation=escalation_data,
         workflow_snapshot=workflow_snapshot,
+        definition=definition,
+        input_prompt=input_prompt,
+        events=events,
+        provider_name=provider_name,
+        workflow_id=workflow_id,
     )
+
+
+def serialize_handoff_context(pkg: EscalationPackage) -> str:
+    """Serialize an escalation package into a markdown context document.
+
+    Produces a structured markdown document suitable for loading into
+    Claude Code or similar interactive CLI tools.
+
+    Args:
+        pkg: The escalation package to serialize.
+
+    Returns:
+        Markdown string with workflow context for human handoff.
+    """
+    import yaml
+
+    sections: list[str] = []
+
+    sections.append(f"# Investigation Handoff: {pkg.workflow_name}")
+    sections.append("")
+
+    # What happened
+    sections.append("## What happened")
+    if pkg.input_prompt:
+        sections.append(pkg.input_prompt)
+    else:
+        sections.append("No input prompt provided.")
+    sections.append("")
+
+    # Workflow definition
+    if pkg.definition:
+        sections.append("## Workflow definition")
+        sections.append("```yaml")
+        sections.append(yaml.dump(pkg.definition, default_flow_style=False).rstrip())
+        sections.append("```")
+        sections.append("")
+
+    # Step results
+    sections.append("## Step results")
+    for step_key, step_data in pkg.workflow_snapshot.items():
+        if isinstance(step_data, dict):
+            step_status = step_data.get("status", "unknown")
+            sections.append(f"### {step_key} -- {step_status}")
+            if output := step_data.get("output"):
+                sections.append(f"**Output**: {json.dumps(output, indent=2)}")
+            if error := step_data.get("error"):
+                sections.append(f"**Error**: {error}")
+            sections.append("")
+
+    # Event timeline
+    if pkg.events:
+        sections.append("## Event timeline")
+        for event in pkg.events:
+            ts = event.get("timestamp", "")
+            etype = event.get("type", "")
+            step = event.get("step", "")
+            sections.append(f"- {ts} -- {etype} / {step}")
+        sections.append("")
+
+    # What failed
+    sections.append("## What failed")
+    sections.append(
+        f"Step '{pkg.step_name}' failed."
+    )
+    if pkg.escalation.get("failure_history"):
+        last_error = pkg.escalation["failure_history"][-1].get("error", "unknown")
+        sections.append(f"Last error: {last_error}")
+    sections.append("")
+
+    # Provider info
+    if pkg.provider_name:
+        sections.append("## Provider")
+        sections.append(f"Provider: {pkg.provider_name}")
+        sections.append("")
+
+    # Suggested next steps
+    sections.append("## Suggested next steps")
+    sections.append(f"1. Investigate the root cause of the '{pkg.step_name}' failure")
+    if pkg.provider_name:
+        sections.append(
+            f"2. Check the provider ({pkg.provider_name}) for availability issues"
+        )
+    sections.append("")
+
+    # Launch command
+    wf_id = pkg.workflow_id or pkg.workflow_name
+    sections.append("## CLI launch command")
+    sections.append("```bash")
+    sections.append(
+        f'claude -p "Continue this investigation. '
+        f"The workflow '{pkg.workflow_name}' (ID: {wf_id}) needs attention. "
+        f'Read the context above for details."'
+    )
+    sections.append("```")
+
+    return "\n".join(sections)
+
+
+class CLIHandoffPackager:
+    """Generate a markdown context file and CLI launch command.
+
+    Writes a structured markdown document for human consumption
+    with pre-loaded context from a failed workflow.
+
+    Attributes:
+        output_dir: Directory to write context files to.
+    """
+
+    def __init__(self, output_dir: str = "/tmp/cloud-agents-handoff") -> None:
+        """Initialize the CLI handoff packager.
+
+        Args:
+            output_dir: Directory for writing context files.
+        """
+        self.output_dir = output_dir
+
+    async def package(self, pkg: EscalationPackage) -> None:
+        """Write handoff context to file and log the launch command."""
+        try:
+            context_md = serialize_handoff_context(pkg)
+            out_dir = Path(self.output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            wf_id = pkg.workflow_id or pkg.workflow_name
+            filename = f"handoff-{wf_id}.md"
+            context_file = out_dir / filename
+            context_file.write_text(context_md)
+
+            launch_cmd = (
+                f'claude -p "Continue this investigation. '
+                f"Read the context file at {context_file} first.\""
+            )
+            logger.info(
+                "CLI handoff ready:\n  Context: %s\n  Launch:  %s",
+                context_file,
+                launch_cmd,
+            )
+        except Exception as exc:
+            logger.warning(
+                "CLI handoff packaging failed for step '%s': %s",
+                pkg.step_name,
+                exc,
+            )
