@@ -207,6 +207,41 @@ class PodmanSpawner(AgentSpawner):
         logger.info("Spawned Podman container '%s' at %s", container_name, endpoint)
         return endpoint
 
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        """Write content to a file inside a Podman container via podman exec.
+
+        Uses stdin piping with ``cat`` to write arbitrary content safely.
+        The path is shell-quoted to prevent injection.
+
+        Args:
+            agent_name: Name of the agent (without "agent-" prefix).
+            path: Absolute file path inside the container.
+            content: String content to write.
+
+        Raises:
+            RuntimeError: If the write operation fails.
+        """
+        import shlex
+        import subprocess
+
+        container_name = f"agent-{agent_name}"
+        try:
+            subprocess.run(
+                ["podman", "exec", "-i", container_name, "sh", "-c", f"cat > {shlex.quote(path)}"],
+                input=content.encode(),
+                capture_output=True,
+                timeout=30,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to write {path} to container {container_name}: {exc.stderr}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot write file to container {container_name}: {exc}"
+            ) from exc
+
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Read a file from a Podman container via podman exec cat.
 

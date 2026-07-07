@@ -64,6 +64,47 @@ class TestKubernetesSpawnerInit:
         assert spawner._secret_env_vars == {}
 
 
+class TestKubernetesSpawnerWriteFile:
+    """Tests for KubernetesSpawner._do_write_file() via kubectl exec."""
+
+    @pytest.mark.asyncio
+    async def test_write_file_calls_kubectl_exec(self) -> None:
+        """write_file uses kubectl exec with stdin piping."""
+        import subprocess
+
+        spawner = KubernetesSpawner(namespace="test-ns")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            await spawner._do_write_file("my-agent", "/tmp/test.txt", "hello")
+
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert "kubectl" in cmd
+            assert "exec" in cmd
+            assert "-i" in cmd
+            assert "agent-my-agent" in cmd
+            assert "-n" in cmd
+            assert "test-ns" in cmd
+            assert call_args[1]["input"] == b"hello"
+            assert call_args[1]["check"] is True
+
+    @pytest.mark.asyncio
+    async def test_write_file_raises_on_failure(self) -> None:
+        """write_file raises RuntimeError when kubectl exec fails."""
+        import subprocess
+
+        spawner = KubernetesSpawner(namespace="test-ns")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, "kubectl", stderr="permission denied"
+            )
+            with pytest.raises(RuntimeError, match="Failed to write"):
+                await spawner._do_write_file("my-agent", "/tmp/test.txt", "content")
+
+
 class TestKubernetesSpawnerAlreadyExists:
     """Tests for idempotent Job creation (409 handling)."""
 

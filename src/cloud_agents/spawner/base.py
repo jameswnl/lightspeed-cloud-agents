@@ -242,6 +242,23 @@ class AgentSpawner(ABC):
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Implementation-specific file read from container."""
 
+    async def write_file(self, agent_name: str, path: str, content: str) -> None:
+        """Write content to a file inside a spawned agent container.
+
+        Parameters:
+            agent_name: Name of the agent container.
+            path: Absolute file path inside the container.
+            content: String content to write.
+
+        Raises:
+            RuntimeError: If the write operation fails.
+        """
+        await self._do_write_file(agent_name, path, content)
+
+    @abstractmethod
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        """Implementation-specific file write to container."""
+
     async def wait_ready(
         self,
         endpoint: str,

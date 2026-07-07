@@ -13,6 +13,7 @@ class MockSpawner(AgentSpawner):
         super().__init__(**kwargs)
         self.spawned = []
         self.destroyed = []
+        self.written_files: dict[str, str] = {}
 
     async def _do_spawn(
         self, agent_name, image, env, config=None, labels=None, **kwargs
@@ -28,6 +29,9 @@ class MockSpawner(AgentSpawner):
 
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         raise FileNotFoundError(f"No such file: {path}")
+
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        self.written_files[f"{agent_name}:{path}"] = content
 
 
 class FailingSpawner(AgentSpawner):
@@ -46,6 +50,9 @@ class FailingSpawner(AgentSpawner):
 
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         raise FileNotFoundError(f"No such file: {path}")
+
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        raise RuntimeError("Write failed")
 
 
 class TestAgentSpawner:
@@ -202,6 +209,9 @@ class ReadFileSpawner(AgentSpawner):
             raise FileNotFoundError(f"No such file: {path}")
         return self._file_contents[key]
 
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        self._file_contents[f"{agent_name}:{path}"] = content
+
 
 class TestReadFile:
     """Tests for AgentSpawner.read_file() method."""
@@ -230,6 +240,57 @@ class TestReadFile:
         )
         result = await spawner.read_file("agent-1", "/tmp/test.txt")
         assert result == "hello"
+
+
+class TestWriteFile:
+    """Tests for AgentSpawner.write_file() method."""
+
+    @pytest.mark.asyncio
+    async def test_write_file_delegates_to_do_write_file(self) -> None:
+        """write_file delegates to _do_write_file implementation."""
+        spawner = MockSpawner()
+        await spawner.write_file("agent-1", "/tmp/test.txt", "hello world")
+        assert spawner.written_files["agent-1:/tmp/test.txt"] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_write_file_propagates_errors(self) -> None:
+        """write_file propagates errors from _do_write_file."""
+        spawner = FailingSpawner()
+        with pytest.raises(RuntimeError, match="Write failed"):
+            await spawner.write_file("agent-1", "/tmp/test.txt", "content")
+
+    @pytest.mark.asyncio
+    async def test_write_file_creates_readable_content(self) -> None:
+        """Content written via write_file can be read via read_file."""
+        spawner = ReadFileSpawner()
+        await spawner.write_file("agent-1", "/tmp/test.txt", "written content")
+        result = await spawner.read_file("agent-1", "/tmp/test.txt")
+        assert result == "written content"
+
+    @pytest.mark.asyncio
+    async def test_write_file_overwrites_existing(self) -> None:
+        """write_file overwrites existing file content."""
+        spawner = ReadFileSpawner(
+            file_contents={"agent-1:/tmp/test.txt": "old content"}
+        )
+        await spawner.write_file("agent-1", "/tmp/test.txt", "new content")
+        result = await spawner.read_file("agent-1", "/tmp/test.txt")
+        assert result == "new content"
+
+    @pytest.mark.asyncio
+    async def test_write_file_handles_empty_content(self) -> None:
+        """write_file accepts empty string content."""
+        spawner = MockSpawner()
+        await spawner.write_file("agent-1", "/tmp/empty.txt", "")
+        assert spawner.written_files["agent-1:/tmp/empty.txt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_write_file_handles_multiline_content(self) -> None:
+        """write_file accepts multiline content with special characters."""
+        spawner = MockSpawner()
+        content = '{"event": "test"}\n{"event": "done"}\n'
+        await spawner.write_file("agent-1", "/var/run/messages.jsonl", content)
+        assert spawner.written_files["agent-1:/var/run/messages.jsonl"] == content
 
 
 class TestSpawnConfig:

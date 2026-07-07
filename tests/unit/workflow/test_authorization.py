@@ -124,7 +124,7 @@ class TestWorkflowAction:
         expected = {
             "trigger", "approve", "view", "cancel", "view_defs", "manage_defs",
             "schedule_create", "schedule_view", "schedule_delete",
-            "schedule_pause", "schedule_resume",
+            "schedule_pause", "schedule_resume", "session_message",
         }
         actual = {a.value for a in WorkflowAction}
         assert actual == expected

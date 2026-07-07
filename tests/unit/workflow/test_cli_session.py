@@ -1,8 +1,9 @@
-"""Unit tests for CLI session launcher (T15 Phase 2, Task 1)."""
+"""Unit tests for CLI session launcher (T15 Phase 2 + Phase 3)."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ from cloud_agents.workflow.cli_session import (
     CLISessionLauncher,
     CLISessionInfo,
     CLISessionStatus,
+    SessionOutputEvent,
 )
 
 
@@ -635,3 +637,234 @@ class TestCLISessionTimeoutEnforcement:
         assert len(sessions) == 1
         assert sessions[0].status == CLISessionStatus.RUNNING
         spawner.destroy.assert_not_called()
+
+
+class TestSessionOutputEvent:
+    """Tests for SessionOutputEvent model."""
+
+    def test_output_event_creation(self) -> None:
+        """SessionOutputEvent captures all required fields."""
+        event = SessionOutputEvent(
+            event_type="output",
+            data="Hello from agent",
+            offset=0,
+        )
+        assert event.event_type == "output"
+        assert event.data == "Hello from agent"
+        assert event.offset == 0
+
+    def test_output_event_serialization(self) -> None:
+        """SessionOutputEvent round-trips through dict serialization."""
+        event = SessionOutputEvent(
+            event_type="output",
+            data="test data",
+            offset=42,
+        )
+        d = event.model_dump()
+        assert d["event_type"] == "output"
+        assert d["data"] == "test data"
+        assert d["offset"] == 42
+
+
+class TestCLISessionMonitorOutput:
+    """Tests for CLISessionLauncher.monitor_output() async generator."""
+
+    @pytest.mark.asyncio
+    async def test_monitor_output_yields_events(self) -> None:
+        """monitor_output yields SessionOutputEvent objects from file content."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(
+            side_effect=[
+                '{"event": "started"}\n{"event": "tool_call"}\n',
+                '{"event": "started"}\n{"event": "tool_call"}\n{"event": "done"}\n',
+                FileNotFoundError("session ended"),
+            ]
+        )
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-monitor",
+        )
+
+        events = []
+        async for event in launcher.monitor_output(session_id, spawner, poll_interval=0.01):
+            events.append(event)
+            if len(events) >= 2:
+                break
+
+        assert len(events) == 2
+        assert all(isinstance(e, SessionOutputEvent) for e in events)
+        assert events[0].event_type == "output"
+
+    @pytest.mark.asyncio
+    async def test_monitor_output_unknown_session_raises(self) -> None:
+        """monitor_output raises KeyError for unknown session ID."""
+        spawner = AsyncMock()
+        launcher = CLISessionLauncher()
+
+        with pytest.raises(KeyError, match="not found"):
+            async for _ in launcher.monitor_output("nonexistent", spawner):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_monitor_output_tracks_byte_offset(self) -> None:
+        """monitor_output only yields new content using byte offset tracking."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        first_content = '{"event": "first"}\n'
+        second_content = '{"event": "first"}\n{"event": "second"}\n'
+
+        spawner.read_file = AsyncMock(
+            side_effect=[
+                first_content,
+                second_content,
+                FileNotFoundError("done"),
+            ]
+        )
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-offset",
+        )
+
+        events = []
+        async for event in launcher.monitor_output(session_id, spawner, poll_interval=0.01):
+            events.append(event)
+
+        # Should have two events: one for first content, one for delta
+        assert len(events) == 2
+        assert "first" in events[0].data
+        assert "second" in events[1].data
+        # Second event should not re-include first event data
+        assert "first" not in events[1].data
+
+    @pytest.mark.asyncio
+    async def test_monitor_output_stops_on_non_running_session(self) -> None:
+        """monitor_output stops when session is no longer RUNNING."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(return_value='{"event": "data"}\n')
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-stop",
+        )
+
+        # Mark session as terminated
+        launcher._sessions[session_id].status = CLISessionStatus.TERMINATED
+
+        events = []
+        async for event in launcher.monitor_output(session_id, spawner, poll_interval=0.01):
+            events.append(event)
+
+        assert len(events) == 0
+
+
+class TestCLISessionSendMessage:
+    """Tests for CLISessionLauncher.send_message()."""
+
+    @pytest.mark.asyncio
+    async def test_send_message_writes_jsonl_to_container(self) -> None:
+        """send_message writes a JSONL line to the message file."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-msg",
+        )
+
+        await launcher.send_message(session_id, spawner, "Hello agent!")
+
+        spawner.write_file.assert_called_once()
+        call_args = spawner.write_file.call_args
+        # Should write to the agent's message file
+        written_path = call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("path")
+        assert "messages.jsonl" in written_path
+
+        written_content = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("content")
+        parsed = json.loads(written_content.strip())
+        assert parsed["message"] == "Hello agent!"
+        assert "timestamp" in parsed
+
+    @pytest.mark.asyncio
+    async def test_send_message_appends_to_existing(self) -> None:
+        """send_message appends to existing message file content."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        existing_line = json.dumps({"message": "first", "timestamp": "t1"}) + "\n"
+        spawner.read_file = AsyncMock(return_value=existing_line)
+        spawner.write_file = AsyncMock()
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-append",
+        )
+
+        await launcher.send_message(session_id, spawner, "Second message")
+
+        written_content = spawner.write_file.call_args[0][2]
+        lines = written_content.strip().split("\n")
+        assert len(lines) == 2
+        assert json.loads(lines[0])["message"] == "first"
+        assert json.loads(lines[1])["message"] == "Second message"
+
+    @pytest.mark.asyncio
+    async def test_send_message_unknown_session_raises(self) -> None:
+        """send_message raises KeyError for unknown session ID."""
+        spawner = AsyncMock()
+        launcher = CLISessionLauncher()
+
+        with pytest.raises(KeyError, match="not found"):
+            await launcher.send_message("nonexistent", spawner, "hello")
+
+    @pytest.mark.asyncio
+    async def test_send_message_emits_audit_event(self) -> None:
+        """send_message emits a cli_session_message_sent audit event."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        launcher = CLISessionLauncher()
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-audit-msg",
+        )
+
+        with patch("cloud_agents.workflow.cli_session.emit_audit") as mock_audit:
+            await launcher.send_message(session_id, spawner, "Hello!")
+
+            msg_calls = [
+                c for c in mock_audit.call_args_list
+                if c[1].get("event_type") == "cli_session_message_sent"
+            ]
+            assert len(msg_calls) == 1
+            assert msg_calls[0][1]["details"]["session_id"] == session_id
