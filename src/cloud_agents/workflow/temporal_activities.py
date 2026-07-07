@@ -19,6 +19,7 @@ from typing import Any, Optional
 import httpx
 from temporalio import activity
 
+from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.workflow.audit import emit_audit
 from cloud_agents.workflow.circuit_breaker import ProviderCircuitBreaker
@@ -214,6 +215,22 @@ async def _run_sandbox_step_inner(
 
         env_vars["LIGHTSPEED_MCP_SERVERS"] = json.dumps(mcp_env_list)
 
+    # Runner-to-sandbox bearer token auth
+    sandbox_auth_enabled = (
+        os.environ.get("SANDBOX_AUTH_ENABLED", "false").lower() == "true"
+    )
+    sandbox_auth_token: str | None = None
+    if sandbox_auth_enabled:
+        sandbox_auth_token = get_runner_auth_token()
+        if sandbox_auth_token:
+            env_vars["AGENT_API_TOKEN"] = sandbox_auth_token
+        else:
+            logger.warning(
+                "SANDBOX_AUTH_ENABLED=true but no auth token available — "
+                "sandbox will run unauthenticated. Set AGENT_API_TOKEN or "
+                "configure AUTH_MODE=sa_token with a projected volume."
+            )
+
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
@@ -315,6 +332,11 @@ async def _run_sandbox_step_inner(
                 ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
                 client_kwargs["verify"] = ssl_ctx
 
+            # Build HTTP headers for sandbox call
+            http_headers: dict[str, str] = {}
+            if sandbox_auth_enabled and sandbox_auth_token:
+                http_headers["Authorization"] = f"Bearer {sandbox_auth_token}"
+
             heartbeat_task = asyncio.create_task(_heartbeat_loop())
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
@@ -322,6 +344,7 @@ async def _run_sandbox_step_inner(
                         response = await client.post(
                             f"{endpoint}/v1/agent/run",
                             json=request_body,
+                            headers=http_headers or None,
                         )
                     except ssl.SSLError as tls_exc:
                         emit_audit(

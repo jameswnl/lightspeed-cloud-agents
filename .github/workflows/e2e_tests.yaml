@@ -87,7 +87,14 @@ jobs:
             exit 1
           fi
 
-      - name: Run E2E tests
+      - name: Run E2E workflow tests
         env:
           TEMPORAL_E2E_URL: localhost:7233
         run: uv run pytest tests/e2e/test_workflow_e2e.py -v
+
+      - name: Run E2E trigger tests (alert + schedule)
+        env:
+          TEMPORAL_E2E_URL: localhost:7233
+          ALERT_TRIGGER_ENABLED: "true"
+          SCHEDULE_TRIGGER_ENABLED: "true"
+        run: uv run pytest tests/e2e/test_triggers_e2e.py -v
