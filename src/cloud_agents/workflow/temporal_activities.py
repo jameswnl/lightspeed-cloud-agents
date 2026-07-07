@@ -6,6 +6,8 @@ spawning sandbox pods, calling the LLM, building escalation packages.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -70,6 +72,23 @@ def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
     hash_input = f"{workflow_id}:{step_name}:{attempt}"
     digest = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
     return f"ca-{digest}"
+
+
+async def _heartbeat_loop(interval_seconds: float = 30) -> None:
+    """Send periodic heartbeats during sandbox HTTP call.
+
+    Calls activity.heartbeat() in a loop so the Temporal server can
+    detect stale workers.  Errors are logged but swallowed (best-effort).
+
+    Parameters:
+        interval_seconds: Seconds between heartbeat calls.
+    """
+    while True:
+        try:
+            activity.heartbeat()
+        except Exception:
+            logger.debug("Heartbeat failed (best-effort)", exc_info=True)
+        await asyncio.sleep(interval_seconds)
 
 
 @activity.defn
@@ -209,6 +228,7 @@ async def _run_sandbox_step_inner(
         details={"pod_name": pod_name, "image": sandbox_image},
     )
     endpoint = None
+    was_cancelled = False
     try:
         try:
             sa = permissions.get("service_account")
@@ -261,11 +281,17 @@ async def _run_sandbox_step_inner(
             if permissions.get("denied_tools"):
                 request_body["deniedTools"] = permissions["denied_tools"]
 
-            async with httpx.AsyncClient(timeout=http_timeout) as client:
-                response = await client.post(
-                    f"{endpoint}/v1/agent/run",
-                    json=request_body,
-                )
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+            try:
+                async with httpx.AsyncClient(timeout=http_timeout) as client:
+                    response = await client.post(
+                        f"{endpoint}/v1/agent/run",
+                        json=request_body,
+                    )
+            finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
 
             if response.status_code == 502:
                 _circuit_breaker.record_failure(provider_name)
@@ -302,6 +328,9 @@ async def _run_sandbox_step_inner(
                 "status": "completed",
                 "output": output,
             }
+        except asyncio.CancelledError:
+            was_cancelled = True
+            raise
         except Exception as exc:
             if secret_values:
                 redacted_msg = redact_secrets(str(exc), secret_values)
@@ -309,6 +338,19 @@ async def _run_sandbox_step_inner(
             raise
 
     finally:
+        if was_cancelled and endpoint:
+            from cloud_agents.workflow.temporal_metrics import ls_sandbox_timeout_total
+
+            ls_sandbox_timeout_total.labels(
+                step_name=step_name, reason="cancelled"
+            ).inc()
+            emit_audit(
+                event_type="sandbox_timeout",
+                workflow_id=workflow_id,
+                step_name=step_name,
+                details={"pod_name": pod_name, "reason": "cancelled"},
+            )
+
         if endpoint and spawner:
             if os.environ.get("SKIP_SANDBOX_DESTROY", "").lower() in ("1", "true"):
                 logger.info(

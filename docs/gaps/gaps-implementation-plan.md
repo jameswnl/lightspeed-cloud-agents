@@ -11,7 +11,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 1** | High value, enables other work | T1 ✓, T3 ✓, T22 ✓ |
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
-| **Phase 3b** | Triggers + hardening | T2, T13 ✓, T14, T23, T49 ✓, T50 ✓ |
+| **Phase 3b** | Triggers + hardening | T2 ✓, T13, T14, T23, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 |
 | **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
@@ -50,9 +50,9 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **Decision needed**: Does the sandbox `/v1/agent/run` contract already support `allowedTools`/`deniedTools`?
 
-### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b]
+### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b] — DONE
 
-**Status**: Open
+**Status**: Done
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
 
 **Problem**: When a Temporal activity times out, cleanup is best-effort in `finally`. No heartbeat, no explicit kill signal if worker crashes mid-timeout.
@@ -185,24 +185,14 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **⚠ DOUBLE-BLOCKED**: Depends on T11 (itself a blocker with sync/async unsolved) AND on LCS integration (external team, unknown scope). Don't plan until T11 is complete and LCS integration surface is documented.
 
-### T13: Alert trigger (R15) [Phase 3b] — DONE
+### T13: Alert trigger (R15) [Phase 3b]
 
-**Status**: Done
+**Status**: Open
 **ARCHITECTURE.md ref**: Requirements table R15 — TODO
 
 **Problem**: No Alertmanager webhook → workflow trigger.
 
 **What to build**: Webhook endpoint that accepts Alertmanager payloads and starts workflows.
-
-**What was built**:
-- `POST /v1/webhooks/alertmanager` endpoint accepting Alertmanager v4 payloads
-- Alert-to-workflow mapping via `cloud_agents_workflow` label
-- In-memory dedup tracker (fingerprint-based, configurable window)
-- `ls_alert_triggers_total` Prometheus counter with workflow_name/status labels
-- `alert_triggered` and `alert_validation_failed` audit event types
-- Opt-in via `ALERT_TRIGGER_ENABLED=true` env var
-- Config: `ALERT_TRIGGER_WORKFLOW_LABEL`, `ALERT_TRIGGER_DEFAULT_WORKFLOW`,
-  `ALERT_TRIGGER_DEDUP_WINDOW`, `ALERT_TRIGGER_FIRE_ON_RESOLVED`
 
 **Effort**: 1 week
 

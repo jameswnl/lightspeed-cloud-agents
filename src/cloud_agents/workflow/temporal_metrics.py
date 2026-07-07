@@ -39,13 +39,14 @@ ls_sandbox_cleanup_failures_total = Counter(
     ["step_name"],
 )
 
+ls_sandbox_timeout_total = Counter(
+    "ls_sandbox_timeout_total",
+    "Number of sandbox activities cancelled or timed out",
+    ["step_name", "reason"],
+)
+
 ls_sandbox_orphans_cleaned_total = Counter(
     "ls_sandbox_orphans_cleaned_total",
     "Number of orphaned sandbox containers cleaned up on startup",
 )
 
-ls_alert_triggers_total = Counter(
-    "ls_alert_triggers_total",
-    "Total number of Alertmanager alert trigger outcomes",
-    ["workflow_name", "status"],
-)

@@ -254,6 +254,7 @@ class AgentWorkflow:
                     }
                 ],
                 start_to_close_timeout=timedelta(seconds=timeout_seconds),
+                heartbeat_timeout=timedelta(seconds=180),
                 retry_policy=RetryPolicy(maximum_attempts=max_retries + 1),
             )
 

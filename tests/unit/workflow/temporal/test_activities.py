@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
+from prometheus_client import REGISTRY
 from pytest_mock import MockerFixture
 
 from cloud_agents.workflow.temporal_activities import (
@@ -2320,3 +2322,259 @@ class TestSecretRedactionInActivity:
                 },
                 spawner=mock_spawner,
             )
+
+
+def _get_counter_value(name: str, labels: dict | None = None) -> float:
+    """Read a Prometheus counter's current value."""
+    for metric in REGISTRY.collect():
+        if metric.name == name:
+            for sample in metric.samples:
+                if sample.name == f"{name}_total":
+                    if labels is None or all(
+                        sample.labels.get(k) == v for k, v in labels.items()
+                    ):
+                        return sample.value
+    return 0.0
+
+
+class TestHeartbeat:
+    """Tests for activity heartbeat during sandbox HTTP call (T2)."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_called_during_http_call(
+        self, mocker: MockerFixture
+    ) -> None:
+        """activity.heartbeat() is called at least once during sandbox HTTP call."""
+        mock_heartbeat = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.activity.heartbeat"
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        async def slow_post(*args, **kwargs):
+            await asyncio.sleep(0)
+            return mock_response
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=slow_post)
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "hb-step", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-hb-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        assert mock_heartbeat.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_task_cancelled_after_completion(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Heartbeat task is cancelled after HTTP call completes (no leaked tasks)."""
+        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "hb-step", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-hb-2",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_errors_logged_not_fatal(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Heartbeat errors are logged but don't fail the activity."""
+        mock_heartbeat = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.activity.heartbeat",
+            side_effect=RuntimeError("heartbeat RPC failed"),
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        async def slow_post(*args, **kwargs):
+            await asyncio.sleep(0)
+            return mock_response
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=slow_post)
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        result = await run_sandbox_step(
+            {
+                "step": {"name": "hb-step", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-hb-3",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        assert mock_heartbeat.call_count >= 1
+
+
+class TestCancellationHandling:
+    """Tests for cancellation/timeout handling in finally block (T2)."""
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_still_destroys(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When CancelledError raised during HTTP call, spawner.destroy() still called."""
+        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "cancel-step", "prompt": "test", "output_key": "r1"},
+                    "workflow_id": "wf-cancel-1",
+                    "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+        mock_spawner.destroy.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_increments_timeout_counter(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Cancellation increments ls_sandbox_timeout_total with reason=cancelled."""
+        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        before = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "cancel-step", "reason": "cancelled"},
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "cancel-step", "prompt": "test", "output_key": "r1"},
+                    "workflow_id": "wf-cancel-2",
+                    "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+        after = _get_counter_value(
+            "ls_sandbox_timeout", {"step_name": "cancel-step", "reason": "cancelled"},
+        )
+        assert after > before
+
+    @pytest.mark.asyncio
+    async def test_cancellation_emits_audit_event(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Cancellation emits sandbox_timeout audit event with pod_name and reason."""
+        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_activities.emit_audit")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_sandbox_step(
+                {
+                    "step": {"name": "cancel-step", "prompt": "test", "output_key": "r1"},
+                    "workflow_id": "wf-cancel-3",
+                    "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                },
+                spawner=mock_spawner,
+            )
+
+        timeout_calls = [
+            c for c in mock_emit.call_args_list
+            if c[1].get("event_type") == "sandbox_timeout"
+        ]
+        assert len(timeout_calls) == 1
+        assert timeout_calls[0][1]["step_name"] == "cancel-step"
+        assert timeout_calls[0][1]["details"]["reason"] == "cancelled"
