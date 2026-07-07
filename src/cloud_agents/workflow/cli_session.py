@@ -7,6 +7,7 @@ with scoped credentials and a mounted context file.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_SESSION_SECONDS: int = 3600
+DEFAULT_CHECK_INTERVAL: float = 30.0
 
 
 class CLISessionStatus(str, Enum):
@@ -82,6 +84,8 @@ class CLISessionLauncher:
         """
         self.max_session_seconds = max_session_seconds
         self._sessions: dict[str, CLISessionInfo] = {}
+        self._timeout_task: asyncio.Task[None] | None = None
+        self._check_interval: float = DEFAULT_CHECK_INTERVAL
 
     async def launch(
         self,
@@ -257,3 +261,91 @@ class CLISessionLauncher:
         if workflow_id is not None:
             sessions = [s for s in sessions if s.workflow_id == workflow_id]
         return sessions
+
+    def start_timeout_monitor(self, spawner: AgentSpawner) -> None:
+        """Start the background timeout enforcement task.
+
+        Launches an asyncio task that periodically checks all running
+        sessions and terminates those exceeding ``max_session_seconds``.
+
+        Parameters:
+            spawner: AgentSpawner instance for container destruction.
+        """
+        self._timeout_task = asyncio.create_task(self._timeout_loop(spawner))
+        logger.info(
+            "Timeout monitor started: check_interval=%.1fs, max_session_seconds=%d",
+            self._check_interval,
+            self.max_session_seconds,
+        )
+
+    async def _timeout_loop(self, spawner: AgentSpawner) -> None:
+        """Background loop that enforces session timeouts.
+
+        Iterates over all tracked sessions, comparing their age against
+        ``max_session_seconds``. Expired RUNNING sessions are destroyed
+        via the spawner and marked TERMINATED with a ``timeout`` reason
+        audit event.
+
+        Parameters:
+            spawner: AgentSpawner instance for container destruction.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._check_interval)
+                now = datetime.now(tz=UTC)
+
+                for session_id, info in list(self._sessions.items()):
+                    if info.status != CLISessionStatus.RUNNING:
+                        continue
+
+                    started = datetime.fromisoformat(info.started_at)
+                    elapsed = (now - started).total_seconds()
+
+                    if elapsed <= self.max_session_seconds:
+                        continue
+
+                    logger.info(
+                        "Session timeout: session_id=%s, elapsed=%.0fs, max=%ds",
+                        session_id,
+                        elapsed,
+                        self.max_session_seconds,
+                    )
+
+                    try:
+                        await spawner.destroy(info.agent_name)
+                        info.status = CLISessionStatus.TERMINATED
+
+                        emit_audit(
+                            event_type="cli_session_terminated",
+                            workflow_id=info.workflow_id,
+                            details={
+                                "session_id": session_id,
+                                "agent_name": info.agent_name,
+                                "reason": "timeout",
+                            },
+                        )
+                    except Exception as exc:
+                        info.status = CLISessionStatus.FAILED
+                        info.error = str(exc)
+                        logger.error(
+                            "Timeout destroy failed: session_id=%s, error=%s",
+                            session_id,
+                            exc,
+                        )
+
+        except asyncio.CancelledError:
+            logger.info("Timeout monitor cancelled")
+
+    async def shutdown(self) -> None:
+        """Cancel the background timeout monitor task.
+
+        Safe to call multiple times or when no monitor is running.
+        """
+        if self._timeout_task is not None:
+            self._timeout_task.cancel()
+            try:
+                await self._timeout_task
+            except asyncio.CancelledError:
+                pass
+            self._timeout_task = None
+            logger.info("Timeout monitor shut down")

@@ -361,6 +361,7 @@ class TestCLISessionLauncherTerminate:
             ]
             assert len(terminated_calls) == 1
             assert terminated_calls[0][1]["details"]["session_id"] == session_id
+            assert terminated_calls[0][1]["details"]["reason"] == "user_request"
 
     @pytest.mark.asyncio
     async def test_terminate_unknown_session_raises(self) -> None:
@@ -450,3 +451,187 @@ class TestCLISessionLauncherListSessions:
         sessions = launcher.list_sessions(workflow_id="wf-filter-a")
         assert len(sessions) == 1
         assert sessions[0].workflow_id == "wf-filter-a"
+
+
+class TestCLISessionTimeoutEnforcement:
+    """Tests for session timeout enforcement background task."""
+
+    @pytest.mark.asyncio
+    async def test_start_timeout_monitor_creates_background_task(self) -> None:
+        """start_timeout_monitor() creates a background asyncio task."""
+        spawner = AsyncMock()
+        launcher = CLISessionLauncher(max_session_seconds=60)
+
+        launcher.start_timeout_monitor(spawner)
+        try:
+            assert launcher._timeout_task is not None
+            assert not launcher._timeout_task.done()
+        finally:
+            await launcher.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_timeout_monitor_terminates_expired_session(self) -> None:
+        """Timeout monitor auto-terminates sessions exceeding max_session_seconds."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.destroy = AsyncMock()
+
+        # Use a very short timeout so the session expires immediately
+        launcher = CLISessionLauncher(max_session_seconds=0)
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-timeout",
+        )
+
+        # Patch the check interval to be very short for testing
+        with patch.object(launcher, "_check_interval", 0.01):
+            launcher.start_timeout_monitor(spawner)
+            # Give the monitor time to run one cycle
+            await asyncio.sleep(0.1)
+            await launcher.shutdown()
+
+        info = launcher.get_status(session_id)
+        assert info is not None
+        assert info.status == CLISessionStatus.TERMINATED
+        spawner.destroy.assert_called_once_with(info.agent_name)
+
+    @pytest.mark.asyncio
+    async def test_timeout_monitor_emits_audit_event_with_timeout_reason(self) -> None:
+        """Timeout termination emits cli_session_terminated with reason=timeout."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.destroy = AsyncMock()
+
+        launcher = CLISessionLauncher(max_session_seconds=0)
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-audit-timeout",
+        )
+
+        with (
+            patch("cloud_agents.workflow.cli_session.emit_audit") as mock_audit,
+            patch.object(launcher, "_check_interval", 0.01),
+        ):
+            launcher.start_timeout_monitor(spawner)
+            await asyncio.sleep(0.1)
+            await launcher.shutdown()
+
+            terminated_calls = [
+                c
+                for c in mock_audit.call_args_list
+                if c[1].get("event_type") == "cli_session_terminated"
+            ]
+            assert len(terminated_calls) == 1
+            details = terminated_calls[0][1]["details"]
+            assert details["session_id"] == session_id
+            assert details["reason"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_timeout_monitor_skips_non_running_sessions(self) -> None:
+        """Timeout monitor only terminates RUNNING sessions."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.destroy = AsyncMock()
+
+        launcher = CLISessionLauncher(max_session_seconds=0)
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-skip",
+        )
+
+        # Manually mark session as already terminated
+        launcher._sessions[session_id].status = CLISessionStatus.TERMINATED
+
+        with patch.object(launcher, "_check_interval", 0.01):
+            launcher.start_timeout_monitor(spawner)
+            await asyncio.sleep(0.1)
+            await launcher.shutdown()
+
+        # destroy should not have been called (session was already terminated)
+        spawner.destroy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_timeout_monitor_handles_destroy_failure_gracefully(self) -> None:
+        """Timeout monitor marks session FAILED if destroy raises."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.destroy = AsyncMock(side_effect=RuntimeError("pod gone"))
+
+        launcher = CLISessionLauncher(max_session_seconds=0)
+        session_id = await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-fail-timeout",
+        )
+
+        with patch.object(launcher, "_check_interval", 0.01):
+            launcher.start_timeout_monitor(spawner)
+            await asyncio.sleep(0.1)
+            await launcher.shutdown()
+
+        info = launcher.get_status(session_id)
+        assert info is not None
+        assert info.status == CLISessionStatus.FAILED
+        assert info.error is not None
+        assert "pod gone" in info.error
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_timeout_task(self) -> None:
+        """shutdown() cancels the background timeout monitor task."""
+        spawner = AsyncMock()
+        launcher = CLISessionLauncher(max_session_seconds=3600)
+
+        launcher.start_timeout_monitor(spawner)
+        task = launcher._timeout_task
+        assert task is not None
+        assert not task.done()
+
+        await launcher.shutdown()
+        assert task.cancelled() or task.done()
+        assert launcher._timeout_task is None
+
+    @pytest.mark.asyncio
+    async def test_shutdown_is_idempotent(self) -> None:
+        """shutdown() is safe to call multiple times."""
+        launcher = CLISessionLauncher()
+        # Should not raise even without a monitor running
+        await launcher.shutdown()
+        await launcher.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_timeout_monitor_does_not_terminate_fresh_sessions(self) -> None:
+        """Sessions within max_session_seconds are not terminated."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+        spawner.destroy = AsyncMock()
+
+        # Long timeout, session should not be terminated
+        launcher = CLISessionLauncher(max_session_seconds=3600)
+        await launcher.launch(
+            spawner=spawner,
+            context_markdown="# Context",
+            prompt="Investigate",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-fresh",
+        )
+
+        with patch.object(launcher, "_check_interval", 0.01):
+            launcher.start_timeout_monitor(spawner)
+            await asyncio.sleep(0.1)
+            await launcher.shutdown()
+
+        sessions = launcher.list_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].status == CLISessionStatus.RUNNING
+        spawner.destroy.assert_not_called()
