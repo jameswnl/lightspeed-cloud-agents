@@ -357,11 +357,20 @@ def build_schedule_router(
                     state=ScheduleState(paused=schedule_input.paused),
                 ),
                 trigger_immediately=False,
-                memo={"workflow_name": schedule_input.workflow_name},
+                memo={
+                    "workflow_name": schedule_input.workflow_name,
+                    "cron": schedule_spec.cron,
+                },
             )
         except Exception as exc:
+            from temporalio.client import ScheduleAlreadyRunningError
             from temporalio.service import RPCError, RPCStatusCode
 
+            if isinstance(exc, ScheduleAlreadyRunningError):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Schedule '{schedule_id}' already exists",
+                ) from exc
             if isinstance(exc, RPCError) and exc.status == RPCStatusCode.ALREADY_EXISTS:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -430,13 +439,21 @@ def build_schedule_router(
 
         results: list[dict[str, Any]] = []
         async for entry in await temporal_client.list_schedules():
-            workflow_name = ""
-            if hasattr(entry, "memo") and isinstance(entry.memo, dict):
-                workflow_name = entry.memo.get("workflow_name", "")
+            # Decode memo (async method in Temporal SDK)
+            memo_data: dict[str, Any] = {}
+            try:
+                memo_data = dict(await entry.memo())
+            except Exception:
+                pass
 
-            cron = ""
+            workflow_name = memo_data.get("workflow_name", "")
+
+            # Read cron from memo first (Temporal may normalize cron_expressions
+            # into structured calendars, leaving the list empty).
+            cron = memo_data.get("cron", "")
             if (
-                hasattr(entry, "spec")
+                not cron
+                and hasattr(entry, "spec")
                 and hasattr(entry.spec, "spec")
                 and entry.spec.spec.cron_expressions
             ):
@@ -514,12 +531,19 @@ def build_schedule_router(
                 ) from exc
             raise
 
-        workflow_name = ""
-        if hasattr(desc, "memo") and isinstance(desc.memo, dict):
-            workflow_name = desc.memo.get("workflow_name", "")
+        # Decode memo (async method in Temporal SDK)
+        memo_data: dict[str, Any] = {}
+        try:
+            memo_data = dict(await desc.memo())
+        except Exception:
+            pass
 
-        cron = ""
-        if desc.schedule.spec.cron_expressions:
+        workflow_name = memo_data.get("workflow_name", "")
+
+        # Read cron from memo first (Temporal may normalize cron_expressions
+        # into structured calendars, leaving the list empty).
+        cron = memo_data.get("cron", "")
+        if not cron and desc.schedule.spec.cron_expressions:
             cron = desc.schedule.spec.cron_expressions[0]
 
         timezone = getattr(desc.schedule.spec, "timezone_name", "UTC") or "UTC"

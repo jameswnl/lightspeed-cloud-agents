@@ -57,6 +57,11 @@ def _diagnostic_workflow_yaml() -> dict:
                 },
             ],
         },
+        "provider": {
+            "name": "openai",
+            "model": "gpt-4o",
+            "credentials_secret": "OPENAI_API_KEY",
+        },
     }
 
 
