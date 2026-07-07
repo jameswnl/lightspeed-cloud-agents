@@ -1,0 +1,20 @@
+# Kind cluster configuration with Calico CNI for NetworkPolicy egress testing.
+#
+# Calico replaces the default Kind CNI (kindnet) to enable full
+# NetworkPolicy support including egress rules.
+#
+# Usage:
+#   kind create cluster --config deploy/kind/kind-config-calico.yaml
+#   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+#   kubectl apply -f deploy/kind/network-policy.yaml
+#
+# Then run egress tests:
+#   EGRESS_TEST_ENABLED=1 uv run pytest tests/e2e/test_egress.py -v
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+nodes:
+  - role: control-plane
+  - role: worker

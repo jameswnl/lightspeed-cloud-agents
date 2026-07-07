@@ -503,7 +503,9 @@ class TestScheduleListEndpoint:
         """GET /v1/schedules returns schedule list."""
         mock_entry = mocker.MagicMock()
         mock_entry.id = "sched-abc"
-        mock_entry.memo = {"workflow_name": "nightly-report"}
+        mock_entry.memo = mocker.AsyncMock(
+            return_value={"workflow_name": "nightly-report", "cron": "0 2 * * *"}
+        )
         mock_entry.spec.spec.cron_expressions = ["0 2 * * *"]
         mock_entry.spec.spec.timezone_name = "UTC"
         mock_entry.state.paused = False
@@ -538,7 +540,9 @@ class TestScheduleGetEndpoint:
         mock_handle = mocker.AsyncMock()
         desc = mocker.MagicMock()
         desc.id = "sched-abc"
-        desc.memo = {"workflow_name": "nightly-report"}
+        desc.memo = mocker.AsyncMock(
+            return_value={"workflow_name": "nightly-report", "cron": "0 2 * * *"}
+        )
         desc.schedule.spec.cron_expressions = ["0 2 * * *"]
         desc.schedule.spec.timezone_name = "UTC"
         desc.schedule.state.paused = False

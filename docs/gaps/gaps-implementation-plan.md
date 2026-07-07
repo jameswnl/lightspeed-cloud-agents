@@ -730,3 +730,19 @@ PoC1 leftover. The Temporal workflow path does not load tool modules — tools a
 ### T28: Async callback dispatch — REMOVED
 
 PoC1 leftover. In the Temporal architecture, the activity calls the sandbox synchronously via HTTP. No callback mechanism needed.
+
+### T52: E2E test coverage gaps ([issue #41](https://github.com/jameswnl/lightspeed-cloud-agents/issues/41)) — DONE
+
+**Status**: Done (PR #TBD)
+
+**Problem**: All closed features had strong unit test coverage but four areas lacked E2E tests exercising real infrastructure: sandbox auth, alert/schedule triggers, network egress, and full-stack workflow lifecycle.
+
+**What was built**:
+1. **Sandbox auth wiring** — `temporal_activities.py` now injects `AGENT_API_TOKEN` on sandbox containers and sends `Authorization: Bearer <token>` on httpx POST when `SANDBOX_AUTH_ENABLED=true`. Uses `get_runner_auth_token()` from `runtime/auth.py`. 7 unit tests + E2E test (`tests/e2e/test_sandbox_auth.py`).
+2. **Alert/schedule trigger E2E** — `tests/e2e/test_triggers_e2e.py`: full alert webhook flow (register def, POST webhook, verify workflow starts), dedup, missing-definition error. Schedule CRUD lifecycle (create, get, delete, verify gone), duplicate-ID rejection, nonexistent-workflow rejection. Runs against real Temporal in CI.
+3. **Network egress E2E** — `tests/e2e/test_egress.py`: validates sandbox pods cannot reach external HTTP hosts, can resolve DNS, can reach in-cluster services. Requires Kind + Calico (local only, skips in CI). Created `deploy/kind/kind-config-calico.yaml`.
+4. **Full-stack workflow E2E** — `tests/e2e/test_full_stack.py`: real LLM output validation, sandbox cleanup verification. Requires LLM API key (local only, skips in CI).
+5. **CI updates** — `e2e_tests.yaml` now runs trigger E2E tests alongside existing workflow tests.
+6. **ARCHITECTURE.md** — documented `AGENT_API_TOKEN` env var in config table.
+
+**Effort**: 1 day

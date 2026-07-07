@@ -30,3 +30,36 @@
 - test_workflow_survives_replica_crash: Workflow completes after active replica is killed
 - test_orphan_cleanup_across_replicas: New replica cleans up orphaned sandboxes from crashed replica
 - test_concurrent_workflows_across_replicas: 4 concurrent workflows distributed across 2 replicas
+
+## Sandbox Auth E2E
+# File: tests/e2e/test_sandbox_auth.py
+# Requires: Podman + SANDBOX_AUTH_ENABLED=true + AGENT_API_TOKEN
+- test_unauthenticated_rejected: Request without auth header rejected by sandbox
+- test_correct_token_accepted: Request with correct Bearer token accepted
+- test_wrong_token_rejected: Request with wrong Bearer token rejected
+- test_health_endpoint_unauthenticated: Health endpoint accessible without auth
+
+## Trigger E2E (Temporal)
+# File: tests/e2e/test_triggers_e2e.py
+# Requires: Temporal server (TEMPORAL_E2E_URL)
+- test_alert_triggers_workflow: Alertmanager webhook POST triggers workflow in Temporal
+- test_alert_dedup_prevents_duplicate: Duplicate alert within dedup window is skipped
+- test_alert_missing_workflow_definition_errors: Alert for nonexistent workflow errors
+- test_schedule_lifecycle: Create, get, delete schedule against real Temporal
+- test_schedule_duplicate_id_rejected: Duplicate schedule ID returns 409
+- test_schedule_nonexistent_workflow_rejected: Schedule for nonexistent workflow returns 404
+
+## Network Egress E2E (Kind + Calico)
+# File: tests/e2e/test_egress.py
+# Requires: Kind cluster with Calico CNI (EGRESS_TEST_ENABLED=1)
+# Setup: kind create cluster --config deploy/kind/kind-config-calico.yaml
+- test_sandbox_cannot_reach_external_http: Sandbox pod blocked from external HTTP
+- test_sandbox_can_reach_dns: Sandbox pod can perform DNS resolution (port 53 allowed)
+- test_sandbox_can_reach_cluster_services: Sandbox pod can reach in-cluster services
+
+## Full-Stack E2E (Podman + LLM + Temporal)
+# File: tests/e2e/test_full_stack.py
+# Requires: Podman + LLM API key + Temporal server
+# Run: OPENAI_API_KEY=sk-... TEMPORAL_E2E_URL=localhost:7233 uv run pytest tests/e2e/test_full_stack.py -v
+- test_single_step_real_llm: Single-step workflow completes with real LLM output
+- test_no_sandbox_containers_left_running: No containers remain after workflow completion
