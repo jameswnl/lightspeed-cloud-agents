@@ -13,7 +13,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T34 ✓, T36, T51 ✓ |
-| **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T33, T35, T40, T41 |
+| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18, T20, T25-T27, T29-T33, T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
 1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
@@ -52,25 +52,20 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T2: Explicit sandbox termination on timeout/cancellation [Phase 3b] — DONE
 
-**Status**: Done
+**Status**: Done ([issue #13](https://github.com/jameswnl/lightspeed-cloud-agents/issues/13))
 **ARCHITECTURE.md ref**: Temporal Server — explicit sandbox termination on timeout
 
 **Problem**: When a Temporal activity times out, cleanup is best-effort in `finally`. No heartbeat, no explicit kill signal if worker crashes mid-timeout.
 
-**What to build**:
-1. Add `activity.heartbeat()` during sandbox HTTP call
-2. Distinguish cancellation from normal completion in `finally`
-3. Add `ls_sandbox_timeout_total` counter
-
-**Tests**:
-- Unit: activity cancellation → destroy still called
-- Unit: heartbeat called during sandbox HTTP request
+**What was built**:
+- `_heartbeat_loop()` async helper in `temporal_activities.py` — heartbeats every 30s during sandbox HTTP call
+- `asyncio.CancelledError` handler sets `was_cancelled` flag, ensures `destroy()` runs
+- `heartbeat_timeout=timedelta(seconds=180)` on activity execution (accommodates cold pod starts)
+- `ls_sandbox_timeout_total` Prometheus counter with `step_name` and `reason` labels
+- `sandbox_timeout` audit event type
+- 9 unit tests (heartbeat, cancellation handling, timeout metrics)
 
 **Effort**: 1 day
-
-**Decision needed**: Is Temporal heartbeat sufficient, or do we need `spawner.terminate()` (SIGTERM before destroy)?
-
-**⚠ ORDERING CONFLICT with T36**: T36 may change the sync HTTP model this task builds on. Resolve ordering before implementing either. If T36 ships first, T2's heartbeat design should adapt to the streaming side channel.
 
 ### T3: Cleanup failure metrics [Phase 1] — DONE
 
@@ -89,12 +84,14 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Sandbox Runtime (source: `sandbox-runtime-gaps.md`)
 
-### T5: Document runtime input completeness [Phase 4]
+### T5: Document runtime input completeness [Phase 4] — DONE
 
-**Status**: Nearly done — `LIGHTSPEED_SERVICE_ACCOUNT` missing from config table
+**Status**: Done ([issue #35](https://github.com/jameswnl/lightspeed-cloud-agents/issues/35))
 **ARCHITECTURE.md ref**: Sandbox Runtime config table
 
-**What to build**: Add `LIGHTSPEED_SERVICE_ACCOUNT` to the config table. Verify no other env vars are missing.
+**What was built**:
+- Added `LIGHTSPEED_MODEL_PROVIDER`, `LIGHTSPEED_SERVICE_ACCOUNT`, `SANDBOX_TLS_CERT_PATH`/`SANDBOX_TLS_KEY_PATH` to ARCHITECTURE.md config table
+- Doc-code sync test (`test_doc_env_sync.py`) that parses the config table, greps source for all env vars set on sandbox containers, and asserts completeness
 
 **Effort**: 15 minutes
 
@@ -185,14 +182,20 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 **⚠ DOUBLE-BLOCKED**: Depends on T11 (itself a blocker with sync/async unsolved) AND on LCS integration (external team, unknown scope). Don't plan until T11 is complete and LCS integration surface is documented.
 
-### T13: Alert trigger (R15) [Phase 3b]
+### T13: Alert trigger (R15) [Phase 3b] — DONE
 
-**Status**: Open
-**ARCHITECTURE.md ref**: Requirements table R15 — TODO
+**Status**: Done ([issue #14](https://github.com/jameswnl/lightspeed-cloud-agents/issues/14))
+**ARCHITECTURE.md ref**: Requirements table R15
 
 **Problem**: No Alertmanager webhook → workflow trigger.
 
-**What to build**: Webhook endpoint that accepts Alertmanager payloads and starts workflows.
+**What was built**:
+- `alert_trigger.py`: Pydantic models (`AlertmanagerAlert`, `AlertmanagerPayload`, `AlertTriggerConfig`), alert-to-workflow mapping, dedup tracker, `build_alert_router()` at `/v1/webhooks/alertmanager`
+- RBAC enforcement via authorizer param, content policy validation on stored definitions
+- Prompt sanitization: alert labels/annotations truncated to 2000 chars
+- Configurable namespace via `ALERT_TRIGGER_NAMESPACE` env var
+- `ls_alert_triggers_total` Prometheus counter, `alert_triggered`/`alert_validation_failed` audit events
+- 37 unit tests
 
 **Effort**: 1 week
 
@@ -406,9 +409,18 @@ If not set, progress streaming is disabled (opt-in).
 
 ### T23: Rate limiting [Phase 3b] -- DONE
 
-**Status**: Done
+**Status**: Done ([issue #16](https://github.com/jameswnl/lightspeed-cloud-agents/issues/16))
 
-**What to build**: Per-user request-level rate limiting. Existing spawner/worker concurrency caps handle pod storms; this adds API-level throttling for multi-tenant.
+**Problem**: No per-user API-level throttling for multi-tenant deployments.
+
+**What was built**:
+- `rate_limiter.py`: `TokenBucket` class (per-key buckets, stale cleanup, rate=0 bypass) and `RateLimitMiddleware` ASGI middleware
+- Key derivation: `sha256(bearer_token)[:16]` for privacy, client IP fallback
+- 429 response with `Retry-After` header (`max(1, math.ceil(1/rate))`)
+- Health/metrics endpoints exempt
+- `ls_rate_limit_rejections_total` Prometheus counter, `rate_limit_exceeded` audit events (throttled: 1 per key per 60s)
+- Env vars: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_RATE`, `RATE_LIMIT_BURST`
+- 25 unit tests
 
 **Effort**: 2-3 days
 
