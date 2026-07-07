@@ -26,6 +26,7 @@ tls = ["cryptography>=44.0"]
 dev = [
     "pytest>=9.0",
     "pytest-asyncio>=1.4",
+    "pytest-bdd>=8.0",
     "pytest-mock>=3.15",
     "kubernetes>=30.1.0",
     "cryptography>=44.0",

@@ -165,10 +165,18 @@ clean:  ## Stop everything and clean up
 
 # ── Tests ──────────────────────────────────────────────
 
-.PHONY: test test-unit
+.PHONY: test test-unit test-multi-replica
 
 test-unit:  ## Run unit tests
 	uv run pytest tests/unit/ -q --tb=short
+
+test-multi-replica:  ## Run multi-replica E2E tests (requires Kind + 2 replicas)
+	kubectl apply -f deploy/kind/workflow-runner-2-replicas.yaml
+	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=120s
+	uv run pytest tests/e2e/features/steps/test_multi_replica_bdd.py -v --tb=short
+	@echo ""
+	@echo "Restore single-replica deployment with:"
+	@echo "  kubectl apply -f deploy/kind/workflow-runner.yaml"
 
 test: test-unit  ## Run all tests
 

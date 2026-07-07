@@ -12,8 +12,8 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 ✓ |
-| **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15, T34 ✓, T36, T51 ✓ |
+| **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T33, T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
 1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
@@ -500,11 +500,24 @@ Image signing attestation and software bill of materials.
 - Cross-VM networking depends on the Ansible installer's network topology
 - Resource limit enforcement on Podman differs from K8s (no cgroups v2 on some distros)
 
-### T34: Multi-replica E2E testing [Phase 4]
+### T34: Multi-replica E2E testing [Phase 4] -- DONE
 
-**Status**: Open
+**Status**: Done ([issue #38](https://github.com/jameswnl/lightspeed-cloud-agents/issues/38))
 
-2-replica workflow runner deployment with Temporal. Test: start workflow on replica A, kill replica A, verify Temporal re-dispatches activities to replica B and workflow completes.
+**Problem**: No tests verifying Temporal's crash recovery with multiple workflow runner replicas. Need to prove the stateless runner claim (R7) holds under replica failure.
+
+**What was built**:
+- `deploy/kind/workflow-runner-2-replicas.yaml`: 2-replica Kind overlay (identical to base except `replicas: 2`)
+- `tests/e2e/features/multi_replica.feature`: BDD scenarios for crash recovery, orphan cleanup, concurrent workflows
+- `tests/e2e/features/steps/multi_replica_steps.py`: pytest-bdd step definitions with kubectl helpers
+- `tests/e2e/features/steps/test_multi_replica_bdd.py`: pytest-bdd runner (auto-skips when no Kind cluster)
+- `tests/unit/test_multi_replica_overlay.py`: 13 unit tests validating overlay YAML (drift guard, security context, task queue)
+- `tests/unit/test_multi_replica_helpers.py`: 10 unit tests for kubectl helper functions
+- `tests/e2e/test_list.txt`: complete E2E scenario inventory
+- `Makefile`: `test-multi-replica` target (deploys overlay, waits for readiness, runs tests)
+- `pyproject.toml`: added `pytest-bdd>=8.0` to dev dependencies
+
+**Effort**: 1 day
 
 ### T35: CRD-based K8s operator [Phase 5]
 
