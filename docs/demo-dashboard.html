@@ -41,6 +41,15 @@ a { color: #58a6ff; text-decoration: none; }
 .sc-badge.live { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
 .sc-badge.animated { background: #2d2000; color: #d29922; border: 1px solid #9e6a03; }
 
+/* Mode toggle */
+.mode-toggle-bar { display: none; padding: 0 24px 8px; }
+.mode-toggle-bar.visible { display: flex; align-items: center; gap: 12px; }
+.mode-toggle { display: inline-flex; background: #21262d; border: 1px solid #30363d; border-radius: 20px; overflow: hidden; }
+.mode-toggle button { background: none; border: none; color: #8b949e; padding: 6px 16px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.mode-toggle button.active { background: #238636; color: #fff; border-radius: 20px; }
+.mode-toggle button:hover:not(.active) { color: #c9d1d9; }
+.mode-toggle-hint { font-size: 11px; color: #484f58; }
+
 /* Main area */
 .main { display: flex; flex-direction: column; border-bottom: 1px solid #21262d; position: relative; }
 .pipeline-area { padding: 24px; overflow-x: auto; display: flex; flex-direction: column; }
@@ -178,6 +187,15 @@ a { color: #58a6ff; text-decoration: none; }
 <!-- Scenario Cards -->
 <div class="scenarios" id="scenarios"></div>
 
+<!-- Mode Toggle (visible only for scenarios with variants) -->
+<div class="mode-toggle-bar" id="mode-toggle-bar">
+  <div class="mode-toggle" id="mode-toggle">
+    <button id="toggle-simulated" class="active" onclick="app.setVariant('simulated')">Simulated</button>
+    <button id="toggle-realCluster" onclick="app.setVariant('realCluster')">Real Cluster</button>
+  </div>
+  <span class="mode-toggle-hint" id="mode-toggle-hint"></span>
+</div>
+
 <!-- Main Area -->
 <div class="main">
   <div class="pipeline-area">
@@ -220,28 +238,68 @@ const SCENARIOS = [
     subtitle: 'diagnose → approve → fix → verify',
     icon: '⚠️',
     mode: 'live',
-    definition: {
-      apiVersion: 'v1', kind: 'AgentWorkflow',
-      metadata: { name: 'k8s-incident-response' },
-      spec: { steps: [
-        { name: 'diagnose', type: 'agent', output_key: 'diagnosis',
-          prompt: 'Kubernetes cluster issue: api-backend deployment has 0/2 pods ready due to ErrImagePull (image nonexistent-registry.io/api-server:v2.broken does not exist). web-frontend is healthy (3/3 Running). Diagnose the root cause and recommend a fix.',
-          output_schema: { type: 'object', properties: { health_status: {type:'string'}, root_cause: {type:'string'}, fix: {type:'string'}, severity: {type:'string', enum:['low','medium','high','critical']} }, required: ['health_status','root_cause','fix','severity'] },
-          timeout_seconds: 120 },
-        { name: 'approve-fix', type: 'human-approval', output_key: 'approval',
-          message: 'Review the diagnosis and approve remediation.', risk_level: 'high' },
-        { name: 'fix', type: 'agent', output_key: 'fix',
-          prompt: 'Apply the recommended fix: {{ steps.diagnosis.output.fix }}',
-          condition: 'steps.approval.output.approved == true', timeout_seconds: 180 },
-        { name: 'verify', type: 'agent', output_key: 'verification',
-          prompt: 'Verify the cluster is healthy after remediation. Check that api-backend pods are running.',
-          condition: 'steps.fix.status == completed', timeout_seconds: 120 }
-      ]}
-    },
-    runRequest: {
-      provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
-      sandbox_image: 'lightspeed-agentic-sandbox:latest',
-      approval_policy: { auto_approve_risk_levels: ['low'] }
+    variants: {
+      simulated: {
+        definition: {
+          apiVersion: 'v1', kind: 'AgentWorkflow',
+          metadata: { name: 'k8s-incident-response' },
+          spec: { steps: [
+            { name: 'diagnose', type: 'agent', output_key: 'diagnosis',
+              prompt: 'Kubernetes cluster issue: api-backend deployment has 0/2 pods ready due to ErrImagePull (image nonexistent-registry.io/api-server:v2.broken does not exist). web-frontend is healthy (3/3 Running). Diagnose the root cause and recommend a fix.',
+              output_schema: { type: 'object', properties: { health_status: {type:'string'}, root_cause: {type:'string'}, fix: {type:'string'}, severity: {type:'string', enum:['low','medium','high','critical']} }, required: ['health_status','root_cause','fix','severity'] },
+              timeout_seconds: 120 },
+            { name: 'approve-fix', type: 'human-approval', output_key: 'approval',
+              message: 'Review the diagnosis and approve remediation.', risk_level: 'high' },
+            { name: 'fix', type: 'agent', output_key: 'fix',
+              prompt: 'Apply the recommended fix: {{ steps.diagnosis.output.fix }}',
+              condition: 'steps.approval.output.approved == true', timeout_seconds: 180 },
+            { name: 'verify', type: 'agent', output_key: 'verification',
+              prompt: 'Verify the cluster is healthy after remediation. Check that api-backend pods are running.',
+              condition: 'steps.fix.status == completed', timeout_seconds: 120 }
+          ]}
+        },
+        runRequest: {
+          provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+          sandbox_image: 'lightspeed-agentic-sandbox:latest',
+          approval_policy: { auto_approve_risk_levels: ['low'] }
+        }
+      },
+      realCluster: {
+        definition: {
+          apiVersion: 'v1', kind: 'AgentWorkflow',
+          metadata: { name: 'k8s-realcluster-diagnose-fix' },
+          spec: { steps: [
+            { name: 'diagnose', type: 'agent', output_key: 'diagnosis',
+              prompt: 'Use your kubectl MCP tools to investigate the current state of the Kubernetes cluster. Check pod status, recent events, and deployment health. Identify any issues — CrashLoopBackOff pods, failed deployments, resource pressure, or error events. Report your findings with the root cause.',
+              output_schema: { type: 'object', properties: { summary: {type:'string'}, issues_found: {type:'integer'}, affected_resources: {type:'array', items: {type:'string'}}, root_cause: {type:'string'} }, required: ['summary','issues_found'] },
+              mcp_servers: ['kubectl'],
+              permissions: { allowed_tools: ['mcp__kubectl__get_pods','mcp__kubectl__describe_pod','mcp__kubectl__get_pod_logs','mcp__kubectl__get_events','mcp__kubectl__get_deployments','mcp__kubectl__describe_deployment','mcp__kubectl__get_nodes','mcp__kubectl__get_services'] },
+              timeout_seconds: 120 },
+            { name: 'approve-fix', type: 'human-approval', output_key: 'approval',
+              message: 'Review the diagnosis and approve remediation: {{ steps.diagnosis.output.summary }}', risk_level: 'high' },
+            { name: 'fix', type: 'agent', output_key: 'fix',
+              prompt: 'Based on the diagnosis: {{ steps.diagnosis.output.summary }}. Root cause: {{ steps.diagnosis.output.root_cause }}. Use your kubectl tools to fix the identified issues. You may restart deployments or scale them as needed. Do NOT delete any resources.',
+              condition: 'steps.approval.output.approved == true',
+              mcp_servers: ['kubectl'],
+              permissions: { allowed_tools: ['mcp__kubectl__rollout_restart','mcp__kubectl__scale_deployment','mcp__kubectl__get_pods','mcp__kubectl__get_deployments'] },
+              timeout_seconds: 180 },
+            { name: 'verify', type: 'agent', output_key: 'verification',
+              prompt: 'The fix has been applied: {{ steps.fix.output.summary }}. Verify the cluster is now healthy. Check pod status, events, and deployment readiness. Confirm the issues are resolved.',
+              condition: 'steps.fix.status == completed',
+              mcp_servers: ['kubectl'],
+              permissions: { allowed_tools: ['mcp__kubectl__get_pods','mcp__kubectl__describe_pod','mcp__kubectl__get_events','mcp__kubectl__get_deployments','mcp__kubectl__get_nodes'] },
+              timeout_seconds: 120 }
+          ]}
+        },
+        runRequest: {
+          provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
+          sandbox_image: 'lightspeed-agentic-sandbox:latest',
+          approval_policy: { auto_approve_risk_levels: ['low'] },
+          mcp_servers: [
+            { name: 'kubectl', url: 'http://mcp-kubectl:8082/mcp' }
+          ]
+        }
+      }
     }
   },
   {
@@ -366,8 +424,11 @@ const app = {
   stepData: {},
   animTimer: null,
 
+  activeVariant: 'simulated',
+
   init() {
     this.apiUrl = $('api-url').value;
+    this.activeVariant = localStorage.getItem('k8s-variant') || 'simulated';
     this.renderScenarios();
     this.checkConnection();
   },
@@ -401,18 +462,57 @@ const app = {
     `).join('');
   },
 
+  getVariantData(scenario) {
+    if (!scenario.variants) return { definition: scenario.definition, runRequest: scenario.runRequest };
+    const variant = scenario.variants[this.activeVariant] || scenario.variants.simulated;
+    return { definition: variant.definition, runRequest: variant.runRequest };
+  },
+
   selectScenario(id) {
     this.reset();
     this.scenario = SCENARIOS.find(s => s.id === id);
     document.querySelectorAll('.scenario-card').forEach(c => c.classList.remove('selected'));
     $('sc-' + id).classList.add('selected');
 
+    // Show or hide mode toggle
+    const toggleBar = $('mode-toggle-bar');
+    if (this.scenario.variants) {
+      toggleBar.classList.add('visible');
+      this.updateToggleUI();
+    } else {
+      toggleBar.classList.remove('visible');
+    }
+
+    const variantData = this.getVariantData(this.scenario);
     const steps = this.scenario.mode === 'animated'
       ? this.scenario.steps
-      : this.scenario.definition.spec.steps;
+      : variantData.definition.spec.steps;
     this.steps = steps;
     this.renderPipeline(steps);
     this.updateButtons();
+  },
+
+  setVariant(variant) {
+    this.activeVariant = variant;
+    localStorage.setItem('k8s-variant', variant);
+    this.updateToggleUI();
+    if (this.scenario && this.scenario.variants) {
+      this.reset();
+      const variantData = this.getVariantData(this.scenario);
+      const steps = variantData.definition.spec.steps;
+      this.steps = steps;
+      this.renderPipeline(steps);
+      this.updateButtons();
+    }
+  },
+
+  updateToggleUI() {
+    $('toggle-simulated').classList.toggle('active', this.activeVariant === 'simulated');
+    $('toggle-realCluster').classList.toggle('active', this.activeVariant === 'realCluster');
+    const hint = $('mode-toggle-hint');
+    hint.textContent = this.activeVariant === 'realCluster'
+      ? 'Requires a reachable K8s cluster (Kind or kubeconfig)'
+      : '';
   },
 
   renderPipeline(steps) {
@@ -648,9 +748,10 @@ const app = {
     this.logEvent('info', '', 'Submitting workflow: ' + this.scenario.definition.metadata.name);
 
     try {
+      const variantData = this.getVariantData(this.scenario);
       const body = {
-        ...this.scenario.runRequest,
-        definition: this.scenario.definition,
+        ...variantData.runRequest,
+        definition: variantData.definition,
         workflow_id: 'wf-demo-' + Date.now()
       };
       const r = await fetch(this.apiUrl + '/v1/workflows/run', {
@@ -950,7 +1051,8 @@ const app = {
     $('event-log').innerHTML = '';
     this.setStatus('Idle');
     if (this.scenario) {
-      const steps = this.scenario.mode === 'animated' ? this.scenario.steps : this.scenario.definition.spec.steps;
+      const variantData = this.getVariantData(this.scenario);
+      const steps = this.scenario.mode === 'animated' ? this.scenario.steps : variantData.definition.spec.steps;
       this.renderPipeline(steps);
     }
     this.updateButtons();

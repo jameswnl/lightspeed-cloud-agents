@@ -18,3 +18,9 @@ services:
       - ../../examples/demo-data:/data:ro
     ports:
       - "8081:8081"
+
+  mcp-kubectl:
+    image: localhost/mcp-kubectl:latest
+    restart: unless-stopped
+    ports:
+      - "8082:8082"

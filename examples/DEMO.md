@@ -26,6 +26,18 @@ The interactive dashboard visualizes workflow execution in real-time. Select a s
 | Multi-workflow Composition | Animated | Chatbot triggers chained workflows (future vision) |
 | Security & Governance | Live | RBAC, approval gates, audit trail |
 
+### Real Cluster Mode (K8s Incident Response)
+
+Scenario 1 supports two modes, selectable via a toggle in the dashboard:
+
+- **Simulated** (default): The agent generates text about a hardcoded ErrImagePull issue. No real cluster is needed.
+- **Real Cluster**: The agent uses kubectl MCP tools to interact with a live Kubernetes cluster. Requires:
+  - The mcp-kubectl service running (included in `make demo-up`)
+  - A reachable cluster: either a Kind cluster (`make kind-up`) or a kubeconfig mounted into the mcp-kubectl container
+  - If no cluster is reachable, the agent will report that tools are unavailable (graceful degradation)
+
+The toggle state persists in the browser via localStorage.
+
 ### Terminal setup for demo
 
 **Terminal 1** — Dashboard: `make dashboard`
