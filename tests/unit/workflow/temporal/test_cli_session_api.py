@@ -496,6 +496,246 @@ class TestPostCLISessionMessage:
         assert response.status_code == 403
 
 
+class TestSendMessageStatusGuard:
+    """Tests for 409 Conflict when sending to TERMINATED/FAILED sessions."""
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_terminated_session_returns_409(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message to terminated session returns 409 Conflict."""
+        session_id = await _launch_session(launcher, spawner)
+
+        # Terminate the session
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            await launcher.terminate(session_id, spawner)
+
+        response = client.post(
+            f"/v1/cli-sessions/{session_id}/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 409
+        assert "terminated" in response.json()["detail"].lower() or \
+               "cannot send" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_failed_session_returns_409(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message to failed session returns 409 Conflict."""
+        session_id = await _launch_session(launcher, spawner)
+
+        # Simulate a failed session by setting status directly
+        launcher._sessions[session_id].status = CLISessionStatus.FAILED
+
+        response = client.post(
+            f"/v1/cli-sessions/{session_id}/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_completed_session_returns_409(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message to completed session returns 409 Conflict."""
+        session_id = await _launch_session(launcher, spawner)
+
+        # Simulate completed session
+        launcher._sessions[session_id].status = CLISessionStatus.COMPLETED
+
+        response = client.post(
+            f"/v1/cli-sessions/{session_id}/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_running_session_succeeds(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """POST message to running session returns 200 (no guard)."""
+        session_id = await _launch_session(launcher, spawner)
+
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            response = client.post(
+                f"/v1/cli-sessions/{session_id}/messages",
+                json={"message": "hello"},
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_409_detail_includes_session_status(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """409 response detail includes the current session status."""
+        session_id = await _launch_session(launcher, spawner)
+        launcher._sessions[session_id].status = CLISessionStatus.TERMINATED
+
+        response = client.post(
+            f"/v1/cli-sessions/{session_id}/messages",
+            json={"message": "hello"},
+        )
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "terminated" in detail.lower()
+
+
+class TestMessageSizeLimits:
+    """Tests for message size limits on SendMessageRequest."""
+
+    def test_message_exceeding_64kb_returns_422(
+        self, client: TestClient
+    ) -> None:
+        """Message larger than 64KB returns 422."""
+        # 64KB = 65536 bytes; send slightly over
+        large_message = "A" * 65537
+
+        response = client.post(
+            "/v1/cli-sessions/any-id/messages",
+            json={"message": large_message},
+        )
+        # Pydantic validation returns 422 for field validation errors
+        assert response.status_code == 422
+
+    def test_message_exactly_64kb_succeeds_validation(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Message at exactly 64KB passes validation (returns 404 for missing session)."""
+        exact_message = "A" * 65536
+
+        response = client.post(
+            "/v1/cli-sessions/nonexistent/messages",
+            json={"message": exact_message},
+        )
+        # Should pass validation but fail on session lookup
+        assert response.status_code == 404
+
+    def test_empty_message_returns_422(
+        self, client: TestClient
+    ) -> None:
+        """Empty message returns 422."""
+        response = client.post(
+            "/v1/cli-sessions/any-id/messages",
+            json={"message": ""},
+        )
+        assert response.status_code == 422
+
+
+class TestMessageInputValidation:
+    """Tests for message content sanitization and validation."""
+
+    def test_control_characters_stripped(
+        self, client: TestClient,
+    ) -> None:
+        """Control characters are stripped from message content."""
+        # Message with control characters (except \n, \r, \t which are allowed)
+        msg_with_controls = "Hello\x00World\x01Test\x7f"
+
+        response = client.post(
+            "/v1/cli-sessions/nonexistent/messages",
+            json={"message": msg_with_controls},
+        )
+        # Should pass validation (404 for missing session, not 422)
+        assert response.status_code == 404
+
+    def test_newlines_and_tabs_preserved(
+        self, client: TestClient,
+    ) -> None:
+        """Newlines, carriage returns, and tabs are preserved."""
+        msg = "Hello\nWorld\r\nTest\tTab"
+
+        response = client.post(
+            "/v1/cli-sessions/nonexistent/messages",
+            json={"message": msg},
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_sanitized_message_delivered_to_session(
+        self,
+        client: TestClient,
+        launcher: CLISessionLauncher,
+        spawner: AsyncMock,
+    ) -> None:
+        """Control characters are stripped before delivering to session."""
+        session_id = await _launch_session(launcher, spawner)
+
+        spawner.read_file = AsyncMock(side_effect=FileNotFoundError("no file"))
+        spawner.write_file = AsyncMock()
+
+        with patch("cloud_agents.workflow.cli_session.emit_audit"):
+            response = client.post(
+                f"/v1/cli-sessions/{session_id}/messages",
+                json={"message": "Hello\x00World"},
+            )
+        assert response.status_code == 200
+
+        # The message written to file should have control chars stripped
+        call_args = spawner.write_file.call_args
+        written_content = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("content", "")
+        assert "\x00" not in written_content
+        assert "HelloWorld" in written_content
+
+    def test_whitespace_only_message_returns_422(
+        self, client: TestClient,
+    ) -> None:
+        """Message with only whitespace returns 422."""
+        response = client.post(
+            "/v1/cli-sessions/any-id/messages",
+            json={"message": "   \n\t  "},
+        )
+        assert response.status_code == 422
+
+    def test_valid_unicode_message_accepted(
+        self, client: TestClient,
+    ) -> None:
+        """Valid unicode message with multi-byte chars passes validation."""
+        # Include actual multi-byte characters (emoji, CJK)
+        msg = "Hello 世界! \U0001f680 Multi-byte test"
+
+        response = client.post(
+            "/v1/cli-sessions/nonexistent/messages",
+            json={"message": msg},
+        )
+        assert response.status_code == 404  # passes validation, fails on session lookup
+
+    def test_multibyte_message_over_64kb_in_bytes_returns_422(
+        self, client: TestClient,
+    ) -> None:
+        """Multi-byte message under 64KB char-count but over 64KB byte-count returns 422."""
+        # é is 2 bytes in UTF-8; 32769 copies = 65538 bytes > 64KB
+        multibyte_msg = "é" * 32769
+
+        assert len(multibyte_msg) == 32769  # char count under 64K
+        assert len(multibyte_msg.encode("utf-8")) == 65538  # byte count over 64K
+
+        response = client.post(
+            "/v1/cli-sessions/any-id/messages",
+            json={"message": multibyte_msg},
+        )
+        assert response.status_code == 422
+
+
 class TestGetCLISessionOutput:
     """Tests for GET /v1/cli-sessions/{id}/output (SSE stream)."""
 
