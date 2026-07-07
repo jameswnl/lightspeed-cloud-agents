@@ -794,3 +794,17 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 **Remaining**: Task 5 (sandbox event file producer) is in a separate repo (lightspeed-agentic-sandbox). Tasks 1-4b produce the consumer side; the producer is tracked in issue #52.
 
 **Effort**: 2 days
+
+### T54-followup: Sandbox JSONL event file producer env var wiring ([issue #61](https://github.com/jameswnl/lightspeed-cloud-agents/issues/61)) -- DONE
+
+**Status**: Done
+
+**Problem**: The sandbox event log producer (activated via `AGENT_EVENT_LOG` env var) was implemented in lightspeed-agentic-sandbox (PR #101) but the cloud-agents workflow runner never set the env var on spawned containers.
+
+**What was built**:
+1. Set `AGENT_EVENT_LOG=/var/log/agent-events.jsonl` in sandbox env vars in `temporal_activities.py`, using the existing `_EVENT_LOG_PATH` constant
+2. Added `AGENT_EVENT_LOG` to ARCHITECTURE.md sandbox config table
+3. Added dual truncation documentation (producer: 2000 chars, consumer: 256 bytes)
+4. Unit test verifying the env var is set correctly
+
+**Effort**: 15 minutes
