@@ -121,7 +121,11 @@ class TestWorkflowAction:
 
     def test_all_actions_defined(self) -> None:
         """Verify all expected actions exist."""
-        expected = {"trigger", "approve", "view", "cancel", "view_defs", "manage_defs"}
+        expected = {
+            "trigger", "approve", "view", "cancel", "view_defs", "manage_defs",
+            "schedule_create", "schedule_view", "schedule_delete",
+            "schedule_pause", "schedule_resume",
+        }
         actual = {a.value for a in WorkflowAction}
         assert actual == expected
 

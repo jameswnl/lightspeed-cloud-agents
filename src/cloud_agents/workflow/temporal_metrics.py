@@ -55,3 +55,15 @@ ls_rate_limit_rejections_total = Counter(
     "Total number of requests rejected by per-caller rate limiting",
     ["path"],
 )
+
+ls_alert_triggers_total = Counter(
+    "ls_alert_triggers_total",
+    "Total number of Alertmanager alert trigger outcomes",
+    ["workflow_name", "status"],
+)
+
+ls_schedule_triggers_total = Counter(
+    "ls_schedule_triggers_total",
+    "Total number of schedule trigger outcomes",
+    ["workflow_name", "status"],
+)
