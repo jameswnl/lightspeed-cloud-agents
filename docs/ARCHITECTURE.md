@@ -109,9 +109,12 @@ The sandbox is an HTTP service that receives a step request from the workflow en
 |---------------|---------|
 | `LIGHTSPEED_PROVIDER` env var | LLM provider identifier (claude, openai, gemini) |
 | `LIGHTSPEED_MODEL` env var | Model name or ID |
+| `LIGHTSPEED_MODEL_PROVIDER` env var (optional) | LLM provider type for SDK routing (e.g. azure_openai). Set from workflow `provider.model_provider` or inherited from runner env |
 | Credential Secret (via `credentials_secret`) | Provider credentials (K8s Secret volume mount or env var) |
 | `LIGHTSPEED_MCP_SERVERS` env var (optional) | MCP server configs with file-reference secret headers |
+| `LIGHTSPEED_SERVICE_ACCOUNT` env var (optional) | Kubernetes ServiceAccount name from step `permissions.service_account` |
 | Deployment provider env vars (optional) | `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION` |
+| `SANDBOX_TLS_CERT_PATH` / `SANDBOX_TLS_KEY_PATH` env vars (optional) | Paths to ephemeral TLS cert and key injected by the spawner when `SANDBOX_TLS_MODE=app` |
 | `/app/skills/` (optional) | Domain knowledge packages from skills OCI image |
 
 The architecture treats the runtime interface generically: the workflow engine sends a prompt plus workflow context and receives structured output. Exact route shapes and runtime adapters are implementation details.

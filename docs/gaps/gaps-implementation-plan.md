@@ -13,7 +13,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T36, T51 ✓ |
-| **Phase 5** | Backlog | T5, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
+| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18, T20, T25-T27, T29-T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
 1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
@@ -89,12 +89,14 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ## Sandbox Runtime (source: `sandbox-runtime-gaps.md`)
 
-### T5: Document runtime input completeness [Phase 4]
+### T5: Document runtime input completeness [Phase 4] — DONE
 
-**Status**: Nearly done — `LIGHTSPEED_SERVICE_ACCOUNT` missing from config table
+**Status**: Done ([issue #35](https://github.com/jameswnl/lightspeed-cloud-agents/issues/35))
 **ARCHITECTURE.md ref**: Sandbox Runtime config table
 
-**What to build**: Add `LIGHTSPEED_SERVICE_ACCOUNT` to the config table. Verify no other env vars are missing.
+**What was built**:
+- Added `LIGHTSPEED_MODEL_PROVIDER`, `LIGHTSPEED_SERVICE_ACCOUNT`, `SANDBOX_TLS_CERT_PATH`/`SANDBOX_TLS_KEY_PATH` to ARCHITECTURE.md config table
+- Doc-code sync test (`test_doc_env_sync.py`) that parses the config table, greps source for all env vars set on sandbox containers, and asserts completeness
 
 **Effort**: 15 minutes
 
