@@ -318,3 +318,28 @@ class TestTruncateHeartbeatPayload:
         result = _truncate_heartbeat_payload(event)
 
         assert result["event_type"] == "unknown"
+
+    def test_truncates_long_event_type(self) -> None:
+        """Long event_type is truncated to stay under limit."""
+        event = {"type": "x" * 2000, "name": "tool"}
+        result = _truncate_heartbeat_payload(event)
+        assert len(result["event_type"]) <= 200
+
+    def test_truncates_long_tool_name(self) -> None:
+        """Long tool name is truncated to stay under limit."""
+        event = {"type": "tool_call", "name": "x" * 2000}
+        result = _truncate_heartbeat_payload(event)
+        assert len(result.get("tool", "")) <= 200
+
+    def test_total_payload_under_limit_with_huge_inputs(self) -> None:
+        """Total JSON payload stays under 1KB even with huge inputs."""
+        event = {"type": "x" * 5000, "name": "y" * 5000}
+        result = _truncate_heartbeat_payload(event)
+        encoded = json.dumps(result)
+        assert len(encoded) <= 1024
+
+    def test_normal_event_passes_through_unchanged(self) -> None:
+        """Normal-sized events pass through with correct field mapping."""
+        event = {"type": "tool_call", "name": "get_pods"}
+        result = _truncate_heartbeat_payload(event)
+        assert result == {"event_type": "tool_call", "tool": "get_pods"}

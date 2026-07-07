@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import uuid
 from datetime import timedelta
@@ -41,6 +42,11 @@ WORKFLOW_YAML = (
     / "ephemeral-diagnose-workflow.yaml"
 )
 
+# Default LLM models — configurable via environment variables
+TEST_OPENAI_MODEL = os.environ.get("TEST_LLM_MODEL", "gpt-4o-mini")
+TEST_ANTHROPIC_MODEL = os.environ.get("TEST_LLM_MODEL", "claude-sonnet-4-20250514")
+TEST_GEMINI_MODEL = os.environ.get("TEST_LLM_MODEL", "gemini-2.0-flash")
+
 
 def _has_llm_key() -> bool:
     """Check if an LLM API key is available."""
@@ -56,24 +62,24 @@ def _get_provider_config() -> dict:
     if os.environ.get("OPENAI_API_KEY"):
         return {
             "name": "openai",
-            "model": "gpt-4o-mini",
+            "model": TEST_OPENAI_MODEL,
             "credentials_secret": "OPENAI_API_KEY",
         }
     if os.environ.get("ANTHROPIC_API_KEY"):
         return {
             "name": "claude",
-            "model": "claude-sonnet-4-20250514",
+            "model": TEST_ANTHROPIC_MODEL,
             "credentials_secret": "ANTHROPIC_API_KEY",
         }
     if os.environ.get("GOOGLE_API_KEY"):
         return {
             "name": "gemini",
-            "model": "gemini-2.0-flash",
+            "model": TEST_GEMINI_MODEL,
             "credentials_secret": "GOOGLE_API_KEY",
         }
     return {
         "name": "openai",
-        "model": "gpt-4o-mini",
+        "model": TEST_OPENAI_MODEL,
         "credentials_secret": "OPENAI_API_KEY",
     }
 
@@ -88,18 +94,32 @@ class TestFullStackWorkflow:
 
     @pytest.fixture(autouse=True)
     def _skip_if_no_podman(self) -> None:
-        """Skip if podman-py is not available."""
+        """Skip if podman-py is not available or daemon is not reachable."""
         pytest.importorskip("podman")
+        # Verify Podman daemon is actually reachable
+        result = subprocess.run(
+            ["podman", "info"],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            pytest.skip("Podman daemon is not reachable")
 
     @pytest.fixture
     def spawner(self):
         """Create a PodmanSpawner with test network."""
         from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
-        os.system(
-            "podman network exists cloud-agents 2>/dev/null "
-            "|| podman network create cloud-agents >/dev/null 2>&1"
+        result = subprocess.run(
+            ["podman", "network", "exists", "cloud-agents"],
+            capture_output=True,
         )
+        if result.returncode != 0:
+            subprocess.run(
+                ["podman", "network", "create", "cloud-agents"],
+                capture_output=True,
+                check=False,
+            )
         return PodmanSpawner(network="cloud-agents")
 
     async def test_single_step_real_llm(self, spawner) -> None:

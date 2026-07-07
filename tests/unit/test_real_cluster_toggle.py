@@ -182,6 +182,23 @@ class TestDashboardRealClusterToggle:
             "selectScenario must read toggle state and pick variant"
         )
 
+    def test_real_cluster_fix_step_has_output_schema(self, html_content: str) -> None:
+        """realCluster fix step must have output_schema for downstream references."""
+        # The fix step in the realCluster variant should have output_schema
+        # since the verify step references steps.fix.output.summary.
+        # Search from the realCluster variant definition to avoid hitting
+        # the simulated variant's fix step first.
+        rc_idx = html_content.find("realCluster:")
+        assert rc_idx != -1, "Must have a realCluster variant"
+        fix_idx = html_content.find("name: 'fix'", rc_idx)
+        assert fix_idx != -1, "realCluster variant must have a fix step"
+        # Check that output_schema appears between fix step and the next step
+        next_step_idx = html_content.find("name: 'verify'", fix_idx)
+        fix_section = html_content[fix_idx:next_step_idx] if next_step_idx != -1 else html_content[fix_idx:fix_idx+500]
+        assert "output_schema" in fix_section, (
+            "fix step must have output_schema — verify step references steps.fix.output.summary"
+        )
+
     def test_real_cluster_variant_has_allowed_tools(self, html_content: str) -> None:
         """realCluster variant steps must have permissions.allowed_tools."""
         assert "allowed_tools" in html_content, (

@@ -100,7 +100,11 @@ spec:
         - port: 53
           protocol: TCP
     # MCP kubectl server (streamable HTTP)
-    - ports:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mcp-kubectl
+      ports:
         - port: 8082
           protocol: TCP
     # LLM provider endpoints (HTTPS)

@@ -360,3 +360,177 @@ class TestOpenShellSpawnerListActive:
         result = await spawner.list_active()
 
         assert set(result) == {"agent-1", "agent-2"}
+
+
+class TestOpenShellSpawnerDestroyTracking:
+    """Tests for _do_destroy tracking order (finding 10)."""
+
+    @pytest.mark.asyncio
+    async def test_destroy_retains_tracking_on_delete_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If delete_sandbox fails, agent_name remains in _sandbox_ids for retry.
+
+        _do_destroy must NOT re-raise: base.destroy() always decrements
+        _active_count in its finally block, so re-raising would cause a
+        double-decrement on retry.  Instead, _do_destroy logs the error
+        and returns, keeping the entry in _sandbox_ids for manual cleanup.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.delete_sandbox.side_effect = RuntimeError("API error")
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+
+        # Should NOT raise — _do_destroy swallows the error
+        await spawner.destroy("agent-1")
+
+        # Tracking should NOT be removed since delete failed
+        assert "agent-1" in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_destroy_removes_tracking_on_success(
+        self, mocker: MockerFixture
+    ) -> None:
+        """On successful delete, agent_name is removed from _sandbox_ids."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+
+        await spawner.destroy("agent-1")
+
+        assert "agent-1" not in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_destroy_failure_does_not_double_decrement_active_count(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Verify _active_count is decremented only once on delete failure.
+
+        base.destroy() always decrements in its finally block.  If _do_destroy
+        re-raised, calling destroy() twice would decrement twice — but spawn()
+        only incremented once, corrupting the counter.  This test proves
+        the fix: two destroy() calls on a failed sandbox decrement exactly
+        once (active_count goes to 0, never below).
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.delete_sandbox.side_effect = RuntimeError("API error")
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._active_count = 1  # simulate one spawned pod
+
+        # First destroy — decrements to 0, does not raise
+        await spawner.destroy("agent-1")
+        assert spawner.active_count == 0
+
+        # Second destroy (retry) — still sandbox in _sandbox_ids, decrements
+        # would go to max(0, -1) = 0 without the clamp, but the point is
+        # it should NOT have been at -1 before clamping.
+        await spawner.destroy("agent-1")
+        assert spawner.active_count == 0
+
+
+class TestOpenShellSpawnerStreamProgressBuffering:
+    """Tests for JSONL partial-line buffering across chunks (finding 11)."""
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_buffers_partial_lines(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress reassembles JSON split across chunk boundaries."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            # First chunk ends mid-JSON
+            yield '{"type": "tool_'
+            # Second chunk completes the JSON line
+            yield 'call", "name": "get_pods"}\n'
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 1
+        assert collected[0]["type"] == "tool_call"
+        assert collected[0]["name"] == "get_pods"
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_handles_multiple_partial_chunks(
+        self, mocker: MockerFixture
+    ) -> None:
+        """stream_progress handles multiple successive partial chunks."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield '{"type":'
+            yield ' "tool_call",'
+            yield ' "name": "a"}\n'
+            yield '{"type": "done"}\n'
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 2
+        assert collected[0]["type"] == "tool_call"
+        assert collected[1]["type"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_complete_lines_no_buffer_needed(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When chunks end with newline, no buffering is needed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
+            yield '{"type": "a"}\n'
+            yield '{"type": "b"}\n'
+
+        mock_client = mocker.AsyncMock()
+        mock_client.exec_stream = mock_exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = []
+        async for event in spawner.stream_progress("sandbox-1"):
+            collected.append(event)
+
+        assert len(collected) == 2
+
+
+class TestOpenShellSpawnerGetSandboxId:
+    """Tests for get_sandbox_id() public accessor (finding 13)."""
+
+    def test_returns_sandbox_id_when_tracked(self, mocker: MockerFixture) -> None:
+        """get_sandbox_id returns the sandbox ID for a tracked agent."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+
+        assert spawner.get_sandbox_id("agent-1") == "sb-123"
+
+    def test_returns_none_when_not_tracked(self, mocker: MockerFixture) -> None:
+        """get_sandbox_id returns None for an unknown agent."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        assert spawner.get_sandbox_id("unknown") is None

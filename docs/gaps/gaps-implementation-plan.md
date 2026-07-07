@@ -775,3 +775,4 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 - Python SDK lacks `ExposeService` wrapper (using raw gRPC stub)
 - `SandboxClient.list()` has no label filter — relies on naming convention
 - Gateway is a new infrastructure dependency to operate
+- SDK `_stub` is a private attribute — not part of the public API contract. Upgrades may break the `ExposeService` gRPC call without warning.
