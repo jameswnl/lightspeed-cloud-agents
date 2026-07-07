@@ -167,6 +167,11 @@ async def _collect_transcript(
     Reads /var/log/agent-events.jsonl from the sandbox via spawner.read_file(),
     parses each line into a TranscriptEvent, and returns a StepTranscript.
 
+    Truncation note: transcript data is truncated at two levels:
+    - Producer (sandbox EventLogger) truncates tool input/output at 2000 chars
+    - Consumer (StepTranscript.truncate()) further truncates at 256 bytes per
+      payload field for Temporal memo storage
+
     Graceful degradation: returns an empty transcript if the file doesn't
     exist (Task 5 not shipped yet) or if any error occurs during collection.
 
@@ -263,6 +268,10 @@ async def _run_sandbox_step_inner(
     env_vars = {
         "LIGHTSPEED_PROVIDER": provider["name"],
         "LIGHTSPEED_MODEL": provider["model"],
+        # Activate the JSONL file sink in the sandbox's EventLogger.
+        # The sandbox writes structured events to this path; the consumer
+        # (_collect_transcript) reads it back after the step completes.
+        "AGENT_EVENT_LOG": _EVENT_LOG_PATH,
     }
     if model_provider := provider.get("model_provider"):
         env_vars["LIGHTSPEED_MODEL_PROVIDER"] = model_provider

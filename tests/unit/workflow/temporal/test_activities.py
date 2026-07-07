@@ -3109,3 +3109,47 @@ class TestTranscriptCollection:
 
         assert result["status"] == "completed"
         assert result["transcript"]["events"] == []
+
+
+class TestAgentEventLogEnvVar:
+    """Tests that AGENT_EVENT_LOG env var is set on sandbox containers."""
+
+    @pytest.mark.asyncio
+    async def test_agent_event_log_set_in_env_vars(self, mocker: MockerFixture) -> None:
+        """AGENT_EVENT_LOG is set to /var/log/agent-events.jsonl in sandbox env vars."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env_vars = spawn_call[1].get("env", {})
+        assert env_vars.get("AGENT_EVENT_LOG") == "/var/log/agent-events.jsonl"

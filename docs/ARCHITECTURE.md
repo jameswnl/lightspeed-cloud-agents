@@ -116,6 +116,7 @@ The sandbox is an HTTP service that receives a step request from the workflow en
 | Deployment provider env vars (optional) | `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION` |
 | `SANDBOX_TLS_CERT_PATH` / `SANDBOX_TLS_KEY_PATH` env vars (optional) | Paths to ephemeral TLS cert and key injected by the spawner when `SANDBOX_TLS_MODE=app` |
 | `AGENT_API_TOKEN` env var (optional) | Runner-to-sandbox bearer auth token. Injected when `SANDBOX_AUTH_ENABLED=true`. Sandbox validates via `BearerAuthMiddleware` |
+| `AGENT_EVENT_LOG` env var | Path where the sandbox writes structured JSONL events (`/var/log/agent-events.jsonl`). Activates the EventLogger file sink for transcript collection |
 | `/app/skills/` (optional) | Domain knowledge packages from skills OCI image |
 
 The architecture treats the runtime interface generically: the workflow engine sends a prompt plus workflow context and receives structured output. Exact route shapes and runtime adapters are implementation details.
