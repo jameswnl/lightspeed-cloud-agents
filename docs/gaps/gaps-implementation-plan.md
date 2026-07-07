@@ -13,7 +13,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
 | **Phase 4** | Strategic (needs design first) | T8, T11, T15, T34 ✓, T36, T51 ✓ |
-| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18, T20, T25-T27, T29-T33, T35, T40, T41 |
+| **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18 ✓, T20 ✓, T25-T27, T29-T33, T35, T40, T41 |
 
 ### Immediate actions (before Phase 3a)
 1. **Pin Temporal SDK version** — `temporalio>=1.9.0` has no upper bound; add `<2.0` cap
@@ -367,11 +367,15 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 1 day
 
-### T18: Operational runbooks [Phase 4]
+### T18: Operational runbooks [Phase 4] — DONE
 
-**Status**: Open (from productization-roadmap.md P1)
+**Status**: Done ([issue #36](https://github.com/jameswnl/lightspeed-cloud-agents/issues/36))
 
-**What to build**: `docs/operations/runbook.md` covering common failure modes and recovery.
+**What was built**:
+- `docs/operations/runbook.md` covering 9 failure scenarios: health checks, orphaned sandboxes, stuck workflows, LLM provider errors, sandbox spawn failures, rate limiting, TLS errors, alert/schedule triggers, general diagnostics
+- Every metric, endpoint, env var, Makefile target, and source file referenced in the runbook is validated by 12 unit tests to prevent drift
+- DEPLOYMENT.md updated with link to the runbook
+- Alert reference table linking all PrometheusRule alerts to runbook sections
 
 **Effort**: 1 day
 
@@ -383,9 +387,9 @@ If not set, progress streaming is disabled (opt-in).
 
 **Effort**: 1-2 days
 
-### T20: Load and stress testing [Phase 4]
+### T20: Load and stress testing [Phase 4] -- DONE
 
-**Status**: Open (from productization-roadmap.md P1)
+**Status**: Done (issue #37) (from productization-roadmap.md P1)
 
 **What to build**: `tests/load/` with concurrent workflow scenarios.
 

@@ -2,6 +2,8 @@
 
 For quick start, see [README.md](../README.md#quick-start).
 
+For day-2 operations and troubleshooting, see the [Operational Runbook](operations/runbook.md).
+
 
 ## Building Images
 
