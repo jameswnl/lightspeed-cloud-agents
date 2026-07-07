@@ -458,8 +458,10 @@ const app = {
         <div class="sc-title">${esc(s.title)}</div>
         <div class="sc-sub">${esc(s.subtitle)}</div>
         <span class="sc-badge ${s.mode}">${s.mode === 'live' ? 'LIVE' : 'ANIMATED'}</span>
+        <span class="sc-badge real-cluster-badge" id="rc-badge-${s.id}" style="display:none; background:#2d1117; color:#f85149; border:1px solid #da3633;">REAL</span>
       </div>
     `).join('');
+    this.updateRealClusterBadge();
   },
 
   getVariantData(scenario) {
@@ -489,6 +491,7 @@ const app = {
       : variantData.definition.spec.steps;
     this.steps = steps;
     this.renderPipeline(steps);
+    this.updateRealClusterBadge();
     this.updateButtons();
   },
 
@@ -513,6 +516,17 @@ const app = {
     hint.textContent = this.activeVariant === 'realCluster'
       ? 'Requires a reachable K8s cluster (Kind or kubeconfig)'
       : '';
+    this.updateRealClusterBadge();
+  },
+
+  updateRealClusterBadge() {
+    SCENARIOS.forEach(s => {
+      const badge = $('rc-badge-' + s.id);
+      if (!badge) return;
+      const show = s.variants && this.activeVariant === 'realCluster'
+        && this.scenario && this.scenario.id === s.id;
+      badge.style.display = show ? 'inline-block' : 'none';
+    });
   },
 
   renderPipeline(steps) {
@@ -745,10 +759,11 @@ const app = {
     }
 
     this.setStatus('Starting workflow...', 'running');
-    this.logEvent('info', '', 'Submitting workflow: ' + this.scenario.definition.metadata.name);
+
+    const variantData = this.getVariantData(this.scenario);
+    this.logEvent('info', '', 'Submitting workflow: ' + variantData.definition.metadata.name);
 
     try {
-      const variantData = this.getVariantData(this.scenario);
       const body = {
         ...variantData.runRequest,
         definition: variantData.definition,

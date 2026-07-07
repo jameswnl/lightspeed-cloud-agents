@@ -24,3 +24,6 @@ services:
     restart: unless-stopped
     ports:
       - "8082:8082"
+    # Uncomment to mount your kubeconfig for real-cluster mode:
+    # volumes:
+    #   - ${HOME}/.kube/config:/root/.kube/config:ro
