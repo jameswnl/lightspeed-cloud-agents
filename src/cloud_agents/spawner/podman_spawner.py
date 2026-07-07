@@ -207,6 +207,44 @@ class PodmanSpawner(AgentSpawner):
         logger.info("Spawned Podman container '%s' at %s", container_name, endpoint)
         return endpoint
 
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        """Read a file from a Podman container via podman exec cat.
+
+        Args:
+            agent_name: Name of the agent (without "agent-" prefix).
+            path: Absolute file path inside the container.
+
+        Returns:
+            File contents as a string.
+
+        Raises:
+            FileNotFoundError: If the file does not exist in the container.
+        """
+        import subprocess
+
+        container_name = f"agent-{agent_name}"
+        try:
+            result = subprocess.run(
+                ["podman", "exec", container_name, "cat", path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as exc:
+            if "no such file" in (exc.stderr or "").lower():
+                raise FileNotFoundError(f"File not found: {path}") from exc
+            raise FileNotFoundError(
+                f"Failed to read {path} from container {container_name}: {exc.stderr}"
+            ) from exc
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise FileNotFoundError(
+                f"Cannot read file from container {container_name}: {exc}"
+            ) from exc
+
     async def _do_list_active(
         self,
         labels: dict[str, str] | None = None,

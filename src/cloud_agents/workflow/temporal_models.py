@@ -6,6 +6,7 @@ the Temporal workflow class, and the sandbox activities.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -67,6 +68,118 @@ class SkillsConfig(BaseModel):
 
     image: str
     paths: list[str] = Field(default_factory=list)
+
+
+class TranscriptEvent(BaseModel):
+    """A single event from the agent's execution transcript.
+
+    Attributes:
+        ts: ISO timestamp of the event.
+        type: Event type discriminator.
+        data: Event-specific payload.
+    """
+
+    ts: str
+    type: Literal["tool_call", "tool_result", "thinking", "result", "error"]
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class StepTranscript(BaseModel):
+    """Transcript of an agent step's multi-turn execution.
+
+    Captures tool calls, thinking, results, errors, and cost/token
+    metrics from the agent's execution loop inside a sandbox.
+
+    Attributes:
+        step_name: Name of the workflow step.
+        events: Ordered list of transcript events.
+        cost_usd: Total LLM cost for this step in USD.
+        input_tokens: Total input tokens consumed.
+        output_tokens: Total output tokens generated.
+        duration_ms: Total step execution time in milliseconds.
+    """
+
+    step_name: str
+    events: list[TranscriptEvent] = Field(default_factory=list)
+    cost_usd: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    duration_ms: Optional[int] = None
+
+    def truncate(
+        self,
+        max_events: int = 20,
+        max_payload_bytes: int = 256,
+    ) -> StepTranscript:
+        """Return a truncated copy suitable for Temporal memo storage.
+
+        Smart truncation strategy: keeps tool names and durations but
+        drops large input/output payloads. If the event count exceeds
+        max_events, keeps the first half and last half with a marker.
+
+        Parameters:
+            max_events: Maximum number of events to keep.
+            max_payload_bytes: Maximum bytes for individual payload fields.
+
+        Returns:
+            A new StepTranscript with truncated events.
+        """
+        truncated_events = [
+            self._truncate_event(e, max_payload_bytes) for e in self.events
+        ]
+
+        if len(truncated_events) <= max_events:
+            return StepTranscript(
+                step_name=self.step_name,
+                events=truncated_events,
+                cost_usd=self.cost_usd,
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                duration_ms=self.duration_ms,
+            )
+
+        half = max_events // 2
+        first = truncated_events[:half]
+        last = truncated_events[-half:] if half > 0 else []
+        omitted = len(truncated_events) - (len(first) + len(last))
+        marker = TranscriptEvent(
+            ts="",
+            type="result",
+            data={"_truncated": True, "omitted_events": omitted},
+        )
+        return StepTranscript(
+            step_name=self.step_name,
+            events=first + [marker] + last,
+            cost_usd=self.cost_usd,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            duration_ms=self.duration_ms,
+        )
+
+    @staticmethod
+    def _truncate_event(
+        event: TranscriptEvent,
+        max_payload_bytes: int,
+    ) -> TranscriptEvent:
+        """Truncate large payload fields in an event.
+
+        Keeps name and duration_ms intact; truncates input/output
+        strings that exceed max_payload_bytes.
+
+        Parameters:
+            event: The transcript event to truncate.
+            max_payload_bytes: Max bytes for individual payload fields.
+
+        Returns:
+            A new TranscriptEvent with truncated data.
+        """
+        data = dict(event.data)
+        for key in ("input", "output", "text"):
+            if key in data:
+                serialized = json.dumps(data[key]) if not isinstance(data[key], str) else data[key]
+                if len(serialized) > max_payload_bytes:
+                    data[key] = serialized[:max_payload_bytes] + "...(truncated)"
+        return TranscriptEvent(ts=event.ts, type=event.type, data=data)
 
 
 class StepResult(BaseModel):

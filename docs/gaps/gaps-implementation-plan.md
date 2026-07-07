@@ -776,3 +776,21 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 - `SandboxClient.list()` has no label filter — relies on naming convention
 - Gateway is a new infrastructure dependency to operate
 - SDK `_stub` is a private attribute — not part of the public API contract. Upgrades may break the `ExposeService` gRPC call without warning.
+
+### T54: Agent step transcript persistence ([issue #57](https://github.com/jameswnl/lightspeed-cloud-agents/issues/57)) -- DONE
+
+**Status**: Done (PR #TBD)
+
+**Problem**: When a workflow step completes (or fails), only the final result is retained in Temporal. The agent's multi-turn loop (tool calls, thinking, errors) is lost when the container is destroyed.
+
+**What was built**:
+1. `TranscriptEvent` and `StepTranscript` Pydantic models with smart truncation (keeps tool names/durations, drops large payloads)
+2. `read_file()` method on `AgentSpawner` ABC with implementations for OpenShell, K8s, and Podman spawners
+3. `_collect_transcript()` helper in activities: reads `/var/log/agent-events.jsonl` after HTTP result, before destroy, with graceful degradation when file doesn't exist
+4. `_step_transcripts` dict in `AgentWorkflow` + `@workflow.query get_step_transcripts()` for retrieval
+5. `GET /v1/workflows/{id}/steps/{step}/transcript` API endpoint with RBAC (WorkflowAction.VIEW)
+6. Transcript data wired into CLI handoff: `step_transcripts` field on `EscalationPackage`, tool call chain rendered in `serialize_handoff_context()` for failed steps, `/handoff` endpoint queries and includes transcripts
+
+**Remaining**: Task 5 (sandbox event file producer) is in a separate repo (lightspeed-agentic-sandbox). Tasks 1-4b produce the consumer side; the producer is tracked in issue #52.
+
+**Effort**: 2 days

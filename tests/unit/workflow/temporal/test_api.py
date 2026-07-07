@@ -1607,6 +1607,8 @@ class TestGetWorkflowHandoff:
                 return workflow_context
             if query_fn == AgentWorkflow.get_authz_context:
                 return None
+            if query_fn == AgentWorkflow.get_step_transcripts:
+                return {}
             return None
 
         handle.query = mocker.AsyncMock(side_effect=side_effect)
@@ -1675,3 +1677,81 @@ class TestGetWorkflowHandoff:
         response = client.get("/v1/workflows/wf-nonexistent/handoff")
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
+
+
+class TestTranscriptEndpoint:
+    """Tests for GET /v1/workflows/{id}/steps/{step}/transcript."""
+
+    def _mock_transcripts(
+        self,
+        mock_client: Any,
+        mocker: MockerFixture,
+        transcripts: dict | None = None,
+    ) -> None:
+        """Set up mock for transcript query."""
+        handle = mock_client.get_workflow_handle.return_value
+
+        default_transcripts = transcripts or {
+            "r1": {
+                "step_name": "diagnose",
+                "events": [
+                    {"ts": "t1", "type": "tool_call", "data": {"name": "kubectl"}},
+                    {"ts": "t2", "type": "result", "data": {"output": "ok"}},
+                ],
+                "cost_usd": 0.05,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "duration_ms": 1500,
+            },
+        }
+
+        async def mock_query(query_fn):
+            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+
+            if query_fn == AgentWorkflow.get_step_transcripts:
+                return default_transcripts
+            if query_fn == AgentWorkflow.get_authz_context:
+                return None
+            return mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
+
+        handle.query = mocker.AsyncMock(side_effect=mock_query)
+
+    def test_transcript_returns_200(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /steps/{step}/transcript returns 200 with transcript data."""
+        self._mock_transcripts(mock_client, mocker)
+        response = client.get("/v1/workflows/wf-test-1/steps/r1/transcript")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["step_name"] == "diagnose"
+        assert len(data["events"]) == 2
+        assert data["cost_usd"] == 0.05
+
+    def test_transcript_not_found_returns_404(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /steps/{step}/transcript for unknown step returns 404."""
+        self._mock_transcripts(mock_client, mocker, transcripts={})
+        response = client.get("/v1/workflows/wf-test-1/steps/nonexistent/transcript")
+        assert response.status_code == 404
+
+    def test_transcript_workflow_not_found_returns_404(
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        """GET /steps/{step}/transcript for non-existent workflow returns 404."""
+        handle = mock_client.get_workflow_handle.return_value
+        handle.query = mocker.AsyncMock(
+            side_effect=Exception("workflow not found")
+        )
+        response = client.get("/v1/workflows/wf-missing/steps/r1/transcript")
+        assert response.status_code == 404

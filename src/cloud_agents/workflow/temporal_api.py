@@ -468,6 +468,7 @@ def build_temporal_router(
         try:
             status_result = await handle.query(AgentWorkflow.get_status)
             workflow_context = await handle.query(AgentWorkflow.get_workflow_context)
+            step_transcripts = await handle.query(AgentWorkflow.get_step_transcripts)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -525,6 +526,7 @@ def build_temporal_router(
             events=events_list or None,
             provider_name=provider_name,
             workflow_id=workflow_id,
+            step_transcripts=step_transcripts or None,
         )
 
         context_md = serialize_handoff_context(pkg)
@@ -539,6 +541,53 @@ def build_temporal_router(
             "context_markdown": context_md,
             "launch_command": launch_cmd,
         }
+
+    @router.get("/{workflow_id}/steps/{step_key}/transcript")
+    async def get_step_transcript(
+        workflow_id: str,
+        step_key: str,
+        caller=Depends(get_caller_identity),
+    ) -> dict[str, Any]:
+        """Get the full transcript for a specific workflow step.
+
+        Returns the agent's multi-turn execution transcript including
+        tool calls, thinking, results, errors, and cost/token metrics.
+
+        Parameters:
+            workflow_id: Workflow execution identifier.
+            step_key: Step output_key to retrieve transcript for.
+
+        Returns:
+            StepTranscript dict with events and metrics.
+
+        Raises:
+            HTTPException: 403 if unauthorized, 404 if step not found.
+        """
+        resource = await _get_workflow_authz(workflow_id)
+        view_decision = await authz.authorize(
+            caller,
+            WorkflowAction.VIEW,
+            resource,
+        )
+        if not view_decision.allowed:
+            raise HTTPException(status_code=403, detail=view_decision.reason)
+
+        handle = temporal_client.get_workflow_handle(workflow_id)
+        try:
+            transcripts = await handle.query(AgentWorkflow.get_step_transcripts)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workflow '{workflow_id}' not found or not queryable: {exc}",
+            ) from exc
+
+        if step_key not in transcripts:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Transcript for step '{step_key}' not found in workflow '{workflow_id}'",
+            )
+
+        return transcripts[step_key]
 
     @router.get("/{workflow_id}/events")
     async def get_workflow_events(
