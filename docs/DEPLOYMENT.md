@@ -132,6 +132,42 @@ Adjust the interface name and CIDRs for your environment. These rules apply to a
 
 ---
 
+## Configuration Reference
+
+### Rate Limiting
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `RATE_LIMIT_ENABLED` | `false` | Enable per-user API rate limiting |
+| `RATE_LIMIT_RATE` | `10.0` | Requests per second per caller |
+| `RATE_LIMIT_BURST` | `20` | Max burst size |
+
+### App-level TLS
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `SANDBOX_TLS_MODE` | `disabled` | `app` (ephemeral certs), `mesh` (skip, service mesh handles TLS), `disabled` |
+
+When `SANDBOX_TLS_MODE=app`, the runner generates an ephemeral CA and per-sandbox server certs at spawn time. Certs are valid for 10 minutes. In K8s, certs are mounted via Secrets; in Podman, via temp dir bind mounts.
+
+### Alert Trigger
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `ALERT_TRIGGER_ENABLED` | `false` | Enable Alertmanager webhook endpoint |
+| `ALERT_TRIGGER_DEFAULT_WORKFLOW` | | Default workflow definition name for unmapped alerts |
+| `ALERT_TRIGGER_WORKFLOW_LABEL` | `cloud_agents_workflow` | Prometheus label that maps alerts to workflow names |
+| `ALERT_TRIGGER_DEDUP_WINDOW` | `300` | Seconds to deduplicate identical alerts |
+| `ALERT_TRIGGER_NAMESPACE` | `system` | Namespace for RBAC identity of alert-triggered workflows |
+
+### Schedule Trigger
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `SCHEDULE_TRIGGER_ENABLED` | `false` | Enable schedule CRUD endpoints |
+
+---
+
 ## Demo
 
 See [examples/DEMO.md](../examples/DEMO.md) for the interactive dashboard, demo recording, and terminal setup.
