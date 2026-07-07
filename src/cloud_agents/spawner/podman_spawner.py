@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from typing import Any
 
 from cloud_agents.spawner.base import AgentSpawner
@@ -43,6 +45,7 @@ class PodmanSpawner(AgentSpawner):
         self._network = network
         self._volume_mounts = volume_mounts or {}
         self._podman_url = os.environ.get("CONTAINER_HOST") or os.environ.get("DOCKER_HOST")
+        self._tls_temp_dirs: dict[str, str] = {}
 
     def _client(self) -> "PodmanClient":
         """Create a PodmanClient with the configured socket URL."""
@@ -65,6 +68,7 @@ class PodmanSpawner(AgentSpawner):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
+        tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
         """Create a Podman container for the agent."""
         if credential_secret_name:
@@ -86,8 +90,7 @@ class PodmanSpawner(AgentSpawner):
             logger.info("Advisory mode: omitting host mounts for '%s'", agent_name)
         else:
             volumes = {
-                host: {"bind": ctr, "mode": "ro"}
-                for host, ctr in self._volume_mounts.items()
+                host: {"bind": ctr, "mode": "ro"} for host, ctr in self._volume_mounts.items()
             }
         skills_volume_name = None
 
@@ -103,9 +106,7 @@ class PodmanSpawner(AgentSpawner):
                 client.containers.run(
                     skills_image,
                     command=["sh", "-c", copy_cmd],
-                    volumes={
-                        skills_volume_name: {"bind": "/skills-data", "mode": "rw"}
-                    },
+                    volumes={skills_volume_name: {"bind": "/skills-data", "mode": "rw"}},
                     remove=True,
                     detach=False,
                 )
@@ -113,19 +114,24 @@ class PodmanSpawner(AgentSpawner):
             try:
                 existing = client.containers.get(container_name)
                 if existing.status == "running":
-                    logger.info(
-                        "Container '%s' already running (idempotent)", container_name
-                    )
+                    logger.info("Container '%s' already running (idempotent)", container_name)
                     existing.reload()
                     port_bindings = existing.ports or {}
                     host_port = None
-                    for binding in port_bindings.get("8080/tcp", []):
-                        host_port = binding.get("HostPort")
+                    is_tls = "8443/tcp" in port_bindings
+                    for port_key in ("8443/tcp", "8080/tcp"):
+                        for binding in port_bindings.get(port_key, []):
+                            host_port = binding.get("HostPort")
+                            if host_port:
+                                is_tls = port_key == "8443/tcp"
+                                break
                         if host_port:
                             break
+                    scheme = "https" if is_tls else "http"
+                    container_port = 8443 if is_tls else 8080
                     if host_port:
-                        return f"http://localhost:{host_port}"
-                    return f"http://{container_name}:8080"
+                        return f"{scheme}://localhost:{host_port}"
+                    return f"{scheme}://{container_name}:{container_port}"
                 existing.remove(force=True)
                 logger.info("Removed stale container '%s'", container_name)
             except Exception:
@@ -135,6 +141,32 @@ class PodmanSpawner(AgentSpawner):
             if labels:
                 container_labels.update(labels)
 
+            # TLS cert injection — write cert+key to temp dir, bind mount
+            container_port = 8080
+            if tls_certs is not None:
+                tls_dir = tempfile.mkdtemp(prefix=f"sandbox-tls-{agent_name}-")
+                cert_path = os.path.join(tls_dir, "tls.crt")
+                key_path = os.path.join(tls_dir, "tls.key")
+                with open(cert_path, "wb") as f:
+                    f.write(tls_certs.server_cert_pem)
+                with open(key_path, "wb") as f:
+                    f.write(tls_certs.server_key_pem)
+                os.chmod(cert_path, 0o444)
+                os.chmod(key_path, 0o400)
+                volumes[tls_dir] = {
+                    "bind": "/var/run/secrets/sandbox-tls/",
+                    "mode": "ro",
+                }
+                env["SANDBOX_TLS_CERT_PATH"] = "/var/run/secrets/sandbox-tls/tls.crt"
+                env["SANDBOX_TLS_KEY_PATH"] = "/var/run/secrets/sandbox-tls/tls.key"
+                container_port = 8443
+                self._tls_temp_dirs[agent_name] = tls_dir
+                logger.info(
+                    "TLS certs injected for '%s' via temp dir '%s'",
+                    agent_name,
+                    tls_dir,
+                )
+
             run_kwargs: dict[str, Any] = {
                 "image": image,
                 "name": container_name,
@@ -142,7 +174,7 @@ class PodmanSpawner(AgentSpawner):
                 "environment": env,
                 "network": self._network,
                 "volumes": volumes if volumes else {},
-                "ports": {"8080/tcp": None},
+                "ports": {f"{container_port}/tcp": None},
                 "labels": container_labels,
                 "remove": False,
             }
@@ -158,17 +190,19 @@ class PodmanSpawner(AgentSpawner):
             container.reload()
             port_bindings = container.ports or {}
             host_port = None
-            for binding in port_bindings.get("8080/tcp", []):
+            port_key = f"{container_port}/tcp"
+            for binding in port_bindings.get(port_key, []):
                 host_port = binding.get("HostPort")
                 if host_port:
                     break
 
+        scheme = "https" if tls_certs is not None else "http"
         if self._podman_url:
-            endpoint = f"http://{container_name}:8080"
+            endpoint = f"{scheme}://{container_name}:{container_port}"
         elif host_port:
-            endpoint = f"http://localhost:{host_port}"
+            endpoint = f"{scheme}://localhost:{host_port}"
         else:
-            endpoint = f"http://{container_name}:8080"
+            endpoint = f"{scheme}://{container_name}:{container_port}"
 
         logger.info("Spawned Podman container '%s' at %s", container_name, endpoint)
         return endpoint
@@ -210,9 +244,7 @@ class PodmanSpawner(AgentSpawner):
                     container.remove()
                     logger.info("Destroyed Podman container '%s'", container_name)
                 except Exception as exc:
-                    logger.warning(
-                        "Failed to destroy container '%s': %s", container_name, exc
-                    )
+                    logger.warning("Failed to destroy container '%s': %s", container_name, exc)
                 try:
                     skills_vol = client.volumes.get(f"skills-{agent_name}")
                     skills_vol.remove()
@@ -221,3 +253,9 @@ class PodmanSpawner(AgentSpawner):
                     pass
         except ImportError:
             logger.warning("podman-py not installed, cannot destroy container")
+
+        # Best-effort cleanup of TLS temp directory
+        tls_dir = self._tls_temp_dirs.pop(agent_name, None)
+        if tls_dir:
+            shutil.rmtree(tls_dir, ignore_errors=True)
+            logger.info("Cleaned up TLS temp dir '%s' for '%s'", tls_dir, agent_name)

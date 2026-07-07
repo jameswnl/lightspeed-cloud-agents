@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 
 import pytest
 from prometheus_client import REGISTRY
@@ -248,9 +249,7 @@ class TestRunSandboxStep:
         mock_spawner.destroy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_permissions_service_account_passed(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_permissions_service_account_passed(self, mocker: MockerFixture) -> None:
         """Permissions service_account is forwarded to spawner."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -295,9 +294,7 @@ class TestRunSandboxStep:
         assert env_vars.get("LIGHTSPEED_SERVICE_ACCOUNT") == "custom-sa"
 
     @pytest.mark.asyncio
-    async def test_permissions_timeout_overrides_default(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_permissions_timeout_overrides_default(self, mocker: MockerFixture) -> None:
         """Permissions timeout_seconds overrides default HTTP timeout."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -340,6 +337,315 @@ class TestRunSandboxStep:
 
         http_init_call = mock_http.call_args
         assert http_init_call[1].get("timeout") == 120.0
+
+
+class TestTLSWiring:
+    """Tests for TLS wiring in sandbox step activity."""
+
+    def _make_success_input(self) -> dict:
+        """Build a standard successful sandbox step input dict."""
+        return {
+            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4",
+                "credentials_secret": "k",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    def _mock_http_success(self, mocker: MockerFixture) -> Any:
+        """Set up httpx.AsyncClient mock returning success=True."""
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client_instance = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=mock_response),
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_client_instance,
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+        return mock_http
+
+    @pytest.mark.asyncio
+    async def test_tls_app_generates_certs_and_passes_to_spawner(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TLS mode=app -> generate_ephemeral_certs called and tls_certs passed to spawner."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        mock_gen.assert_called_once()
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("tls_certs") is mock_certs
+
+    @pytest.mark.asyncio
+    async def test_tls_app_configures_ssl_context(self, mocker: MockerFixture) -> None:
+        """TLS mode=app -> httpx client configured with SSL context for CA cert."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        mock_http = self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        # httpx.AsyncClient should be called with verify= keyword
+        http_init_call = mock_http.call_args
+        assert "verify" in http_init_call[1], "Expected verify= kwarg for TLS"
+
+    @pytest.mark.asyncio
+    async def test_tls_disabled_no_certs_generated(self, mocker: MockerFixture) -> None:
+        """TLS mode=disabled -> no certs generated, plain HTTP used."""
+        mocker.patch.dict("os.environ", {}, clear=False)
+        os.environ.pop("SANDBOX_TLS_MODE", None)
+
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        mock_gen.assert_not_called()
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("tls_certs") is None
+
+    @pytest.mark.asyncio
+    async def test_tls_mesh_no_certs_generated(self, mocker: MockerFixture) -> None:
+        """TLS mode=mesh -> no certs generated, plain HTTP used (mesh handles it)."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "mesh"})
+
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        mock_gen.assert_not_called()
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("tls_certs") is None
+
+    @pytest.mark.asyncio
+    async def test_tls_error_emits_audit_and_metric(self, mocker: MockerFixture) -> None:
+        """TLS error emits audit event and increments TLS error metric."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+
+        import ssl as _ssl
+
+        # Use the real ssl.SSLError which inherits from OSError
+        ssl_error = _ssl.SSLError("cert verify failed")
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(side_effect=ssl_error),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_emit = mocker.patch("cloud_agents.workflow.temporal_activities.emit_audit")
+        mock_metric = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.ls_sandbox_tls_errors_total"
+        )
+
+        with pytest.raises((RuntimeError, _ssl.SSLError)):
+            await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        # Verify TLS error audit event was emitted
+        tls_error_calls = [
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "tls_error"
+        ]
+        assert len(tls_error_calls) >= 1
+
+        # Verify TLS error metric was incremented
+        mock_metric.labels.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_tls_san_includes_k8s_fqdn(self, mocker: MockerFixture) -> None:
+        """TLS mode=app -> SAN DNS includes K8s service FQDN entries."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app", "NAMESPACE": "prod"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        pod_name = gen_call[1].get("common_name") or gen_call[0][0]
+
+        # Verify K8s FQDN entries
+        assert f"agent-{pod_name}.prod.svc" in san_dns
+        assert f"agent-{pod_name}.prod.svc.cluster.local" in san_dns
+
+    @pytest.mark.asyncio
+    async def test_tls_san_includes_localhost(self, mocker: MockerFixture) -> None:
+        """TLS mode=app -> SAN DNS includes localhost, SAN IPs includes 127.0.0.1."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        san_ips = gen_call[1].get("san_ips", [])
+
+        assert "localhost" in san_dns
+        assert "127.0.0.1" in san_ips
+
+    @pytest.mark.asyncio
+    async def test_tls_san_uses_default_namespace(self, mocker: MockerFixture) -> None:
+        """TLS mode=app without NAMESPACE env -> uses 'default' namespace."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+        os.environ.pop("NAMESPACE", None)
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mock_gen = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        gen_call = mock_gen.call_args
+        san_dns = gen_call[1].get("san_dns", [])
+        pod_name = gen_call[1].get("common_name") or gen_call[0][0]
+
+        assert f"agent-{pod_name}.default.svc" in san_dns
+        assert f"agent-{pod_name}.default.svc.cluster.local" in san_dns
+
+    @pytest.mark.asyncio
+    async def test_tls_app_passes_ca_cert_pem_to_wait_ready(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TLS mode=app -> ca_cert_pem from tls_certs is passed to wait_ready."""
+        mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
+
+        mock_certs = mocker.MagicMock()
+        mock_certs.ca_cert_pem = b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+            return_value=mock_certs,
+        )
+        mocker.patch("cloud_agents.workflow.temporal_activities.ssl.create_default_context")
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "https://agent-pod:8443"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        wait_call = mock_spawner.wait_ready.call_args
+        assert wait_call[1].get("ca_cert_pem") is mock_certs.ca_cert_pem
+
+    @pytest.mark.asyncio
+    async def test_tls_disabled_no_ca_cert_to_wait_ready(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TLS mode=disabled -> ca_cert_pem=None passed to wait_ready."""
+        mocker.patch.dict("os.environ", {}, clear=False)
+        os.environ.pop("SANDBOX_TLS_MODE", None)
+
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities.generate_ephemeral_certs",
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+        self._mock_http_success(mocker)
+
+        await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+
+        wait_call = mock_spawner.wait_ready.call_args
+        assert wait_call[1].get("ca_cert_pem") is None
 
 
 class TestNotificationActivity:
@@ -443,9 +749,7 @@ class TestNormalizeConfigRef:
 
     def test_hyphens_to_underscores(self) -> None:
         """Hyphens become underscores."""
-        assert (
-            _normalize_config_ref("slack-approval-channel") == "SLACK_APPROVAL_CHANNEL"
-        )
+        assert _normalize_config_ref("slack-approval-channel") == "SLACK_APPROVAL_CHANNEL"
 
     def test_already_uppercase(self) -> None:
         """Already uppercase passes through."""
@@ -532,9 +836,7 @@ class TestNotificationConfigResolution:
         """Slack notifier resolves webhook URL from env var."""
         mocker.patch.dict(
             "os.environ",
-            {
-                "NOTIFIER_SLACK_APPROVAL_CHANNEL_WEBHOOK_URL": "https://hooks.slack.com/test"
-            },
+            {"NOTIFIER_SLACK_APPROVAL_CHANNEL_WEBHOOK_URL": "https://hooks.slack.com/test"},
         )
         mock_slack = mocker.patch(
             "cloud_agents.workflow.notifier.SlackNotifier",
@@ -786,7 +1088,9 @@ class TestMCPInjection:
         await run_sandbox_step(
             {
                 "step": {
-                    "name": "s1", "prompt": "check", "output_key": "r1",
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
                     "mcp_servers": ["sn"],
                 },
                 "workflow_id": "wf-1",
@@ -859,9 +1163,7 @@ class TestMCPInjection:
         assert "LIGHTSPEED_MCP_SERVERS" not in env_vars
 
     @pytest.mark.asyncio
-    async def test_secret_headers_encoded_as_file_refs(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_secret_headers_encoded_as_file_refs(self, mocker: MockerFixture) -> None:
         """Secret headers encoded as file references in MCP env var."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -883,8 +1185,12 @@ class TestMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["servicenow"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["servicenow"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -920,9 +1226,7 @@ class TestMCPInjection:
         }
 
     @pytest.mark.asyncio
-    async def test_mcp_secret_mounts_passed_to_spawner(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_mcp_secret_mounts_passed_to_spawner(self, mocker: MockerFixture) -> None:
         """MCP secret refs passed to spawner as mcp_secret_mounts."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -944,8 +1248,12 @@ class TestMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["servicenow"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["servicenow"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -981,9 +1289,7 @@ class TestMCPInjection:
         )
 
     @pytest.mark.asyncio
-    async def test_mcp_allowed_secrets_blocks_unlisted(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_mcp_allowed_secrets_blocks_unlisted(self, mocker: MockerFixture) -> None:
         """MCP_ALLOWED_SECRETS rejects secrets not in the allowlist."""
         mocker.patch.dict(
             "os.environ",
@@ -994,8 +1300,12 @@ class TestMCPInjection:
         with pytest.raises(ValueError, match="not in MCP_ALLOWED_SECRETS"):
             await run_sandbox_step(
                 {
-                    "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                             "mcp_servers": ["sn"]},
+                    "step": {
+                        "name": "s1",
+                        "prompt": "check",
+                        "output_key": "r1",
+                        "mcp_servers": ["sn"],
+                    },
                     "workflow_id": "wf-1",
                     "provider": {
                         "name": "openai",
@@ -1021,9 +1331,7 @@ class TestMCPInjection:
             )
 
     @pytest.mark.asyncio
-    async def test_mcp_allowed_secrets_permits_listed(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_mcp_allowed_secrets_permits_listed(self, mocker: MockerFixture) -> None:
         """MCP_ALLOWED_SECRETS permits secrets in the allowlist."""
         mocker.patch.dict(
             "os.environ",
@@ -1049,8 +1357,12 @@ class TestMCPInjection:
 
         result = await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["sn"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["sn"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {
                     "name": "openai",
@@ -1144,8 +1456,12 @@ class TestPerStepMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["filesystem"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["filesystem"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
                 "sandbox_image": "sandbox:latest",
@@ -1161,6 +1477,7 @@ class TestPerStepMCPInjection:
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
         import json
+
         mcp_json = json.loads(env_vars["LIGHTSPEED_MCP_SERVERS"])
         assert len(mcp_json) == 1
         assert mcp_json[0]["name"] == "filesystem"
@@ -1188,8 +1505,12 @@ class TestPerStepMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["filesystem", "jira"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["filesystem", "jira"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
                 "sandbox_image": "sandbox:latest",
@@ -1205,6 +1526,7 @@ class TestPerStepMCPInjection:
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
         import json
+
         mcp_json = json.loads(env_vars["LIGHTSPEED_MCP_SERVERS"])
         assert len(mcp_json) == 2
         names = {s["name"] for s in mcp_json}
@@ -1233,8 +1555,12 @@ class TestPerStepMCPInjection:
 
         await run_sandbox_step(
             {
-                "step": {"name": "s1", "prompt": "check", "output_key": "r1",
-                         "mcp_servers": ["nonexistent"]},
+                "step": {
+                    "name": "s1",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "mcp_servers": ["nonexistent"],
+                },
                 "workflow_id": "wf-1",
                 "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
                 "sandbox_image": "sandbox:latest",
@@ -1282,18 +1608,21 @@ class TestOutputSchemaForwarding:
             "required": ["severity"],
         }
 
-        await run_sandbox_step({
-            "step": {
-                "name": "diag",
-                "prompt": "diagnose",
-                "output_key": "r1",
-                "output_schema": schema,
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "diag",
+                    "prompt": "diagnose",
+                    "output_key": "r1",
+                    "output_schema": schema,
+                },
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
             },
-            "workflow_id": "wf-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+            spawner=mock_spawner,
+        )
 
         post_call = mock_client_instance.post.call_args
         body = post_call[1]["json"]
@@ -1304,9 +1633,7 @@ class TestModelProviderDerivation:
     """Tests for per-workflow model_provider derivation."""
 
     @pytest.mark.asyncio
-    async def test_model_provider_from_provider_config(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_model_provider_from_provider_config(self, mocker: MockerFixture) -> None:
         """model_provider in ProviderConfig sets LIGHTSPEED_MODEL_PROVIDER env var on pod."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1347,9 +1674,7 @@ class TestModelProviderDerivation:
         assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "anthropic"
 
     @pytest.mark.asyncio
-    async def test_model_provider_fallback_to_env(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_model_provider_fallback_to_env(self, mocker: MockerFixture) -> None:
         """No model_provider in config falls back to os.environ LIGHTSPEED_MODEL_PROVIDER."""
         mocker.patch.dict(
             "os.environ",
@@ -1393,9 +1718,7 @@ class TestModelProviderDerivation:
         assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "openai"
 
     @pytest.mark.asyncio
-    async def test_model_provider_overrides_env(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_model_provider_overrides_env(self, mocker: MockerFixture) -> None:
         """model_provider in config overrides os.environ value."""
         mocker.patch.dict(
             "os.environ",
@@ -1440,9 +1763,7 @@ class TestModelProviderDerivation:
         assert env_vars.get("LIGHTSPEED_MODEL_PROVIDER") == "anthropic"
 
     @pytest.mark.asyncio
-    async def test_no_model_provider_anywhere(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_model_provider_anywhere(self, mocker: MockerFixture) -> None:
         """No model_provider in config or env means not in env_vars."""
         mocker.patch.dict(
             "os.environ",
@@ -1494,9 +1815,7 @@ class TestPermissionScopeForwarding:
     """Tests that allowed_tools/denied_tools are forwarded to sandbox POST body."""
 
     @pytest.mark.asyncio
-    async def test_allowed_tools_forwarded_to_sandbox(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_allowed_tools_forwarded_to_sandbox(self, mocker: MockerFixture) -> None:
         """allowed_tools in step permissions -> allowedTools in sandbox POST body."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1544,9 +1863,7 @@ class TestPermissionScopeForwarding:
         assert body["allowedTools"] == ["list_hosts", "check_host"]
 
     @pytest.mark.asyncio
-    async def test_denied_tools_forwarded_to_sandbox(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_denied_tools_forwarded_to_sandbox(self, mocker: MockerFixture) -> None:
         """denied_tools in step permissions -> deniedTools in sandbox POST body."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1594,9 +1911,7 @@ class TestPermissionScopeForwarding:
         assert body["deniedTools"] == ["run_remediation"]
 
     @pytest.mark.asyncio
-    async def test_both_allowed_and_denied_forwarded(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_both_allowed_and_denied_forwarded(self, mocker: MockerFixture) -> None:
         """Both fields forwarded when both present."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1646,9 +1961,7 @@ class TestPermissionScopeForwarding:
         assert body["deniedTools"] == ["run_remediation"]
 
     @pytest.mark.asyncio
-    async def test_no_permissions_no_tool_fields(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_permissions_no_tool_fields(self, mocker: MockerFixture) -> None:
         """No permissions -> no allowedTools/deniedTools in body."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1694,9 +2007,7 @@ class TestPermissionScopeForwarding:
         assert "deniedTools" not in body
 
     @pytest.mark.asyncio
-    async def test_permissions_without_tools_no_tool_fields(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_permissions_without_tools_no_tool_fields(self, mocker: MockerFixture) -> None:
         """Permissions with only service_account -> no tool fields in body."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1784,17 +2095,13 @@ class TestAuditEmission:
         )
 
         spawn_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "sandbox_spawned"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "sandbox_spawned"
         ]
         assert len(spawn_calls) == 1
         assert spawn_calls[0][1]["workflow_id"] == "wf-audit-1"
 
         destroy_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "sandbox_destroyed"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "sandbox_destroyed"
         ]
         assert len(destroy_calls) == 1
 
@@ -1807,9 +2114,7 @@ class TestCircuitBreakerInActivity:
         self, mocker: MockerFixture
     ) -> None:
         """Open circuit breaker returns failed without spawning sandbox."""
-        mock_cb = mocker.patch(
-            "cloud_agents.workflow.temporal_activities._circuit_breaker"
-        )
+        mock_cb = mocker.patch("cloud_agents.workflow.temporal_activities._circuit_breaker")
         mock_cb.is_open.return_value = True
         mock_spawner = mocker.AsyncMock()
 
@@ -1835,9 +2140,7 @@ class TestCircuitBreakerInActivity:
     @pytest.mark.asyncio
     async def test_success_records_on_breaker(self, mocker: MockerFixture) -> None:
         """Successful sandbox step records success on breaker."""
-        mock_cb = mocker.patch(
-            "cloud_agents.workflow.temporal_activities._circuit_breaker"
-        )
+        mock_cb = mocker.patch("cloud_agents.workflow.temporal_activities._circuit_breaker")
         mock_cb.is_open.return_value = False
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1877,9 +2180,7 @@ class TestCircuitBreakerInActivity:
     @pytest.mark.asyncio
     async def test_failure_records_on_breaker(self, mocker: MockerFixture) -> None:
         """Failed sandbox step records failure on breaker."""
-        mock_cb = mocker.patch(
-            "cloud_agents.workflow.temporal_activities._circuit_breaker"
-        )
+        mock_cb = mocker.patch("cloud_agents.workflow.temporal_activities._circuit_breaker")
         mock_cb.is_open.return_value = False
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1919,9 +2220,7 @@ class TestCircuitBreakerInActivity:
     @pytest.mark.asyncio
     async def test_http_502_records_failure_on_breaker(self, mocker: MockerFixture) -> None:
         """HTTP 502 from sandbox records failure on circuit breaker."""
-        mock_cb = mocker.patch(
-            "cloud_agents.workflow.temporal_activities._circuit_breaker"
-        )
+        mock_cb = mocker.patch("cloud_agents.workflow.temporal_activities._circuit_breaker")
         mock_cb.is_open.return_value = False
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -1930,13 +2229,9 @@ class TestCircuitBreakerInActivity:
         mock_response = mocker.MagicMock()
         mock_response.status_code = 502
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
-            return_value=mocker.MagicMock(
-                post=mocker.AsyncMock(return_value=mock_response)
-            ),
+            return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
@@ -1961,9 +2256,7 @@ class TestCircuitBreakerInActivity:
     @pytest.mark.asyncio
     async def test_readiness_failure_records_on_breaker(self, mocker: MockerFixture) -> None:
         """Readiness timeout records failure on circuit breaker."""
-        mock_cb = mocker.patch(
-            "cloud_agents.workflow.temporal_activities._circuit_breaker"
-        )
+        mock_cb = mocker.patch("cloud_agents.workflow.temporal_activities._circuit_breaker")
         mock_cb.is_open.return_value = False
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -2025,9 +2318,7 @@ class TestSkipSandboxDestroy:
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
     @pytest.mark.asyncio
-    async def test_skip_destroy_when_env_set_true(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_skip_destroy_when_env_set_true(self, mocker: MockerFixture) -> None:
         """SKIP_SANDBOX_DESTROY=true skips spawner.destroy, result still returned."""
         mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "true"})
         mock_spawner = mocker.AsyncMock()
@@ -2045,9 +2336,7 @@ class TestSkipSandboxDestroy:
         mock_spawner.destroy.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skip_destroy_when_env_set_1(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_skip_destroy_when_env_set_1(self, mocker: MockerFixture) -> None:
         """SKIP_SANDBOX_DESTROY=1 skips spawner.destroy, result still returned."""
         mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "1"})
         mock_spawner = mocker.AsyncMock()
@@ -2065,9 +2354,7 @@ class TestSkipSandboxDestroy:
         mock_spawner.destroy.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_destroy_called_when_env_not_set(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_destroy_called_when_env_not_set(self, mocker: MockerFixture) -> None:
         """Without SKIP_SANDBOX_DESTROY, spawner.destroy IS called."""
         mocker.patch.dict("os.environ", {}, clear=False)
         os.environ.pop("SKIP_SANDBOX_DESTROY", None)
@@ -2086,9 +2373,7 @@ class TestSkipSandboxDestroy:
         mock_spawner.destroy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_skip_destroy_case_insensitive(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_skip_destroy_case_insensitive(self, mocker: MockerFixture) -> None:
         """SKIP_SANDBOX_DESTROY=True (capital T) also skips destroy."""
         mocker.patch.dict("os.environ", {"SKIP_SANDBOX_DESTROY": "True"})
         mock_spawner = mocker.AsyncMock()
@@ -2110,9 +2395,7 @@ class TestSecretRedactionInActivity:
     """Tests for secret redaction in activity error paths."""
 
     @pytest.mark.asyncio
-    async def test_spawner_error_containing_secret_is_redacted(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_spawner_error_containing_secret_is_redacted(self, mocker: MockerFixture) -> None:
         """Spawner error containing API key secret is redacted before re-raising."""
         mocker.patch.dict(
             "os.environ",
@@ -2142,9 +2425,7 @@ class TestSecretRedactionInActivity:
         assert "sk-secret-key-12345" not in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_http_error_containing_secret_is_redacted(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_http_error_containing_secret_is_redacted(self, mocker: MockerFixture) -> None:
         """HTTP error containing credential value is redacted."""
         mocker.patch.dict(
             "os.environ",
@@ -2160,9 +2441,7 @@ class TestSecretRedactionInActivity:
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
                 post=mocker.AsyncMock(
-                    side_effect=RuntimeError(
-                        "Connection failed with key ant-key-secret-789"
-                    )
+                    side_effect=RuntimeError("Connection failed with key ant-key-secret-789")
                 ),
             ),
         )
@@ -2187,9 +2466,7 @@ class TestSecretRedactionInActivity:
         assert "ant-key-secret-789" not in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_error_without_secret_preserved(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_error_without_secret_preserved(self, mocker: MockerFixture) -> None:
         """Errors without secret values are re-raised with original message."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.side_effect = RuntimeError("Pod scheduling failed")
@@ -2211,9 +2488,7 @@ class TestSecretRedactionInActivity:
             )
 
     @pytest.mark.asyncio
-    async def test_mcp_header_secrets_redacted(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_mcp_header_secrets_redacted(self, mocker: MockerFixture) -> None:
         """MCP server header values are included in secret redaction."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.side_effect = RuntimeError(
@@ -2251,9 +2526,7 @@ class TestSecretRedactionInActivity:
         assert "mcp-token-secret-abc" not in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_success_false_error_redacted(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_success_false_error_redacted(self, mocker: MockerFixture) -> None:
         """Sandbox success=false error containing secret is redacted."""
         mocker.patch.dict(
             "os.environ",
@@ -2300,9 +2573,7 @@ class TestSecretRedactionInActivity:
         assert "***REDACTED***" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_no_secret_no_redaction_needed(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_secret_no_redaction_needed(self, mocker: MockerFixture) -> None:
         """When no secrets are tracked, errors pass through unchanged."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.side_effect = RuntimeError("Network unreachable")

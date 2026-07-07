@@ -62,6 +62,7 @@ class KubernetesSpawner(AgentSpawner):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
+        tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
         """Create a K8s Job for the agent.
 
@@ -261,6 +262,69 @@ class KubernetesSpawner(AgentSpawner):
                     )
                 )
 
+        # TLS cert injection — create K8s Secret with cert+key, mount as volume
+        container_port = 8080
+        service_port = 8080
+        tls_secret_name = None
+        if tls_certs is not None:
+            import base64
+
+            tls_secret_name = f"sandbox-tls-{agent_name}"
+            tls_secret = client.V1Secret(
+                metadata=client.V1ObjectMeta(name=tls_secret_name),
+                data={
+                    "tls.crt": base64.b64encode(tls_certs.server_cert_pem).decode(),
+                    "tls.key": base64.b64encode(tls_certs.server_key_pem).decode(),
+                },
+            )
+            try:
+                core.create_namespaced_secret(
+                    namespace=self._namespace, body=tls_secret
+                )
+            except Exception as exc:
+                if getattr(exc, "status", None) == 409:
+                    logger.info(
+                        "TLS Secret '%s' already exists (idempotent retry)",
+                        tls_secret_name,
+                    )
+                else:
+                    raise
+
+            volumes.append(
+                client.V1Volume(
+                    name="sandbox-tls",
+                    secret=client.V1SecretVolumeSource(
+                        secret_name=tls_secret_name,
+                    ),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name="sandbox-tls",
+                    mount_path="/var/run/secrets/sandbox-tls/",
+                    read_only=True,
+                )
+            )
+            env_list.append(
+                client.V1EnvVar(
+                    name="SANDBOX_TLS_CERT_PATH",
+                    value="/var/run/secrets/sandbox-tls/tls.crt",
+                )
+            )
+            env_list.append(
+                client.V1EnvVar(
+                    name="SANDBOX_TLS_KEY_PATH",
+                    value="/var/run/secrets/sandbox-tls/tls.key",
+                )
+            )
+            container_port = 8443
+            service_port = 8443
+            logger.info(
+                "TLS certs injected for '%s' via K8s Secret '%s'",
+                agent_name,
+                tls_secret_name,
+            )
+
         job = client.V1Job(
             metadata=client.V1ObjectMeta(
                 name=job_name,
@@ -285,7 +349,7 @@ class KubernetesSpawner(AgentSpawner):
                                 image_pull_policy="IfNotPresent",
                                 env=env_list,
                                 env_from=env_from,
-                                ports=[client.V1ContainerPort(container_port=8080)],
+                                ports=[client.V1ContainerPort(container_port=container_port)],
                                 resources=client.V1ResourceRequirements(
                                     requests={
                                         "cpu": cfg.cpu_request,
@@ -331,7 +395,7 @@ class KubernetesSpawner(AgentSpawner):
             metadata=client.V1ObjectMeta(name=job_name),
             spec=client.V1ServiceSpec(
                 selector={"app": agent_name},
-                ports=[client.V1ServicePort(port=8080, target_port=8080)],
+                ports=[client.V1ServicePort(port=service_port, target_port=container_port)],
             ),
         )
         try:
@@ -343,6 +407,8 @@ class KubernetesSpawner(AgentSpawner):
                 raise
 
         logger.info("Spawned K8s Job '%s' in namespace '%s'", job_name, self._namespace)
+        if tls_certs is not None:
+            return f"https://{job_name}.{self._namespace}.svc:8443"
         return f"http://{job_name}.{self._namespace}.svc:8080"
 
     async def _do_list_active(
@@ -395,6 +461,17 @@ class KubernetesSpawner(AgentSpawner):
                 propagation_policy="Background",
             )
             core.delete_namespaced_service(name=job_name, namespace=self._namespace)
+
+            # Best-effort cleanup of TLS Secret
+            tls_secret_name = f"sandbox-tls-{agent_name}"
+            try:
+                core.delete_namespaced_secret(
+                    name=tls_secret_name, namespace=self._namespace
+                )
+                logger.info("Deleted TLS Secret '%s'", tls_secret_name)
+            except Exception:
+                pass  # Secret may not exist if TLS was not enabled
+
             logger.info("Destroyed K8s Job '%s'", job_name)
         except Exception as exc:
             logger.warning("Failed to destroy K8s Job '%s': %s", agent_name, exc)

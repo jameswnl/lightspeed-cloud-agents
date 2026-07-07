@@ -113,6 +113,7 @@ class AgentSpawner(ABC):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
+        tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -130,6 +131,7 @@ class AgentSpawner(ABC):
                 for file-based credential providers (e.g. Vertex, Bedrock).
             mcp_secret_mounts: List of (secret_name, key, mount_path) tuples
                 for MCP server Secret-backed auth headers.
+            tls_certs: Optional ephemeral TLS certs to inject into sandbox.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -157,6 +159,7 @@ class AgentSpawner(ABC):
                 read_only=read_only,
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
+                tls_certs=tls_certs,
             )
             return endpoint
         except Exception:
@@ -178,6 +181,7 @@ class AgentSpawner(ABC):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
+        tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
         """Implementation-specific pod creation."""
 
@@ -224,6 +228,7 @@ class AgentSpawner(ABC):
         endpoint: str,
         timeout: float = 60.0,
         health_path: str = "/healthz",
+        ca_cert_pem: bytes | None = None,
     ) -> bool:
         """Wait for a spawned pod to be ready.
 
@@ -233,16 +238,26 @@ class AgentSpawner(ABC):
             endpoint: HTTP endpoint of the pod.
             timeout: Maximum wait time in seconds.
             health_path: Health check path (default /healthz).
+            ca_cert_pem: PEM-encoded CA certificate for TLS verification.
+                When provided, creates an SSL context for HTTPS endpoints
+                using self-signed certificates.
 
         Returns:
             True if the pod became ready, False if timed out.
         """
+        import ssl
         import time
+
+        client_kwargs: dict[str, object] = {"timeout": 5.0}
+        if ca_cert_pem is not None:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(cadata=ca_cert_pem.decode())
+            client_kwargs["verify"] = ssl_ctx
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
+                async with httpx.AsyncClient(**client_kwargs) as client:
                     resp = await client.get(f"{endpoint}{health_path}")
                     if resp.status_code == 200:
                         return True
