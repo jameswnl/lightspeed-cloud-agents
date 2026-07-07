@@ -42,6 +42,11 @@ WORKFLOW_YAML = (
     / "ephemeral-diagnose-workflow.yaml"
 )
 
+# Default LLM models — configurable via environment variables
+TEST_OPENAI_MODEL = os.environ.get("TEST_LLM_MODEL", "gpt-4o-mini")
+TEST_ANTHROPIC_MODEL = os.environ.get("TEST_LLM_MODEL", "claude-sonnet-4-20250514")
+TEST_GEMINI_MODEL = os.environ.get("TEST_LLM_MODEL", "gemini-2.0-flash")
+
 
 def _has_llm_key() -> bool:
     """Check if an LLM API key is available."""
@@ -57,24 +62,24 @@ def _get_provider_config() -> dict:
     if os.environ.get("OPENAI_API_KEY"):
         return {
             "name": "openai",
-            "model": "gpt-4o-mini",
+            "model": TEST_OPENAI_MODEL,
             "credentials_secret": "OPENAI_API_KEY",
         }
     if os.environ.get("ANTHROPIC_API_KEY"):
         return {
             "name": "claude",
-            "model": "claude-sonnet-4-20250514",
+            "model": TEST_ANTHROPIC_MODEL,
             "credentials_secret": "ANTHROPIC_API_KEY",
         }
     if os.environ.get("GOOGLE_API_KEY"):
         return {
             "name": "gemini",
-            "model": "gemini-2.0-flash",
+            "model": TEST_GEMINI_MODEL,
             "credentials_secret": "GOOGLE_API_KEY",
         }
     return {
         "name": "openai",
-        "model": "gpt-4o-mini",
+        "model": TEST_OPENAI_MODEL,
         "credentials_secret": "OPENAI_API_KEY",
     }
 

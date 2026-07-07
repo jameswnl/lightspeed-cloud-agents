@@ -117,12 +117,6 @@ def _truncate_heartbeat_payload(event: dict[str, Any]) -> dict[str, Any]:
     }
     if name := event.get("name"):
         summary["tool"] = name[:200]
-    # Ensure total size stays under limit
-    encoded = json.dumps(summary)
-    if len(encoded) > _MAX_HEARTBEAT_BYTES:
-        summary["event_type"] = summary["event_type"][:100]
-        if "tool" in summary:
-            summary["tool"] = summary["tool"][:100]
     return summary
 
 

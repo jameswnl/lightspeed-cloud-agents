@@ -243,13 +243,18 @@ class OpenShellSpawner(AgentSpawner):
             await self._client.delete_sandbox(sandbox_id)
             logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_id, agent_name)
         except Exception:
+            # Do NOT re-raise: base.destroy() always decrements _active_count
+            # in its finally block.  Re-raising would cause a double-decrement
+            # on retry.  Keep the _sandbox_ids entry so the sandbox is visible
+            # via list_active() for manual cleanup or a subsequent destroy().
             logger.warning(
-                "Failed to destroy sandbox '%s' (agent=%s)",
+                "Failed to destroy sandbox '%s' (agent=%s) — "
+                "sandbox retained in _sandbox_ids for manual cleanup",
                 sandbox_id,
                 agent_name,
                 exc_info=True,
             )
-            raise
+            return
         # Only remove tracking after successful delete
         self._sandbox_ids.pop(agent_name, None)
 

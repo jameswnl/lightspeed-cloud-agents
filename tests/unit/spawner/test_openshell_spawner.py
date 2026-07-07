@@ -369,7 +369,13 @@ class TestOpenShellSpawnerDestroyTracking:
     async def test_destroy_retains_tracking_on_delete_failure(
         self, mocker: MockerFixture
     ) -> None:
-        """If delete_sandbox fails, agent_name remains in _sandbox_ids for retry."""
+        """If delete_sandbox fails, agent_name remains in _sandbox_ids for retry.
+
+        _do_destroy must NOT re-raise: base.destroy() always decrements
+        _active_count in its finally block, so re-raising would cause a
+        double-decrement on retry.  Instead, _do_destroy logs the error
+        and returns, keeping the entry in _sandbox_ids for manual cleanup.
+        """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.AsyncMock()
@@ -377,8 +383,8 @@ class TestOpenShellSpawnerDestroyTracking:
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_ids["agent-1"] = "sb-123"
 
-        with pytest.raises(RuntimeError, match="API error"):
-            await spawner.destroy("agent-1")
+        # Should NOT raise — _do_destroy swallows the error
+        await spawner.destroy("agent-1")
 
         # Tracking should NOT be removed since delete failed
         assert "agent-1" in spawner._sandbox_ids
@@ -397,6 +403,36 @@ class TestOpenShellSpawnerDestroyTracking:
         await spawner.destroy("agent-1")
 
         assert "agent-1" not in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_destroy_failure_does_not_double_decrement_active_count(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Verify _active_count is decremented only once on delete failure.
+
+        base.destroy() always decrements in its finally block.  If _do_destroy
+        re-raised, calling destroy() twice would decrement twice — but spawn()
+        only incremented once, corrupting the counter.  This test proves
+        the fix: two destroy() calls on a failed sandbox decrement exactly
+        once (active_count goes to 0, never below).
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.delete_sandbox.side_effect = RuntimeError("API error")
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._active_count = 1  # simulate one spawned pod
+
+        # First destroy — decrements to 0, does not raise
+        await spawner.destroy("agent-1")
+        assert spawner.active_count == 0
+
+        # Second destroy (retry) — still sandbox in _sandbox_ids, decrements
+        # would go to max(0, -1) = 0 without the clamp, but the point is
+        # it should NOT have been at -1 before clamping.
+        await spawner.destroy("agent-1")
+        assert spawner.active_count == 0
 
 
 class TestOpenShellSpawnerStreamProgressBuffering:
