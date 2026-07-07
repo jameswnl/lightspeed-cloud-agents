@@ -1,7 +1,9 @@
 FROM docker.io/library/node:22-slim
 
-RUN npm install -g mcp-server-kubernetes supergateway
+RUN npm install -g mcp-server-kubernetes@3.9.3 supergateway@3.4.3
 
 EXPOSE 8082
+
+USER node
 
 CMD ["supergateway", "--stdio", "npx mcp-server-kubernetes", "--port", "8082", "--outputTransport", "streamableHttp", "--statefulMode"]

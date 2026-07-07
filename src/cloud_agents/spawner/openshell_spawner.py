@@ -17,9 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from cloud_agents.spawner.base import AgentSpawner
+
+if TYPE_CHECKING:
+    from cloud_agents.spawner.base import SpawnConfig
+    from cloud_agents.workflow.tls import EphemeralCerts
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,17 @@ class OpenShellSpawner(AgentSpawner):
         self._client = openshell_client
         self._sandbox_ids: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
+
+    def get_sandbox_id(self, agent_name: str) -> str | None:
+        """Return the sandbox ID for an agent, or None if not tracked.
+
+        Args:
+            agent_name: Name of the agent.
+
+        Returns:
+            Sandbox ID string, or None if no sandbox is tracked for this agent.
+        """
+        return self._sandbox_ids.get(agent_name)
 
     async def _do_spawn(
         self,
@@ -166,9 +181,19 @@ class OpenShellSpawner(AgentSpawner):
             Parsed JSONL event dicts from the agent event log.
         """
         tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
+        partial = ""
         try:
             async for chunk in self._client.exec_stream(sandbox_id, tail_cmd):
-                for line in chunk.split("\n"):
+                data = partial + chunk
+                # Split but keep partial last line if chunk doesn't end with newline
+                lines = data.split("\n")
+                # If data doesn't end with newline, last element is a partial line
+                if not data.endswith("\n"):
+                    partial = lines[-1]
+                    lines = lines[:-1]
+                else:
+                    partial = ""
+                for line in lines:
                     line = line.strip()
                     if not line:
                         continue
@@ -200,7 +225,7 @@ class OpenShellSpawner(AgentSpawner):
         Args:
             agent_name: Name of the agent to destroy.
         """
-        sandbox_id = self._sandbox_ids.pop(agent_name, None)
+        sandbox_id = self._sandbox_ids.get(agent_name)
         if not sandbox_id:
             logger.warning("No sandbox ID found for agent '%s'", agent_name)
             return
@@ -224,6 +249,9 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
                 exc_info=True,
             )
+            raise
+        # Only remove tracking after successful delete
+        self._sandbox_ids.pop(agent_name, None)
 
     async def _do_list_active(
         self,

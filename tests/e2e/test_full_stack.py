@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import uuid
 from datetime import timedelta
@@ -88,18 +89,32 @@ class TestFullStackWorkflow:
 
     @pytest.fixture(autouse=True)
     def _skip_if_no_podman(self) -> None:
-        """Skip if podman-py is not available."""
+        """Skip if podman-py is not available or daemon is not reachable."""
         pytest.importorskip("podman")
+        # Verify Podman daemon is actually reachable
+        result = subprocess.run(
+            ["podman", "info"],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            pytest.skip("Podman daemon is not reachable")
 
     @pytest.fixture
     def spawner(self):
         """Create a PodmanSpawner with test network."""
         from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
-        os.system(
-            "podman network exists cloud-agents 2>/dev/null "
-            "|| podman network create cloud-agents >/dev/null 2>&1"
+        result = subprocess.run(
+            ["podman", "network", "exists", "cloud-agents"],
+            capture_output=True,
         )
+        if result.returncode != 0:
+            subprocess.run(
+                ["podman", "network", "create", "cloud-agents"],
+                capture_output=True,
+                check=False,
+            )
         return PodmanSpawner(network="cloud-agents")
 
     async def test_single_step_real_llm(self, spawner) -> None:

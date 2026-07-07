@@ -59,6 +59,13 @@ class TestContainerfile:
         content = self.CONTAINERFILE.read_text()
         assert "8082" in content, "Must expose port 8082"
 
+    def test_containerfile_runs_as_non_root(self) -> None:
+        """Containerfile must set a non-root USER."""
+        content = self.CONTAINERFILE.read_text()
+        assert "USER" in content, (
+            "Containerfile must contain a USER directive to avoid running as root"
+        )
+
 
 class TestKubernetesManifests:
     """Validate the mcp-kubectl K8s manifests."""
@@ -224,6 +231,43 @@ class TestNetworkPolicy:
         assert 8082 in egress_ports, (
             f"sandbox-egress must allow port 8082 for mcp-kubectl. "
             f"Current ports: {egress_ports}"
+        )
+
+    def test_sandbox_egress_8082_scoped_to_mcp_kubectl(self, policies: list[dict]) -> None:
+        """Port 8082 egress rule must be scoped to mcp-kubectl pod via podSelector."""
+        sandbox_policy = None
+        for doc in policies:
+            if (
+                doc
+                and doc.get("kind") == "NetworkPolicy"
+                and doc["metadata"].get("name") == "sandbox-egress"
+            ):
+                sandbox_policy = doc
+                break
+
+        assert sandbox_policy is not None, "Missing sandbox-egress NetworkPolicy"
+
+        # Find the egress rule that includes port 8082
+        rule_8082 = None
+        for rule in sandbox_policy["spec"].get("egress", []):
+            for port_spec in rule.get("ports", []):
+                if port_spec.get("port") == 8082:
+                    rule_8082 = rule
+                    break
+
+        assert rule_8082 is not None, "No egress rule with port 8082 found"
+        assert "to" in rule_8082, (
+            "Port 8082 egress rule must have a 'to' clause to scope traffic"
+        )
+
+        # Verify the to clause targets mcp-kubectl pods
+        to_selectors = rule_8082["to"]
+        labels = [
+            selector.get("podSelector", {}).get("matchLabels", {})
+            for selector in to_selectors
+        ]
+        assert any(l.get("app") == "mcp-kubectl" for l in labels), (
+            "Port 8082 egress 'to' clause must target pods with app: mcp-kubectl"
         )
 
 

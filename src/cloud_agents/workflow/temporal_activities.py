@@ -111,16 +111,18 @@ def _truncate_heartbeat_payload(event: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Truncated summary dict suitable for activity.heartbeat().
     """
+    event_type = event.get("type", "unknown")
     summary: dict[str, Any] = {
-        "event_type": event.get("type", "unknown"),
+        "event_type": event_type[:200],
     }
     if name := event.get("name"):
-        summary["tool"] = name
+        summary["tool"] = name[:200]
     # Ensure total size stays under limit
     encoded = json.dumps(summary)
     if len(encoded) > _MAX_HEARTBEAT_BYTES:
-        # Extreme case: tool name itself is huge — truncate it
-        summary["tool"] = summary.get("tool", "")[:100]
+        summary["event_type"] = summary["event_type"][:100]
+        if "tool" in summary:
+            summary["tool"] = summary["tool"][:100]
     return summary
 
 
@@ -404,8 +406,7 @@ async def _run_sandbox_step_inner(
             from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
             if isinstance(spawner, OpenShellSpawner):
-                # TODO: Add public get_sandbox_id() method for production
-                sandbox_id = spawner._sandbox_ids.get(pod_name)
+                sandbox_id = spawner.get_sandbox_id(pod_name)
                 if sandbox_id:
                     progress_task = asyncio.create_task(
                         _progress_streaming_loop(spawner, sandbox_id)

@@ -280,6 +280,7 @@ const SCENARIOS = [
             { name: 'fix', type: 'agent', output_key: 'fix',
               prompt: 'Based on the diagnosis: {{ steps.diagnosis.output.summary }}. Root cause: {{ steps.diagnosis.output.root_cause }}. Use your kubectl tools to fix the identified issues. You may restart deployments or scale them as needed. Do NOT delete any resources.',
               condition: 'steps.approval.output.approved == true',
+              output_schema: { type: 'object', properties: { summary: {type:'string'}, actions_taken: {type:'array', items: {type:'string'}} }, required: ['summary'] },
               mcp_servers: ['kubectl'],
               permissions: { allowed_tools: ['mcp__kubectl__rollout_restart','mcp__kubectl__scale_deployment','mcp__kubectl__get_pods','mcp__kubectl__get_deployments'] },
               timeout_seconds: 180 },
