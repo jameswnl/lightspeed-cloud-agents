@@ -41,10 +41,10 @@ class TestContainerfile:
         assert "node" in content.lower(), "Should use a Node.js base image"
 
     def test_containerfile_installs_mcp_kubernetes(self) -> None:
-        """Containerfile must install @anthropic-ai/mcp-server-kubernetes."""
+        """Containerfile must install mcp-server-kubernetes."""
         content = self.CONTAINERFILE.read_text()
         assert "mcp-server-kubernetes" in content, (
-            "Must install @anthropic-ai/mcp-server-kubernetes npm package"
+            "Must install mcp-server-kubernetes npm package"
         )
 
     def test_containerfile_installs_supergateway(self) -> None:
