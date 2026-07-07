@@ -1,7 +1,7 @@
 FROM docker.io/library/node:22-slim
 
-RUN npm install -g @anthropic-ai/mcp-server-kubernetes supergateway
+RUN npm install -g mcp-server-kubernetes supergateway
 
 EXPOSE 8082
 
-CMD ["supergateway", "--stdio", "npx @anthropic-ai/mcp-server-kubernetes", "--port", "8082", "--outputTransport", "streamableHttp", "--statefulMode"]
+CMD ["supergateway", "--stdio", "npx mcp-server-kubernetes", "--port", "8082", "--outputTransport", "streamableHttp", "--statefulMode"]
