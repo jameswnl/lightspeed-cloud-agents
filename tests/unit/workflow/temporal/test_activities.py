@@ -3430,7 +3430,7 @@ class TestAgentEventLogEnvVar:
 
     @pytest.mark.asyncio
     async def test_agent_event_log_set_in_env_vars(self, mocker: MockerFixture) -> None:
-        """AGENT_EVENT_LOG is set to /var/log/agent-events.jsonl in sandbox env vars."""
+        """AGENT_EVENT_LOG is set to /tmp/agent-events.jsonl in sandbox env vars."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -3466,7 +3466,7 @@ class TestAgentEventLogEnvVar:
 
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
-        assert env_vars.get("AGENT_EVENT_LOG") == "/var/log/agent-events.jsonl"
+        assert env_vars.get("AGENT_EVENT_LOG") == "/tmp/agent-events.jsonl"
 
 
 class TestTruncateHeartbeatPayload:
