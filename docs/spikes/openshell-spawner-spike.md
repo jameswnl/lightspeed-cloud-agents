@@ -144,9 +144,12 @@ TOML config enables sandbox JWT minting (`[openshell.gateway.gateway_jwt]`) and 
 
 ### Blockers identified and worked around
 
-1. **Podman secret file mount broken**: The OpenShell Podman driver creates a Podman secret containing the sandbox JWT and specifies a file mount at `/etc/openshell/auth/sandbox.jwt`. On Podman 5.8.x, the mount is not applied to the container (the secret exists in `podman secret ls` but the `secrets` field in container inspect is `[]`). Likely a Podman REST API format mismatch between what the driver sends and what Podman expects.
-   - **Workaround**: Extract token from Podman secret, `podman cp` it into the stopped container, restart. Supervisor boots successfully on second start.
-   - **Upstream fix needed**: OpenShell driver should use `OPENSHELL_SANDBOX_TOKEN` env var injection or Podman `secret_env` field.
+1. **Podman secret file mount broken** ([issue #82](https://github.com/jameswnl/lightspeed-cloud-agents/issues/82)): The OpenShell Podman driver creates a Podman secret containing the sandbox JWT and specifies a file mount at `/etc/openshell/auth/sandbox.jwt`. On Podman 5.8.x, the mount is not applied to the container (the secret exists in `podman secret ls` but the `secrets` field in container inspect is `[]`).
+   - **Root cause**: The driver serializes the `secrets` field as `[{"source": "...", "target": "...", "uid": 0, "gid": 0, "mode": 256}]` (see `container.rs` `SecretMount` struct, line ~289). Podman 5.8.x does not apply this format via the REST API, though the CLI `--secret name,target=/path` works fine. This is a Podman REST API compatibility issue.
+   - **Env var injection not viable**: The driver explicitly strips `OPENSHELL_SANDBOX_TOKEN` from the container env (`container.rs` line 432) as a security measure. Even if we set it in the SandboxSpec environment, the driver removes it. The `secret_env` field exists in the `ContainerSpec` struct but is always empty.
+   - **Supervisor token acquisition order** (`grpc_client.rs`): The supervisor reads the JWT from (1) `OPENSHELL_SANDBOX_TOKEN` env var (test harness path), (2) `OPENSHELL_SANDBOX_TOKEN_FILE` file path (production path), (3) K8s ServiceAccount token exchange.
+   - **Automated workaround implemented**: `OpenShellSpawner._inject_podman_token()` — after `create_sandbox()`, extracts the JWT from the Podman secret via CLI, copies it into the stopped container, and restarts. Activated by passing `podman_cli="/usr/bin/podman"` to the spawner constructor. No-op on K8s path (where `podman_cli` is None).
+   - **Upstream fix still needed**: OpenShell driver should use `secret_env` (env-var-based Podman secret injection) or fix the `secrets` JSON format for Podman 5.8.x compatibility.
 
 2. **Sandbox images need iproute2 + sandbox user**: The supervisor creates network namespaces via `ip netns add` and drops privileges to a `sandbox` user. Alpine and Ubuntu minimal images fail. Fedora 40 + `dnf install iproute` + `useradd sandbox` works.
 
@@ -184,9 +187,9 @@ Client --[mTLS or OIDC]--> Gateway --[JWT in Podman Secret]--> Supervisor
 1. OpenShell team commits to stabilizing the Python SDK (especially `ExposeService` wrapper)
 2. Gateway resource overhead is acceptable in target deployment environments
 3. L7 network policy works with our sandbox image (needs integration test)
-4. **PARTIAL**: Standalone Podman gateway works on macOS with manual JWT config, but Podman secret file mount is broken in 5.8.x — requires manual `podman cp` token injection. Needs upstream Podman driver fix for automated flow.
-5. **PARTIAL**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication), but secret-based token delivery fails on Podman 5.8.x. Manual token injection workaround required; needs upstream Podman driver fix for automated flow.
-6. **NEW**: Podman secret file mount needs upstream fix or driver-level workaround for Podman 5.8.x
+4. **RESOLVED**: Standalone Podman gateway works on macOS with JWT config. Podman secret file mount is broken in 5.8.x but automated workaround implemented (issue #82): `OpenShellSpawner._inject_podman_token()` extracts JWT from Podman secret and copies it into the container.
+5. **RESOLVED**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication). Secret-based token delivery fails on Podman 5.8.x but automated workaround handles it transparently.
+6. **RESOLVED**: Podman secret file mount workaround implemented in `openshell_spawner.py`. Upstream OpenShell driver fix still desirable (use `secret_env` instead of `secrets`).
 7. **NEW**: Our sandbox image (`lightspeed-agentic-sandbox`) must include `iproute2` and a `sandbox` user
 
 **Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation. Even without L7 policy, the Landlock + seccomp sandbox is a security improvement.

@@ -124,6 +124,11 @@ client = SandboxClient(
 
 ## Step 5: Known Issue -- Podman Secret Mount
 
+> **Note**: This issue is handled automatically by `OpenShellSpawner` when
+> `podman_cli` is set (see [issue #82](https://github.com/jameswnl/lightspeed-cloud-agents/issues/82)).
+> The manual workaround below is only needed for standalone testing outside
+> the spawner.
+
 **Blocker**: The gateway mints a JWT at sandbox creation time and stores it in a Podman secret. The Podman driver's container spec includes a secret file mount at `/etc/openshell/auth/sandbox.jwt`, but the mount is **not applied** to the container on Podman 5.8.x. The secret exists (`podman secret ls`), the env var `OPENSHELL_SANDBOX_TOKEN_FILE` is set, but the file is missing inside the container.
 
 ### Workaround
