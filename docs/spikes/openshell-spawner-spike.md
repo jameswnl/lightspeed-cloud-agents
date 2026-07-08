@@ -184,8 +184,8 @@ Client --[mTLS or OIDC]--> Gateway --[JWT in Podman Secret]--> Supervisor
 1. OpenShell team commits to stabilizing the Python SDK (especially `ExposeService` wrapper)
 2. Gateway resource overhead is acceptable in target deployment environments
 3. L7 network policy works with our sandbox image (needs integration test)
-4. **RESOLVED**: Standalone Podman gateway works on macOS with manual JWT config + token injection workaround
-5. **RESOLVED**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, secret-based token delivery, supervisor authentication)
+4. **PARTIAL**: Standalone Podman gateway works on macOS with manual JWT config, but Podman secret file mount is broken in 5.8.x — requires manual `podman cp` token injection. Needs upstream Podman driver fix for automated flow.
+5. **PARTIAL**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication), but secret-based token delivery fails on Podman 5.8.x. Manual token injection workaround required; needs upstream Podman driver fix for automated flow.
 6. **NEW**: Podman secret file mount needs upstream fix or driver-level workaround for Podman 5.8.x
 7. **NEW**: Our sandbox image (`lightspeed-agentic-sandbox`) must include `iproute2` and a `sandbox` user
 
