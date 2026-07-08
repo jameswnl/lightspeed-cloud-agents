@@ -158,47 +158,61 @@ _EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
 async def _collect_transcript(
-    spawner: Any,
-    pod_name: str,
+    endpoint: str,
     step_name: str,
+    client_kwargs: dict[str, Any],
+    http_headers: dict[str, str],
 ) -> StepTranscript:
-    """Collect the agent event transcript from the sandbox container.
+    """Collect the agent event transcript via HTTP from the sandbox.
 
-    Reads /var/log/agent-events.jsonl from the sandbox via spawner.read_file(),
+    Fetches the JSONL event log from GET {endpoint}/v1/agent/events,
     parses each line into a TranscriptEvent, and returns a StepTranscript.
+
+    Uses the same httpx client configuration (auth headers, TLS context)
+    as the POST /v1/agent/run call for consistency across spawner backends.
 
     Truncation note: transcript data is truncated at two levels:
     - Producer (sandbox EventLogger) truncates tool input/output at 2000 chars
     - Consumer (StepTranscript.truncate()) further truncates at 256 bytes per
       payload field for Temporal memo storage
 
-    Graceful degradation: returns an empty transcript if the file doesn't
-    exist (Task 5 not shipped yet) or if any error occurs during collection.
+    Graceful degradation:
+    - HTTP 404 = empty transcript (no events recorded yet)
+    - Connection error = empty transcript with warning logged
+    - Any other error = empty transcript with warning logged
 
     Parameters:
-        spawner: Agent spawner instance (must have read_file method).
-        pod_name: Name of the sandbox pod/container.
+        endpoint: Base URL of the sandbox (e.g. http://pod-1:8080).
         step_name: Name of the workflow step (for the transcript).
+        client_kwargs: kwargs for httpx.AsyncClient (timeout, verify, etc.).
+        http_headers: HTTP headers for the request (e.g. Authorization).
 
     Returns:
         StepTranscript with parsed events, or empty transcript on failure.
     """
     empty = StepTranscript(step_name=step_name)
 
-    read_file = getattr(spawner, "read_file", None)
-    if read_file is None or not callable(read_file):
-        return empty
-
     try:
-        content = await read_file(pod_name, _EVENT_LOG_PATH)
-    except (FileNotFoundError, OSError):
-        logger.debug("Event log not found for step '%s' (graceful degradation)", step_name)
-        return empty
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            response = await client.get(
+                f"{endpoint}/v1/agent/events",
+                headers=http_headers or None,
+            )
+
+        if response.status_code == 404:
+            logger.debug("Event log not found for step '%s' (HTTP 404)", step_name)
+            return empty
+
+        response.raise_for_status()
+
+        content = response.text
     except Exception:
-        logger.warning("Failed to read event log for step '%s'", step_name, exc_info=True)
+        logger.warning(
+            "Failed to collect transcript for step '%s'", step_name, exc_info=True
+        )
         return empty
 
-    if not isinstance(content, str):
+    if not content or not content.strip():
         return empty
 
     events: list[TranscriptEvent] = []
@@ -272,7 +286,7 @@ async def _run_sandbox_step_inner(
         "LIGHTSPEED_MODEL": provider["model"],
         # Activate the JSONL file sink in the sandbox's EventLogger.
         # The sandbox writes structured events to this path; the consumer
-        # (_collect_transcript) reads it back after the step completes.
+        # (_collect_transcript) reads them via GET /v1/agent/events.
         "AGENT_EVENT_LOG": _EVENT_LOG_PATH,
     }
     if model_provider := provider.get("model_provider"):
@@ -520,7 +534,9 @@ async def _run_sandbox_step_inner(
             data = response.json()
 
             # Collect transcript from sandbox event log (before destroy)
-            transcript = await _collect_transcript(spawner, pod_name, step_name)
+            transcript = await _collect_transcript(
+                endpoint, step_name, client_kwargs, http_headers
+            )
 
             # Persist full untruncated transcript to PostgreSQL (best-effort).
             # Key by output_key (not step name) to match the read paths in
