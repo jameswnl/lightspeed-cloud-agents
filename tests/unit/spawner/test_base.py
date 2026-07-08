@@ -15,9 +15,7 @@ class MockSpawner(AgentSpawner):
         self.destroyed = []
         self.written_files: dict[str, str] = {}
 
-    async def _do_spawn(
-        self, agent_name, image, env, config=None, labels=None, **kwargs
-    ):
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
         self.spawned.append(agent_name)
         return f"http://{agent_name}:8080"
 
@@ -37,9 +35,7 @@ class MockSpawner(AgentSpawner):
 class FailingSpawner(AgentSpawner):
     """Spawner that always fails."""
 
-    async def _do_spawn(
-        self, agent_name, image, env, config=None, labels=None, **kwargs
-    ):
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
         raise RuntimeError("Spawn failed")
 
     async def _do_destroy(self, agent_name):
@@ -155,9 +151,7 @@ class TestWaitReadyTLS:
 
             assert result is True
             mock_ctx.assert_called_once()
-            mock_ssl_ctx.load_verify_locations.assert_called_once_with(
-                cadata=ca_pem.decode()
-            )
+            mock_ssl_ctx.load_verify_locations.assert_called_once_with(cadata=ca_pem.decode())
             init_call = mock_client_cls.call_args
             assert init_call[1].get("verify") is mock_ssl_ctx
 
@@ -235,9 +229,7 @@ class TestReadFile:
     @pytest.mark.asyncio
     async def test_read_file_is_abstract_method(self) -> None:
         """read_file on the ABC delegates to _do_read_file."""
-        spawner = ReadFileSpawner(
-            file_contents={"agent-1:/tmp/test.txt": "hello"}
-        )
+        spawner = ReadFileSpawner(file_contents={"agent-1:/tmp/test.txt": "hello"})
         result = await spawner.read_file("agent-1", "/tmp/test.txt")
         assert result == "hello"
 
@@ -270,9 +262,7 @@ class TestWriteFile:
     @pytest.mark.asyncio
     async def test_write_file_overwrites_existing(self) -> None:
         """write_file overwrites existing file content."""
-        spawner = ReadFileSpawner(
-            file_contents={"agent-1:/tmp/test.txt": "old content"}
-        )
+        spawner = ReadFileSpawner(file_contents={"agent-1:/tmp/test.txt": "old content"})
         await spawner.write_file("agent-1", "/tmp/test.txt", "new content")
         result = await spawner.read_file("agent-1", "/tmp/test.txt")
         assert result == "new content"
@@ -293,6 +283,59 @@ class TestWriteFile:
         assert spawner.written_files["agent-1:/var/run/messages.jsonl"] == content
 
 
+class FailingDestroySpawner(AgentSpawner):
+    """Spawner whose _do_destroy always raises."""
+
+    async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
+        return f"http://{agent_name}:8080"
+
+    async def _do_destroy(self, agent_name):
+        raise RuntimeError("Destroy failed")
+
+    async def _do_list_active(self, labels=None):
+        return []
+
+    async def _do_read_file(self, agent_name: str, path: str) -> str:
+        raise FileNotFoundError(f"No such file: {path}")
+
+    async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
+        pass
+
+
+class TestDestroyOnFailure:
+    """Tests that _active_count decrements correctly even when _do_destroy fails.
+
+    Design rationale: if _do_destroy raises, the spawner has given up on managing
+    that pod. Not decrementing would permanently reduce the concurrency cap.
+    The max(0, ...) guard prevents underflow.
+    """
+
+    @pytest.mark.asyncio
+    async def test_destroy_decrements_count_on_failure(self) -> None:
+        """Active count still decrements when _do_destroy raises."""
+        spawner = FailingDestroySpawner(max_pods=2)
+        await spawner.spawn("a1", "image:latest")
+        assert spawner.active_count == 1
+
+        with pytest.raises(RuntimeError, match="Destroy failed"):
+            await spawner.destroy("a1")
+
+        assert spawner.active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_destroy_failure_frees_concurrency_slot(self) -> None:
+        """A failed destroy frees the slot so new pods can be spawned."""
+        spawner = FailingDestroySpawner(max_pods=1)
+        await spawner.spawn("a1", "image:latest")
+
+        with pytest.raises(RuntimeError, match="Destroy failed"):
+            await spawner.destroy("a1")
+
+        # Slot should be free for a new spawn
+        endpoint = await spawner.spawn("a2", "image:latest")
+        assert endpoint == "http://a2:8080"
+
+
 class TestSpawnConfig:
     """Tests for SpawnConfig resource limit validation."""
 
@@ -308,8 +351,10 @@ class TestSpawnConfig:
     def test_valid_custom_values(self) -> None:
         """Valid custom values are accepted."""
         cfg = SpawnConfig(
-            cpu_request="200m", cpu_limit="2",
-            memory_request="512Mi", memory_limit="2Gi",
+            cpu_request="200m",
+            cpu_limit="2",
+            memory_request="512Mi",
+            memory_limit="2Gi",
             timeout_seconds=120,
         )
         assert cfg.cpu_limit == "2"
