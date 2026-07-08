@@ -3350,6 +3350,80 @@ class TestHTTPTranscriptCollection:
         assert transcript.events == []
         mock_logger.warning.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_http_transcript_500_returns_empty_not_bogus_events(
+        self, mocker: MockerFixture
+    ) -> None:
+        """HTTP 500 with JSON error body must return empty transcript, not bogus events."""
+        import httpx as _httpx
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = '{"detail": "internal error"}'
+        mock_response.raise_for_status.side_effect = _httpx.HTTPStatusError(
+            "Server Error",
+            request=mocker.MagicMock(),
+            response=mock_response,
+        )
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_logger = mocker.patch("cloud_agents.workflow.temporal_activities.logger")
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+        mock_logger.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_401_returns_empty_not_bogus_events(
+        self, mocker: MockerFixture
+    ) -> None:
+        """HTTP 401 with JSON error body must return empty transcript, not bogus events."""
+        import httpx as _httpx
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = '{"detail": "Not authenticated"}'
+        mock_response.raise_for_status.side_effect = _httpx.HTTPStatusError(
+            "Unauthorized",
+            request=mocker.MagicMock(),
+            response=mock_response,
+        )
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_logger = mocker.patch("cloud_agents.workflow.temporal_activities.logger")
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+        mock_logger.warning.assert_called()
+
 
 class TestAgentEventLogEnvVar:
     """Tests that AGENT_EVENT_LOG env var is set on sandbox containers."""

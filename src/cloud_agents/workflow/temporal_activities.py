@@ -203,6 +203,8 @@ async def _collect_transcript(
             logger.debug("Event log not found for step '%s' (HTTP 404)", step_name)
             return empty
 
+        response.raise_for_status()
+
         content = response.text
     except Exception:
         logger.warning(
