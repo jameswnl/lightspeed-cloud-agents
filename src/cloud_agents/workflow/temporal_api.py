@@ -172,6 +172,7 @@ def build_temporal_router(
     content_policy: Optional["ContentPolicy"] = None,
     cli_session_launcher: Optional[Any] = None,
     cli_session_spawner: Optional[Any] = None,
+    transcript_store: Optional[Any] = None,
 ) -> APIRouter:
     """Build FastAPI router with Temporal workflow endpoints.
 
@@ -189,6 +190,9 @@ def build_temporal_router(
             management. When provided, CLI session endpoints are registered.
         cli_session_spawner: Optional AgentSpawner for CLI session containers.
             Required when cli_session_launcher is provided.
+        transcript_store: Optional TranscriptStore for full transcript
+            persistence in PostgreSQL. When provided, transcript endpoints
+            read from Postgres first with fallback to workflow query state.
 
     Returns:
         APIRouter with workflow endpoints.
@@ -579,6 +583,24 @@ def build_temporal_router(
                     e.model_dump() if hasattr(e, "model_dump") else e
                 )
 
+        # Pull full transcripts from PostgreSQL when available
+        if transcript_store is not None:
+            try:
+                full_transcripts: dict[str, Any] = {}
+                for step_key in steps_snapshot:
+                    transcript = await transcript_store.get(workflow_id, step_key)
+                    if transcript is not None:
+                        full_transcripts[step_key] = transcript.model_dump()
+                if full_transcripts:
+                    step_transcripts = full_transcripts
+            except Exception:
+                logger.warning(
+                    "Failed to read transcripts from store for handoff %s, "
+                    "using workflow query state",
+                    workflow_id,
+                    exc_info=True,
+                )
+
         # Find the failed step
         failed_step = "unknown"
         for k, v in steps_snapshot.items():
@@ -634,15 +656,20 @@ def build_temporal_router(
     ) -> dict[str, Any]:
         """Get the full transcript for a specific workflow step.
 
-        Returns the agent's multi-turn execution transcript including
-        tool calls, thinking, results, errors, and cost/token metrics.
+        When a transcript store (PostgreSQL) is configured, returns the
+        full untruncated transcript. Falls back to workflow query state
+        (truncated) when Postgres is unavailable or has no data.
+
+        The response includes a ``truncated`` field: False when the full
+        transcript was returned from PostgreSQL, True when falling back
+        to the truncated workflow query state.
 
         Parameters:
             workflow_id: Workflow execution identifier.
             step_key: Step output_key to retrieve transcript for.
 
         Returns:
-            StepTranscript dict with events and metrics.
+            StepTranscript dict with events, metrics, and truncated flag.
 
         Raises:
             HTTPException: 403 if unauthorized, 404 if step not found.
@@ -656,6 +683,24 @@ def build_temporal_router(
         if not view_decision.allowed:
             raise HTTPException(status_code=403, detail=view_decision.reason)
 
+        # Try PostgreSQL first for full untruncated transcript
+        if transcript_store is not None:
+            try:
+                full_transcript = await transcript_store.get(workflow_id, step_key)
+                if full_transcript is not None:
+                    result = full_transcript.model_dump()
+                    result["truncated"] = False
+                    return result
+            except Exception:
+                logger.warning(
+                    "Failed to read transcript from store for %s/%s, "
+                    "falling back to workflow query state",
+                    workflow_id,
+                    step_key,
+                    exc_info=True,
+                )
+
+        # Fall back to workflow query state (truncated)
         handle = temporal_client.get_workflow_handle(workflow_id)
         try:
             transcripts = await handle.query(AgentWorkflow.get_step_transcripts)
@@ -671,7 +716,9 @@ def build_temporal_router(
                 detail=f"Transcript for step '{step_key}' not found in workflow '{workflow_id}'",
             )
 
-        return transcripts[step_key]
+        result = transcripts[step_key]
+        result["truncated"] = True
+        return result
 
     @router.get("/{workflow_id}/events")
     async def get_workflow_events(

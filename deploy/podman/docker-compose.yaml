@@ -64,6 +64,8 @@ services:
       CONTAINER_HOST: unix:///run/podman/podman.sock
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TRANSCRIPT_DB_URL: postgresql://temporal:temporal@temporal-db:5432/temporal
+      TRANSCRIPT_RETENTION_DAYS: ${TRANSCRIPT_RETENTION_DAYS:-30}
     volumes:
       - ${PODMAN_SOCK}:/run/podman/podman.sock
     ports:

@@ -45,6 +45,12 @@ spec:
             - name: TEMPORAL_TLS_CA_PATH
               value: {{ .Values.temporal.tls.caPath | quote }}
             {{- end }}
+            {{- if .Values.transcriptStore.dbUrl }}
+            - name: TRANSCRIPT_DB_URL
+              value: {{ .Values.transcriptStore.dbUrl | quote }}
+            - name: TRANSCRIPT_RETENTION_DAYS
+              value: {{ .Values.transcriptStore.retentionDays | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

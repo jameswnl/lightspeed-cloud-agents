@@ -1755,3 +1755,116 @@ class TestTranscriptEndpoint:
         )
         response = client.get("/v1/workflows/wf-missing/steps/r1/transcript")
         assert response.status_code == 404
+
+
+class TestTranscriptWithPostgres:
+    """Tests for transcript endpoint with PostgreSQL store integration."""
+
+    @pytest.fixture
+    def mock_store(self, mocker: MockerFixture) -> Any:
+        """Create a mock TranscriptStore."""
+        return mocker.AsyncMock()
+
+    @pytest.fixture
+    def app_with_store(self, mock_client: Any, mock_store: Any) -> FastAPI:
+        """Create a test FastAPI app with transcript store."""
+        app = FastAPI()
+        router = build_temporal_router(mock_client, transcript_store=mock_store)
+        app.include_router(router)
+        return app
+
+    @pytest.fixture
+    def client_with_store(self, app_with_store: FastAPI) -> TestClient:
+        """Create a test client with transcript store."""
+        return TestClient(app_with_store)
+
+    def _mock_workflow_query(self, mock_client: Any, mocker: MockerFixture) -> None:
+        """Set up workflow query to return truncated transcripts."""
+        handle = mock_client.get_workflow_handle.return_value
+
+        async def mock_query(query_fn):
+            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            if query_fn == AgentWorkflow.get_step_transcripts:
+                return {
+                    "r1": {
+                        "step_name": "diagnose",
+                        "events": [
+                            {"ts": "t1", "type": "tool_call", "data": {"name": "kubectl"}},
+                        ],
+                        "cost_usd": 0.01,
+                        "input_tokens": 50,
+                        "output_tokens": 25,
+                        "duration_ms": 500,
+                    },
+                }
+            if query_fn == AgentWorkflow.get_authz_context:
+                return None
+            return mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
+
+        handle.query = mocker.AsyncMock(side_effect=mock_query)
+
+    def test_reads_from_postgres_first(
+        self, client_with_store: TestClient, mock_client: Any,
+        mock_store: Any, mocker: MockerFixture,
+    ) -> None:
+        """Transcript endpoint reads from Postgres when available."""
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        full_transcript = StepTranscript(
+            step_name="diagnose",
+            events=[
+                TranscriptEvent(ts="t1", type="tool_call", data={"name": "kubectl"}),
+                TranscriptEvent(ts="t2", type="result", data={"output": "full data"}),
+            ],
+            cost_usd=0.05, input_tokens=1000, output_tokens=500, duration_ms=5000,
+        )
+        mock_store.get = mocker.AsyncMock(return_value=full_transcript)
+        self._mock_workflow_query(mock_client, mocker)
+        response = client_with_store.get("/v1/workflows/wf-test-1/steps/r1/transcript")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["truncated"] is False
+        assert len(data["events"]) == 2
+
+    def test_falls_back_to_workflow_query_when_postgres_empty(
+        self, client_with_store: TestClient, mock_client: Any,
+        mock_store: Any, mocker: MockerFixture,
+    ) -> None:
+        """Falls back to workflow query state when Postgres has no data."""
+        mock_store.get = mocker.AsyncMock(return_value=None)
+        self._mock_workflow_query(mock_client, mocker)
+        response = client_with_store.get("/v1/workflows/wf-test-1/steps/r1/transcript")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["truncated"] is True
+
+    def test_falls_back_to_workflow_query_when_postgres_fails(
+        self, client_with_store: TestClient, mock_client: Any,
+        mock_store: Any, mocker: MockerFixture,
+    ) -> None:
+        """Falls back to workflow query state when Postgres is unreachable."""
+        mock_store.get = mocker.AsyncMock(side_effect=RuntimeError("connection refused"))
+        self._mock_workflow_query(mock_client, mocker)
+        response = client_with_store.get("/v1/workflows/wf-test-1/steps/r1/transcript")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["truncated"] is True
+
+    def test_no_store_marks_truncated(
+        self, client: TestClient, mock_client: Any, mocker: MockerFixture,
+    ) -> None:
+        """Without transcript store, response has truncated=True."""
+        handle = mock_client.get_workflow_handle.return_value
+
+        async def mock_query(query_fn):
+            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            if query_fn == AgentWorkflow.get_step_transcripts:
+                return {"r1": {"step_name": "diagnose", "events": []}}
+            if query_fn == AgentWorkflow.get_authz_context:
+                return None
+            return mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
+
+        handle.query = mocker.AsyncMock(side_effect=mock_query)
+        response = client.get("/v1/workflows/wf-test-1/steps/r1/transcript")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["truncated"] is True

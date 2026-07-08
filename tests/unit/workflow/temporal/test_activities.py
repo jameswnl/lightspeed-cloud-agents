@@ -3180,3 +3180,247 @@ class TestTruncateHeartbeatPayload:
         result = _truncate_heartbeat_payload(event)
         assert len(result["event_type"]) == 200
         assert len(result["tool"]) == 200
+
+
+class TestTranscriptPersistence:
+    """Tests for full transcript persistence in PostgreSQL via activity."""
+
+    def _make_input(self) -> dict:
+        """Build a standard sandbox step input dict."""
+        return {
+            "step": {"name": "diag", "prompt": "diagnose", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4",
+                "credentials_secret": "k",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    def _mock_sandbox_success(self, mocker: MockerFixture) -> Any:
+        """Set up spawner + httpx mocks for success."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        return mock_spawner
+
+    @pytest.mark.asyncio
+    async def test_full_transcript_saved_to_store(self, mocker: MockerFixture) -> None:
+        """Full untruncated transcript is saved to transcript store."""
+        mock_spawner = self._mock_sandbox_success(mocker)
+
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        events = [
+            TranscriptEvent(
+                ts="2026-01-01T00:00:00Z",
+                type="tool_call",
+                data={"name": "kubectl_get", "input": "get pods"},
+            ),
+        ]
+        full_transcript = StepTranscript(
+            step_name="diag",
+            events=events,
+            cost_usd=0.05,
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=5000,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities._collect_transcript",
+            return_value=full_transcript,
+        )
+
+        mock_store = mocker.AsyncMock()
+
+        result = await run_sandbox_step(
+            self._make_input(),
+            spawner=mock_spawner,
+            transcript_store=mock_store,
+        )
+
+        mock_store.save.assert_called_once_with("wf-1", "r1", full_transcript)
+        assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_transcript_saved_with_output_key_not_step_name(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Transcript store uses output_key (not step name) for consistent key space.
+
+        Regression: when name != output_key, saving with step name causes
+        transcripts to be unretrievable via the API and escalation paths
+        which look up by output_key.
+        """
+        mock_spawner = self._mock_sandbox_success(mocker)
+
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        events = [
+            TranscriptEvent(
+                ts="2026-01-01T00:00:00Z",
+                type="tool_call",
+                data={"name": "analyze_logs", "input": "check errors"},
+            ),
+        ]
+        full_transcript = StepTranscript(
+            step_name="analyze",
+            events=events,
+            cost_usd=0.03,
+            input_tokens=80,
+            output_tokens=40,
+            duration_ms=3000,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities._collect_transcript",
+            return_value=full_transcript,
+        )
+
+        mock_store = mocker.AsyncMock()
+
+        # Step name is "analyze" but output_key is "analysis" — they differ
+        result = await run_sandbox_step(
+            {
+                "step": {
+                    "name": "analyze",
+                    "prompt": "analyze the logs",
+                    "output_key": "analysis",
+                },
+                "workflow_id": "wf-key-test",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+            transcript_store=mock_store,
+        )
+
+        assert result["status"] == "completed"
+        # Must save with output_key ("analysis"), NOT step name ("analyze")
+        mock_store.save.assert_called_once_with(
+            "wf-key-test", "analysis", full_transcript
+        )
+
+    @pytest.mark.asyncio
+    async def test_transcript_store_failure_non_fatal(self, mocker: MockerFixture) -> None:
+        """Transcript store save failure does not fail the activity."""
+        mock_spawner = self._mock_sandbox_success(mocker)
+
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        full_transcript = StepTranscript(
+            step_name="diag",
+            events=[
+                TranscriptEvent(
+                    ts="2026-01-01T00:00:00Z",
+                    type="tool_call",
+                    data={"name": "kubectl_get"},
+                ),
+            ],
+        )
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities._collect_transcript",
+            return_value=full_transcript,
+        )
+
+        mock_store = mocker.AsyncMock()
+        mock_store.save.side_effect = RuntimeError("DB connection lost")
+
+        result = await run_sandbox_step(
+            self._make_input(),
+            spawner=mock_spawner,
+            transcript_store=mock_store,
+        )
+
+        assert result["status"] == "completed"
+        mock_store.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_store_still_works(self, mocker: MockerFixture) -> None:
+        """Activity works normally when no transcript store is provided."""
+        mock_spawner = self._mock_sandbox_success(mocker)
+
+        result = await run_sandbox_step(
+            self._make_input(),
+            spawner=mock_spawner,
+            transcript_store=None,
+        )
+
+        assert result["status"] == "completed"
+        assert "transcript" in result
+
+    @pytest.mark.asyncio
+    async def test_failed_step_also_saves_transcript(self, mocker: MockerFixture) -> None:
+        """Transcript is saved even when the step fails."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": False,
+            "error": "agent failed",
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        full_transcript = StepTranscript(
+            step_name="diag",
+            events=[
+                TranscriptEvent(
+                    ts="2026-01-01T00:00:00Z",
+                    type="error",
+                    data={"message": "agent failed"},
+                ),
+            ],
+        )
+        mocker.patch(
+            "cloud_agents.workflow.temporal_activities._collect_transcript",
+            return_value=full_transcript,
+        )
+
+        mock_store = mocker.AsyncMock()
+
+        result = await run_sandbox_step(
+            self._make_input(),
+            spawner=mock_spawner,
+            transcript_store=mock_store,
+        )
+
+        assert result["status"] == "failed"
+        mock_store.save.assert_called_once_with("wf-1", "r1", full_transcript)

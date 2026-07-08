@@ -18,6 +18,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
+from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.definition_store import DefinitionStore
 from cloud_agents.workflow.structured_logging import configure_logging
 from cloud_agents.workflow.temporal_api import build_temporal_router
@@ -200,13 +201,32 @@ def build_temporal_app(
     init_tracing("workflow-runner")
 
     spawner = _create_spawner()
-    worker_config = build_worker_config(spawner=spawner)
+    transcript_store = TranscriptStore.from_env()
+    if transcript_store is not None:
+        logger.info("Transcript store configured (TRANSCRIPT_DB_URL set)")
+    else:
+        logger.info("Transcript store disabled (TRANSCRIPT_DB_URL not set)")
+    worker_config = build_worker_config(
+        spawner=spawner, transcript_store=transcript_store
+    )
     temporal_client_holder: dict[str, Client] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
         await reconcile_orphaned_sandboxes(spawner)
+
+        # Connect transcript store (best-effort: failures are non-fatal)
+        if transcript_store is not None:
+            try:
+                await transcript_store.connect()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to connect transcript store: %s. "
+                    "Transcripts will fall back to workflow query state.",
+                    exc,
+                )
+
         try:
             tls_config = _build_tls_config()
             connect_kwargs: dict = {
@@ -246,6 +266,13 @@ def build_temporal_app(
                 exc,
             )
             yield
+        finally:
+            # Close transcript store on shutdown
+            if transcript_store is not None:
+                try:
+                    await transcript_store.close()
+                except Exception:
+                    logger.debug("Error closing transcript store", exc_info=True)
 
     app = FastAPI(title="Cloud Agents Workflow Runner (Temporal)", lifespan=lifespan)
 
@@ -284,6 +311,7 @@ def build_temporal_app(
         auth_dependency=auth_dep,
         definition_store=definition_store,
         content_policy=content_policy,
+        transcript_store=transcript_store,
     )
     app.include_router(router)
 

@@ -51,6 +51,13 @@ rbac:
 prometheusRule:
   enabled: false
 
+transcriptStore:
+  # PostgreSQL URL for full transcript persistence.
+  # When empty, transcripts are only stored in Temporal workflow query state (truncated).
+  # Default: reuse Temporal's PostgreSQL instance.
+  dbUrl: ""
+  retentionDays: 30
+
 podDisruptionBudget:
   enabled: true
   minAvailable: 1

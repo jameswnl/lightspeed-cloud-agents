@@ -561,3 +561,76 @@ class TestCLIHandoffAutoLaunch:
 
         sessions = launcher.list_sessions()
         assert len(sessions) == 1
+
+
+class TestEscalationWithTranscriptStore:
+    """Tests for escalation activity with PostgreSQL transcript store."""
+
+    @pytest.mark.asyncio
+    async def test_escalation_activity_pulls_full_transcripts(self) -> None:
+        """build_escalation_activity pulls full transcripts from store."""
+        from cloud_agents.workflow.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+
+        mock_store = AsyncMock()
+        full_transcript = StepTranscript(
+            step_name="fix-hosts",
+            events=[
+                TranscriptEvent(
+                    ts="2026-01-01T00:00:00Z",
+                    type="tool_call",
+                    data={"name": "kubectl", "input": "get pods --full-output"},
+                ),
+            ],
+            cost_usd=0.10,
+            input_tokens=2000,
+            output_tokens=1000,
+            duration_ms=10000,
+        )
+        mock_store.get = AsyncMock(return_value=full_transcript)
+
+        with patch(
+            "cloud_agents.workflow.temporal_activities.LogPackager",
+        ) as mock_packager_cls:
+            mock_packager = AsyncMock()
+            mock_packager_cls.return_value = mock_packager
+
+            await build_escalation_activity(
+                {"r1": {"status": "failed", "error": "timeout"}},
+                workflow_name="test-wf",
+                workflow_id="wf-123",
+                transcript_store=mock_store,
+            )
+
+            pkg = mock_packager.package.call_args[0][0]
+            assert pkg.step_transcripts is not None
+            assert "r1" in pkg.step_transcripts
+
+    @pytest.mark.asyncio
+    async def test_escalation_activity_store_failure_non_fatal(self) -> None:
+        """Transcript store failure in escalation is non-fatal."""
+        from cloud_agents.workflow.temporal_activities import build_escalation_activity
+
+        mock_store = AsyncMock()
+        mock_store.get = AsyncMock(side_effect=RuntimeError("DB down"))
+
+        result = await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            workflow_name="test-wf",
+            transcript_store=mock_store,
+        )
+
+        assert result["status"] == "escalated"
+
+    @pytest.mark.asyncio
+    async def test_escalation_activity_no_store_still_works(self) -> None:
+        """Escalation works normally without transcript store."""
+        from cloud_agents.workflow.temporal_activities import build_escalation_activity
+
+        result = await build_escalation_activity(
+            {"r1": {"status": "failed", "error": "timeout"}},
+            workflow_name="test-wf",
+            transcript_store=None,
+        )
+
+        assert result["status"] == "escalated"
