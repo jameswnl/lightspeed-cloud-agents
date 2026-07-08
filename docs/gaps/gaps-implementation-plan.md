@@ -12,7 +12,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 | **Phase 2** | Production hardening | T7 ✓, T17 ✓, T19 ✓, T21 ✓, T24 ✓ |
 | **Phase 3a** | Security quick wins | T37 ✓, T38 ✓, T39 ✓, T42 ✓, T43 ✓, T48 ✓ |
 | **Phase 3b** | Triggers + hardening | T2 ✓, T13 ✓, T14 ✓, T23 ✓, T49 ✓, T50 ✓ |
-| **Phase 4** | Strategic (needs design first) | T8, T11, T15 ✓*, T34 ✓, T36, T51 ✓, T52 ✓, T53, T54 ✓, T55 |
+| **Phase 4** | Strategic (needs design first) | T8, T11, T15 ✓*, T34 ✓, T36, T51 ✓, T52 ✓, T53, T54 ✓, T55 ✓, T57 |
 | **Phase 5** | Backlog | T5 ✓, T9, T12, T16, T18 ✓, T20 ✓, T25-T27, T29-T33, T35, T40, T41, T56 |
 
 *T15 Phase 1+2 done, follow-ups T55 (timeout) and T56 (bi-directional) pending
@@ -840,3 +840,23 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 4. Unit test verifying the env var is set correctly
 
 **Effort**: 15 minutes
+
+### T57: Full transcript persistence in PostgreSQL ([issue #76](https://github.com/jameswnl/lightspeed-cloud-agents/issues/76)) [Phase 4]
+
+**Status**: Open
+
+**Problem**: Step transcripts are truncated aggressively for Temporal memo storage (256 bytes per field, max 50 events). The full JSONL from the sandbox is discarded after truncation. Once the container is destroyed, the full transcript (tool calls, thinking, results) is lost permanently.
+
+**What to build**:
+1. Sandbox `GET /v1/agent/events` HTTP endpoint — serves the JSONL event log via the existing authenticated/encrypted HTTP contract (replaces `spawner.read_file()` which doesn't work from containerized runners)
+2. `TranscriptStore` class using `asyncpg` — async PostgreSQL storage for full untruncated transcripts (reuses Temporal's Postgres instance)
+3. Wire into activity: after collecting transcript, store full version in Postgres + truncated version in Temporal memo
+4. Update `GET /v1/workflows/{id}/steps/{step}/transcript` to read from Postgres (full detail) with Temporal memo fallback
+5. Update escalation handoff to include full transcripts from Postgres in context markdown
+
+**Architecture**:
+- Temporal memo: truncated cache for quick workflow queries
+- PostgreSQL: full untruncated transcripts for detailed inspection and handoff
+- HTTP endpoint: replaces spawner exec-based file reading (works in both Podman and K8s containerized deployments)
+
+**Effort**: 4-5 days
