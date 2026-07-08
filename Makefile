@@ -11,7 +11,7 @@ export PODMAN_SOCK ?= /run/user/$(shell id -u)/podman/podman.sock
 
 # ── Build ──────────────────────────────────────────────
 
-.PHONY: build build-demo build-runner build-sandbox build-mcp build-mcp-kubectl
+.PHONY: build build-demo build-runner build-sandbox build-mcp build-mcp-kubectl build-mcp-rhdh-mock
 
 build: build-runner build-sandbox  ## Build core images (runner + sandbox)
 
@@ -33,6 +33,9 @@ build-mcp:  ## Build MCP filesystem server image (demo only)
 
 build-mcp-kubectl:  ## Build MCP kubectl server image (K8s cluster access)
 	podman build -f deploy/mcp-kubectl/Containerfile -t mcp-kubectl:latest .
+
+build-mcp-rhdh-mock:  ## Build mock RHDH catalog MCP server (CVE demo)
+	podman build -f deploy/mcp-rhdh-mock/Containerfile -t mcp-rhdh-mock:latest deploy/mcp-rhdh-mock
 
 # ── Helpers ────────────────────────────────────────────
 
@@ -94,6 +97,23 @@ demo-restart: ensure-podman  ## Restart demo stack
 dashboard:  ## Serve demo dashboard at http://localhost:3000
 	@echo "Dashboard: http://localhost:3000/demo-dashboard.html"
 	cd docs && python3 -m http.server 3000
+
+CVE_DEMO_COMPOSE_FILE = deploy/podman/docker-compose.cve-demo.yaml
+
+# ── CVE Demo (core + mock RHDH catalog) ───────────────
+
+.PHONY: cve-demo-up cve-demo-down
+
+cve-demo-up: ensure-podman build build-mcp-rhdh-mock  ## Start CVE demo stack (core + mock RHDH catalog MCP)
+	podman compose -f $(COMPOSE_FILE) -f $(CVE_DEMO_COMPOSE_FILE) up -d
+	@echo ""
+	@echo "Services:"
+	@echo "  Workflow Runner API:   http://localhost:8080"
+	@echo "  Temporal UI:           http://localhost:8233"
+	@echo "  MCP RHDH Catalog Mock: http://localhost:8083"
+
+cve-demo-down:  ## Stop CVE demo stack
+	podman compose -f $(COMPOSE_FILE) -f $(CVE_DEMO_COMPOSE_FILE) down
 
 # ── Kind (Kubernetes) ──────────────────────────────────
 
@@ -171,6 +191,7 @@ clean-sandboxes:  ## Remove leftover sandbox containers
 
 clean:  ## Stop everything and clean up
 	-podman compose -f $(COMPOSE_FILE) -f $(DEMO_COMPOSE_FILE) down 2>/dev/null
+	-podman compose -f $(COMPOSE_FILE) -f $(CVE_DEMO_COMPOSE_FILE) down 2>/dev/null
 	-podman compose -f $(COMPOSE_FILE) down 2>/dev/null
 	@$(MAKE) clean-sandboxes
 

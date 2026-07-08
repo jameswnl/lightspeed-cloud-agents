@@ -1,0 +1,60 @@
+{
+  "components": [
+    {
+      "name": "payment-gateway",
+      "repo": "https://github.com/acme/payment-gateway",
+      "owner": "team-payments",
+      "tech_stack": "Java/Spring Boot",
+      "dependencies": [
+        {"name": "spring-boot", "version": "3.1.2", "cve": "CVE-2024-22234", "patched": "3.1.5"},
+        {"name": "log4j-core", "version": "2.17.0", "cve": null, "patched": null},
+        {"name": "jackson-databind", "version": "2.15.2", "cve": null, "patched": null}
+      ]
+    },
+    {
+      "name": "user-service",
+      "repo": "https://github.com/acme/user-service",
+      "owner": "team-identity",
+      "tech_stack": "Python/FastAPI",
+      "dependencies": [
+        {"name": "fastapi", "version": "0.100.0", "cve": null, "patched": null},
+        {"name": "pydantic", "version": "2.0.0", "cve": "CVE-2024-33663", "patched": "2.0.3"},
+        {"name": "uvicorn", "version": "0.23.0", "cve": null, "patched": null}
+      ]
+    },
+    {
+      "name": "notification-service",
+      "repo": "https://github.com/acme/notification-service",
+      "owner": "team-platform",
+      "tech_stack": "Node.js/Express",
+      "dependencies": [
+        {"name": "express", "version": "4.18.2", "cve": null, "patched": null},
+        {"name": "nodemailer", "version": "6.9.4", "cve": null, "patched": null}
+      ]
+    },
+    {
+      "name": "inventory-api",
+      "repo": "https://github.com/acme/inventory-api",
+      "owner": "team-commerce",
+      "tech_stack": "Go",
+      "dependencies": [
+        {"name": "gin", "version": "1.9.1", "cve": null, "patched": null},
+        {"name": "gorm", "version": "1.25.2", "cve": null, "patched": null}
+      ]
+    }
+  ],
+  "cve_database": {
+    "CVE-2024-22234": {
+      "description": "Spring Framework server-side request forgery (SSRF) vulnerability. When a Spring MVC application uses RequestMapping with certain conditions, an attacker can perform SSRF attacks.",
+      "severity": "high",
+      "affected_versions": ">=3.0.0,<=3.1.4",
+      "patched_version": "3.1.5"
+    },
+    "CVE-2024-33663": {
+      "description": "Pydantic URL parsing vulnerability. Pydantic before 2.0.3 allows denial of service via crafted URL values when using AnyUrl or HttpUrl types.",
+      "severity": "medium",
+      "affected_versions": ">=2.0.0,<=2.0.2",
+      "patched_version": "2.0.3"
+    }
+  }
+}
