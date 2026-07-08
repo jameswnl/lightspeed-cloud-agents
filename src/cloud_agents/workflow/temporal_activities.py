@@ -225,6 +225,7 @@ async def _collect_transcript(
 async def run_sandbox_step(
     input: dict[str, Any],
     spawner: Optional[Any] = None,
+    transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Spawn a sandbox pod, call POST /v1/agent/run, return result."""
     step = input["step"]
@@ -234,12 +235,13 @@ async def run_sandbox_step(
         "sandbox.step",
         attributes={"step.name": step_name, "workflow.id": workflow_id},
     ):
-        return await _run_sandbox_step_inner(input, spawner)
+        return await _run_sandbox_step_inner(input, spawner, transcript_store)
 
 
 async def _run_sandbox_step_inner(
     input: dict[str, Any],
     spawner: Optional[Any] = None,
+    transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Inner implementation of run_sandbox_step."""
     step = input["step"]
@@ -519,6 +521,21 @@ async def _run_sandbox_step_inner(
 
             # Collect transcript from sandbox event log (before destroy)
             transcript = await _collect_transcript(spawner, pod_name, step_name)
+
+            # Persist full untruncated transcript to PostgreSQL (best-effort).
+            # Key by output_key (not step name) to match the read paths in
+            # the transcript API and escalation, which look up by output_key.
+            output_key = step.get("output_key", step_name)
+            if transcript_store is not None and transcript.events:
+                try:
+                    await transcript_store.save(workflow_id, output_key, transcript)
+                except Exception:
+                    logger.warning(
+                        "Failed to save transcript to store for step '%s'",
+                        output_key,
+                        exc_info=True,
+                    )
+
             transcript_dict = transcript.model_dump()
 
             if not data.get("success", False):
@@ -659,6 +676,7 @@ async def build_escalation_activity(
     events: list[dict[str, Any]] | None = None,
     provider_name: str | None = None,
     workflow_id: str | None = None,
+    transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Package workflow context for escalation handoff."""
     with _tracer.start_as_current_span(
@@ -674,6 +692,7 @@ async def build_escalation_activity(
             events=events,
             provider_name=provider_name,
             workflow_id=workflow_id,
+            transcript_store=transcript_store,
         )
 
 
@@ -686,6 +705,7 @@ async def _build_escalation_inner(
     events: list[dict[str, Any]] | None = None,
     provider_name: str | None = None,
     workflow_id: str | None = None,
+    transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Inner implementation of build_escalation_activity."""
     failed_steps = [
@@ -734,6 +754,26 @@ async def _build_escalation_inner(
 
         from cloud_agents.workflow.escalation import EscalationPackage
 
+        # Pull full transcripts from PostgreSQL for escalation context
+        step_transcripts: dict[str, Any] | None = None
+        if transcript_store is not None:
+            step_transcripts = {}
+            for step_key in steps:
+                try:
+                    transcript = await transcript_store.get(
+                        workflow_id or workflow_name, step_key
+                    )
+                    if transcript is not None:
+                        step_transcripts[step_key] = transcript.model_dump()
+                except Exception:
+                    logger.debug(
+                        "Failed to load transcript for escalation step '%s'",
+                        step_key,
+                        exc_info=True,
+                    )
+            if not step_transcripts:
+                step_transcripts = None
+
         pkg = EscalationPackage(
             workflow_name=workflow_name,
             step_name=failed_steps[0]["step"] if failed_steps else "unknown",
@@ -745,6 +785,7 @@ async def _build_escalation_inner(
             events=events,
             provider_name=provider_name,
             workflow_id=workflow_id,
+            step_transcripts=step_transcripts,
         )
         await packager.package(pkg)
         emit_audit(
