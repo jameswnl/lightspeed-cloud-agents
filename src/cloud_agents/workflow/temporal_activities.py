@@ -154,7 +154,7 @@ async def _progress_streaming_loop(
 
 
 # Path where the sandbox agent writes structured JSONL events
-_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
+_EVENT_LOG_PATH = "/tmp/agent-events.jsonl"
 
 
 async def _collect_transcript(
