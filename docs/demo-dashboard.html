@@ -30,10 +30,12 @@ a { color: #58a6ff; text-decoration: none; }
 .scenario-card.s2 { border-left-color: #a371f7; }
 .scenario-card.s3 { border-left-color: #d29922; }
 .scenario-card.s4 { border-left-color: #f85149; }
+.scenario-card.s5 { border-left-color: #79c0ff; }
 .scenario-card.selected.s1 { border-color: #3fb950; }
 .scenario-card.selected.s2 { border-color: #a371f7; }
 .scenario-card.selected.s3 { border-color: #d29922; }
 .scenario-card.selected.s4 { border-color: #f85149; }
+.scenario-card.selected.s5 { border-color: #79c0ff; }
 .sc-icon { font-size: 24px; margin-bottom: 8px; }
 .sc-title { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 4px; }
 .sc-sub { font-size: 11px; color: #8b949e; line-height: 1.4; }
@@ -390,6 +392,43 @@ const SCENARIOS = [
     runRequest: {
       provider: { name: 'openai', model: 'gpt-4o', credentials_secret: 'OPENAI_API_KEY' },
       sandbox_image: 'lightspeed-agentic-sandbox:latest',
+      approval_policy: { auto_approve_risk_levels: ['low'] }
+    }
+  },
+  {
+    id: 'cve-patch', idx: 5,
+    title: 'CVE Vulnerability Patch',
+    subtitle: 'scan → approve → patch → verify',
+    icon: '🛡️',
+    mode: 'live',
+    definition: {
+      apiVersion: 'v1', kind: 'AgentWorkflow',
+      metadata: { name: 'cve-patch' },
+      spec: { steps: [
+        { name: 'scan-vulnerabilities', type: 'agent', output_key: 'scan_results',
+          prompt: 'Check the RHDH software catalog for components affected by recent CVEs. Use the catalog tools to list all components, then check each one for vulnerabilities. For any CVEs found, retrieve the full CVE details including severity and patched versions. Report affected components, CVE IDs, current versions, and patched versions.',
+          output_schema: { type: 'object', properties: { affected_components: {type:'array', items: {type:'object', properties: {name:{type:'string'}, cve_id:{type:'string'}, dependency:{type:'string'}, current_version:{type:'string'}, patched_version:{type:'string'}}, required:['name','cve_id','dependency']}}, cve_count: {type:'integer'}, summary: {type:'string'} }, required: ['affected_components','cve_count','summary'] },
+          mcp_servers: ['rhdh-catalog'],
+          timeout_seconds: 120 },
+        { name: 'approve-patch', type: 'human-approval', output_key: 'approval',
+          message: 'Found {{ steps.scan_results.output.cve_count }} CVEs affecting components. {{ steps.scan_results.output.summary }} Approve to create PRs with dependency updates.',
+          risk_level: 'high' },
+        { name: 'apply-patches', type: 'agent', output_key: 'patches',
+          prompt: 'For each affected component, update the vulnerable dependency to the patched version. Components to patch: {{ steps.scan_results.output.affected_components }}. For each component, fork the repository, update the dependency version, run the test suite, and create a pull request with the changes.',
+          condition: 'steps.approval.output.approved == true',
+          timeout_seconds: 300 },
+        { name: 'verify-ci', type: 'agent', output_key: 'verification',
+          prompt: 'Verify that the patches were applied correctly. Review the patched components: {{ steps.patches.output }}. Confirm that the dependency versions match the patched versions from the vulnerability scan.',
+          condition: 'steps.patches.status == completed',
+          timeout_seconds: 120 }
+      ]}
+    },
+    runRequest: {
+      provider: { name: 'openai', model: 'gpt-4o-mini', credentials_secret: 'OPENAI_API_KEY' },
+      sandbox_image: 'lightspeed-agentic-sandbox:latest',
+      mcp_servers: [
+        { name: 'rhdh-catalog', url: 'http://mcp-rhdh-mock:8083/mcp' }
+      ],
       approval_policy: { auto_approve_risk_levels: ['low'] }
     }
   }
