@@ -119,6 +119,64 @@ The blocker is **dev/test on macOS with Podman**, not production RHEL deployment
 ### Revised assessment
 The original "Conditional Go" stands for RHEL/Linux targets. For macOS/Podman dev environments, OpenShell requires either Docker Desktop or a working standalone auth setup (issue #TBD).
 
+## Standalone Gateway E2E Results (2026-07-08, issue #74)
+
+Full end-to-end sandbox lifecycle verified on macOS with Podman driver. See [openshell-standalone-setup.md](openshell-standalone-setup.md) for complete setup instructions.
+
+### Configuration that works
+
+```
+openshell-gateway --disable-tls --config gateway.toml
+```
+
+TOML config enables sandbox JWT minting (`[openshell.gateway.gateway_jwt]`) and unauthenticated client access (`[openshell.gateway.auth] allow_unauthenticated_users = true`).
+
+### Verified operations
+
+| Operation | Result |
+|---|---|
+| CreateSandbox | Working |
+| Supervisor JWT auth | Working (with workaround) |
+| WaitReady (phase=2) | Working |
+| ExecSandbox | Working (runs as `sandbox` user) |
+| DeleteSandbox | Working |
+| Client mTLS auth | Working (but breaks supervisor) |
+
+### Blockers identified and worked around
+
+1. **Podman secret file mount broken**: The OpenShell Podman driver creates a Podman secret containing the sandbox JWT and specifies a file mount at `/etc/openshell/auth/sandbox.jwt`. On Podman 5.8.x, the mount is not applied to the container (the secret exists in `podman secret ls` but the `secrets` field in container inspect is `[]`). Likely a Podman REST API format mismatch between what the driver sends and what Podman expects.
+   - **Workaround**: Extract token from Podman secret, `podman cp` it into the stopped container, restart. Supervisor boots successfully on second start.
+   - **Upstream fix needed**: OpenShell driver should use `OPENSHELL_SANDBOX_TOKEN` env var injection or Podman `secret_env` field.
+
+2. **Sandbox images need iproute2 + sandbox user**: The supervisor creates network namespaces via `ip netns add` and drops privileges to a `sandbox` user. Alpine and Ubuntu minimal images fail. Fedora 40 + `dnf install iproute` + `useradd sandbox` works.
+
+3. **TLS endpoint mismatch**: The Podman driver auto-detects `http://host.containers.internal:17670` as the supervisor-to-gateway endpoint regardless of gateway TLS config. Running the gateway with TLS causes the supervisor to fail (plaintext to TLS gateway). Use `--disable-tls` for dev/test. On production RHEL with k3s, this is handled by the deployment pipeline.
+
+### Sandbox isolation behavior
+
+The supervisor enforces isolation for exec'd commands:
+- User: `sandbox` (not root)
+- Container env vars are **not** propagated (security measure)
+- Network namespace isolation via Landlock + seccomp
+- `/sandbox` workspace directory is writable
+
+### Auth architecture (from source analysis)
+
+```
+Client --[mTLS or OIDC]--> Gateway --[JWT in Podman Secret]--> Supervisor
+                                                                    |
+                                                         reads OPENSHELL_SANDBOX_TOKEN_FILE
+                                                         authenticates via Bearer JWT
+                                                         on all gRPC calls back to gateway
+```
+
+- Gateway mints Ed25519 JWT (EdDSA) at CreateSandbox time
+- JWT contains SPIFFE-format subject: `spiffe://openshell/sandbox/<sandbox_id>`
+- Supervisor reads token from file, sends as Bearer header
+- Gateway validates kid, signature, audience (`openshell-gateway:<gateway_id>`), expiry
+- Supervisor refreshes token at 80% TTL via `RefreshSandboxToken` RPC
+- K8s path uses ServiceAccount projected token + `IssueSandboxToken` exchange (different from Podman path)
+
 ## Go/No-Go Recommendation
 
 **Conditional Go** -- proceed with production hardening if the following are confirmed:
@@ -126,8 +184,10 @@ The original "Conditional Go" stands for RHEL/Linux targets. For macOS/Podman de
 1. OpenShell team commits to stabilizing the Python SDK (especially `ExposeService` wrapper)
 2. Gateway resource overhead is acceptable in target deployment environments
 3. L7 network policy works with our sandbox image (needs integration test)
-4. **NEW**: Standalone Podman gateway setup works on RHEL without k3s (needs verification on Linux)
-5. **NEW**: Supervisor auth chain works end-to-end with Podman driver (needs JWT + cert configuration)
+4. **PARTIAL**: Standalone Podman gateway works on macOS with manual JWT config, but Podman secret file mount is broken in 5.8.x — requires manual `podman cp` token injection. Needs upstream Podman driver fix for automated flow.
+5. **PARTIAL**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication), but secret-based token delivery fails on Podman 5.8.x. Manual token injection workaround required; needs upstream Podman driver fix for automated flow.
+6. **NEW**: Podman secret file mount needs upstream fix or driver-level workaround for Podman 5.8.x
+7. **NEW**: Our sandbox image (`lightspeed-agentic-sandbox`) must include `iproute2` and a `sandbox` user
 
 **Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation. Even without L7 policy, the Landlock + seccomp sandbox is a security improvement.
 
@@ -139,5 +199,6 @@ The original "Conditional Go" stands for RHEL/Linux targets. For macOS/Podman de
 |---|---|
 | `src/cloud_agents/spawner/openshell_spawner.py` | Spawner implementation |
 | `tests/unit/spawner/test_openshell_spawner.py` | 27 unit tests |
+| `docs/spikes/openshell-standalone-setup.md` | Standalone gateway setup guide |
 | `pyproject.toml` | `openshell` optional dependency |
 | `docs/gaps/gaps-implementation-plan.md` | T53 entry |
