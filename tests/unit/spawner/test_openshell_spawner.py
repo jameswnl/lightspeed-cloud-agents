@@ -957,3 +957,137 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         assert endpoint == "http://sb-123:8080"
         mock_client.create_sandbox.assert_called_once()
         mock_client.expose_service.assert_called_once_with("sb-123", port=8080)
+
+
+class TestOpenShellSpawnerPostCreateCleanup:
+    """Tests for sandbox cleanup when post-create steps fail in _do_spawn.
+
+    Regression tests for the orphaned sandbox bug: if _inject_podman_token(),
+    start_server(), or expose_service() fails after create_sandbox() succeeds,
+    the sandbox must be deleted and removed from _sandbox_ids.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inject_token_failure_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """If _inject_podman_token raises, sandbox is deleted and tracking removed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-orphan"
+        mock_client.expose_service.return_value = "http://sb-orphan:8080"
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # _inject_podman_token fails after create_sandbox succeeds
+        mocker.patch.object(
+            spawner,
+            "_inject_podman_token",
+            new_callable=mocker.AsyncMock,
+            side_effect=RuntimeError("podman stop failed (rc=1): container not running"),
+        )
+
+        with pytest.raises(RuntimeError, match="podman stop failed"):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        # Sandbox must be cleaned up
+        mock_client.delete_sandbox.assert_called_once_with("sb-orphan")
+
+        # Tracking must not retain the orphaned entry
+        assert "agent-1" not in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_inject_token_failure_propagates_original_exception(
+        self, mocker: MockerFixture
+    ) -> None:
+        """The original exception from _inject_podman_token propagates to the caller."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-123"
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        mocker.patch.object(
+            spawner,
+            "_inject_podman_token",
+            new_callable=mocker.AsyncMock,
+            side_effect=RuntimeError("No container found for sandbox 'sb-123'"),
+        )
+
+        with pytest.raises(RuntimeError, match="No container found"):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+    @pytest.mark.asyncio
+    async def test_expose_service_failure_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """If expose_service raises, sandbox is deleted and tracking removed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-orphan-2"
+        mock_client.expose_service.side_effect = RuntimeError("port unavailable")
+
+        async def noop_exec(*args, **kwargs):
+            return
+            yield
+
+        mock_client.exec_stream = noop_exec
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        with pytest.raises(RuntimeError, match="port unavailable"):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        mock_client.delete_sandbox.assert_called_once_with("sb-orphan-2")
+        assert "agent-1" not in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_cleanup_tolerates_delete_sandbox_failure(self, mocker: MockerFixture) -> None:
+        """If delete_sandbox also fails during cleanup, the original error still propagates."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-double-fail"
+        mock_client.delete_sandbox.side_effect = RuntimeError("API unreachable")
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        mocker.patch.object(
+            spawner,
+            "_inject_podman_token",
+            new_callable=mocker.AsyncMock,
+            side_effect=RuntimeError("token injection failed"),
+        )
+
+        # The original exception must propagate, not the delete failure
+        with pytest.raises(RuntimeError, match="token injection failed"):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        # Tracking must still be cleaned up even if delete_sandbox failed
+        assert "agent-1" not in spawner._sandbox_ids
+
+    @pytest.mark.asyncio
+    async def test_active_count_decremented_on_post_create_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """base.spawn() decrements _active_count when _do_spawn re-raises."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.AsyncMock()
+        mock_client.create_sandbox.return_value = "sb-123"
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        mocker.patch.object(
+            spawner,
+            "_inject_podman_token",
+            new_callable=mocker.AsyncMock,
+            side_effect=RuntimeError("injection failed"),
+        )
+
+        assert spawner.active_count == 0
+
+        with pytest.raises(RuntimeError):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        # base.spawn() incremented to 1, then decremented back to 0
+        assert spawner.active_count == 0

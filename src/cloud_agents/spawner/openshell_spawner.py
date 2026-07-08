@@ -299,18 +299,38 @@ class OpenShellSpawner(AgentSpawner):
         )
         self._sandbox_ids[agent_name] = sandbox_id
 
-        # Workaround for Podman 5.8.x secret file mount bug (issue #82).
-        # The OpenShell Podman driver's secrets field is not applied to
-        # the container, so the supervisor can't read the sandbox JWT.
-        # Extract the JWT from the Podman secret and copy it in manually.
-        if self._podman_cli is not None:
-            await self._inject_podman_token(sandbox_id)
+        try:
+            # Workaround for Podman 5.8.x secret file mount bug (issue #82).
+            # The OpenShell Podman driver's secrets field is not applied to
+            # the container, so the supervisor can't read the sandbox JWT.
+            # Extract the JWT from the Podman secret and copy it in manually.
+            if self._podman_cli is not None:
+                await self._inject_podman_token(sandbox_id)
 
-        # Start HTTP server via exec (fire-and-forget)
-        await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
+            # Start HTTP server via exec (fire-and-forget)
+            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
 
-        # Expose service port and get routable endpoint
-        endpoint = await self._client.expose_service(sandbox_id, port=8080)
+            # Expose service port and get routable endpoint
+            endpoint = await self._client.expose_service(sandbox_id, port=8080)
+        except Exception:
+            # Clean up the sandbox so it is not orphaned.
+            logger.warning(
+                "Post-create step failed for sandbox '%s' (agent=%s); "
+                "deleting sandbox to prevent orphan",
+                sandbox_id,
+                agent_name,
+                exc_info=True,
+            )
+            try:
+                await self._client.delete_sandbox(sandbox_id)
+            except Exception:
+                logger.warning(
+                    "Failed to delete orphaned sandbox '%s' during cleanup",
+                    sandbox_id,
+                    exc_info=True,
+                )
+            self._sandbox_ids.pop(agent_name, None)
+            raise
 
         logger.info(
             "Spawned OpenShell sandbox '%s' (id=%s) at %s",
