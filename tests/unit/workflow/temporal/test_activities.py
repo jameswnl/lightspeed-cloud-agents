@@ -11,6 +11,7 @@ from prometheus_client import REGISTRY
 from pytest_mock import MockerFixture
 
 from cloud_agents.workflow.temporal_activities import (
+    _collect_transcript,
     _normalize_config_ref,
     _to_k8s_secret_name,
     _truncate_heartbeat_payload,
@@ -2962,16 +2963,35 @@ class TestTranscriptCollection:
 
     @pytest.mark.asyncio
     async def test_transcript_collected_on_success(self, mocker: MockerFixture) -> None:
-        """Transcript is collected from sandbox event log after successful step."""
+        """Transcript is collected via HTTP after successful step."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
+
         event_log = (
             '{"ts":"2026-01-01T00:00:00Z","type":"tool_call","data":{"name":"kubectl"}}\n'
             '{"ts":"2026-01-01T00:00:01Z","type":"result","data":{"output":"ok"}}\n'
         )
-        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
-        self._mock_http_success(mocker)
+        mock_post_response = mocker.MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+        mock_get_response = mocker.MagicMock()
+        mock_get_response.status_code = 200
+        mock_get_response.text = event_log
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_post_response),
+                get=mocker.AsyncMock(return_value=mock_get_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
 
@@ -2983,13 +3003,31 @@ class TestTranscriptCollection:
         assert transcript["events"][0]["type"] == "tool_call"
 
     @pytest.mark.asyncio
-    async def test_transcript_empty_when_file_missing(self, mocker: MockerFixture) -> None:
-        """Transcript is empty when event log file doesn't exist (graceful degradation)."""
+    async def test_transcript_empty_when_404(self, mocker: MockerFixture) -> None:
+        """Transcript is empty when events endpoint returns 404 (graceful degradation)."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
-        mock_spawner.read_file = mocker.AsyncMock(side_effect=FileNotFoundError("not found"))
-        self._mock_http_success(mocker)
+
+        mock_post_response = mocker.MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+        mock_get_response = mocker.MagicMock()
+        mock_get_response.status_code = 404
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_post_response),
+                get=mocker.AsyncMock(return_value=mock_get_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
 
@@ -2998,13 +3036,29 @@ class TestTranscriptCollection:
         assert result["transcript"]["events"] == []
 
     @pytest.mark.asyncio
-    async def test_transcript_empty_when_read_fails(self, mocker: MockerFixture) -> None:
-        """Transcript is empty when read_file raises an exception."""
+    async def test_transcript_empty_when_http_error(self, mocker: MockerFixture) -> None:
+        """Transcript is empty when HTTP GET raises an exception."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
-        mock_spawner.read_file = mocker.AsyncMock(side_effect=RuntimeError("exec failed"))
-        self._mock_http_success(mocker)
+
+        mock_post_response = mocker.MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_post_response),
+                get=mocker.AsyncMock(side_effect=RuntimeError("connection refused")),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
 
@@ -3013,23 +3067,26 @@ class TestTranscriptCollection:
 
     @pytest.mark.asyncio
     async def test_transcript_collected_on_failure(self, mocker: MockerFixture) -> None:
-        """Transcript is collected even when the step fails."""
+        """Transcript is collected via HTTP even when the step fails."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
         event_log = '{"ts":"t","type":"error","data":{"message":"API timeout"}}\n'
-        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
 
-        mock_response = mocker.MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"success": False, "error": "agent failed"}
+        mock_post_response = mocker.MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {"success": False, "error": "agent failed"}
+        mock_get_response = mocker.MagicMock()
+        mock_get_response.status_code = 200
+        mock_get_response.text = event_log
 
         mock_http = mocker.patch(
             "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(
-                post=mocker.AsyncMock(return_value=mock_response),
+                post=mocker.AsyncMock(return_value=mock_post_response),
+                get=mocker.AsyncMock(return_value=mock_get_response),
             ),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
@@ -3051,8 +3108,27 @@ class TestTranscriptCollection:
             "not valid json\n"
             '{"ts":"t2","type":"result","data":{}}\n'
         )
-        mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
-        self._mock_http_success(mocker)
+
+        mock_post_response = mocker.MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "success": True,
+            "output": {"summary": "diagnosed ok"},
+        }
+        mock_get_response = mocker.MagicMock()
+        mock_get_response.status_code = 200
+        mock_get_response.text = event_log
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_post_response),
+                get=mocker.AsyncMock(return_value=mock_get_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
 
@@ -3067,20 +3143,212 @@ class TestTranscriptCollection:
         assert result["status"] == "completed"
         assert "transcript" not in result
 
+
+class TestHTTPTranscriptCollection:
+    """Tests for HTTP-based transcript collection from sandbox /v1/agent/events endpoint."""
+
     @pytest.mark.asyncio
-    async def test_transcript_empty_when_no_read_file_method(self, mocker: MockerFixture) -> None:
-        """Transcript is empty when spawner lacks read_file method."""
-        mock_spawner = mocker.AsyncMock()
-        mock_spawner.spawn.return_value = "http://pod-1:8080"
-        mock_spawner.wait_ready.return_value = True
-        # Remove read_file to simulate a spawner without it
-        del mock_spawner.read_file
-        self._mock_http_success(mocker)
+    async def test_http_transcript_parses_ndjson_response(self, mocker: MockerFixture) -> None:
+        """Successful GET /v1/agent/events with NDJSON body returns parsed events."""
+        ndjson_body = (
+            '{"ts":"2026-01-01T00:00:00Z","type":"tool_call","data":{"name":"kubectl"}}\n'
+            '{"ts":"2026-01-01T00:00:01Z","type":"result","data":{"output":"ok"}}\n'
+        )
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ndjson_body
 
-        result = await run_sandbox_step(self._make_success_input(), spawner=mock_spawner)
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        assert result["status"] == "completed"
-        assert result["transcript"]["events"] == []
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={"timeout": 600},
+            http_headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert transcript.step_name == "diag"
+        assert len(transcript.events) == 2
+        assert transcript.events[0].type == "tool_call"
+        assert transcript.events[0].data["name"] == "kubectl"
+        assert transcript.events[1].type == "result"
+        mock_client.get.assert_called_once_with(
+            "http://pod-1:8080/v1/agent/events",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_404_returns_empty(self, mocker: MockerFixture) -> None:
+        """HTTP 404 from /v1/agent/events returns empty transcript (no events yet)."""
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 404
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_connection_error_returns_empty(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Connection error returns empty transcript with warning logged."""
+        import httpx as _httpx
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(
+            side_effect=_httpx.ConnectError("Connection refused")
+        )
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_logger = mocker.patch("cloud_agents.workflow.temporal_activities.logger")
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+        mock_logger.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_skips_invalid_jsonl_lines(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Invalid JSONL lines are skipped; valid lines are parsed."""
+        ndjson_body = (
+            '{"ts":"t1","type":"tool_call","data":{"name":"kubectl"}}\n'
+            "not valid json\n"
+            '{"ts":"t2","type":"result","data":{}}\n'
+        )
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ndjson_body
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert len(transcript.events) == 2
+        assert transcript.events[0].type == "tool_call"
+        assert transcript.events[1].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_empty_response_body(self, mocker: MockerFixture) -> None:
+        """Empty 200 response body returns empty transcript."""
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_passes_tls_config(self, mocker: MockerFixture) -> None:
+        """client_kwargs (including TLS verify) are forwarded to httpx.AsyncClient."""
+        import ssl
+
+        ssl_ctx = ssl.create_default_context()
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await _collect_transcript(
+            endpoint="https://pod-1:8443",
+            step_name="diag",
+            client_kwargs={"timeout": 30, "verify": ssl_ctx},
+            http_headers={},
+        )
+
+        init_call = mock_client_cls.call_args
+        assert init_call[1].get("timeout") == 30
+        assert init_call[1].get("verify") is ssl_ctx
+
+    @pytest.mark.asyncio
+    async def test_http_transcript_generic_exception_returns_empty(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Any unexpected exception returns empty transcript with warning."""
+        mock_client_cls = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get = mocker.AsyncMock(side_effect=RuntimeError("unexpected"))
+        mock_client_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_logger = mocker.patch("cloud_agents.workflow.temporal_activities.logger")
+
+        transcript = await _collect_transcript(
+            endpoint="http://pod-1:8080",
+            step_name="diag",
+            client_kwargs={},
+            http_headers={},
+        )
+
+        assert transcript.step_name == "diag"
+        assert transcript.events == []
+        mock_logger.warning.assert_called()
 
 
 class TestAgentEventLogEnvVar:
