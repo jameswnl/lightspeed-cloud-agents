@@ -42,6 +42,33 @@ Scenario 1 supports two modes, selectable via a toggle in the dashboard:
 
 The toggle state persists in the browser via localStorage.
 
+### CVE Patch Workflow (RHDH Lightspeed)
+
+A separate demo scenario for CVE vulnerability patching using a mock RHDH software catalog.
+
+```bash
+make cve-demo-up   # build core + mock RHDH catalog MCP server, start stack
+```
+
+The workflow (`examples/workflow-definitions/cve-patch-workflow.yaml`) follows 4 steps:
+1. **Scan** — agent queries the RHDH catalog MCP server for components with known CVEs
+2. **Approve** — human reviews affected components and approves patching
+3. **Patch** — agent creates dependency update PRs for each affected component
+4. **Verify** — agent confirms patches match the expected patched versions
+
+Trigger via API:
+```bash
+curl -X POST http://localhost:8080/v1/workflows/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "definition": <contents of cve-patch-workflow.yaml>,
+    "mcp_servers": [{"name": "rhdh-catalog", "url": "http://mcp-rhdh-mock:8083/mcp"}],
+    "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "OPENAI_API_KEY"}
+  }'
+```
+
+The mock RHDH catalog server (`deploy/mcp-rhdh-mock/`) returns hardcoded data with 2 vulnerable components (payment-gateway with Spring Boot CVE, user-service with pydantic CVE). To use a real RHDH catalog MCP server later, only the `mcp_servers` URL in the API request needs to change.
+
 ### Terminal setup for demo
 
 **Terminal 1** — Dashboard: `make dashboard`
