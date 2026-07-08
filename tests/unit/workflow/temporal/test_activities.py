@@ -13,6 +13,7 @@ from pytest_mock import MockerFixture
 from cloud_agents.workflow.temporal_activities import (
     _normalize_config_ref,
     _to_k8s_secret_name,
+    _truncate_heartbeat_payload,
     build_escalation_activity,
     compute_pod_name,
     run_sandbox_step,
@@ -601,9 +602,7 @@ class TestTLSWiring:
         assert f"agent-{pod_name}.default.svc.cluster.local" in san_dns
 
     @pytest.mark.asyncio
-    async def test_tls_app_passes_ca_cert_pem_to_wait_ready(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_tls_app_passes_ca_cert_pem_to_wait_ready(self, mocker: MockerFixture) -> None:
         """TLS mode=app -> ca_cert_pem from tls_certs is passed to wait_ready."""
         mocker.patch.dict("os.environ", {"SANDBOX_TLS_MODE": "app"})
 
@@ -626,9 +625,7 @@ class TestTLSWiring:
         assert wait_call[1].get("ca_cert_pem") is mock_certs.ca_cert_pem
 
     @pytest.mark.asyncio
-    async def test_tls_disabled_no_ca_cert_to_wait_ready(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_tls_disabled_no_ca_cert_to_wait_ready(self, mocker: MockerFixture) -> None:
         """TLS mode=disabled -> ca_cert_pem=None passed to wait_ready."""
         mocker.patch.dict("os.environ", {}, clear=False)
         os.environ.pop("SANDBOX_TLS_MODE", None)
@@ -2701,9 +2698,7 @@ def _get_counter_value(name: str, labels: dict | None = None) -> float:
         if metric.name == name:
             for sample in metric.samples:
                 if sample.name == f"{name}_total":
-                    if labels is None or all(
-                        sample.labels.get(k) == v for k, v in labels.items()
-                    ):
+                    if labels is None or all(sample.labels.get(k) == v for k, v in labels.items()):
                         return sample.value
     return 0.0
 
@@ -2712,9 +2707,7 @@ class TestHeartbeat:
     """Tests for activity heartbeat during sandbox HTTP call (T2)."""
 
     @pytest.mark.asyncio
-    async def test_heartbeat_called_during_http_call(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_heartbeat_called_during_http_call(self, mocker: MockerFixture) -> None:
         """activity.heartbeat() is called at least once during sandbox HTTP call."""
         mock_heartbeat = mocker.patch(
             "cloud_agents.workflow.temporal_activities.activity.heartbeat"
@@ -2732,9 +2725,7 @@ class TestHeartbeat:
             await asyncio.sleep(0)
             return mock_response
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(side_effect=slow_post)
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
@@ -2754,9 +2745,7 @@ class TestHeartbeat:
         assert mock_heartbeat.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_heartbeat_task_cancelled_after_completion(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_heartbeat_task_cancelled_after_completion(self, mocker: MockerFixture) -> None:
         """Heartbeat task is cancelled after HTTP call completes (no leaked tasks)."""
         mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
 
@@ -2768,9 +2757,7 @@ class TestHeartbeat:
         mock_response.status_code = 200
         mock_response.json.return_value = {"success": True, "output": {}}
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
@@ -2790,9 +2777,7 @@ class TestHeartbeat:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_heartbeat_errors_logged_not_fatal(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_heartbeat_errors_logged_not_fatal(self, mocker: MockerFixture) -> None:
         """Heartbeat errors are logged but don't fail the activity."""
         mock_heartbeat = mocker.patch(
             "cloud_agents.workflow.temporal_activities.activity.heartbeat",
@@ -2811,9 +2796,7 @@ class TestHeartbeat:
             await asyncio.sleep(0)
             return mock_response
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(side_effect=slow_post)
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
@@ -2838,9 +2821,7 @@ class TestCancellationHandling:
     """Tests for cancellation/timeout handling in finally block (T2)."""
 
     @pytest.mark.asyncio
-    async def test_cancelled_error_still_destroys(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_cancelled_error_still_destroys(self, mocker: MockerFixture) -> None:
         """When CancelledError raised during HTTP call, spawner.destroy() still called."""
         mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
 
@@ -2848,9 +2829,7 @@ class TestCancellationHandling:
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
@@ -2871,9 +2850,7 @@ class TestCancellationHandling:
         mock_spawner.destroy.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_cancellation_increments_timeout_counter(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_cancellation_increments_timeout_counter(self, mocker: MockerFixture) -> None:
         """Cancellation increments ls_sandbox_timeout_total with reason=cancelled."""
         mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
 
@@ -2881,16 +2858,15 @@ class TestCancellationHandling:
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
         before = _get_counter_value(
-            "ls_sandbox_timeout", {"step_name": "cancel-step", "reason": "cancelled"},
+            "ls_sandbox_timeout",
+            {"step_name": "cancel-step", "reason": "cancelled"},
         )
 
         with pytest.raises(asyncio.CancelledError):
@@ -2906,14 +2882,13 @@ class TestCancellationHandling:
             )
 
         after = _get_counter_value(
-            "ls_sandbox_timeout", {"step_name": "cancel-step", "reason": "cancelled"},
+            "ls_sandbox_timeout",
+            {"step_name": "cancel-step", "reason": "cancelled"},
         )
         assert after > before
 
     @pytest.mark.asyncio
-    async def test_cancellation_emits_audit_event(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_cancellation_emits_audit_event(self, mocker: MockerFixture) -> None:
         """Cancellation emits sandbox_timeout audit event with pod_name and reason."""
         mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
         mock_emit = mocker.patch("cloud_agents.workflow.temporal_activities.emit_audit")
@@ -2922,9 +2897,7 @@ class TestCancellationHandling:
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
 
-        mock_http = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient"
-        )
+        mock_http = mocker.patch("cloud_agents.workflow.temporal_activities.httpx.AsyncClient")
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(side_effect=asyncio.CancelledError())
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
@@ -2943,8 +2916,7 @@ class TestCancellationHandling:
             )
 
         timeout_calls = [
-            c for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "sandbox_timeout"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "sandbox_timeout"
         ]
         assert len(timeout_calls) == 1
         assert timeout_calls[0][1]["step_name"] == "cancel-step"
@@ -3076,7 +3048,7 @@ class TestTranscriptCollection:
         mock_spawner.wait_ready.return_value = True
         event_log = (
             '{"ts":"t","type":"tool_call","data":{"name":"kubectl"}}\n'
-            'not valid json\n'
+            "not valid json\n"
             '{"ts":"t2","type":"result","data":{}}\n'
         )
         mock_spawner.read_file = mocker.AsyncMock(return_value=event_log)
@@ -3153,3 +3125,58 @@ class TestAgentEventLogEnvVar:
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
         assert env_vars.get("AGENT_EVENT_LOG") == "/var/log/agent-events.jsonl"
+
+
+class TestTruncateHeartbeatPayload:
+    """Tests for _truncate_heartbeat_payload robustness with non-string values."""
+
+    def test_string_type_and_name(self) -> None:
+        """String type and name are truncated normally."""
+        event = {"type": "tool_call", "name": "list_hosts"}
+        result = _truncate_heartbeat_payload(event)
+        assert result["event_type"] == "tool_call"
+        assert result["tool"] == "list_hosts"
+
+    def test_missing_type_defaults_to_unknown(self) -> None:
+        """Missing type key defaults to 'unknown'."""
+        result = _truncate_heartbeat_payload({})
+        assert result["event_type"] == "unknown"
+        assert "tool" not in result
+
+    def test_integer_type_coerced_to_string(self) -> None:
+        """Integer type value is coerced to string without raising."""
+        event = {"type": 42, "name": "some_tool"}
+        result = _truncate_heartbeat_payload(event)
+        assert result["event_type"] == "42"
+        assert result["tool"] == "some_tool"
+
+    def test_boolean_type_coerced_to_string(self) -> None:
+        """Boolean type value is coerced to string without raising."""
+        event = {"type": True}
+        result = _truncate_heartbeat_payload(event)
+        assert result["event_type"] == "True"
+
+    def test_list_type_coerced_to_string(self) -> None:
+        """List type value is coerced to string without raising."""
+        event = {"type": ["a", "b"]}
+        result = _truncate_heartbeat_payload(event)
+        assert result["event_type"] == "['a', 'b']"
+
+    def test_integer_name_coerced_to_string(self) -> None:
+        """Integer name value is coerced to string without raising."""
+        event = {"type": "tool_call", "name": 999}
+        result = _truncate_heartbeat_payload(event)
+        assert result["tool"] == "999"
+
+    def test_none_name_excluded(self) -> None:
+        """None name is falsy and excluded from summary."""
+        event = {"type": "tool_call", "name": None}
+        result = _truncate_heartbeat_payload(event)
+        assert "tool" not in result
+
+    def test_long_values_truncated_to_200(self) -> None:
+        """Values longer than 200 chars are truncated."""
+        event = {"type": "x" * 300, "name": "y" * 300}
+        result = _truncate_heartbeat_payload(event)
+        assert len(result["event_type"]) == 200
+        assert len(result["tool"]) == 200

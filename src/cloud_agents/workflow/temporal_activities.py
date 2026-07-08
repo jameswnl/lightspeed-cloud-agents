@@ -111,12 +111,12 @@ def _truncate_heartbeat_payload(event: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Truncated summary dict suitable for activity.heartbeat().
     """
-    event_type = event.get("type", "unknown")
+    event_type = str(event.get("type", "unknown"))
     summary: dict[str, Any] = {
         "event_type": event_type[:200],
     }
     if name := event.get("name"):
-        summary["tool"] = name[:200]
+        summary["tool"] = str(name)[:200]
     return summary
 
 
@@ -346,9 +346,7 @@ async def _run_sandbox_step_inner(
         env_vars["LIGHTSPEED_MCP_SERVERS"] = json.dumps(mcp_env_list)
 
     # Runner-to-sandbox bearer token auth
-    sandbox_auth_enabled = (
-        os.environ.get("SANDBOX_AUTH_ENABLED", "false").lower() == "true"
-    )
+    sandbox_auth_enabled = os.environ.get("SANDBOX_AUTH_ENABLED", "false").lower() == "true"
     sandbox_auth_token: str | None = None
     if sandbox_auth_enabled:
         sandbox_auth_token = get_runner_auth_token()
@@ -565,9 +563,7 @@ async def _run_sandbox_step_inner(
         if was_cancelled and endpoint:
             from cloud_agents.workflow.temporal_metrics import ls_sandbox_timeout_total
 
-            ls_sandbox_timeout_total.labels(
-                step_name=step_name, reason="cancelled"
-            ).inc()
+            ls_sandbox_timeout_total.labels(step_name=step_name, reason="cancelled").inc()
             emit_audit(
                 event_type="sandbox_timeout",
                 workflow_id=workflow_id,
