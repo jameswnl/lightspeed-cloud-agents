@@ -208,6 +208,10 @@ class AgentWorkflow:
         )
         classification = classify_step_risk(step_spec, policy)
 
+        # Interpolate approval message with step outputs
+        raw_message = step.get("message", "")
+        interpolated_message = self._interpolate_prompt(raw_message, input) if raw_message else raw_message
+
         if classification.auto_approved:
             result = StepResult(
                 status="completed",
@@ -226,7 +230,7 @@ class AgentWorkflow:
                     {
                         "workflow_id": input.workflow_id,
                         "step_name": step_name,
-                        "message": step.get("message", ""),
+                        "message": interpolated_message,
                         "notifier_config": input.notifier_config,
                     }
                 ],
