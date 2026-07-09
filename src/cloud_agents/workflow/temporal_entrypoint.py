@@ -85,6 +85,15 @@ def _create_spawner():
         network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
         logger.info("Using PodmanSpawner (network=%s)", network)
         return PodmanSpawner(network=network)
+    if SPAWNER_TYPE == "openshell":
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+        from openshell import SandboxClient
+
+        gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "http://localhost:17670")
+        podman_cli = os.environ.get("OPENSHELL_PODMAN_CLI")
+        client = SandboxClient(endpoint=gateway_url)
+        logger.info("Using OpenShellSpawner (gateway=%s)", gateway_url)
+        return OpenShellSpawner(openshell_client=client, podman_cli=podman_cli)
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
 

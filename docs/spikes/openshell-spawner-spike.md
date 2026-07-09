@@ -260,11 +260,42 @@ The resulting binary links against glibc 2.34 and works in UBI 9 containers.
 
 **RHEL 10 / UBI 10**: No issue. glibc 2.39 matches the pre-built binary.
 
-### Gateway Deployment Model
+### Containerized Gateway (DooD Pattern) — Verified
 
-The gateway was tested as a **bare process on the host**, not containerized. For production:
-- Containerized gateway via DooD (Docker-out-of-Docker) pattern with Podman socket mount is preferred
-- Not yet tested — listed as remaining work
+Tested containerized gateway on RHEL 9.6 with Podman 5.8.2:
+
+```bash
+podman run -d --name openshell-gateway \
+  --network podman_default \
+  -v /run/user/1000/podman/podman.sock:/run/podman/podman.sock \
+  -v ~/openshell-config:/config:ro \
+  -e OPENSHELL_PODMAN_SOCKET=/run/podman/podman.sock \
+  -p 17670:17670 \
+  --privileged \
+  localhost/openshell-gateway:latest \
+  --disable-tls --bind-address 0.0.0.0 --config /config/gateway.toml
+```
+
+**Result**: Gateway connects to host Podman via socket mount, creates and manages sandboxes. Sandbox lifecycle (create, exec, delete) verified through containerized gateway. Seccomp and network namespace isolation confirmed.
+
+**Key requirements**:
+- `OPENSHELL_PODMAN_SOCKET=/run/podman/podman.sock` — gateway runs as root in container, default socket path differs
+- `--privileged` — required for Podman socket access
+- Gateway container must be on the same network as the workflow runner for DNS resolution
+
+### OpenShellSpawner SDK Migration Required
+
+The `OpenShellSpawner` was written against an earlier OpenShell SDK version. The v0.0.78 SDK has breaking API changes:
+
+| Old API (spawner code) | New API (v0.0.78) |
+|---|---|
+| `create_sandbox(image=, env=, labels=)` | `create(spec=SandboxSpec)` |
+| `delete_sandbox(sandbox_id)` | `delete(sandbox_name)` |
+| `expose_service(sandbox_id, port=)` | Not available — use port forwarding |
+| `exec_stream(sandbox_id, command)` (async iterator) | `exec_stream(sandbox_id, command)` (sync iterator) |
+| All methods async | All methods sync (need `asyncio.to_thread()`) |
+
+The entrypoint wiring works (`WORKFLOW_SPAWNER=openshell` → creates `SandboxClient` → passes to `OpenShellSpawner`), but the spawner's internal calls fail at runtime. Tracked as a follow-up issue.
 
 ## Go/No-Go Recommendation
 
