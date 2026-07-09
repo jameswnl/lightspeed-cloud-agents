@@ -180,19 +180,114 @@ Client --[mTLS or OIDC]--> Gateway --[JWT in Podman Secret]--> Supervisor
 - Supervisor refreshes token at 80% TTL via `RefreshSandboxToken` RPC
 - K8s path uses ServiceAccount projected token + `IssueSandboxToken` exchange (different from Podman path)
 
+## RHEL Verification (2026-07-09, issues #81, #92)
+
+End-to-end testing on AWS EC2 RHEL 9.6 instance (m5.large, kernel 5.14.0, Podman 5.4.0).
+
+### Environment
+
+- **Host**: RHEL 9.6, kernel 5.14.0-570.123.1.el9_6.x86_64
+- **Podman**: 5.4.0 (rootless, cgroup v2)
+- **OpenShell**: v0.0.80 (pre-built gateway binary + source-built supervisor)
+- **LSMs**: lockdown, capability, landlock, yama, selinux, bpf
+
+### Setup Prerequisites
+
+1. **Cgroup CPU delegation** — rootless Podman on RHEL 9 does not delegate the CPU controller by default. OpenShell sets CPU limits on sandboxes, which fails without it.
+   ```
+   sudo mkdir -p /etc/systemd/system/user@.service.d
+   cat > delegate.conf <<EOF
+   [Service]
+   Delegate=cpu cpuset io memory pids
+   EOF
+   sudo systemctl daemon-reload
+   ```
+2. **Podman socket** — `systemctl --user enable --now podman.socket`
+3. **Gateway bind address** — must use `--bind-address 0.0.0.0` (not default `127.0.0.1`) so containers can reach the gateway via bridge network
+4. **Gateway JWT config** — v0.0.80 changed from `secret` to file-based Ed25519 keys (`signing_key_path`, `public_key_path`, `kid_path`)
+5. **Sandbox image requirements** — must include `iproute2` (for `ip`), `util-linux-core` (for `nsenter`), and a `sandbox` user
+
+### Gateway Configuration (v0.0.80)
+
+```toml
+[openshell.gateway]
+supervisor_image = "localhost/openshell-supervisor:latest"
+compute_drivers = ["podman"]
+
+[openshell.gateway.auth]
+allow_unauthenticated_users = true
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "keys/signing.pem"
+public_key_path = "keys/public.pem"
+kid_path = "keys/kid"
+gateway_id = "rhel-test"
+```
+
+### Results by Image
+
+| Image | Base | glibc | Pre-built supervisor (v0.0.80) | Source-built supervisor | Sandbox Status |
+|---|---|---|---|---|---|
+| Fedora 40 | Fedora | 2.39 | **Works** | N/A | **Ready** (healthy) |
+| UBI 10 (RHEL 10.2) | RHEL 10 | 2.39 | **Works** | N/A | **Ready** (healthy) |
+| UBI 9 (RHEL 9.8) | RHEL 9 | 2.34 | **FAILS** (`GLIBC_2.38` / `GLIBC_2.39` not found) | **Works** (14 min build) | **Ready** (healthy) |
+
+### Isolation Verification (all three images)
+
+| Check | Result |
+|---|---|
+| Exec runs as `sandbox` user | `uid=1000(sandbox) gid=1000(sandbox)` |
+| Seccomp enforced | `Seccomp: 2`, `Seccomp_filters: 3`, `NoNewPrivs: 1` |
+| Network namespace isolated | Separate veth `10.200.0.2/24`, not host network |
+| CreateSandbox latency | ~300ms |
+| DeleteSandbox | Clean (container + volume removed) |
+
+### RHEL 9 glibc Compatibility Issue
+
+The pre-built OpenShell v0.0.80 supervisor binary (`openshell-sandbox`) is compiled against glibc 2.39 (Fedora 40 toolchain). It does not run on RHEL 9 (glibc 2.34) — neither on the host nor inside UBI 9 containers.
+
+**Workaround**: Build the supervisor from source on RHEL 9. Requires Rust toolchain + build dependencies (`gcc`, `gcc-c++`, `cmake`, `openssl-devel`, `clang-devel`). Build time: ~14 minutes on m5.large.
+
+```bash
+git clone --depth 1 https://github.com/nvidia/openshell.git
+cd openshell
+cargo build --release --bin openshell-sandbox
+```
+
+The resulting binary links against glibc 2.34 and works in UBI 9 containers.
+
+**Upstream fix needed**: OpenShell should either ship a musl-static supervisor binary or provide builds targeting RHEL 9/glibc 2.34. This is a build/packaging issue, not a runtime limitation — the supervisor code itself is compatible.
+
+**RHEL 10 / UBI 10**: No issue. glibc 2.39 matches the pre-built binary.
+
+### Gateway Deployment Model
+
+The gateway was tested as a **bare process on the host**, not containerized. For production:
+- Containerized gateway via DooD (Docker-out-of-Docker) pattern with Podman socket mount is preferred
+- Not yet tested — listed as remaining work
+
 ## Go/No-Go Recommendation
 
-**Conditional Go** -- proceed with production hardening if the following are confirmed:
+**Go** — RHEL verification confirms OpenShell works on both RHEL 9 and RHEL 10 with Podman driver. Seccomp, network namespace isolation, and sandbox lifecycle all verified.
+
+### Resolved
+
+1. **RESOLVED**: Standalone Podman gateway works on macOS with JWT config. Podman secret file mount is broken in 5.8.x but automated workaround implemented (issue #82).
+2. **RESOLVED**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication).
+3. **RESOLVED**: Podman secret file mount workaround implemented in `openshell_spawner.py`.
+4. **RESOLVED**: RHEL 9 verification — gateway + supervisor + sandbox lifecycle works. Seccomp and network namespace isolation confirmed.
+5. **RESOLVED**: UBI 9 sandbox images — requires source-built supervisor (glibc 2.34 compatibility). UBI 10 works with pre-built binaries.
+
+### Remaining
 
 1. OpenShell team commits to stabilizing the Python SDK (especially `ExposeService` wrapper)
-2. Gateway resource overhead is acceptable in target deployment environments
-3. L7 network policy works with our sandbox image (needs integration test)
-4. **RESOLVED**: Standalone Podman gateway works on macOS with JWT config. Podman secret file mount is broken in 5.8.x but automated workaround implemented (issue #82): `OpenShellSpawner._inject_podman_token()` extracts JWT from Podman secret and copies it into the container.
-5. **RESOLVED**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication). Secret-based token delivery fails on Podman 5.8.x but automated workaround handles it transparently.
-6. **RESOLVED**: Podman secret file mount workaround implemented in `openshell_spawner.py`. Upstream OpenShell driver fix still desirable (use `secret_env` instead of `secrets`).
-7. **NEW**: Our sandbox image (`lightspeed-agentic-sandbox`) must include `iproute2` and a `sandbox` user
+2. Gateway resource overhead measurement in target deployment environments
+3. L7 network policy testing with our sandbox image
+4. Sandbox image must include `iproute2`, `nsenter` (`util-linux-core`), and a `sandbox` user
+5. Containerized gateway deployment (DooD pattern) — not yet tested
+6. Upstream: request musl-static supervisor binary or RHEL 9-compatible builds
 
-**Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation. Even without L7 policy, the Landlock + seccomp sandbox is a security improvement.
+**Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation (seccomp + network namespace). Even without L7 policy, this is a security improvement over container securityContext alone.
 
 **If no-go**: The prototype code remains as a third spawner option. No changes to existing K8s/Podman spawners.
 
