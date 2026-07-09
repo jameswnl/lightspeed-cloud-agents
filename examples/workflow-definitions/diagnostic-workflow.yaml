@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/workflow-definition.schema.json
 apiVersion: v1
 kind: AgentWorkflow
 metadata:

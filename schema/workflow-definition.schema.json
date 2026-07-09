@@ -1,0 +1,465 @@
+{
+  "$defs": {
+    "PermissionScope": {
+      "description": "Permission constraints for a workflow step.\n\nAttributes:\n    service_account: K8s ServiceAccount for spawned pods.\n    allowed_tools: Whitelist of tool names the agent may use.\n    denied_tools: Blacklist of tool names to exclude.\n    max_tokens: Maximum token budget for this step.\n    timeout_seconds: Maximum duration for this step.",
+      "properties": {
+        "service_account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Account"
+        },
+        "allowed_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Tools"
+        },
+        "denied_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Denied Tools"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        }
+      },
+      "title": "PermissionScope",
+      "type": "object"
+    },
+    "ProviderSpec": {
+      "description": "Provider configuration at the workflow level.\n\nAttributes:\n    name: Provider name (openai, claude, gemini).\n    model: Model identifier.\n    credentials_secret: K8s secret name or env var prefix for credentials.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "credentials_secret": {
+          "title": "Credentials Secret",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "model",
+        "credentials_secret"
+      ],
+      "title": "ProviderSpec",
+      "type": "object"
+    },
+    "SkillsSpec": {
+      "description": "Skills configuration for sandbox agents.\n\nAttributes:\n    image: OCI image containing skills.\n    paths: Paths within the image to mount.",
+      "properties": {
+        "image": {
+          "title": "Image",
+          "type": "string"
+        },
+        "paths": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paths"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "title": "SkillsSpec",
+      "type": "object"
+    },
+    "SpawnConfig": {
+      "description": "Per-step resource configuration for ephemeral pods.\n\nValidation bounds prevent resource abuse. workflow step configuration\nsets the maximum envelope; SpawnConfig may only narrow within it.\n\nAttributes:\n    cpu_request: CPU request (e.g. \"100m\").\n    cpu_limit: CPU limit (max 4 cores).\n    memory_request: Memory request (e.g. \"256Mi\").\n    memory_limit: Memory limit (max 4Gi).\n    timeout_seconds: Max wait for pod readiness.\n    health_path: Health probe endpoint path.",
+      "properties": {
+        "cpu_request": {
+          "default": "100m",
+          "title": "Cpu Request",
+          "type": "string"
+        },
+        "cpu_limit": {
+          "default": "500m",
+          "title": "Cpu Limit",
+          "type": "string"
+        },
+        "memory_request": {
+          "default": "256Mi",
+          "title": "Memory Request",
+          "type": "string"
+        },
+        "memory_limit": {
+          "default": "512Mi",
+          "title": "Memory Limit",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 60,
+          "maximum": 300,
+          "minimum": 5,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "health_path": {
+          "default": "/healthz",
+          "title": "Health Path",
+          "type": "string"
+        }
+      },
+      "title": "SpawnConfig",
+      "type": "object"
+    },
+    "WorkflowSpec": {
+      "description": "Full workflow specification.\n\nAttributes:\n    input_prompt: Optional initial prompt passed to the first step.\n    steps: Ordered list of workflow steps.",
+      "properties": {
+        "input_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Prompt"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStepSpec"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "title": "WorkflowSpec",
+      "type": "object"
+    },
+    "WorkflowStepSpec": {
+      "description": "A single step in a workflow.\n\nAttributes:\n    name: Unique step identifier within the workflow.\n    type: Step type \u2014 agent (calls an agent) or human-approval (pauses for approval).\n    agent: Agent name for type=agent (resolved via AgentRegistry).\n    prompt: Prompt template for the agent, supports {{ steps.X.output.Y }}.\n    output_key: Key in workflow state for this step's output.\n    condition: Optional expression \u2014 skip step if evaluates to false.\n    message: Human-readable message for type=human-approval.\n    timeout_seconds: Maximum seconds for this step.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "agent",
+            "human-approval"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt"
+        },
+        "output_key": {
+          "title": "Output Key",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "timeout_seconds": {
+          "default": 3600,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "risk_level": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Risk Level"
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parallel_group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parallel Group"
+        },
+        "mcp_servers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mcp Servers"
+        },
+        "runtime": {
+          "default": "sandbox",
+          "enum": [
+            "sandbox",
+            "generic"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "analysis",
+                "execution",
+                "verification"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Schema"
+        },
+        "service_account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Account"
+        },
+        "target_namespaces": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Namespaces"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "output_key"
+      ],
+      "title": "WorkflowStepSpec",
+      "type": "object"
+    }
+  },
+  "description": "Top-level workflow definition from workflow.yaml.\n\nAttributes:\n    apiVersion: API version string.\n    kind: Must be AgentWorkflow.\n    metadata: Workflow metadata including name.\n    spec: Full workflow specification.\n    provider: Default provider for all steps.\n    skills: Skills OCI image configuration.",
+  "properties": {
+    "apiVersion": {
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "const": "AgentWorkflow",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "spec": {
+      "$ref": "#/$defs/WorkflowSpec"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "skills": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SkillsSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "advisory": {
+      "default": false,
+      "title": "Advisory",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "WorkflowDefinition",
+  "type": "object"
+}

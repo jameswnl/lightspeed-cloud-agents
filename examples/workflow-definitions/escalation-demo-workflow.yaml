@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=../../schema/workflow-definition.schema.json
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: escalation-demo
+spec:
+  escalation:
+    type: cli_handoff
+  steps:
+    - name: analyze
+      type: agent
+      prompt: |
+        Analyze the following production incident:
+        - Service: payment-gateway
+        - Symptom: 5xx error rate increased from 0.1% to 15% over the last hour
+        - Affected endpoints: /v1/charge, /v1/refund
+        - Recent changes: Database connection pool config updated 2 hours ago
+
+        Investigate the root cause. Check database connection metrics,
+        error logs, and recent deployment changes. Provide a structured
+        analysis with severity assessment.
+      output_key: analysis
+      output_schema:
+        type: object
+        properties:
+          root_cause:
+            type: string
+          severity:
+            type: string
+            enum: [low, medium, high, critical]
+          affected_services:
+            type: array
+            items:
+              type: string
+          recommended_fix:
+            type: string
+        required: [root_cause, severity, recommended_fix]
+      timeout_seconds: 120
+      max_retries: 1
+
+    - name: approve-remediation
+      type: human-approval
+      message: |
+        Analysis complete. Review the findings and approve remediation.
+        Root cause: {{ steps.analysis.output.root_cause }}
+        Severity: {{ steps.analysis.output.severity }}
+        Recommended fix: {{ steps.analysis.output.recommended_fix }}
+      output_key: approval
+      risk_level: high
+
+    - name: remediate
+      type: agent
+      prompt: |
+        Apply the recommended fix for the payment-gateway incident.
+        Root cause: {{ steps.analysis.output.root_cause }}
+        Fix: {{ steps.analysis.output.recommended_fix }}
+
+        IMPORTANT: This step is expected to fail for demo purposes.
+        Simulate applying the fix but report that the database
+        connection pool change could not be reverted because the
+        configuration management system is locked by another deployment.
+        Return an error indicating the remediation failed.
+      output_key: remediation
+      condition: "steps.approval.output.approved == true"
+      timeout_seconds: 120
+      max_retries: 1
+
+    - name: verify
+      type: agent
+      prompt: "Verify the payment-gateway is healthy after remediation."
+      output_key: verification
+      condition: "steps.remediation.status == completed"
+      timeout_seconds: 60
