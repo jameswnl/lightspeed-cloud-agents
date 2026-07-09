@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from cloud_agents.spawner.base import SpawnConfig
     from cloud_agents.workflow.tls import EphemeralCerts
 
+    from openshell._proto import openshell_pb2
+
 logger = logging.getLogger(__name__)
 
 # Default command to start the HTTP server inside the sandbox
@@ -67,8 +69,8 @@ class OpenShellSpawner(AgentSpawner):
 
     Attributes:
         _client: OpenShell SDK client instance.
-        _sandbox_ids: Map of agent_name -> sandbox_id for cleanup.
-        _server_tasks: Map of sandbox_id -> background asyncio.Task
+        _sandbox_names: Map of agent_name -> sandbox_name for cleanup.
+        _server_tasks: Map of sandbox_name -> background asyncio.Task
             for the exec'd server process.
     """
 
@@ -82,8 +84,8 @@ class OpenShellSpawner(AgentSpawner):
 
         Args:
             openshell_client: OpenShell SDK client for sandbox operations.
-                Must implement create_sandbox(), exec_stream(),
-                expose_service(), and delete_sandbox().
+                Must implement create(), wait_ready(), exec(), exec_stream(),
+                and delete().
             podman_cli: Path to the podman CLI binary. When set, enables
                 the Podman secret file mount workaround for Podman 5.8.x
                 (issue #82). The workaround extracts the sandbox JWT from
@@ -94,21 +96,21 @@ class OpenShellSpawner(AgentSpawner):
         super().__init__(**kwargs)
         self._client = openshell_client
         self._podman_cli = podman_cli
-        self._sandbox_ids: dict[str, str] = {}
+        self._sandbox_names: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
-        """Return the sandbox ID for an agent, or None if not tracked.
+        """Return the sandbox name for an agent, or None if not tracked.
 
         Args:
             agent_name: Name of the agent.
 
         Returns:
-            Sandbox ID string, or None if no sandbox is tracked for this agent.
+            Sandbox name string, or None if no sandbox is tracked for this agent.
         """
-        return self._sandbox_ids.get(agent_name)
+        return self._sandbox_names.get(agent_name)
 
-    async def _inject_podman_token(self, sandbox_id: str) -> None:
+    async def _inject_podman_token(self, sandbox_name: str) -> None:
         """Fix Podman 5.8.x secret file mount failure (issue #82).
 
         The OpenShell Podman driver creates a Podman secret with the
@@ -123,7 +125,7 @@ class OpenShellSpawner(AgentSpawner):
         back to the gateway.
 
         Args:
-            sandbox_id: OpenShell sandbox identifier.
+            sandbox_name: OpenShell sandbox name.
 
         Raises:
             RuntimeError: If the container or secret is not found, or
@@ -132,10 +134,10 @@ class OpenShellSpawner(AgentSpawner):
         assert self._podman_cli is not None  # noqa: S101
 
         # 1. Find the container name by label.
-        container_name = await self._podman_find_container(sandbox_id)
+        container_name = await self._podman_find_container(sandbox_name)
 
         # 2. Extract the JWT from the Podman secret.
-        secret_name = f"{_TOKEN_SECRET_PREFIX}{sandbox_id}"
+        secret_name = f"{_TOKEN_SECRET_PREFIX}{sandbox_name}"
         token = await self._podman_extract_secret(secret_name)
 
         # 3. Stop container, copy token, restart.
@@ -163,7 +165,7 @@ class OpenShellSpawner(AgentSpawner):
 
             logger.info(
                 "Podman token workaround applied for sandbox '%s' " "(container=%s, secret=%s)",
-                sandbox_id,
+                sandbox_name,
                 container_name,
                 secret_name,
             )
@@ -177,11 +179,11 @@ class OpenShellSpawner(AgentSpawner):
                 except OSError:
                     pass
 
-    async def _podman_find_container(self, sandbox_id: str) -> str:
+    async def _podman_find_container(self, sandbox_name: str) -> str:
         """Find the container name for a sandbox by its label.
 
         Args:
-            sandbox_id: OpenShell sandbox identifier.
+            sandbox_name: OpenShell sandbox name.
 
         Returns:
             Container name string.
@@ -195,7 +197,7 @@ class OpenShellSpawner(AgentSpawner):
             "ps",
             "-a",
             "--filter",
-            f"label={_SANDBOX_ID_LABEL}={sandbox_id}",
+            f"label={_SANDBOX_ID_LABEL}={sandbox_name}",
             "--format",
             "{{.Names}}",
             stdout=asyncio.subprocess.PIPE,
@@ -205,8 +207,8 @@ class OpenShellSpawner(AgentSpawner):
         name = stdout.decode().strip()
         if not name:
             raise RuntimeError(
-                f"No container found for sandbox '{sandbox_id}' "
-                f"(label={_SANDBOX_ID_LABEL}={sandbox_id})"
+                f"No container found for sandbox '{sandbox_name}' "
+                f"(label={_SANDBOX_ID_LABEL}={sandbox_name})"
             )
         # If multiple lines, take the first (shouldn't happen).
         return name.splitlines()[0].strip()
@@ -286,63 +288,86 @@ class OpenShellSpawner(AgentSpawner):
         """Create an OpenShell sandbox, start HTTP server, return endpoint.
 
         1. Create sandbox with the given image and env vars.
-        2. Exec the HTTP server command (fire-and-forget background task).
-        3. Expose the service port and return the routable URL.
+        2. Wait for sandbox to be ready.
+        3. Exec the HTTP server command (fire-and-forget background task).
+        4. Return the network-local endpoint URL.
 
         Returns:
             HTTP endpoint URL of the sandbox service.
         """
-        sandbox_id = await self._client.create_sandbox(
-            image=image,
-            env=env,
-            labels=labels,
+        from openshell._proto import openshell_pb2
+
+        # Build sandbox name using our naming convention
+        sandbox_name = f"ca-agent-{agent_name}"
+
+        # Construct SandboxSpec for the new API
+        spec = openshell_pb2.SandboxSpec(
+            template=openshell_pb2.SandboxTemplate(
+                image=image,
+                labels=labels or {},
+            )
         )
-        self._sandbox_ids[agent_name] = sandbox_id
+        # Add environment variables
+        for key, value in env.items():
+            spec.environment[key] = value
+
+        # Create sandbox (sync call wrapped in thread)
+        sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
+        sandbox_name = sandbox_ref.name
+        self._sandbox_names[agent_name] = sandbox_name
 
         try:
+            # Wait for sandbox to be ready
+            await asyncio.to_thread(
+                self._client.wait_ready,
+                sandbox_name,
+                timeout_seconds=300,
+            )
+
             # Workaround for Podman 5.8.x secret file mount bug (issue #82).
             # The OpenShell Podman driver's secrets field is not applied to
             # the container, so the supervisor can't read the sandbox JWT.
             # Extract the JWT from the Podman secret and copy it in manually.
             if self._podman_cli is not None:
-                await self._inject_podman_token(sandbox_id)
+                await self._inject_podman_token(sandbox_name)
 
             # Start HTTP server via exec (fire-and-forget)
-            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
+            await self.start_server(sandbox_name, _DEFAULT_SERVER_COMMAND, env=env)
 
-            # Expose service port and get routable endpoint
-            endpoint = await self._client.expose_service(sandbox_id, port=8080)
+            # No expose_service in new API — sandbox container is on same network.
+            # OpenShell prefixes container names with "openshell-sandbox-"
+            endpoint = f"http://openshell-sandbox-{sandbox_name}:8080"
         except Exception:
             # Clean up the sandbox so it is not orphaned.
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
                 "deleting sandbox to prevent orphan",
-                sandbox_id,
+                sandbox_name,
                 agent_name,
                 exc_info=True,
             )
             try:
-                await self._client.delete_sandbox(sandbox_id)
+                await asyncio.to_thread(self._client.delete, sandbox_name)
             except Exception:
                 logger.warning(
                     "Failed to delete orphaned sandbox '%s' during cleanup",
-                    sandbox_id,
+                    sandbox_name,
                     exc_info=True,
                 )
-            self._sandbox_ids.pop(agent_name, None)
+            self._sandbox_names.pop(agent_name, None)
             raise
 
         logger.info(
-            "Spawned OpenShell sandbox '%s' (id=%s) at %s",
+            "Spawned OpenShell sandbox '%s' (name=%s) at %s",
             agent_name,
-            sandbox_id,
+            sandbox_name,
             endpoint,
         )
         return endpoint
 
     async def start_server(
         self,
-        sandbox_id: str,
+        sandbox_name: str,
         command: list[str],
         env: dict[str, str] | None = None,
     ) -> None:
@@ -352,7 +377,7 @@ class OpenShellSpawner(AgentSpawner):
         asyncio task. The method returns immediately.
 
         Args:
-            sandbox_id: OpenShell sandbox identifier.
+            sandbox_name: OpenShell sandbox name.
             command: Command to execute (e.g. uvicorn invocation).
             env: Optional environment variables for the exec.
         """
@@ -360,22 +385,32 @@ class OpenShellSpawner(AgentSpawner):
         async def _consume_exec() -> None:
             """Consume exec_stream output in background (fire-and-forget)."""
             try:
-                async for chunk in self._client.exec_stream(sandbox_id, command, env=env):
-                    # Log server output at debug level
-                    logger.debug("Server output [%s]: %s", sandbox_id, chunk.rstrip())
+                # exec_stream is now a sync iterator — wrap in to_thread
+                def _sync_consume():
+                    for item in self._client.exec_stream(sandbox_name, command, env=env):
+                        # item is ExecChunk or ExecResult
+                        if hasattr(item, "chunk"):
+                            chunk = item.chunk
+                        else:
+                            # ExecResult — log final status
+                            logger.debug("Server exec result [%s]: exit_code=%s", sandbox_name, item.exit_code)
+                            continue
+                        logger.debug("Server output [%s]: %s", sandbox_name, chunk.rstrip())
+
+                await asyncio.to_thread(_sync_consume)
             except asyncio.CancelledError:
-                logger.info("Server exec cancelled for sandbox '%s'", sandbox_id)
+                logger.info("Server exec cancelled for sandbox '%s'", sandbox_name)
             except Exception:
                 logger.warning(
                     "Server exec ended for sandbox '%s'",
-                    sandbox_id,
+                    sandbox_name,
                     exc_info=True,
                 )
 
         task = asyncio.create_task(_consume_exec())
-        self._server_tasks[sandbox_id] = task
+        self._server_tasks[sandbox_name] = task
 
-    async def stream_progress(self, sandbox_id: str) -> AsyncIterator[dict[str, Any]]:
+    async def stream_progress(self, sandbox_name: str) -> AsyncIterator[dict[str, Any]]:
         """Stream agent progress events from the sandbox event log.
 
         Calls exec_stream with tail -f on the JSONL event log file.
@@ -386,49 +421,94 @@ class OpenShellSpawner(AgentSpawner):
         isinstance(spawner, OpenShellSpawner) before calling.
 
         Args:
-            sandbox_id: OpenShell sandbox identifier.
+            sandbox_name: OpenShell sandbox name.
 
         Yields:
             Parsed JSONL event dicts from the agent event log.
         """
         tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
         partial = ""
+
+        # Use a queue to communicate between thread and async code
+        import queue
+        q: queue.Queue = queue.Queue()
+
+        def _sync_stream():
+            """Run in thread - consume sync iterator and put events in queue."""
+            nonlocal partial
+            try:
+                for item in self._client.exec_stream(sandbox_name, tail_cmd):
+                    # item is ExecChunk or ExecResult
+                    if hasattr(item, "chunk"):
+                        chunk = item.chunk
+                    else:
+                        # ExecResult — stream ended
+                        break
+
+                    data = partial + chunk
+                    # Split but keep partial last line if chunk doesn't end with newline
+                    lines = data.split("\n")
+                    # If data doesn't end with newline, last element is a partial line
+                    if not data.endswith("\n"):
+                        partial = lines[-1]
+                        lines = lines[:-1]
+                    else:
+                        partial = ""
+
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                            q.put(("event", event))
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Invalid JSON in event stream [%s]: %s",
+                                sandbox_name,
+                                line[:200],
+                            )
+            except (ConnectionError, OSError) as exc:
+                q.put(("error", exc))
+            except Exception as exc:
+                q.put(("error", exc))
+            finally:
+                q.put(("done", None))
+
+        # Start thread to consume sync iterator
+        import threading
+        thread = threading.Thread(target=_sync_stream, daemon=True)
+        thread.start()
+
         try:
-            async for chunk in self._client.exec_stream(sandbox_id, tail_cmd):
-                data = partial + chunk
-                # Split but keep partial last line if chunk doesn't end with newline
-                lines = data.split("\n")
-                # If data doesn't end with newline, last element is a partial line
-                if not data.endswith("\n"):
-                    partial = lines[-1]
-                    lines = lines[:-1]
-                else:
-                    partial = ""
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                        yield event
-                    except json.JSONDecodeError:
+            while True:
+                # Poll queue with timeout to allow async event loop to run
+                try:
+                    msg_type, msg_data = await asyncio.to_thread(q.get, timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                if msg_type == "event":
+                    yield msg_data
+                elif msg_type == "error":
+                    if isinstance(msg_data, (ConnectionError, OSError)):
                         logger.warning(
-                            "Invalid JSON in event stream [%s]: %s",
-                            sandbox_id,
-                            line[:200],
+                            "Progress stream disconnected for sandbox '%s': %s",
+                            sandbox_name,
+                            msg_data,
                         )
-        except (ConnectionError, OSError) as exc:
-            logger.warning(
-                "Progress stream disconnected for sandbox '%s': %s",
-                sandbox_id,
-                exc,
-            )
-        except Exception:
-            logger.warning(
-                "Progress stream error for sandbox '%s'",
-                sandbox_id,
-                exc_info=True,
-            )
+                    else:
+                        logger.warning(
+                            "Progress stream error for sandbox '%s'",
+                            sandbox_name,
+                            exc_info=True,
+                        )
+                    break
+                elif msg_type == "done":
+                    break
+        finally:
+            # Wait for thread to finish
+            thread.join(timeout=1.0)
 
     async def _do_write_file(self, agent_name: str, path: str, content: str) -> None:
         """Write content to a file inside an OpenShell sandbox via exec.
@@ -448,17 +528,21 @@ class OpenShellSpawner(AgentSpawner):
         import base64
         import shlex
 
-        sandbox_id = self._sandbox_ids.get(agent_name)
-        if not sandbox_id:
+        sandbox_name = self._sandbox_names.get(agent_name)
+        if not sandbox_name:
             raise RuntimeError(f"No sandbox tracked for agent '{agent_name}'")
 
         encoded = base64.b64encode(content.encode()).decode()
         cmd = ["sh", "-c", f"echo '{encoded}' | base64 -d > {shlex.quote(path)}"]
         try:
-            async for _ in self._client.exec_stream(sandbox_id, cmd):
-                pass  # consume output
+            # exec_stream is sync iterator — consume in thread
+            def _sync_exec():
+                for _ in self._client.exec_stream(sandbox_name, cmd):
+                    pass  # consume output
+
+            await asyncio.to_thread(_sync_exec)
         except Exception as exc:
-            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
+            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_name}: {exc}") from exc
 
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Read a file from an OpenShell sandbox via exec.
@@ -475,14 +559,19 @@ class OpenShellSpawner(AgentSpawner):
         Raises:
             FileNotFoundError: If the sandbox or file is not found.
         """
-        sandbox_id = self._sandbox_ids.get(agent_name)
-        if not sandbox_id:
+        sandbox_name = self._sandbox_names.get(agent_name)
+        if not sandbox_name:
             raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
 
         chunks: list[str] = []
         try:
-            async for chunk in self._client.exec_stream(sandbox_id, ["cat", path]):
-                chunks.append(chunk)
+            # exec_stream is sync iterator — consume in thread
+            def _sync_exec():
+                for item in self._client.exec_stream(sandbox_name, ["cat", path]):
+                    if hasattr(item, "chunk"):
+                        chunks.append(item.chunk)
+
+            await asyncio.to_thread(_sync_exec)
         except Exception as exc:
             if "no such file" in str(exc).lower() or "not found" in str(exc).lower():
                 raise FileNotFoundError(f"File not found: {path}") from exc
@@ -499,13 +588,13 @@ class OpenShellSpawner(AgentSpawner):
         Args:
             agent_name: Name of the agent to destroy.
         """
-        sandbox_id = self._sandbox_ids.get(agent_name)
-        if not sandbox_id:
-            logger.warning("No sandbox ID found for agent '%s'", agent_name)
+        sandbox_name = self._sandbox_names.get(agent_name)
+        if not sandbox_name:
+            logger.warning("No sandbox name found for agent '%s'", agent_name)
             return
 
         # Cancel server background task if running
-        task = self._server_tasks.pop(sandbox_id, None)
+        task = self._server_tasks.pop(sandbox_name, None)
         if task and not task.done():
             task.cancel()
             try:
@@ -514,23 +603,23 @@ class OpenShellSpawner(AgentSpawner):
                 pass
 
         try:
-            await self._client.delete_sandbox(sandbox_id)
-            logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_id, agent_name)
+            await asyncio.to_thread(self._client.delete, sandbox_name)
+            logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
         except Exception:
             # Do NOT re-raise: base.destroy() always decrements _active_count
             # in its finally block.  Re-raising would cause a double-decrement
-            # on retry.  Keep the _sandbox_ids entry so the sandbox is visible
+            # on retry.  Keep the _sandbox_names entry so the sandbox is visible
             # via list_active() for manual cleanup or a subsequent destroy().
             logger.warning(
                 "Failed to destroy sandbox '%s' (agent=%s) — "
-                "sandbox retained in _sandbox_ids for manual cleanup",
-                sandbox_id,
+                "sandbox retained in _sandbox_names for manual cleanup",
+                sandbox_name,
                 agent_name,
                 exc_info=True,
             )
             return
         # Only remove tracking after successful delete
-        self._sandbox_ids.pop(agent_name, None)
+        self._sandbox_names.pop(agent_name, None)
 
     async def _do_list_active(
         self,
@@ -544,4 +633,4 @@ class OpenShellSpawner(AgentSpawner):
         Returns:
             List of agent names with active sandboxes.
         """
-        return list(self._sandbox_ids.keys())
+        return list(self._sandbox_names.keys())

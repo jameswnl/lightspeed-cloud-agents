@@ -23,15 +23,9 @@ class TestOpenShellSpawnerStartServer:
         """start_server calls exec_stream with the given command."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        # exec_stream returns an async iterator that we consume in a background task
-        mock_client.exec_stream.return_value = mocker.AsyncMock(
-            __aiter__=mocker.MagicMock(
-                return_value=mocker.AsyncMock(
-                    __anext__=mocker.AsyncMock(side_effect=StopAsyncIteration)
-                )
-            )
-        )
+        mock_client = mocker.Mock()
+        # exec_stream is now a sync iterator
+        mock_client.exec_stream.return_value = iter([])
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
         command = ["uvicorn", "lightspeed_agentic.app:create_app", "--host", "0.0.0.0"]
@@ -47,15 +41,17 @@ class TestOpenShellSpawnerStartServer:
         """start_server returns immediately without blocking on exec output."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        # Make exec_stream block indefinitely
-        async def slow_exec(*args, **kwargs):
-            async def slow_gen():
-                await asyncio.sleep(100)
+        # Make exec_stream block indefinitely (sync iterator)
+        def slow_exec(*args, **kwargs):
+            import time
+
+            def slow_gen():
+                time.sleep(100)
                 yield "never"
 
             return slow_gen()
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = slow_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -71,14 +67,16 @@ class TestOpenShellSpawnerStartServer:
         """start_server stores the background task for later cleanup."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def forever_exec(*args, **kwargs):
-            async def gen():
-                await asyncio.sleep(100)
+        def forever_exec(*args, **kwargs):
+            import time
+
+            def gen():
+                time.sleep(100)
                 yield "data"
 
             return gen()
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = forever_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -105,11 +103,16 @@ class TestOpenShellSpawnerStreamProgress:
             '{"type": "tool_result", "name": "get_pods", "ts": "2024-01-01T00:00:01Z"}\n',
         ]
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            for event in events:
-                yield event
+        # Create mock ExecChunk objects
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            for event in events:
+                yield ExecChunk(event)
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -130,10 +133,14 @@ class TestOpenShellSpawnerStreamProgress:
 
         chunk = '{"type": "tool_call", "name": "a"}\n' '{"type": "tool_result", "name": "a"}\n'
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield chunk
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk(chunk)
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -149,10 +156,14 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress skips empty lines in the stream."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield '\n\n{"type": "tool_call", "name": "a"}\n\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk('\n\n{"type": "tool_call", "name": "a"}\n\n')
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -168,11 +179,15 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress logs warning and skips invalid JSON lines."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield "not valid json\n"
-            yield '{"type": "tool_call", "name": "a"}\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk("not valid json\n")
+            yield ExecChunk('{"type": "tool_call", "name": "a"}\n')
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -190,11 +205,15 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress catches gRPC/connection errors and stops yielding."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield '{"type": "tool_call", "name": "a"}\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
+
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk('{"type": "tool_call", "name": "a"}\n')
             raise ConnectionError("gRPC stream disconnected")
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -213,13 +232,12 @@ class TestOpenShellSpawnerStreamProgress:
 
         call_args = {}
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            call_args["sandbox_id"] = sandbox_id
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            call_args["sandbox_name"] = sandbox_name
             call_args["cmd"] = cmd
-            return
-            yield  # Make it an async generator
+            return iter([])  # Return empty iterator
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -242,21 +260,20 @@ class TestOpenShellSpawnerWriteFile:
 
         call_args: dict[str, Any] = {}
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            call_args["sandbox_id"] = sandbox_id
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            call_args["sandbox_name"] = sandbox_name
             call_args["cmd"] = cmd
-            return
-            yield  # Make it an async generator
+            return iter([])  # Return empty iterator
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         await spawner._do_write_file("agent-1", "/tmp/test.txt", "hello world")
 
-        assert call_args["sandbox_id"] == "sb-123"
+        assert call_args["sandbox_name"] == "sb-123"
         cmd = call_args["cmd"]
         assert cmd[0] == "sh"
         assert cmd[1] == "-c"
@@ -271,7 +288,7 @@ class TestOpenShellSpawnerWriteFile:
         """write_file raises RuntimeError for unknown agent."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
         with pytest.raises(RuntimeError, match="No sandbox tracked"):
@@ -282,15 +299,15 @@ class TestOpenShellSpawnerWriteFile:
         """write_file raises RuntimeError when exec_stream fails."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def failing_exec(sandbox_id, cmd, **kwargs):
+        def failing_exec(sandbox_name, cmd, **kwargs):
             raise ConnectionError("sandbox unreachable")
             yield  # pragma: no cover
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         mock_client.exec_stream = failing_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         with pytest.raises(RuntimeError, match="Failed to write"):
             await spawner._do_write_file("agent-1", "/tmp/test.txt", "content")
@@ -301,38 +318,45 @@ class TestOpenShellSpawnerSpawn:
 
     @pytest.mark.asyncio
     async def test_spawn_creates_sandbox_and_returns_endpoint(self, mocker: MockerFixture) -> None:
-        """_do_spawn creates sandbox, starts server, exposes service."""
+        """_do_spawn creates sandbox, starts server, returns network endpoint."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
-        mock_client.expose_service.return_value = "http://sb-123.example.com:8080"
+        # Mock SandboxRef
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def noop_exec(*args, **kwargs):
+            return iter([])
 
         mock_client.exec_stream = noop_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
         endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
 
-        assert endpoint == "http://sb-123.example.com:8080"
-        mock_client.create_sandbox.assert_called_once()
-        mock_client.expose_service.assert_called_once_with("sb-123", port=8080)
+        assert endpoint == "http://openshell-sandbox-ca-agent-agent-1:8080"
+        mock_client.create.assert_called_once()
+        mock_client.wait_ready.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_spawn_passes_env_to_sandbox(self, mocker: MockerFixture) -> None:
         """_do_spawn passes environment variables to sandbox creation."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
-        mock_client.expose_service.return_value = "http://sb-123:8080"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def noop_exec(*args, **kwargs):
+            return iter([])
 
         mock_client.exec_stream = noop_exec
 
@@ -340,8 +364,12 @@ class TestOpenShellSpawnerSpawn:
         env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4"}
         await spawner.spawn("agent-1", "sandbox:latest", env=env)
 
-        create_call = mock_client.create_sandbox.call_args
-        assert create_call[1].get("env") == env or create_call.kwargs.get("env") == env
+        # Verify create was called and check the spec
+        create_call = mock_client.create.call_args
+        spec = create_call.kwargs["spec"]
+        # Environment variables are in spec.environment
+        assert spec.environment["LIGHTSPEED_PROVIDER"] == "openai"
+        assert spec.environment["LIGHTSPEED_MODEL"] == "gpt-4"
 
 
 class TestOpenShellSpawnerDestroy:
@@ -352,22 +380,22 @@ class TestOpenShellSpawnerDestroy:
         """destroy deletes the OpenShell sandbox."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         await spawner.destroy("agent-1")
 
-        mock_client.delete_sandbox.assert_called_once_with("sb-123")
+        mock_client.delete.assert_called_once_with("sb-123")
 
     @pytest.mark.asyncio
     async def test_destroy_cancels_server_task(self, mocker: MockerFixture) -> None:
         """destroy cancels the background server task if running."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         # Fake awaitable task that tracks cancel() calls
         class FakeTask:
@@ -389,7 +417,7 @@ class TestOpenShellSpawnerDestroy:
         await spawner.destroy("agent-1")
 
         assert fake_task.cancel_count == 1
-        mock_client.delete_sandbox.assert_called_once()
+        mock_client.delete.assert_called_once()
 
 
 class TestOpenShellSpawnerListActive:
@@ -400,10 +428,10 @@ class TestOpenShellSpawnerListActive:
         """list_active returns tracked sandbox agent names."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-1"
-        spawner._sandbox_ids["agent-2"] = "sb-2"
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_names["agent-2"] = "sb-2"
 
         result = await spawner.list_active()
 
@@ -415,38 +443,38 @@ class TestOpenShellSpawnerDestroyTracking:
 
     @pytest.mark.asyncio
     async def test_destroy_retains_tracking_on_delete_failure(self, mocker: MockerFixture) -> None:
-        """If delete_sandbox fails, agent_name remains in _sandbox_ids for retry.
+        """If delete fails, agent_name remains in _sandbox_names for retry.
 
         _do_destroy must NOT re-raise: base.destroy() always decrements
         _active_count in its finally block, so re-raising would cause a
         double-decrement on retry.  Instead, _do_destroy logs the error
-        and returns, keeping the entry in _sandbox_ids for manual cleanup.
+        and returns, keeping the entry in _sandbox_names for manual cleanup.
         """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.delete_sandbox.side_effect = RuntimeError("API error")
+        mock_client = mocker.Mock()
+        mock_client.delete.side_effect = RuntimeError("API error")
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         # Should NOT raise — _do_destroy swallows the error
         await spawner.destroy("agent-1")
 
         # Tracking should NOT be removed since delete failed
-        assert "agent-1" in spawner._sandbox_ids
+        assert "agent-1" in spawner._sandbox_names
 
     @pytest.mark.asyncio
     async def test_destroy_removes_tracking_on_success(self, mocker: MockerFixture) -> None:
-        """On successful delete, agent_name is removed from _sandbox_ids."""
+        """On successful delete, agent_name is removed from _sandbox_names."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         await spawner.destroy("agent-1")
 
-        assert "agent-1" not in spawner._sandbox_ids
+        assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
     async def test_destroy_failure_does_not_double_decrement_active_count(
@@ -462,17 +490,17 @@ class TestOpenShellSpawnerDestroyTracking:
         """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.delete_sandbox.side_effect = RuntimeError("API error")
+        mock_client = mocker.Mock()
+        mock_client.delete.side_effect = RuntimeError("API error")
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
         spawner._active_count = 1  # simulate one spawned pod
 
         # First destroy — decrements to 0, does not raise
         await spawner.destroy("agent-1")
         assert spawner.active_count == 0
 
-        # Second destroy (retry) — still sandbox in _sandbox_ids, decrements
+        # Second destroy (retry) — still sandbox in _sandbox_names, decrements
         # would go to max(0, -1) = 0 without the clamp, but the point is
         # it should NOT have been at -1 before clamping.
         await spawner.destroy("agent-1")
@@ -487,13 +515,17 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """stream_progress reassembles JSON split across chunk boundaries."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            # First chunk ends mid-JSON
-            yield '{"type": "tool_'
-            # Second chunk completes the JSON line
-            yield 'call", "name": "get_pods"}\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            # First chunk ends mid-JSON
+            yield ExecChunk('{"type": "tool_')
+            # Second chunk completes the JSON line
+            yield ExecChunk('call", "name": "get_pods"}\n')
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -513,13 +545,17 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """stream_progress handles multiple successive partial chunks."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield '{"type":'
-            yield ' "tool_call",'
-            yield ' "name": "a"}\n'
-            yield '{"type": "done"}\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk('{"type":')
+            yield ExecChunk(' "tool_call",')
+            yield ExecChunk(' "name": "a"}\n')
+            yield ExecChunk('{"type": "done"}\n')
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -539,11 +575,15 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """When chunks end with newline, no buffering is needed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        async def mock_exec_stream(sandbox_id, cmd, **kwargs):
-            yield '{"type": "a"}\n'
-            yield '{"type": "b"}\n'
+        class ExecChunk:
+            def __init__(self, chunk):
+                self.chunk = chunk
 
-        mock_client = mocker.AsyncMock()
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield ExecChunk('{"type": "a"}\n')
+            yield ExecChunk('{"type": "b"}\n')
+
+        mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
@@ -559,12 +599,12 @@ class TestOpenShellSpawnerGetSandboxId:
     """Tests for get_sandbox_id() public accessor (finding 13)."""
 
     def test_returns_sandbox_id_when_tracked(self, mocker: MockerFixture) -> None:
-        """get_sandbox_id returns the sandbox ID for a tracked agent."""
+        """get_sandbox_id returns the sandbox name for a tracked agent."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "sb-123"
+        spawner._sandbox_names["agent-1"] = "sb-123"
 
         assert spawner.get_sandbox_id("agent-1") == "sb-123"
 
@@ -572,7 +612,7 @@ class TestOpenShellSpawnerGetSandboxId:
         """get_sandbox_id returns None for an unknown agent."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
+        mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
         assert spawner.get_sandbox_id("unknown") is None
@@ -591,13 +631,16 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         """No workaround attempted when podman_cli is None."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
-        mock_client.expose_service.return_value = "http://sb-123:8080"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def noop_exec(*args, **kwargs):
+            return iter([])
 
         mock_client.exec_stream = noop_exec
 
@@ -614,16 +657,19 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
     @pytest.mark.asyncio
     async def test_workaround_enabled_when_podman_cli_set(self, mocker: MockerFixture) -> None:
-        """Workaround is called after create_sandbox when podman_cli is set."""
+        """Workaround is called after create when podman_cli is set."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
-        mock_client.expose_service.return_value = "http://sb-123:8080"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def noop_exec(*args, **kwargs):
+            return iter([])
 
         mock_client.exec_stream = noop_exec
 
@@ -637,7 +683,7 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
         await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        mock_workaround.assert_called_once_with("sb-123")
+        mock_workaround.assert_called_once_with("ca-agent-agent-1")
 
     @pytest.mark.asyncio
     async def test_inject_token_extracts_from_podman_secret(self, mocker: MockerFixture) -> None:
@@ -929,16 +975,19 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
     @pytest.mark.asyncio
     async def test_spawn_proceeds_after_successful_workaround(self, mocker: MockerFixture) -> None:
-        """After workaround, spawn continues to start server and expose."""
+        """After workaround, spawn continues to start server and return endpoint."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
-        mock_client.expose_service.return_value = "http://sb-123:8080"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def noop_exec(*args, **kwargs):
+            return iter([])
 
         mock_client.exec_stream = noop_exec
 
@@ -954,9 +1003,9 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
         endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        assert endpoint == "http://sb-123:8080"
-        mock_client.create_sandbox.assert_called_once()
-        mock_client.expose_service.assert_called_once_with("sb-123", port=8080)
+        assert endpoint == "http://openshell-sandbox-ca-agent-agent-1:8080"
+        mock_client.create.assert_called_once()
+        mock_client.wait_ready.assert_called_once()
 
 
 class TestOpenShellSpawnerPostCreateCleanup:
@@ -972,13 +1021,17 @@ class TestOpenShellSpawnerPostCreateCleanup:
         """If _inject_podman_token raises, sandbox is deleted and tracking removed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-orphan"
-        mock_client.expose_service.return_value = "http://sb-orphan:8080"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
 
-        # _inject_podman_token fails after create_sandbox succeeds
+        # _inject_podman_token fails after create succeeds
         mocker.patch.object(
             spawner,
             "_inject_podman_token",
@@ -990,10 +1043,10 @@ class TestOpenShellSpawnerPostCreateCleanup:
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
         # Sandbox must be cleaned up
-        mock_client.delete_sandbox.assert_called_once_with("sb-orphan")
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1")
 
         # Tracking must not retain the orphaned entry
-        assert "agent-1" not in spawner._sandbox_ids
+        assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
     async def test_inject_token_failure_propagates_original_exception(
@@ -1002,8 +1055,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         """The original exception from _inject_podman_token propagates to the caller."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
 
@@ -1011,43 +1069,46 @@ class TestOpenShellSpawnerPostCreateCleanup:
             spawner,
             "_inject_podman_token",
             new_callable=mocker.AsyncMock,
-            side_effect=RuntimeError("No container found for sandbox 'sb-123'"),
+            side_effect=RuntimeError("No container found for sandbox 'ca-agent-agent-1'"),
         )
 
         with pytest.raises(RuntimeError, match="No container found"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
     @pytest.mark.asyncio
-    async def test_expose_service_failure_deletes_sandbox(self, mocker: MockerFixture) -> None:
-        """If expose_service raises, sandbox is deleted and tracking removed."""
+    async def test_wait_ready_failure_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """If wait_ready raises, sandbox is deleted and tracking removed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-orphan-2"
-        mock_client.expose_service.side_effect = RuntimeError("port unavailable")
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
 
-        async def noop_exec(*args, **kwargs):
-            return
-            yield
-
-        mock_client.exec_stream = noop_exec
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.side_effect = RuntimeError("sandbox failed to start")
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
-        with pytest.raises(RuntimeError, match="port unavailable"):
+        with pytest.raises(RuntimeError, match="sandbox failed to start"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        mock_client.delete_sandbox.assert_called_once_with("sb-orphan-2")
-        assert "agent-1" not in spawner._sandbox_ids
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1")
+        assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
     async def test_cleanup_tolerates_delete_sandbox_failure(self, mocker: MockerFixture) -> None:
-        """If delete_sandbox also fails during cleanup, the original error still propagates."""
+        """If delete also fails during cleanup, the original error still propagates."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-double-fail"
-        mock_client.delete_sandbox.side_effect = RuntimeError("API unreachable")
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.delete.side_effect = RuntimeError("API unreachable")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
 
@@ -1062,8 +1123,8 @@ class TestOpenShellSpawnerPostCreateCleanup:
         with pytest.raises(RuntimeError, match="token injection failed"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        # Tracking must still be cleaned up even if delete_sandbox failed
-        assert "agent-1" not in spawner._sandbox_ids
+        # Tracking must still be cleaned up even if delete failed
+        assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
     async def test_active_count_decremented_on_post_create_failure(
@@ -1072,8 +1133,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         """base.spawn() decrements _active_count when _do_spawn re-raises."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        mock_client = mocker.AsyncMock()
-        mock_client.create_sandbox.return_value = "sb-123"
+        class SandboxRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
 
