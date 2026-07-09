@@ -173,6 +173,7 @@ class PodmanSpawner(AgentSpawner):
                 "detach": True,
                 "environment": env,
                 "network": self._network,
+                "network_mode": "bridge",
                 "volumes": volumes if volumes else {},
                 "ports": {f"{container_port}/tcp": None},
                 "labels": container_labels,

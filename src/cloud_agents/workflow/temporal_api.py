@@ -66,8 +66,9 @@ class RunWorkflowRequest(BaseModel):
     definition: dict[str, Any] | None = None
     input_prompt: str | None = None
     provider: ProviderConfig | None = None
-    sandbox_image: str = (
-        "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
+    sandbox_image: str = os.environ.get(
+        "SANDBOX_IMAGE",
+        "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest",
     )
     skills_image: str | None = None
     skills_paths: list[str] | None = None
