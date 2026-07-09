@@ -89,7 +89,7 @@ class TestProgressStreamingWithOpenShell:
         mocker.patch.object(spawner, "spawn", return_value="http://sb-1:8080")
         mocker.patch.object(spawner, "wait_ready", return_value=True)
         mocker.patch.object(spawner, "destroy", return_value=None)
-        spawner._sandbox_ids[_DEFAULT_POD_NAME] = "sb-1"
+        spawner._sandbox_names[_DEFAULT_POD_NAME] = "sb-1"
 
         # Mock stream_progress to yield one event then stop
         async def mock_stream_progress(sandbox_id):
@@ -126,7 +126,7 @@ class TestProgressStreamingWithOpenShell:
         mocker.patch.object(spawner, "spawn", return_value="http://sb-1:8080")
         mocker.patch.object(spawner, "wait_ready", return_value=True)
         mocker.patch.object(spawner, "destroy", return_value=None)
-        spawner._sandbox_ids[_DEFAULT_POD_NAME] = "sb-1"
+        spawner._sandbox_names[_DEFAULT_POD_NAME] = "sb-1"
 
         # Yield event with very long input
         long_input = "x" * 5000
@@ -163,7 +163,7 @@ class TestProgressStreamingWithOpenShell:
         mocker.patch.object(spawner, "spawn", return_value="http://sb-1:8080")
         mocker.patch.object(spawner, "wait_ready", return_value=True)
         mocker.patch.object(spawner, "destroy", return_value=None)
-        spawner._sandbox_ids[_DEFAULT_POD_NAME] = "sb-1"
+        spawner._sandbox_names[_DEFAULT_POD_NAME] = "sb-1"
 
         progress_cancelled = False
 
@@ -251,7 +251,7 @@ class TestProgressStreamError:
         mocker.patch.object(spawner, "spawn", return_value="http://sb-1:8080")
         mocker.patch.object(spawner, "wait_ready", return_value=True)
         mocker.patch.object(spawner, "destroy", return_value=None)
-        spawner._sandbox_ids[_DEFAULT_POD_NAME] = "sb-1"
+        spawner._sandbox_names[_DEFAULT_POD_NAME] = "sb-1"
 
         async def failing_stream_progress(sandbox_id):
             yield {"type": "tool_call", "name": "a", "ts": "t1"}

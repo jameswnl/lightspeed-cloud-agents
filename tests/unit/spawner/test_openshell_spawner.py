@@ -7,6 +7,16 @@ Also tests the Podman secret file mount workaround (issue #82).
 
 from __future__ import annotations
 
+import sys
+from unittest.mock import MagicMock
+
+# Stub openshell if not installed (CI doesn't install the openshell extra)
+if "openshell" not in sys.modules:
+    _mock_openshell = MagicMock()
+    sys.modules["openshell"] = _mock_openshell
+    sys.modules["openshell._proto"] = _mock_openshell._proto
+    sys.modules["openshell._proto.openshell_pb2"] = _mock_openshell._proto.openshell_pb2
+
 import asyncio
 import json
 from typing import Any
@@ -364,12 +374,13 @@ class TestOpenShellSpawnerSpawn:
         env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4"}
         await spawner.spawn("agent-1", "sandbox:latest", env=env)
 
-        # Verify create was called and check the spec
+        # Verify create was called with a spec
+        mock_client.create.assert_called_once()
         create_call = mock_client.create.call_args
         spec = create_call.kwargs["spec"]
-        # Environment variables are in spec.environment
-        assert spec.environment["LIGHTSPEED_PROVIDER"] == "openai"
-        assert spec.environment["LIGHTSPEED_MODEL"] == "gpt-4"
+        # Verify env vars were set on the spec (protobuf map assignment)
+        spec.environment.__setitem__.assert_any_call("LIGHTSPEED_PROVIDER", "openai")
+        spec.environment.__setitem__.assert_any_call("LIGHTSPEED_MODEL", "gpt-4")
 
 
 class TestOpenShellSpawnerDestroy:
