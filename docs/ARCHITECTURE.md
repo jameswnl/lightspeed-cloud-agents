@@ -205,6 +205,8 @@ Workflows can be started from multiple entry points:
 
 ## Workflow Definition
 
+> **JSON Schema**: The full machine-readable schema is at [`schema/workflow-definition.schema.json`](../schema/workflow-definition.schema.json), auto-generated from the Pydantic models. Add `# yaml-language-server: $schema=../../schema/workflow-definition.schema.json` to workflow YAML files for IDE validation. Regenerate with `uv run python schema/generate.py`.
+
 ```yaml
 apiVersion: v1
 kind: AgentWorkflow
