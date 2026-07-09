@@ -15,10 +15,22 @@ from cloud_agents.workflow.definition import WorkflowDefinition
 
 SCHEMA_PATH = Path(__file__).parent / "workflow-definition.schema.json"
 
+DEAD_STEP_FIELDS = {"spawn", "agent", "spawn_config"}
+
+
+def _strip_dead_fields(schema: dict) -> dict:
+    """Remove dead fields from WorkflowStepSpec in the generated schema."""
+    step_spec = schema.get("$defs", {}).get("WorkflowStepSpec", {})
+    props = step_spec.get("properties", {})
+    for field in DEAD_STEP_FIELDS:
+        props.pop(field, None)
+    return schema
+
 
 def generate() -> str:
     """Return the JSON Schema as a formatted string."""
     schema = WorkflowDefinition.model_json_schema()
+    schema = _strip_dead_fields(schema)
     return json.dumps(schema, indent=2) + "\n"
 
 

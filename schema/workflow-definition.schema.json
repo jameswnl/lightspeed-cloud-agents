@@ -212,18 +212,6 @@
           "title": "Type",
           "type": "string"
         },
-        "agent": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Agent"
-        },
         "prompt": {
           "anyOf": [
             {
@@ -274,16 +262,6 @@
           "minimum": 1,
           "title": "Max Retries",
           "type": "integer"
-        },
-        "spawn": {
-          "default": "ephemeral",
-          "enum": [
-            "pre-deployed",
-            "on-demand",
-            "ephemeral"
-          ],
-          "title": "Spawn",
-          "type": "string"
         },
         "risk_level": {
           "anyOf": [
@@ -340,17 +318,6 @@
           ],
           "default": null,
           "title": "Mcp Servers"
-        },
-        "spawn_config": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SpawnConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "runtime": {
           "default": "sandbox",
