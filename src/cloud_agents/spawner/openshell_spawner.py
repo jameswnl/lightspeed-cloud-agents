@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import tempfile
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
 
@@ -104,15 +104,18 @@ class OpenShellSpawner(AgentSpawner):
         self._server_tasks: dict[str, asyncio.Task] = {}
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
-        """Return the sandbox name for an agent, or None if not tracked.
+        """Return the sandbox ID (UUID) for an agent, or None if not tracked.
+
+        The OpenShell SDK's exec_stream() requires the sandbox UUID,
+        not the human-readable sandbox name.
 
         Args:
             agent_name: Name of the agent.
 
         Returns:
-            Sandbox name string, or None if no sandbox is tracked for this agent.
+            Sandbox ID string (UUID), or None if no sandbox is tracked.
         """
-        return self._sandbox_names.get(agent_name)
+        return self._sandbox_ids.get(agent_name)
 
     def get_sandbox_headers(self, agent_name: str) -> dict[str, str]:
         """Return HTTP headers for gateway-proxied sandbox requests.
@@ -176,6 +179,21 @@ class OpenShellSpawner(AgentSpawner):
             return rewritten_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
+
+    async def wait_ready(
+        self,
+        endpoint: str,
+        timeout: float = 60.0,
+        health_path: str = "/health",
+        ca_cert_pem: bytes | None = None,
+    ) -> bool:
+        """Skip base readiness check — already done inside _do_spawn.
+
+        OpenShell's _do_spawn performs its own host-aware readiness check
+        via _wait_ready_with_host() after ExposeService, so the base
+        class wait_ready() call from temporal_activities is redundant.
+        """
+        return True
 
     async def _wait_ready_with_host(
         self,
@@ -375,11 +393,12 @@ class OpenShellSpawner(AgentSpawner):
                 f"podman {args[0]} failed (rc={proc.returncode}): " f"{stderr.decode().strip()}"
             )
 
-    _PROVIDER_HOSTS: dict[str, str] = {
+    _PROVIDER_HOSTS: ClassVar[dict[str, str]] = {
         "openai": "api.openai.com",
         "anthropic": "api.anthropic.com",
         "claude": "api.anthropic.com",
         "gemini": "generativelanguage.googleapis.com",
+        "azure": "*.openai.azure.com",
         "azure_openai": "*.openai.azure.com",
     }
 
@@ -421,11 +440,12 @@ class OpenShellSpawner(AgentSpawner):
 
             parsed = urlparse(provider_url)
             if parsed.hostname:
+                default_port = 443 if parsed.scheme == "https" else 80
                 np = spec.policy.network_policies["custom_provider"]
                 np.name = "custom-provider"
                 ep = np.endpoints.add()
                 ep.host = parsed.hostname
-                ep.port = parsed.port or 443
+                ep.port = parsed.port or default_port
                 b = np.binaries.add()
                 b.path = "**"
 
@@ -442,11 +462,12 @@ class OpenShellSpawner(AgentSpawner):
 
                     parsed = urlparse(url)
                     if parsed.hostname:
+                        default_port = 443 if parsed.scheme == "https" else 80
                         np = spec.policy.network_policies[f"mcp_{i}"]
                         np.name = f"mcp-{server.get('name', i)}"
                         ep = np.endpoints.add()
                         ep.host = parsed.hostname
-                        ep.port = parsed.port or 443
+                        ep.port = parsed.port or default_port
                         b = np.binaries.add()
                         b.path = "**"
             except (json.JSONDecodeError, TypeError):

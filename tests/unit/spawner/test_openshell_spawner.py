@@ -653,15 +653,15 @@ class TestOpenShellSpawnerGetSandboxId:
     """Tests for get_sandbox_id() public accessor (finding 13)."""
 
     def test_returns_sandbox_id_when_tracked(self, mocker: MockerFixture) -> None:
-        """get_sandbox_id returns the sandbox name for a tracked agent."""
+        """get_sandbox_id returns the sandbox UUID, not the sandbox name."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_names["agent-1"] = "sb-123"
-        spawner._sandbox_ids["agent-1"] = "id-123"
+        spawner._sandbox_names["agent-1"] = "sb-name-123"
+        spawner._sandbox_ids["agent-1"] = "uuid-456"
 
-        assert spawner.get_sandbox_id("agent-1") == "sb-123"
+        assert spawner.get_sandbox_id("agent-1") == "uuid-456"
 
     def test_returns_none_when_not_tracked(self, mocker: MockerFixture) -> None:
         """get_sandbox_id returns None for an unknown agent."""
@@ -1315,3 +1315,155 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         # base.spawn() incremented to 1, then decremented back to 0
         assert spawner.active_count == 0
+
+
+class TestBuildNetworkPolicy:
+    """Tests for _build_network_policy() static method."""
+
+    def _make_mock_spec(self, mocker: MockerFixture) -> Any:
+        """Create a mock SandboxSpec with nested policy structure."""
+        from collections import defaultdict
+
+        spec = mocker.Mock()
+
+        class MockNP:
+            def __init__(self) -> None:
+                self.name = ""
+                self.endpoints = mocker.Mock()
+                self.binaries = mocker.Mock()
+                ep = mocker.Mock()
+                ep.host = ""
+                ep.port = 0
+                self.endpoints.add.return_value = ep
+                b = mocker.Mock()
+                b.path = ""
+                self.binaries.add.return_value = b
+                self._ep = ep
+                self._b = b
+
+        policies: dict[str, MockNP] = defaultdict(MockNP)
+        spec.policy.network_policies = policies
+        return spec
+
+    def test_openai_provider(self, mocker: MockerFixture) -> None:
+        """OpenAI provider adds api.openai.com egress rule."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "openai"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" in spec.policy.network_policies
+        np = spec.policy.network_policies["llm_provider"]
+        assert np._ep.host == "api.openai.com"
+        assert np._ep.port == 443
+
+    def test_azure_provider(self, mocker: MockerFixture) -> None:
+        """Azure provider adds *.openai.azure.com egress rule."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "azure"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" in spec.policy.network_policies
+        np = spec.policy.network_policies["llm_provider"]
+        assert np._ep.host == "*.openai.azure.com"
+
+    def test_anthropic_provider(self, mocker: MockerFixture) -> None:
+        """Anthropic provider adds api.anthropic.com egress rule."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "anthropic"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" in spec.policy.network_policies
+        np = spec.policy.network_policies["llm_provider"]
+        assert np._ep.host == "api.anthropic.com"
+
+    def test_unknown_provider_no_default_rule(self, mocker: MockerFixture) -> None:
+        """Unknown provider does not add llm_provider rule."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "unknown-llm"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" not in spec.policy.network_policies
+
+    def test_custom_provider_url_https(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_PROVIDER_URL with https defaults to port 443."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER_URL": "https://my-vllm.internal/v1"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["custom_provider"]
+        assert np._ep.host == "my-vllm.internal"
+        assert np._ep.port == 443
+
+    def test_custom_provider_url_explicit_port(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_PROVIDER_URL with explicit port uses that port."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER_URL": "https://my-vllm.internal:8443/v1"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["custom_provider"]
+        assert np._ep.host == "my-vllm.internal"
+        assert np._ep.port == 8443
+
+    def test_custom_provider_url_http(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_PROVIDER_URL with http defaults to port 80."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER_URL": "http://local-vllm.internal/v1"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["custom_provider"]
+        assert np._ep.host == "local-vllm.internal"
+        assert np._ep.port == 80
+
+    def test_mcp_servers(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_MCP_SERVERS adds per-server egress rules."""
+        import json
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        mcp = [
+            {"name": "kubectl", "url": "http://mcp-kubectl:8082/mcp"},
+            {"name": "fs", "url": "http://mcp-fs:8081/sse"},
+        ]
+        env = {"LIGHTSPEED_MCP_SERVERS": json.dumps(mcp)}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "mcp_0" in spec.policy.network_policies
+        assert "mcp_1" in spec.policy.network_policies
+        assert spec.policy.network_policies["mcp_0"]._ep.host == "mcp-kubectl"
+        assert spec.policy.network_policies["mcp_0"]._ep.port == 8082
+        assert spec.policy.network_policies["mcp_1"]._ep.host == "mcp-fs"
+        assert spec.policy.network_policies["mcp_1"]._ep.port == 8081
+
+    def test_invalid_mcp_json_is_skipped(self, mocker: MockerFixture) -> None:
+        """Invalid LIGHTSPEED_MCP_SERVERS JSON does not crash."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_MCP_SERVERS": "not-json"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert len(spec.policy.network_policies) == 0
+
+    def test_empty_env_no_rules(self, mocker: MockerFixture) -> None:
+        """Empty env produces no network policy rules."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        OpenShellSpawner._build_network_policy(spec, {})
+
+        assert len(spec.policy.network_policies) == 0
