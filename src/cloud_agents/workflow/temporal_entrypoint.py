@@ -89,9 +89,11 @@ def _create_spawner():
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
         from openshell import SandboxClient
 
-        gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "http://localhost:17670")
+        gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670")
         podman_cli = os.environ.get("OPENSHELL_PODMAN_CLI")
-        client = SandboxClient(endpoint=gateway_url)
+        # Strip http:// scheme — SandboxClient uses gRPC, not HTTP
+        endpoint = gateway_url.replace("http://", "").replace("https://", "")
+        client = SandboxClient(endpoint=endpoint)
         logger.info("Using OpenShellSpawner (gateway=%s)", gateway_url)
         return OpenShellSpawner(openshell_client=client, podman_cli=podman_cli)
     logger.info("No spawner configured — sandbox activity will use stub mode")

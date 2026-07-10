@@ -21,6 +21,8 @@ import os
 import tempfile
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
+import httpx
+
 from cloud_agents.spawner.base import AgentSpawner
 
 if TYPE_CHECKING:
@@ -100,6 +102,7 @@ class OpenShellSpawner(AgentSpawner):
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
+        self._current_virtual_host: str = ""
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox name for an agent, or None if not tracked.
@@ -153,7 +156,11 @@ class OpenShellSpawner(AgentSpawner):
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_expose() -> tuple[str, str]:
-            channel = grpc.insecure_channel(self._client._endpoint)
+            # Strip http:// scheme — gRPC channels use bare host:port
+            grpc_target = self._client._endpoint
+            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
+
+            channel = grpc.insecure_channel(grpc_target)
             stub = openshell_pb2_grpc.OpenShellStub(channel)
             req = openshell_pb2.ExposeServiceRequest(
                 sandbox=sandbox_name,
@@ -166,7 +173,7 @@ class OpenShellSpawner(AgentSpawner):
 
             parsed = urlparse(resp.url)
             virtual_host = parsed.hostname or ""
-            rewritten_url = f"http://{self._client._endpoint}"
+            rewritten_url = f"http://{grpc_target}"
             return rewritten_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
@@ -181,16 +188,17 @@ class OpenShellSpawner(AgentSpawner):
         """Wait for sandbox readiness via gateway-proxied health check.
 
         Overrides the base implementation to include the Host header
-        required for gateway virtual-host routing.
+        required for gateway virtual-host routing. Looks up the correct
+        virtual host for the specific endpoint being checked.
         """
         import time
 
-        # Find the virtual host for this endpoint
+        # Use the virtual host set by the most recent _do_spawn call.
+        # _do_spawn sets _current_virtual_host before returning the
+        # endpoint, and base.spawn() calls wait_ready immediately after.
         headers = {}
-        for _name, vhost in self._virtual_hosts.items():
-            if vhost:
-                headers["Host"] = vhost
-                break
+        if self._current_virtual_host:
+            headers["Host"] = self._current_virtual_host
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
@@ -436,6 +444,7 @@ class OpenShellSpawner(AgentSpawner):
                 sandbox_name, port=8080,
             )
             self._virtual_hosts[sandbox_name] = virtual_host
+            self._current_virtual_host = virtual_host
         except Exception:
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
@@ -493,7 +502,7 @@ class OpenShellSpawner(AgentSpawner):
                             chunk = item.chunk
                         else:
                             # ExecResult — log final status
-                            logger.debug("Server exec result [%s]: exit_code=%s", sandbox_name, item.exit_code)
+                            logger.debug("Server exec ended [%s]: %s", sandbox_name, item)
                             continue
                         logger.debug("Server output [%s]: %s", sandbox_name, chunk.rstrip())
 
