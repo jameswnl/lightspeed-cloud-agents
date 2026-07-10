@@ -97,6 +97,8 @@ class OpenShellSpawner(AgentSpawner):
         self._client = openshell_client
         self._podman_cli = podman_cli
         self._sandbox_names: dict[str, str] = {}
+        self._sandbox_ids: dict[str, str] = {}
+        self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
@@ -109,6 +111,101 @@ class OpenShellSpawner(AgentSpawner):
             Sandbox name string, or None if no sandbox is tracked for this agent.
         """
         return self._sandbox_names.get(agent_name)
+
+    def get_sandbox_headers(self, agent_name: str) -> dict[str, str]:
+        """Return HTTP headers for gateway-proxied sandbox requests.
+
+        The gateway uses virtual-host routing — requests must include
+        a Host header matching the sandbox's exposed service hostname.
+
+        Args:
+            agent_name: Name of the agent.
+
+        Returns:
+            Dict with Host header, or empty dict if not tracked.
+        """
+        virtual_host = self._virtual_hosts.get(
+            self._sandbox_names.get(agent_name, ""), ""
+        )
+        if virtual_host:
+            return {"Host": virtual_host}
+        return {}
+
+    async def _expose_service(
+        self,
+        sandbox_name: str,
+        port: int = 8080,
+    ) -> tuple[str, str]:
+        """Expose a sandbox port via the gateway's HTTP proxy.
+
+        Calls the ExposeService gRPC method on the gateway. Returns
+        a gateway-routable endpoint and the virtual hostname for
+        Host-header-based routing.
+
+        Args:
+            sandbox_name: OpenShell sandbox name.
+            port: Target port inside the sandbox.
+
+        Returns:
+            Tuple of (gateway_endpoint_url, virtual_hostname).
+        """
+        import grpc
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_expose() -> tuple[str, str]:
+            channel = grpc.insecure_channel(self._client._endpoint)
+            stub = openshell_pb2_grpc.OpenShellStub(channel)
+            req = openshell_pb2.ExposeServiceRequest(
+                sandbox=sandbox_name,
+                target_port=port,
+            )
+            resp = stub.ExposeService(req)
+            channel.close()
+
+            from urllib.parse import urlparse
+
+            parsed = urlparse(resp.url)
+            virtual_host = parsed.hostname or ""
+            rewritten_url = f"http://{self._client._endpoint}"
+            return rewritten_url, virtual_host
+
+        return await asyncio.to_thread(_sync_expose)
+
+    async def wait_ready(
+        self,
+        endpoint: str,
+        timeout: float = 60.0,
+        health_path: str = "/healthz",
+        ca_cert_pem: bytes | None = None,
+    ) -> bool:
+        """Wait for sandbox readiness via gateway-proxied health check.
+
+        Overrides the base implementation to include the Host header
+        required for gateway virtual-host routing.
+        """
+        import time
+
+        # Find the virtual host for this endpoint
+        headers = {}
+        for _name, vhost in self._virtual_hosts.items():
+            if vhost:
+                headers["Host"] = vhost
+                break
+
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"{endpoint}{health_path}",
+                        headers=headers,
+                    )
+                    if resp.status_code == 200:
+                        return True
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(2.0)
+        return False
 
     async def _inject_podman_token(self, sandbox_name: str) -> None:
         """Fix Podman 5.8.x secret file mount failure (issue #82).
@@ -314,7 +411,9 @@ class OpenShellSpawner(AgentSpawner):
         # Create sandbox (sync call wrapped in thread)
         sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
         sandbox_name = sandbox_ref.name
+        sandbox_id = sandbox_ref.id
         self._sandbox_names[agent_name] = sandbox_name
+        self._sandbox_ids[agent_name] = sandbox_id
 
         try:
             # Wait for sandbox to be ready
@@ -325,20 +424,19 @@ class OpenShellSpawner(AgentSpawner):
             )
 
             # Workaround for Podman 5.8.x secret file mount bug (issue #82).
-            # The OpenShell Podman driver's secrets field is not applied to
-            # the container, so the supervisor can't read the sandbox JWT.
-            # Extract the JWT from the Podman secret and copy it in manually.
             if self._podman_cli is not None:
                 await self._inject_podman_token(sandbox_name)
 
-            # Start HTTP server via exec (fire-and-forget)
-            await self.start_server(sandbox_name, _DEFAULT_SERVER_COMMAND, env=env)
+            # Start HTTP server via exec (fire-and-forget).
+            # exec_stream takes sandbox_id (UUID), not sandbox_name.
+            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
 
-            # No expose_service in new API — sandbox container is on same network.
-            # OpenShell prefixes container names with "openshell-sandbox-"
-            endpoint = f"http://openshell-sandbox-{sandbox_name}:8080"
+            # Expose the sandbox port via the gateway's HTTP proxy.
+            endpoint, virtual_host = await self._expose_service(
+                sandbox_name, port=8080,
+            )
+            self._virtual_hosts[sandbox_name] = virtual_host
         except Exception:
-            # Clean up the sandbox so it is not orphaned.
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
                 "deleting sandbox to prevent orphan",
@@ -355,6 +453,8 @@ class OpenShellSpawner(AgentSpawner):
                     exc_info=True,
                 )
             self._sandbox_names.pop(agent_name, None)
+            self._sandbox_ids.pop(agent_name, None)
+            self._virtual_hosts.pop(sandbox_name, None)
             raise
 
         logger.info(
@@ -528,21 +628,20 @@ class OpenShellSpawner(AgentSpawner):
         import base64
         import shlex
 
-        sandbox_name = self._sandbox_names.get(agent_name)
-        if not sandbox_name:
+        sandbox_id = self._sandbox_ids.get(agent_name)
+        if not sandbox_id:
             raise RuntimeError(f"No sandbox tracked for agent '{agent_name}'")
 
         encoded = base64.b64encode(content.encode()).decode()
         cmd = ["sh", "-c", f"echo '{encoded}' | base64 -d > {shlex.quote(path)}"]
         try:
-            # exec_stream is sync iterator — consume in thread
             def _sync_exec():
-                for _ in self._client.exec_stream(sandbox_name, cmd):
-                    pass  # consume output
+                for _ in self._client.exec_stream(sandbox_id, cmd):
+                    pass
 
             await asyncio.to_thread(_sync_exec)
         except Exception as exc:
-            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_name}: {exc}") from exc
+            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
 
     async def _do_read_file(self, agent_name: str, path: str) -> str:
         """Read a file from an OpenShell sandbox via exec.
@@ -559,15 +658,14 @@ class OpenShellSpawner(AgentSpawner):
         Raises:
             FileNotFoundError: If the sandbox or file is not found.
         """
-        sandbox_name = self._sandbox_names.get(agent_name)
-        if not sandbox_name:
+        sandbox_id = self._sandbox_ids.get(agent_name)
+        if not sandbox_id:
             raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
 
         chunks: list[str] = []
         try:
-            # exec_stream is sync iterator — consume in thread
             def _sync_exec():
-                for item in self._client.exec_stream(sandbox_name, ["cat", path]):
+                for item in self._client.exec_stream(sandbox_id, ["cat", path]):
                     if hasattr(item, "chunk"):
                         chunks.append(item.chunk)
 
@@ -619,7 +717,10 @@ class OpenShellSpawner(AgentSpawner):
             )
             return
         # Only remove tracking after successful delete
-        self._sandbox_names.pop(agent_name, None)
+        sandbox_name = self._sandbox_names.pop(agent_name, None)
+        self._sandbox_ids.pop(agent_name, None)
+        if sandbox_name:
+            self._virtual_hosts.pop(sandbox_name, None)
 
     async def _do_list_active(
         self,

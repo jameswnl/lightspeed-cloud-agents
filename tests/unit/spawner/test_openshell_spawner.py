@@ -280,10 +280,11 @@ class TestOpenShellSpawnerWriteFile:
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         await spawner._do_write_file("agent-1", "/tmp/test.txt", "hello world")
 
-        assert call_args["sandbox_name"] == "sb-123"
+        assert call_args["sandbox_name"] == "id-123"
         cmd = call_args["cmd"]
         assert cmd[0] == "sh"
         assert cmd[1] == "-c"
@@ -318,6 +319,7 @@ class TestOpenShellSpawnerWriteFile:
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         with pytest.raises(RuntimeError, match="Failed to write"):
             await spawner._do_write_file("agent-1", "/tmp/test.txt", "content")
@@ -333,6 +335,7 @@ class TestOpenShellSpawnerSpawn:
 
         # Mock SandboxRef
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -346,9 +349,17 @@ class TestOpenShellSpawnerSpawn:
         mock_client.exec_stream = noop_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
         endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
 
-        assert endpoint == "http://openshell-sandbox-ca-agent-agent-1:8080"
+        assert endpoint == "http://gateway:17670"
         mock_client.create.assert_called_once()
         mock_client.wait_ready.assert_called_once()
 
@@ -358,6 +369,7 @@ class TestOpenShellSpawnerSpawn:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -371,6 +383,14 @@ class TestOpenShellSpawnerSpawn:
         mock_client.exec_stream = noop_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
         env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4"}
         await spawner.spawn("agent-1", "sandbox:latest", env=env)
 
@@ -394,6 +414,7 @@ class TestOpenShellSpawnerDestroy:
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         await spawner.destroy("agent-1")
 
@@ -407,6 +428,7 @@ class TestOpenShellSpawnerDestroy:
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         # Fake awaitable task that tracks cancel() calls
         class FakeTask:
@@ -442,7 +464,9 @@ class TestOpenShellSpawnerListActive:
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "id-1"
         spawner._sandbox_names["agent-2"] = "sb-2"
+        spawner._sandbox_ids["agent-2"] = "id-2"
 
         result = await spawner.list_active()
 
@@ -467,6 +491,7 @@ class TestOpenShellSpawnerDestroyTracking:
         mock_client.delete.side_effect = RuntimeError("API error")
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         # Should NOT raise — _do_destroy swallows the error
         await spawner.destroy("agent-1")
@@ -482,6 +507,7 @@ class TestOpenShellSpawnerDestroyTracking:
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         await spawner.destroy("agent-1")
 
@@ -505,6 +531,7 @@ class TestOpenShellSpawnerDestroyTracking:
         mock_client.delete.side_effect = RuntimeError("API error")
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
         spawner._active_count = 1  # simulate one spawned pod
 
         # First destroy — decrements to 0, does not raise
@@ -616,6 +643,7 @@ class TestOpenShellSpawnerGetSandboxId:
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_names["agent-1"] = "sb-123"
+        spawner._sandbox_ids["agent-1"] = "id-123"
 
         assert spawner.get_sandbox_id("agent-1") == "sb-123"
 
@@ -643,6 +671,7 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -658,6 +687,13 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         spawner = OpenShellSpawner(openshell_client=mock_client)
         assert spawner._podman_cli is None
 
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
         # Should not call any subprocess
         mock_subprocess = mocker.patch(
             "asyncio.create_subprocess_exec", new_callable=mocker.AsyncMock
@@ -672,6 +708,7 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -685,6 +722,13 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         mock_client.exec_stream = noop_exec
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         # Mock the workaround method to verify it's called
         mock_workaround = mocker.patch.object(
@@ -990,6 +1034,7 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1004,6 +1049,13 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
 
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
         # Mock the workaround
         mocker.patch.object(
             spawner,
@@ -1014,7 +1066,7 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
 
         endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        assert endpoint == "http://openshell-sandbox-ca-agent-agent-1:8080"
+        assert endpoint == "http://gateway:17670"
         mock_client.create.assert_called_once()
         mock_client.wait_ready.assert_called_once()
 
@@ -1033,6 +1085,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1041,6 +1094,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         # _inject_podman_token fails after create succeeds
         mocker.patch.object(
@@ -1067,6 +1127,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1075,6 +1136,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         mocker.patch.object(
             spawner,
@@ -1092,6 +1160,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1100,6 +1169,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.side_effect = RuntimeError("sandbox failed to start")
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         with pytest.raises(RuntimeError, match="sandbox failed to start"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
@@ -1113,6 +1189,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1122,6 +1199,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.delete.side_effect = RuntimeError("API unreachable")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         mocker.patch.object(
             spawner,
@@ -1145,6 +1229,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
+            id: str = "test-id"
             def __init__(self, name):
                 self.name = name
 
@@ -1153,6 +1238,13 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
         spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+
+        # Mock _expose_service to return gateway endpoint and virtual host
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
 
         mocker.patch.object(
             spawner,
