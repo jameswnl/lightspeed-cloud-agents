@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Default command to start the HTTP server inside the sandbox
 _DEFAULT_SERVER_COMMAND = [
     "uvicorn",
-    "lightspeed_agentic.app:create_app",
+    "lightspeed_agentic.app:app",
     "--host",
     "0.0.0.0",
     "--port",
