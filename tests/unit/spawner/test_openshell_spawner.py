@@ -357,6 +357,14 @@ class TestOpenShellSpawnerSpawn:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _wait_ready_with_host to return True immediately
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
 
         assert endpoint == "http://gateway:17670"
@@ -390,6 +398,14 @@ class TestOpenShellSpawnerSpawn:
             "_expose_service",
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
+
+        # Mock _wait_ready_with_host to return True immediately
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
         env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4"}
         await spawner.spawn("agent-1", "sandbox:latest", env=env)
@@ -694,6 +710,14 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _wait_ready_with_host to return True immediately
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         # Should not call any subprocess
         mock_subprocess = mocker.patch(
             "asyncio.create_subprocess_exec", new_callable=mocker.AsyncMock
@@ -729,6 +753,14 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
             "_expose_service",
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
+
+        # Mock _wait_ready_with_host to return True immediately
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
         # Mock the workaround method to verify it's called
         mock_workaround = mocker.patch.object(
@@ -1056,6 +1088,14 @@ class TestOpenShellSpawnerPodmanTokenWorkaround:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _wait_ready_with_host to return True immediately
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         # Mock the workaround
         mocker.patch.object(
             spawner,
@@ -1102,6 +1142,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         # _inject_podman_token fails after create succeeds
         mocker.patch.object(
             spawner,
@@ -1144,6 +1187,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         mocker.patch.object(
             spawner,
             "_inject_podman_token",
@@ -1177,6 +1223,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
 
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
         with pytest.raises(RuntimeError, match="sandbox failed to start"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
@@ -1206,6 +1255,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
             "_expose_service",
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
         mocker.patch.object(
             spawner,
@@ -1245,6 +1297,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
             "_expose_service",
             return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
         )
+
+        # Mock _build_network_policy (static method)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
         mocker.patch.object(
             spawner,

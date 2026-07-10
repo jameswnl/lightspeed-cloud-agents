@@ -102,7 +102,6 @@ class OpenShellSpawner(AgentSpawner):
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
-        self._current_virtual_host: str = ""
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox name for an agent, or None if not tracked.
@@ -178,28 +177,30 @@ class OpenShellSpawner(AgentSpawner):
 
         return await asyncio.to_thread(_sync_expose)
 
-    async def wait_ready(
+    async def _wait_ready_with_host(
         self,
         endpoint: str,
+        virtual_host: str,
         timeout: float = 60.0,
-        health_path: str = "/healthz",
-        ca_cert_pem: bytes | None = None,
+        health_path: str = "/health",
     ) -> bool:
         """Wait for sandbox readiness via gateway-proxied health check.
 
-        Overrides the base implementation to include the Host header
-        required for gateway virtual-host routing. Looks up the correct
-        virtual host for the specific endpoint being checked.
+        Parallel-safe: takes the virtual host as a parameter rather
+        than reading shared instance state.
+
+        Args:
+            endpoint: Gateway HTTP endpoint URL.
+            virtual_host: Virtual hostname for Host header routing.
+            timeout: Maximum wait time in seconds.
+            health_path: Health check path.
+
+        Returns:
+            True if the sandbox became ready, False if timed out.
         """
         import time
 
-        # Use the virtual host set by the most recent _do_spawn call.
-        # _do_spawn sets _current_virtual_host before returning the
-        # endpoint, and base.spawn() calls wait_ready immediately after.
-        headers = {}
-        if self._current_virtual_host:
-            headers["Host"] = self._current_virtual_host
-
+        headers = {"Host": virtual_host} if virtual_host else {}
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
@@ -374,6 +375,83 @@ class OpenShellSpawner(AgentSpawner):
                 f"podman {args[0]} failed (rc={proc.returncode}): " f"{stderr.decode().strip()}"
             )
 
+    _PROVIDER_HOSTS: dict[str, str] = {
+        "openai": "api.openai.com",
+        "anthropic": "api.anthropic.com",
+        "claude": "api.anthropic.com",
+        "gemini": "generativelanguage.googleapis.com",
+        "azure_openai": "*.openai.azure.com",
+    }
+
+    @staticmethod
+    def _build_network_policy(
+        spec: "openshell_pb2.SandboxSpec",
+        env: dict[str, str],
+    ) -> None:
+        """Derive sandbox network policy from step environment config.
+
+        Automatically allows egress to the LLM provider and any
+        configured MCP servers. Workflow authors don't need to write
+        OpenShell policy YAML — the spawner derives it from existing
+        provider and MCP config.
+
+        Args:
+            spec: SandboxSpec to populate with network_policies.
+            env: Environment variables for the step (contains provider
+                name, provider URL, and MCP server config).
+        """
+        spec.policy.version = 1
+
+        # LLM provider egress
+        provider = env.get("LIGHTSPEED_PROVIDER", "")
+        provider_host = OpenShellSpawner._PROVIDER_HOSTS.get(provider)
+        if provider_host:
+            np = spec.policy.network_policies["llm_provider"]
+            np.name = "llm-provider"
+            ep = np.endpoints.add()
+            ep.host = provider_host
+            ep.port = 443
+            b = np.binaries.add()
+            b.path = "**"
+
+        # Custom provider URL egress
+        provider_url = env.get("LIGHTSPEED_PROVIDER_URL", "")
+        if provider_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(provider_url)
+            if parsed.hostname:
+                np = spec.policy.network_policies["custom_provider"]
+                np.name = "custom-provider"
+                ep = np.endpoints.add()
+                ep.host = parsed.hostname
+                ep.port = parsed.port or 443
+                b = np.binaries.add()
+                b.path = "**"
+
+        # MCP server egress (parsed from LIGHTSPEED_MCP_SERVERS JSON)
+        mcp_json = env.get("LIGHTSPEED_MCP_SERVERS", "")
+        if mcp_json:
+            try:
+                mcp_servers = json.loads(mcp_json)
+                for i, server in enumerate(mcp_servers):
+                    url = server.get("url", "")
+                    if not url:
+                        continue
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(url)
+                    if parsed.hostname:
+                        np = spec.policy.network_policies[f"mcp_{i}"]
+                        np.name = f"mcp-{server.get('name', i)}"
+                        ep = np.endpoints.add()
+                        ep.host = parsed.hostname
+                        ep.port = parsed.port or 443
+                        b = np.binaries.add()
+                        b.path = "**"
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Failed to parse LIGHTSPEED_MCP_SERVERS for network policy")
+
     async def _do_spawn(
         self,
         agent_name: str,
@@ -416,6 +494,9 @@ class OpenShellSpawner(AgentSpawner):
         for key, value in env.items():
             spec.environment[key] = value
 
+        # Derive network policy from step config (provider, MCP servers)
+        self._build_network_policy(spec, env)
+
         # Create sandbox (sync call wrapped in thread)
         sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
         sandbox_name = sandbox_ref.name
@@ -444,7 +525,17 @@ class OpenShellSpawner(AgentSpawner):
                 sandbox_name, port=8080,
             )
             self._virtual_hosts[sandbox_name] = virtual_host
-            self._current_virtual_host = virtual_host
+
+            # Wait for the sandbox HTTP server to be ready.
+            # Done here (not in base wait_ready) so each parallel
+            # spawn uses its own virtual host — no shared state race.
+            ready = await self._wait_ready_with_host(
+                endpoint, virtual_host, timeout=60.0,
+            )
+            if not ready:
+                raise RuntimeError(
+                    f"Sandbox '{sandbox_name}' HTTP server did not become ready"
+                )
         except Exception:
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
