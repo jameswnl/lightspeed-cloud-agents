@@ -481,11 +481,12 @@ async def _run_sandbox_step_inner(
             if sandbox_auth_enabled and sandbox_auth_token:
                 http_headers["Authorization"] = f"Bearer {sandbox_auth_token}"
 
-            # Start progress streaming for OpenShell spawners (best-effort)
+            # OpenShell-specific: merge gateway routing headers
             progress_task: asyncio.Task | None = None
             from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
             if isinstance(spawner, OpenShellSpawner):
+                http_headers.update(spawner.get_sandbox_headers(pod_name))
                 sandbox_id = spawner.get_sandbox_id(pod_name)
                 if sandbox_id:
                     progress_task = asyncio.create_task(
