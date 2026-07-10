@@ -793,10 +793,10 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 **Spike findings**: OpenShellSpawner prototype implements AgentSpawner ABC via OpenShell gRPC API. Single `_do_spawn` replaces both K8s and Podman paths. Gateway handles sandbox lifecycle, network isolation, and credential management. Service exposure via `ExposeService` RPC preserves the `POST /v1/agent/run` contract. Full findings: `docs/spikes/openshell-spawner-spike.md`.
 
 **What to build** (if spike -> go):
-1. Production-harden the `OpenShellSpawner` prototype
+1. Production-harden the `OpenShellSpawner` prototype — SDK migrated (PRs #97–#100), parallel-safe readiness, auto-cleanup on failure ✅
 2. Add skills_image support (init container equivalent via OpenShell exec)
 3. Add credential provider integration (replace K8s Secret env vars)
-4. L7 network policy configuration via SandboxPolicy
+4. L7 network policy configuration via SandboxPolicy — auto-derived from provider + MCP config via `_build_network_policy()` (PR #102) ✅
 5. Integration tests with a running OpenShell gateway
 6. Deployment guide: gateway setup for K8s and Podman modes
 
@@ -804,10 +804,9 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 
 **Risks**:
 - OpenShell is alpha software — API may change
-- Python SDK lacks `ExposeService` wrapper (using raw gRPC stub)
+- Python SDK lacks `ExposeService` wrapper — using standalone gRPC channel (not `client._stub`)
 - `SandboxClient.list()` has no label filter — relies on naming convention
 - Gateway is a new infrastructure dependency to operate
-- SDK `_stub` is a private attribute — not part of the public API contract. Upgrades may break the `ExposeService` gRPC call without warning.
 
 ### T54: Agent step transcript persistence ([issue #57](https://github.com/jameswnl/lightspeed-cloud-agents/issues/57)) -- DONE
 
