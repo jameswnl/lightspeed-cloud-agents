@@ -283,19 +283,21 @@ podman run -d --name openshell-gateway \
 - `--privileged` — required for Podman socket access
 - Gateway container must be on the same network as the workflow runner for DNS resolution
 
-### OpenShellSpawner SDK Migration Required
+### OpenShellSpawner SDK Migration (Completed)
 
-The `OpenShellSpawner` was written against an earlier OpenShell SDK version. The v0.0.78 SDK has breaking API changes:
+The `OpenShellSpawner` has been migrated to the v0.0.78+ SDK API (PRs #97–#100):
 
-| Old API (spawner code) | New API (v0.0.78) |
-|---|---|
-| `create_sandbox(image=, env=, labels=)` | `create(spec=SandboxSpec)` |
-| `delete_sandbox(sandbox_id)` | `delete(sandbox_name)` |
-| `expose_service(sandbox_id, port=)` | Not available — use port forwarding |
-| `exec_stream(sandbox_id, command)` (async iterator) | `exec_stream(sandbox_id, command)` (sync iterator) |
-| All methods async | All methods sync (need `asyncio.to_thread()`) |
+| Old API | New API (v0.0.78+) | Status |
+|---|---|---|
+| `create_sandbox(image=, env=, labels=)` | `create(spec=SandboxSpec)` | ✅ Done |
+| `delete_sandbox(sandbox_id)` | `delete(sandbox_name)` | ✅ Done |
+| `expose_service(sandbox_id, port=)` | Raw gRPC `ExposeService` via standalone channel | ✅ Done |
+| `exec_stream(sandbox_id, command)` (async) | `exec_stream(sandbox_id, command)` (sync, wrapped in `asyncio.to_thread()`) | ✅ Done |
 
-The entrypoint wiring works (`WORKFLOW_SPAWNER=openshell` → creates `SandboxClient` → passes to `OpenShellSpawner`), but the spawner's internal calls fail at runtime. Tracked as a follow-up issue.
+Additional changes:
+- **Parallel-safe readiness**: `_wait_ready_with_host()` takes virtual host as parameter (no shared state race)
+- **Auto-derived network policy**: `_build_network_policy()` derives L7 egress rules from provider name and MCP server config
+- **Sandbox identity**: `get_sandbox_id()` returns UUID (for `exec_stream`), distinct from sandbox name (for `create`/`delete`/`wait_ready`)
 
 ## Go/No-Go Recommendation
 
@@ -313,9 +315,9 @@ The entrypoint wiring works (`WORKFLOW_SPAWNER=openshell` → creates `SandboxCl
 
 1. OpenShell team commits to stabilizing the Python SDK (especially `ExposeService` wrapper)
 2. Gateway resource overhead measurement in target deployment environments
-3. L7 network policy testing with our sandbox image
+3. L7 network policy testing with live gateway (auto-derivation implemented in `_build_network_policy()`)
 4. Sandbox image must include `iproute2`, `nsenter` (`util-linux-core`), and a `sandbox` user
-5. Containerized gateway deployment (DooD pattern) — not yet tested
+5. ~~Containerized gateway deployment (DooD pattern)~~ — verified above (see "Containerized Gateway" section)
 6. Upstream: request musl-static supervisor binary or RHEL 9-compatible builds
 
 **Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation (seccomp + network namespace). Even without L7 policy, this is a security improvement over container securityContext alone.
