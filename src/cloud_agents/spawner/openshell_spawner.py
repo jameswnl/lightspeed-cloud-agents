@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from openshell._proto import openshell_pb2
 
+
 logger = logging.getLogger(__name__)
 
 # Default command to start the HTTP server inside the sandbox
@@ -46,20 +47,6 @@ _DEFAULT_SERVER_COMMAND = [
 # Path where the sandbox agent writes structured JSONL events
 _EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
-# Path where the supervisor expects the sandbox JWT (matches
-# openshell_core::driver_utils::SANDBOX_TOKEN_MOUNT_PATH in the
-# OpenShell Podman driver).
-_SANDBOX_TOKEN_PATH = "/etc/openshell/auth/sandbox.jwt"
-
-# Podman secret name prefix for per-sandbox JWTs (matches
-# TOKEN_SECRET_PREFIX in openshell-driver-podman container.rs).
-_TOKEN_SECRET_PREFIX = "openshell-token-"
-
-# Podman label used by the OpenShell Podman driver to tag containers.
-_SANDBOX_ID_LABEL = "openshell.sandbox-id"
-
-# Delay after container restart to allow supervisor to boot.
-_POST_RESTART_DELAY_SECS = 3.0
 
 
 class OpenShellSpawner(AgentSpawner):
@@ -79,7 +66,6 @@ class OpenShellSpawner(AgentSpawner):
     def __init__(
         self,
         openshell_client: Any = None,
-        podman_cli: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -88,20 +74,27 @@ class OpenShellSpawner(AgentSpawner):
             openshell_client: OpenShell SDK client for sandbox operations.
                 Must implement create(), wait_ready(), exec(), exec_stream(),
                 and delete().
-            podman_cli: Path to the podman CLI binary. When set, enables
-                the Podman secret file mount workaround for Podman 5.8.x
-                (issue #82). The workaround extracts the sandbox JWT from
-                the Podman secret and copies it into the container after
-                creation. Set to None (default) when using K8s or when the
-                Podman secret mount works correctly.
+
+        Requires OpenShell gateway v0.0.79+ with gateway_jwt configured.
+        The gateway mints sandbox JWTs and delivers them via Podman
+        secrets (PR NVIDIA/OpenShell#2156). No client-side JWT workaround
+        is needed — the supervisor authenticates directly via gRPC.
+
+        History (issue #82):
+            Pre-v0.0.79 gateways used host bind-mounted token files which
+            failed on Podman 5.8.x REST API. We had a workaround
+            (_inject_podman_token) that extracted JWTs from Podman secrets
+            and copied them into containers. This was removed because
+            v0.0.79+ fixes the issue upstream and we require v0.0.79+.
         """
         super().__init__(**kwargs)
         self._client = openshell_client
-        self._podman_cli = podman_cli
+        self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
+        self._provider_ids: dict[str, str] = {}
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox ID (UUID) for an agent, or None if not tracked.
@@ -234,164 +227,6 @@ class OpenShellSpawner(AgentSpawner):
             await asyncio.sleep(2.0)
         return False
 
-    async def _inject_podman_token(self, sandbox_name: str) -> None:
-        """Fix Podman 5.8.x secret file mount failure (issue #82).
-
-        The OpenShell Podman driver creates a Podman secret with the
-        sandbox JWT and specifies a file mount at the expected path.
-        On Podman 5.8.x, the mount is not applied. This workaround:
-
-        1. Finds the container by its openshell.sandbox-id label.
-        2. Extracts the JWT from the Podman secret.
-        3. Stops the container, copies the token file in, restarts.
-
-        The supervisor reads the token on startup and authenticates
-        back to the gateway.
-
-        Args:
-            sandbox_name: OpenShell sandbox name.
-
-        Raises:
-            RuntimeError: If the container or secret is not found, or
-                if any podman command fails.
-        """
-        assert self._podman_cli is not None  # noqa: S101
-
-        # 1. Find the container name by label.
-        container_name = await self._podman_find_container(sandbox_name)
-
-        # 2. Extract the JWT from the Podman secret.
-        secret_name = f"{_TOKEN_SECRET_PREFIX}{sandbox_name}"
-        token = await self._podman_extract_secret(secret_name)
-
-        # 3. Stop container, copy token, restart.
-        tmp_path: str | None = None
-        try:
-            # Write token to temp file for podman cp.
-            fd, tmp_path = tempfile.mkstemp(suffix=".jwt", prefix="openshell-token-")
-            with os.fdopen(fd, "w") as f:
-                f.write(token.strip() + "\n")
-
-            await self._podman_exec(
-                "stop",
-                "-t",
-                "0",
-                container_name,
-            )
-
-            await self._podman_exec(
-                "cp",
-                tmp_path,
-                f"{container_name}:{_SANDBOX_TOKEN_PATH}",
-            )
-
-            await self._podman_exec("start", container_name)
-
-            logger.info(
-                "Podman token workaround applied for sandbox '%s' " "(container=%s, secret=%s)",
-                sandbox_name,
-                container_name,
-                secret_name,
-            )
-
-            # Brief delay for supervisor to boot with the injected token.
-            await asyncio.sleep(_POST_RESTART_DELAY_SECS)
-        finally:
-            if tmp_path is not None:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-
-    async def _podman_find_container(self, sandbox_name: str) -> str:
-        """Find the container name for a sandbox by its label.
-
-        Args:
-            sandbox_name: OpenShell sandbox name.
-
-        Returns:
-            Container name string.
-
-        Raises:
-            RuntimeError: If no container is found with the expected label.
-        """
-        assert self._podman_cli is not None  # noqa: S101
-        proc = await asyncio.create_subprocess_exec(
-            self._podman_cli,
-            "ps",
-            "-a",
-            "--filter",
-            f"label={_SANDBOX_ID_LABEL}={sandbox_name}",
-            "--format",
-            "{{.Names}}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        name = stdout.decode().strip()
-        if not name:
-            raise RuntimeError(
-                f"No container found for sandbox '{sandbox_name}' "
-                f"(label={_SANDBOX_ID_LABEL}={sandbox_name})"
-            )
-        # If multiple lines, take the first (shouldn't happen).
-        return name.splitlines()[0].strip()
-
-    async def _podman_extract_secret(self, secret_name: str) -> str:
-        """Extract a JWT from a Podman secret.
-
-        Args:
-            secret_name: Name of the Podman secret.
-
-        Returns:
-            The secret data string (JWT).
-
-        Raises:
-            RuntimeError: If the secret doesn't exist or can't be read.
-        """
-        assert self._podman_cli is not None  # noqa: S101
-        proc = await asyncio.create_subprocess_exec(
-            self._podman_cli,
-            "secret",
-            "inspect",
-            "--showsecret",
-            secret_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"Failed to extract JWT from Podman secret '{secret_name}': "
-                f"{stderr.decode().strip()}"
-            )
-        try:
-            data = json.loads(stdout.decode())
-            return data[0]["SecretData"]
-        except (json.JSONDecodeError, KeyError, IndexError) as exc:
-            raise RuntimeError(f"Failed to parse Podman secret '{secret_name}': {exc}") from exc
-
-    async def _podman_exec(self, *args: str) -> None:
-        """Run a podman CLI command.
-
-        Args:
-            *args: Arguments to pass after the podman binary path.
-
-        Raises:
-            RuntimeError: If the command exits with a non-zero code.
-        """
-        assert self._podman_cli is not None  # noqa: S101
-        proc = await asyncio.create_subprocess_exec(
-            self._podman_cli,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"podman {args[0]} failed (rc={proc.returncode}): " f"{stderr.decode().strip()}"
-            )
 
     _PROVIDER_HOSTS: ClassVar[dict[str, str]] = {
         "openai": "api.openai.com",
@@ -480,7 +315,6 @@ class OpenShellSpawner(AgentSpawner):
         env: dict[str, str],
         config: "SpawnConfig | None" = None,
         labels: dict[str, str] | None = None,
-        # TODO: Map to OpenShell equivalents for production
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
         service_account: str | None = None,
@@ -489,36 +323,36 @@ class OpenShellSpawner(AgentSpawner):
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
         tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
-        """Create an OpenShell sandbox, start HTTP server, return endpoint.
-
-        1. Create sandbox with the given image and env vars.
-        2. Wait for sandbox to be ready.
-        3. Exec the HTTP server command (fire-and-forget background task).
-        4. Return the network-local endpoint URL.
-
-        Returns:
-            HTTP endpoint URL of the sandbox service.
-        """
+        """Create an OpenShell sandbox, start HTTP server, return endpoint."""
         from openshell._proto import openshell_pb2
 
-        # Build sandbox name using our naming convention
+        if service_account:
+            logger.info(
+                "OpenShell manages identity — service_account '%s' not applicable",
+                service_account,
+            )
+
+        if tls_certs is not None:
+            logger.info(
+                "TLS certs not needed for OpenShell — gateway provides transport security",
+            )
+
         sandbox_name = f"ca-agent-{agent_name}"
 
-        # Construct SandboxSpec for the new API
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
                 image=image,
                 labels=labels or {},
             )
         )
-        # Add environment variables
         for key, value in env.items():
             spec.environment[key] = value
 
-        # Derive network policy from step config (provider, MCP servers)
         self._build_network_policy(spec, env)
 
-        # Create sandbox (sync call wrapped in thread)
+        if read_only:
+            self._build_filesystem_policy(spec)
+
         sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
         sandbox_name = sandbox_ref.name
         sandbox_id = sandbox_ref.id
@@ -526,30 +360,32 @@ class OpenShellSpawner(AgentSpawner):
         self._sandbox_ids[agent_name] = sandbox_id
 
         try:
-            # Wait for sandbox to be ready
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
                 timeout_seconds=300,
             )
 
-            # Workaround for Podman 5.8.x secret file mount bug (issue #82).
-            if self._podman_cli is not None:
-                await self._inject_podman_token(sandbox_name)
+            if credential_secret_name:
+                await self._inject_credentials(
+                    agent_name, sandbox_name, credential_secret_name, env,
+                )
 
-            # Start HTTP server via exec (fire-and-forget).
-            # exec_stream takes sandbox_id (UUID), not sandbox_name.
+            if skills_image:
+                await self._load_skills(
+                    agent_name, sandbox_id, skills_image, skills_paths,
+                )
+
+            if mcp_secret_mounts:
+                await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
+
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
 
-            # Expose the sandbox port via the gateway's HTTP proxy.
             endpoint, virtual_host = await self._expose_service(
                 sandbox_name, port=8080,
             )
             self._virtual_hosts[sandbox_name] = virtual_host
 
-            # Wait for the sandbox HTTP server to be ready.
-            # Done here (not in base wait_ready) so each parallel
-            # spawn uses its own virtual host — no shared state race.
             ready = await self._wait_ready_with_host(
                 endpoint, virtual_host, timeout=60.0,
             )
@@ -565,17 +401,7 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
                 exc_info=True,
             )
-            try:
-                await asyncio.to_thread(self._client.delete, sandbox_name)
-            except Exception:
-                logger.warning(
-                    "Failed to delete orphaned sandbox '%s' during cleanup",
-                    sandbox_name,
-                    exc_info=True,
-                )
-            self._sandbox_names.pop(agent_name, None)
-            self._sandbox_ids.pop(agent_name, None)
-            self._virtual_hosts.pop(sandbox_name, None)
+            await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
         logger.info(
@@ -585,6 +411,323 @@ class OpenShellSpawner(AgentSpawner):
             endpoint,
         )
         return endpoint
+
+    async def _cleanup_sandbox(
+        self, agent_name: str, sandbox_name: str,
+    ) -> None:
+        """Clean up a sandbox and all associated resources on failure."""
+        provider_id = self._provider_ids.pop(agent_name, None)
+        if provider_id:
+            try:
+                await self._detach_provider(sandbox_name, provider_id)
+            except Exception:
+                logger.warning(
+                    "Failed to detach provider '%s' during cleanup",
+                    provider_id, exc_info=True,
+                )
+        try:
+            await asyncio.to_thread(self._client.delete, sandbox_name)
+        except Exception:
+            logger.warning(
+                "Failed to delete orphaned sandbox '%s' during cleanup",
+                sandbox_name, exc_info=True,
+            )
+        self._sandbox_names.pop(agent_name, None)
+        self._sandbox_ids.pop(agent_name, None)
+        self._virtual_hosts.pop(sandbox_name, None)
+
+    @staticmethod
+    def _build_filesystem_policy(spec: "openshell_pb2.SandboxSpec") -> None:
+        """Set read-only filesystem policy with write exceptions.
+
+        Allows writes to agent workspace, skills, secrets, and log
+        directories so post-create injection still works in advisory mode.
+        """
+        spec.policy.filesystem.read_only.append("/")
+        for rw_path in (
+            "/tmp",
+            "/home/agent",
+            "/var/log",
+            "/app/skills",
+            "/var/secrets/mcp",
+            "/var/run/secrets/llm-credentials",
+        ):
+            spec.policy.filesystem.read_write.append(rw_path)
+        spec.policy.filesystem.include_workdir = True
+
+    async def _inject_credentials(
+        self,
+        agent_name: str,
+        sandbox_name: str,
+        credential_secret_name: str,
+        env: dict[str, str],
+    ) -> None:
+        """Inject LLM credentials into the sandbox via Provider API.
+
+        Uses the OpenShell Provider system for gateway-managed credentials.
+        Falls back to file-based injection if Provider RPCs fail.
+        """
+        cred_value = env.get(credential_secret_name)
+        if not cred_value:
+            raise RuntimeError(
+                f"Credential '{credential_secret_name}' not found in env "
+                f"for sandbox '{sandbox_name}' — cannot start agent without credentials"
+            )
+
+        try:
+            provider_id = await self._create_and_attach_provider(
+                sandbox_name,
+                credentials={credential_secret_name: cred_value},
+            )
+            self._provider_ids[agent_name] = provider_id
+            logger.info(
+                "Attached credential provider '%s' to sandbox '%s'",
+                provider_id, sandbox_name,
+            )
+        except Exception:
+            logger.warning(
+                "Provider API failed for '%s' — falling back to file injection",
+                sandbox_name, exc_info=True,
+            )
+            await self._inject_credentials_via_files(
+                agent_name, credential_secret_name, cred_value,
+            )
+
+    async def _inject_credentials_via_files(
+        self,
+        agent_name: str,
+        credential_secret_name: str,
+        cred_value: str,
+    ) -> None:
+        """Write credential files to the sandbox filesystem.
+
+        Handles both API-key providers (env var only) and file-backed
+        providers like Vertex (GOOGLE_APPLICATION_CREDENTIALS).
+        """
+        cred_dir = "/var/run/secrets/llm-credentials"
+        sandbox_id = self._sandbox_ids[agent_name]
+        await self._exec_mkdir(sandbox_id, cred_dir)
+        file_path = f"{cred_dir}/{credential_secret_name}"
+        await self._do_write_file(agent_name, file_path, cred_value)
+        logger.info(
+            "Injected credential file '%s' into sandbox for agent '%s'",
+            file_path, agent_name,
+        )
+
+    async def _create_and_attach_provider(
+        self,
+        sandbox_name: str,
+        credentials: dict[str, str],
+    ) -> str:
+        """Create an OpenShell provider and attach it to a sandbox.
+
+        Returns the provider ID for later cleanup.
+        """
+        import grpc
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_provider() -> str:
+            grpc_target = self._client._endpoint
+            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
+            channel = grpc.insecure_channel(grpc_target)
+            stub = openshell_pb2_grpc.OpenShellStub(channel)
+
+            create_req = openshell_pb2.CreateProviderRequest(
+                provider=openshell_pb2.Provider(
+                    type="cloud-agents",
+                    credentials=credentials,
+                ),
+            )
+            create_resp = stub.CreateProvider(create_req)
+            provider_id = create_resp.provider.id
+
+            attach_req = openshell_pb2.AttachSandboxProviderRequest(
+                sandbox=sandbox_name,
+                provider=provider_id,
+            )
+            stub.AttachSandboxProvider(attach_req)
+            channel.close()
+            return provider_id
+
+        return await asyncio.to_thread(_sync_provider)
+
+    async def _detach_provider(
+        self, sandbox_name: str, provider_id: str,
+    ) -> None:
+        """Detach a provider from a sandbox."""
+        import grpc
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_detach() -> None:
+            grpc_target = self._client._endpoint
+            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
+            channel = grpc.insecure_channel(grpc_target)
+            stub = openshell_pb2_grpc.OpenShellStub(channel)
+            req = openshell_pb2.DetachSandboxProviderRequest(
+                sandbox=sandbox_name,
+                provider=provider_id,
+            )
+            stub.DetachSandboxProvider(req)
+            channel.close()
+
+        await asyncio.to_thread(_sync_detach)
+
+    async def _load_skills(
+        self,
+        agent_name: str,
+        sandbox_id: str,
+        skills_image: str,
+        skills_paths: list[str] | None = None,
+    ) -> None:
+        """Load skills from an OCI image into the sandbox.
+
+        Extracts skills content from the image locally, then streams
+        it into the sandbox via exec_stream with tar.
+
+        Cross-platform: uses the Podman Python SDK (available in the
+        runner container) to run a transient container that copies
+        skills into a temp dir. Falls back to podman CLI if the SDK
+        is not available. The sandbox-side tar upload is the same
+        regardless of extraction method.
+        """
+        import shutil
+        import tarfile
+        from io import BytesIO
+
+        copy_paths = skills_paths or ["/skills"]
+        tmp_dir = tempfile.mkdtemp(prefix=f"skills-{agent_name}-")
+
+        try:
+            await self._extract_skills_image(
+                skills_image, copy_paths, tmp_dir,
+            )
+
+            tar_buf = BytesIO()
+            with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+                tar.add(tmp_dir, arcname=".")
+            tar_bytes = tar_buf.getvalue()
+
+            def _sync_upload() -> None:
+                for _ in self._client.exec_stream(
+                    sandbox_id,
+                    ["tar", "xf", "-", "-C", "/app/skills"],
+                    stdin=tar_bytes,
+                ):
+                    pass
+
+            await asyncio.to_thread(_sync_upload)
+            logger.info(
+                "Loaded skills into sandbox for agent '%s' from '%s'",
+                agent_name, skills_image,
+            )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    async def _extract_skills_image(
+        self,
+        skills_image: str,
+        copy_paths: list[str],
+        tmp_dir: str,
+    ) -> None:
+        """Extract skills content from an OCI image to a local directory.
+
+        Uses the Podman Python SDK (cross-platform, works in any
+        container) or falls back to the podman CLI binary.
+        """
+        try:
+            from podman import PodmanClient
+
+            def _sdk_extract() -> None:
+                pclient = PodmanClient(
+                    base_url=f"unix://{os.environ.get('CONTAINER_HOST', '/run/podman/podman.sock').replace('unix://', '')}",
+                )
+                copy_cmd = " && ".join(
+                    f"cp -r {p}/* /out/ 2>/dev/null || true"
+                    for p in copy_paths
+                )
+                pclient.containers.run(
+                    skills_image,
+                    command=["sh", "-c", copy_cmd],
+                    volumes={tmp_dir: {"bind": "/out", "mode": "rw"}},
+                    remove=True,
+                    detach=False,
+                )
+                pclient.close()
+
+            await asyncio.to_thread(_sdk_extract)
+            return
+        except ImportError:
+            pass
+        except Exception:
+            logger.warning(
+                "Podman SDK skills extraction failed, trying CLI",
+                exc_info=True,
+            )
+
+        if self._podman_cli:
+            import subprocess
+
+            for src_path in copy_paths:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        self._podman_cli, "run", "--rm",
+                        "-v", f"{tmp_dir}:/out:Z",
+                        skills_image,
+                        "sh", "-c", f"cp -r {src_path}/* /out/ 2>/dev/null || true",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+            return
+
+        raise RuntimeError(
+            f"Cannot extract skills image '{skills_image}': "
+            "neither Podman SDK nor podman CLI available"
+        )
+
+    async def _inject_mcp_secrets(
+        self,
+        agent_name: str,
+        mcp_secret_mounts: list[tuple[str, str, str]],
+        env: dict[str, str],
+    ) -> None:
+        """Inject MCP secret header files into the sandbox.
+
+        Each mount tuple is (secret_name, key, mount_path) where
+        mount_path is the directory and key is the filename.
+        """
+        sandbox_id = self._sandbox_ids.get(agent_name)
+        if not sandbox_id:
+            raise RuntimeError(f"No sandbox tracked for agent '{agent_name}'")
+
+        for secret_name, key, mount_path in mcp_secret_mounts:
+            secret_value = env.get(secret_name, "")
+            if not secret_value:
+                logger.warning(
+                    "MCP secret '%s' not found in env for agent '%s'",
+                    secret_name, agent_name,
+                )
+                continue
+
+            await self._exec_mkdir(sandbox_id, mount_path)
+            file_path = f"{mount_path}{key}"
+            await self._do_write_file(agent_name, file_path, secret_value)
+            logger.info(
+                "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
+                mount_path, key, agent_name,
+            )
+
+    async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
+        """Create a directory inside the sandbox."""
+        def _sync_mkdir() -> None:
+            for _ in self._client.exec_stream(
+                sandbox_id, ["mkdir", "-p", path],
+            ):
+                pass
+
+        await asyncio.to_thread(_sync_mkdir)
 
     async def start_server(
         self,
@@ -802,17 +945,12 @@ class OpenShellSpawner(AgentSpawner):
         return content
 
     async def _do_destroy(self, agent_name: str) -> None:
-        """Delete the OpenShell sandbox and clean up background tasks.
-
-        Args:
-            agent_name: Name of the agent to destroy.
-        """
+        """Delete the OpenShell sandbox and clean up all resources."""
         sandbox_name = self._sandbox_names.get(agent_name)
         if not sandbox_name:
             logger.warning("No sandbox name found for agent '%s'", agent_name)
             return
 
-        # Cancel server background task if running
         task = self._server_tasks.pop(sandbox_name, None)
         if task and not task.done():
             task.cancel()
@@ -821,23 +959,26 @@ class OpenShellSpawner(AgentSpawner):
             except asyncio.CancelledError:
                 pass
 
+        provider_id = self._provider_ids.pop(agent_name, None)
+        if provider_id:
+            try:
+                await self._detach_provider(sandbox_name, provider_id)
+            except Exception:
+                logger.warning(
+                    "Failed to detach provider '%s' from sandbox '%s'",
+                    provider_id, sandbox_name, exc_info=True,
+                )
+
         try:
             await asyncio.to_thread(self._client.delete, sandbox_name)
             logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
         except Exception:
-            # Do NOT re-raise: base.destroy() always decrements _active_count
-            # in its finally block.  Re-raising would cause a double-decrement
-            # on retry.  Keep the _sandbox_names entry so the sandbox is visible
-            # via list_active() for manual cleanup or a subsequent destroy().
             logger.warning(
                 "Failed to destroy sandbox '%s' (agent=%s) — "
                 "sandbox retained in _sandbox_names for manual cleanup",
-                sandbox_name,
-                agent_name,
-                exc_info=True,
+                sandbox_name, agent_name, exc_info=True,
             )
             return
-        # Only remove tracking after successful delete
         sandbox_name = self._sandbox_names.pop(agent_name, None)
         self._sandbox_ids.pop(agent_name, None)
         if sandbox_name:
