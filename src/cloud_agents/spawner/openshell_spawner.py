@@ -66,6 +66,7 @@ class OpenShellSpawner(AgentSpawner):
     def __init__(
         self,
         openshell_client: Any = None,
+        driver: str = "podman",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -74,6 +75,13 @@ class OpenShellSpawner(AgentSpawner):
             openshell_client: OpenShell SDK client for sandbox operations.
                 Must implement create(), wait_ready(), exec(), exec_stream(),
                 and delete().
+            driver: OpenShell compute driver type ("podman" or "kubernetes").
+                Controls how skills_image is handled:
+                - "podman": Uses native image mounts via driver_config
+                  (no extraction, no tar streaming — Podman mounts the
+                  OCI image directly at /app/skills).
+                - "kubernetes": Falls back to tar streaming (extract
+                  skills locally, stream into sandbox via exec_stream).
 
         Requires OpenShell gateway v0.0.79+ with gateway_jwt configured.
         The gateway mints sandbox JWTs and delivers them via Podman
@@ -89,6 +97,7 @@ class OpenShellSpawner(AgentSpawner):
         """
         super().__init__(**kwargs)
         self._client = openshell_client
+        self._driver = driver
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
@@ -353,6 +362,27 @@ class OpenShellSpawner(AgentSpawner):
         if read_only:
             self._build_filesystem_policy(spec)
 
+        # Skills image: Podman driver mounts the OCI image directly
+        # via driver_config (no extraction needed). K8s driver falls
+        # back to tar streaming after sandbox creation.
+        skills_via_driver_config = False
+        if skills_image and self._driver == "podman":
+            from google.protobuf import struct_pb2
+
+            mount_config = struct_pb2.Struct()
+            mount_config.update({
+                "podman": {
+                    "mounts": [{
+                        "type": "image",
+                        "source": skills_image,
+                        "target": "/app/skills",
+                        "read_only": True,
+                    }],
+                },
+            })
+            spec.template.driver_config.MergeFrom(mount_config)
+            skills_via_driver_config = True
+
         sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
         sandbox_name = sandbox_ref.name
         sandbox_id = sandbox_ref.id
@@ -371,7 +401,7 @@ class OpenShellSpawner(AgentSpawner):
                     agent_name, sandbox_name, credential_secret_name, env,
                 )
 
-            if skills_image:
+            if skills_image and not skills_via_driver_config:
                 await self._load_skills(
                     agent_name, sandbox_id, skills_image, skills_paths,
                 )
@@ -631,9 +661,53 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Extract skills content from an OCI image to a local directory.
 
-        Uses the Podman Python SDK (cross-platform, works in any
-        container) or falls back to the podman CLI binary.
+        Fallback chain (first success wins):
+        1. crane — static binary, no daemon needed, works everywhere
+        2. Podman Python SDK — needs Podman socket
+        3. podman CLI — needs binary + socket
+
+        crane is the primary path because it works in K8s pods
+        where no container runtime socket is available. Install it
+        in the runner Containerfile from go-containerregistry releases.
         """
+        import shutil
+        import subprocess
+
+        # 1. Try crane (no daemon needed — works in K8s pods)
+        crane_bin = shutil.which("crane")
+        if crane_bin:
+            try:
+                def _crane_extract() -> None:
+                    result = subprocess.run(
+                        [crane_bin, "export", skills_image, "-"],
+                        capture_output=True,
+                        timeout=120,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            f"crane export failed: {result.stderr.decode()[:200]}"
+                        )
+                    import tarfile
+                    from io import BytesIO
+
+                    with tarfile.open(fileobj=BytesIO(result.stdout)) as tar:
+                        for member in tar:
+                            for skill_path in copy_paths:
+                                prefix = skill_path.lstrip("/") + "/"
+                                if member.name.startswith(prefix):
+                                    member.name = member.name[len(prefix):]
+                                    tar.extract(member, tmp_dir)
+
+                await asyncio.to_thread(_crane_extract)
+                logger.info("Extracted skills via crane from '%s'", skills_image)
+                return
+            except Exception:
+                logger.warning(
+                    "crane skills extraction failed, trying Podman SDK",
+                    exc_info=True,
+                )
+
+        # 2. Try Podman Python SDK (needs socket)
         try:
             from podman import PodmanClient
 
@@ -655,6 +729,7 @@ class OpenShellSpawner(AgentSpawner):
                 pclient.close()
 
             await asyncio.to_thread(_sdk_extract)
+            logger.info("Extracted skills via Podman SDK from '%s'", skills_image)
             return
         except ImportError:
             pass
@@ -664,9 +739,8 @@ class OpenShellSpawner(AgentSpawner):
                 exc_info=True,
             )
 
+        # 3. Try podman CLI
         if self._podman_cli:
-            import subprocess
-
             for src_path in copy_paths:
                 await asyncio.to_thread(
                     subprocess.run,
@@ -680,11 +754,12 @@ class OpenShellSpawner(AgentSpawner):
                     capture_output=True,
                     timeout=120,
                 )
+            logger.info("Extracted skills via podman CLI from '%s'", skills_image)
             return
 
         raise RuntimeError(
             f"Cannot extract skills image '{skills_image}': "
-            "neither Podman SDK nor podman CLI available"
+            "none of crane, Podman SDK, or podman CLI available"
         )
 
     async def _inject_mcp_secrets(
