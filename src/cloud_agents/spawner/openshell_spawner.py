@@ -497,7 +497,13 @@ class OpenShellSpawner(AgentSpawner):
         Uses the OpenShell Provider system for gateway-managed credentials.
         Falls back to file-based injection if Provider RPCs fail.
         """
+        # credential_secret_name may be K8s-normalized (e.g. "openai-api-key")
+        # while the env dict has the original key (e.g. "OPENAI_API_KEY").
+        # Try both forms.
         cred_value = env.get(credential_secret_name)
+        if not cred_value:
+            original_key = credential_secret_name.upper().replace("-", "_")
+            cred_value = env.get(original_key)
         if not cred_value:
             raise RuntimeError(
                 f"Credential '{credential_secret_name}' not found in env "
