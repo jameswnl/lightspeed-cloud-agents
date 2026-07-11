@@ -698,10 +698,17 @@ class OpenShellSpawner(AgentSpawner):
 
                     with tarfile.open(fileobj=BytesIO(result.stdout)) as tar:
                         for member in tar:
+                            if member.issym() or member.islnk():
+                                continue
                             for skill_path in copy_paths:
                                 prefix = skill_path.lstrip("/") + "/"
                                 if member.name.startswith(prefix):
                                     member.name = member.name[len(prefix):]
+                                    resolved = os.path.normpath(
+                                        os.path.join(tmp_dir, member.name),
+                                    )
+                                    if not resolved.startswith(tmp_dir):
+                                        continue
                                     tar.extract(member, tmp_dir)
 
                 await asyncio.to_thread(_crane_extract)
@@ -792,8 +799,10 @@ class OpenShellSpawner(AgentSpawner):
                 )
                 continue
 
+            import posixpath
+
             await self._exec_mkdir(sandbox_id, mount_path)
-            file_path = f"{mount_path}{key}"
+            file_path = posixpath.join(mount_path, key)
             await self._do_write_file(agent_name, file_path, secret_value)
             logger.info(
                 "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
@@ -1040,13 +1049,15 @@ class OpenShellSpawner(AgentSpawner):
             except asyncio.CancelledError:
                 pass
 
-        provider_id = self._provider_ids.pop(agent_name, None)
+        provider_id = self._provider_ids.get(agent_name)
         if provider_id:
             try:
                 await self._detach_provider(sandbox_name, provider_id)
+                self._provider_ids.pop(agent_name, None)
             except Exception:
                 logger.warning(
-                    "Failed to detach provider '%s' from sandbox '%s'",
+                    "Failed to detach provider '%s' from sandbox '%s' — "
+                    "retained for retry on next destroy",
                     provider_id, sandbox_name, exc_info=True,
                 )
 
