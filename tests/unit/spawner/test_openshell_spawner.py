@@ -673,455 +673,23 @@ class TestOpenShellSpawnerGetSandboxId:
         assert spawner.get_sandbox_id("unknown") is None
 
 
-class TestOpenShellSpawnerPodmanTokenWorkaround:
-    """Tests for Podman secret file mount workaround (issue #82).
-
-    On Podman 5.8.x, the OpenShell Podman driver's secrets field is not
-    applied to the container. The workaround extracts the JWT from the
-    Podman secret and copies it into the container.
-    """
-
-    @pytest.mark.asyncio
-    async def test_workaround_disabled_when_podman_cli_not_set(self, mocker: MockerFixture) -> None:
-        """No workaround attempted when podman_cli is None."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        class SandboxRef:
-            id: str = "test-id"
-            def __init__(self, name):
-                self.name = name
-
-        mock_client = mocker.Mock()
-        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
-        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
-
-        def noop_exec(*args, **kwargs):
-            return iter([])
-
-        mock_client.exec_stream = noop_exec
-
-        spawner = OpenShellSpawner(openshell_client=mock_client)
-        assert spawner._podman_cli is None
-
-        # Mock _expose_service to return gateway endpoint and virtual host
-        mocker.patch.object(
-            spawner,
-            "_expose_service",
-            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
-        )
-
-        # Mock _wait_ready_with_host to return True immediately
-        async def mock_ready(*args, **kwargs):
-            return True
-        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
-
-        # Mock _build_network_policy (static method)
-        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
-
-        # Should not call any subprocess
-        mock_subprocess = mocker.patch(
-            "asyncio.create_subprocess_exec", new_callable=mocker.AsyncMock
-        )
-        await spawner.spawn("agent-1", "sandbox:latest", env={})
-
-        mock_subprocess.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_workaround_enabled_when_podman_cli_set(self, mocker: MockerFixture) -> None:
-        """Workaround is called after create when podman_cli is set."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        class SandboxRef:
-            id: str = "test-id"
-            def __init__(self, name):
-                self.name = name
-
-        mock_client = mocker.Mock()
-        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
-        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
-
-        def noop_exec(*args, **kwargs):
-            return iter([])
-
-        mock_client.exec_stream = noop_exec
-
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        # Mock _expose_service to return gateway endpoint and virtual host
-        mocker.patch.object(
-            spawner,
-            "_expose_service",
-            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
-        )
-
-        # Mock _wait_ready_with_host to return True immediately
-        async def mock_ready(*args, **kwargs):
-            return True
-        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
-
-        # Mock _build_network_policy (static method)
-        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
-
-        # Mock the workaround method to verify it's called
-        mock_workaround = mocker.patch.object(
-            spawner, "_inject_podman_token", new_callable=mocker.AsyncMock
-        )
-        mock_workaround.return_value = True
-
-        await spawner.spawn("agent-1", "sandbox:latest", env={})
-
-        mock_workaround.assert_called_once_with("ca-agent-agent-1")
-
-    @pytest.mark.asyncio
-    async def test_inject_token_extracts_from_podman_secret(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token reads the JWT from the Podman secret."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        # Mock subprocess calls: first is container lookup, second is secret inspect
-        secret_data = json.dumps([{"SecretData": "eyJhbGciOiJFZERTQSJ9.test.signature"}])
-        container_proc = mocker.AsyncMock()
-        container_proc.returncode = 0
-        container_proc.communicate.return_value = (
-            b"openshell-sandbox-my-sandbox\n",
-            b"",
-        )
-
-        default_proc = mocker.AsyncMock()
-        default_proc.returncode = 0
-        default_proc.communicate.return_value = (secret_data.encode(), b"")
-
-        # Track all subprocess calls
-        calls: list[tuple] = []
-        call_index = 0
-
-        async def mock_create_subprocess(*args, **kwargs):
-            nonlocal call_index
-            calls.append(args)
-            call_index += 1
-            if call_index == 1:
-                return container_proc
-            return default_proc
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        await spawner._inject_podman_token("sb-123")
-
-        # First call is container lookup (podman ps)
-        assert calls[0][0] == "/usr/bin/podman"
-        assert "ps" in calls[0]
-
-        # Second call should be podman secret inspect
-        assert calls[1][0] == "/usr/bin/podman"
-        assert "secret" in calls[1]
-        assert "inspect" in calls[1]
-        assert "openshell-token-sb-123" in calls[1]
-
-    @pytest.mark.asyncio
-    async def test_inject_token_copies_file_into_container(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token copies the JWT file into the container."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        secret_data = json.dumps([{"SecretData": "test.jwt.token"}])
-        mock_proc = mocker.AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate.return_value = (secret_data.encode(), b"")
-
-        calls: list[tuple] = []
-
-        async def mock_create_subprocess(*args, **kwargs):
-            calls.append(args)
-            return mock_proc
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        await spawner._inject_podman_token("sb-123")
-
-        # Should have calls for: find container, secret inspect, stop, cp, start
-        # Verify a cp call exists that targets the token path
-        cp_calls = [c for c in calls if "cp" in c and "/etc/openshell/auth/sandbox.jwt" in str(c)]
-        assert len(cp_calls) >= 1, f"Expected a podman cp call, got: {calls}"
-
-    @pytest.mark.asyncio
-    async def test_inject_token_restarts_container(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token stops then starts the container."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        secret_data = json.dumps([{"SecretData": "test.jwt.token"}])
-        mock_proc = mocker.AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate.return_value = (secret_data.encode(), b"")
-
-        # For the container name lookup, return a container name
-        container_name_proc = mocker.AsyncMock()
-        container_name_proc.returncode = 0
-        container_name_proc.communicate.return_value = (
-            b"openshell-sandbox-my-sandbox\n",
-            b"",
-        )
-
-        call_index = 0
-        calls: list[tuple] = []
-
-        async def mock_create_subprocess(*args, **kwargs):
-            nonlocal call_index
-            calls.append(args)
-            call_index += 1
-            # First call is container name lookup
-            if call_index == 1:
-                return container_name_proc
-            return mock_proc
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        await spawner._inject_podman_token("sb-123")
-
-        # Verify stop and start calls exist
-        stop_calls = [c for c in calls if "stop" in c]
-        start_calls = [c for c in calls if "start" in c]
-        assert len(stop_calls) >= 1, f"Expected a podman stop call, got: {calls}"
-        assert len(start_calls) >= 1, f"Expected a podman start call, got: {calls}"
-
-    @pytest.mark.asyncio
-    async def test_inject_token_raises_on_secret_not_found(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token raises RuntimeError if secret doesn't exist."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        # Container name lookup succeeds
-        container_proc = mocker.AsyncMock()
-        container_proc.returncode = 0
-        container_proc.communicate.return_value = (
-            b"openshell-sandbox-my-sandbox\n",
-            b"",
-        )
-
-        # Secret inspect fails
-        secret_proc = mocker.AsyncMock()
-        secret_proc.returncode = 1
-        secret_proc.communicate.return_value = (
-            b"",
-            b"Error: no secret with name or id openshell-token-sb-999",
-        )
-
-        call_index = 0
-
-        async def mock_create_subprocess(*args, **kwargs):
-            nonlocal call_index
-            call_index += 1
-            if call_index == 1:
-                return container_proc
-            return secret_proc
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        with pytest.raises(RuntimeError, match="Failed to extract.*secret"):
-            await spawner._inject_podman_token("sb-999")
-
-    @pytest.mark.asyncio
-    async def test_inject_token_raises_on_container_not_found(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token raises RuntimeError if container not found."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        # Container lookup returns empty (no matching container)
-        mock_proc = mocker.AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate.return_value = (b"\n", b"")
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            return_value=mock_proc,
-        )
-
-        with pytest.raises(RuntimeError, match="No container found"):
-            await spawner._inject_podman_token("sb-999")
-
-    @pytest.mark.asyncio
-    async def test_inject_token_cleans_up_temp_file(self, mocker: MockerFixture) -> None:
-        """_inject_podman_token removes the temp file after copy."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        secret_data = json.dumps([{"SecretData": "test.jwt.token"}])
-
-        mock_proc = mocker.AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate.return_value = (secret_data.encode(), b"")
-
-        container_proc = mocker.AsyncMock()
-        container_proc.returncode = 0
-        container_proc.communicate.return_value = (
-            b"openshell-sandbox-my-sandbox\n",
-            b"",
-        )
-
-        call_index = 0
-
-        async def mock_create_subprocess(*args, **kwargs):
-            nonlocal call_index
-            call_index += 1
-            if call_index == 1:
-                return container_proc
-            return mock_proc
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        mock_unlink = mocker.patch("os.unlink")
-
-        await spawner._inject_podman_token("sb-123")
-
-        # os.unlink must be called to clean up the temp file
-        mock_unlink.assert_called_once()
-        # The path should end with .jwt (our suffix)
-        unlink_path = mock_unlink.call_args[0][0]
-        assert unlink_path.endswith(".jwt"), f"Expected .jwt suffix, got: {unlink_path}"
-
-    @pytest.mark.asyncio
-    async def test_inject_token_cleans_up_on_stop_failure(self, mocker: MockerFixture) -> None:
-        """Temp file is cleaned up even when podman stop fails mid-flow."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.AsyncMock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        secret_data = json.dumps([{"SecretData": "test.jwt.token"}])
-
-        # Container lookup succeeds
-        container_proc = mocker.AsyncMock()
-        container_proc.returncode = 0
-        container_proc.communicate.return_value = (
-            b"openshell-sandbox-my-sandbox\n",
-            b"",
-        )
-
-        # Secret extract succeeds
-        secret_proc = mocker.AsyncMock()
-        secret_proc.returncode = 0
-        secret_proc.communicate.return_value = (secret_data.encode(), b"")
-
-        # Stop fails
-        stop_proc = mocker.AsyncMock()
-        stop_proc.returncode = 1
-        stop_proc.communicate.return_value = (b"", b"container not running")
-
-        call_index = 0
-
-        async def mock_create_subprocess(*args, **kwargs):
-            nonlocal call_index
-            call_index += 1
-            if call_index == 1:
-                return container_proc
-            if call_index == 2:
-                return secret_proc
-            return stop_proc  # podman stop fails
-
-        mocker.patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=mock_create_subprocess,
-        )
-
-        mock_unlink = mocker.patch("os.unlink")
-
-        with pytest.raises(RuntimeError, match="podman stop failed"):
-            await spawner._inject_podman_token("sb-123")
-
-        # Even though stop failed, temp file must be cleaned up
-        mock_unlink.assert_called_once()
-        unlink_path = mock_unlink.call_args[0][0]
-        assert unlink_path.endswith(".jwt")
-
-    @pytest.mark.asyncio
-    async def test_spawn_proceeds_after_successful_workaround(self, mocker: MockerFixture) -> None:
-        """After workaround, spawn continues to start server and return endpoint."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        class SandboxRef:
-            id: str = "test-id"
-            def __init__(self, name):
-                self.name = name
-
-        mock_client = mocker.Mock()
-        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
-        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
-
-        def noop_exec(*args, **kwargs):
-            return iter([])
-
-        mock_client.exec_stream = noop_exec
-
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
-
-        # Mock _expose_service to return gateway endpoint and virtual host
-        mocker.patch.object(
-            spawner,
-            "_expose_service",
-            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
-        )
-
-        # Mock _wait_ready_with_host to return True immediately
-        async def mock_ready(*args, **kwargs):
-            return True
-        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
-
-        # Mock _build_network_policy (static method)
-        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
-
-        # Mock the workaround
-        mocker.patch.object(
-            spawner,
-            "_inject_podman_token",
-            new_callable=mocker.AsyncMock,
-            return_value=True,
-        )
-
-        endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={})
-
-        assert endpoint == "http://gateway:17670"
-        mock_client.create.assert_called_once()
-        mock_client.wait_ready.assert_called_once()
+    # JWT workaround tests removed — issue #82 workaround dropped.
+    # OpenShell v0.0.79+ (PR NVIDIA/OpenShell#2156) delivers sandbox
+    # JWTs via Podman secrets natively when gateway_jwt is configured.
+    # See spawner docstring for history.
 
 
 class TestOpenShellSpawnerPostCreateCleanup:
     """Tests for sandbox cleanup when post-create steps fail in _do_spawn.
 
-    Regression tests for the orphaned sandbox bug: if _inject_podman_token(),
-    start_server(), or expose_service() fails after create_sandbox() succeeds,
+    Regression tests for the orphaned sandbox bug: if start_server(),
+    expose_service(), or wait_ready fails after create_sandbox() succeeds,
     the sandbox must be deleted and removed from _sandbox_ids.
     """
 
     @pytest.mark.asyncio
     async def test_inject_token_failure_deletes_sandbox(self, mocker: MockerFixture) -> None:
-        """If _inject_podman_token raises, sandbox is deleted and tracking removed."""
+        """If wait_ready raises, sandbox is deleted and tracking removed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -1133,7 +701,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+        spawner = OpenShellSpawner(openshell_client=mock_client, )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -1145,15 +713,15 @@ class TestOpenShellSpawnerPostCreateCleanup:
         # Mock _build_network_policy (static method)
         mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
-        # _inject_podman_token fails after create succeeds
+        # start_server fails after create + wait_ready succeed
         mocker.patch.object(
             spawner,
-            "_inject_podman_token",
+            "start_server",
             new_callable=mocker.AsyncMock,
-            side_effect=RuntimeError("podman stop failed (rc=1): container not running"),
+            side_effect=RuntimeError("exec failed"),
         )
 
-        with pytest.raises(RuntimeError, match="podman stop failed"):
+        with pytest.raises(RuntimeError, match="exec failed"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
         # Sandbox must be cleaned up
@@ -1166,7 +734,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
     async def test_inject_token_failure_propagates_original_exception(
         self, mocker: MockerFixture
     ) -> None:
-        """The original exception from _inject_podman_token propagates to the caller."""
+        """The original exception from wait_ready propagates to the caller."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -1178,7 +746,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+        spawner = OpenShellSpawner(openshell_client=mock_client, )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -1192,7 +760,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         mocker.patch.object(
             spawner,
-            "_inject_podman_token",
+            "start_server",
             new_callable=mocker.AsyncMock,
             side_effect=RuntimeError("No container found for sandbox 'ca-agent-agent-1'"),
         )
@@ -1247,7 +815,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.delete.side_effect = RuntimeError("API unreachable")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+        spawner = OpenShellSpawner(openshell_client=mock_client, )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -1261,7 +829,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         mocker.patch.object(
             spawner,
-            "_inject_podman_token",
+            "start_server",
             new_callable=mocker.AsyncMock,
             side_effect=RuntimeError("token injection failed"),
         )
@@ -1289,7 +857,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, podman_cli="/usr/bin/podman")
+        spawner = OpenShellSpawner(openshell_client=mock_client, )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -1303,7 +871,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         mocker.patch.object(
             spawner,
-            "_inject_podman_token",
+            "start_server",
             new_callable=mocker.AsyncMock,
             side_effect=RuntimeError("injection failed"),
         )
@@ -1315,6 +883,271 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         # base.spawn() incremented to 1, then decremented back to 0
         assert spawner.active_count == 0
+
+
+class TestFilesystemPolicy:
+    """Tests for _build_filesystem_policy() static method."""
+
+    def test_sets_read_only_root(self, mocker: MockerFixture) -> None:
+        """Read-only policy includes root filesystem."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = mocker.Mock()
+        spec.policy.filesystem.read_only = []
+        spec.policy.filesystem.read_write = []
+        spec.policy.filesystem.include_workdir = False
+
+        OpenShellSpawner._build_filesystem_policy(spec)
+
+        assert "/" in spec.policy.filesystem.read_only
+
+    def test_allows_write_to_injection_targets(self, mocker: MockerFixture) -> None:
+        """Read-write list includes all post-create injection paths."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = mocker.Mock()
+        spec.policy.filesystem.read_only = []
+        spec.policy.filesystem.read_write = []
+        spec.policy.filesystem.include_workdir = False
+
+        OpenShellSpawner._build_filesystem_policy(spec)
+
+        rw = spec.policy.filesystem.read_write
+        assert "/tmp" in rw
+        assert "/home/agent" in rw
+        assert "/var/log" in rw
+        assert "/app/skills" in rw
+        assert "/var/secrets/mcp" in rw
+        assert "/var/run/secrets/llm-credentials" in rw
+
+    def test_includes_workdir(self, mocker: MockerFixture) -> None:
+        """Filesystem policy sets include_workdir."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = mocker.Mock()
+        spec.policy.filesystem.read_only = []
+        spec.policy.filesystem.read_write = []
+        spec.policy.filesystem.include_workdir = False
+
+        OpenShellSpawner._build_filesystem_policy(spec)
+
+        assert spec.policy.filesystem.include_workdir is True
+
+
+class TestCredentialInjection:
+    """Tests for _inject_credentials() and Provider API integration."""
+
+    @pytest.mark.asyncio
+    async def test_creates_and_attaches_provider(self, mocker: MockerFixture) -> None:
+        """Credentials are injected via Provider API when available."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        mock_create = mocker.patch.object(
+            spawner, "_create_and_attach_provider",
+            return_value="provider-123",
+        )
+
+        await spawner._inject_credentials(
+            "agent-1", "sb-1", "OPENAI_API_KEY",
+            {"OPENAI_API_KEY": "sk-test"},
+        )
+
+        mock_create.assert_called_once_with(
+            "sb-1", credentials={"OPENAI_API_KEY": "sk-test"},
+        )
+        assert spawner._provider_ids["agent-1"] == "provider-123"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_file_injection(self, mocker: MockerFixture) -> None:
+        """Falls back to file injection when Provider API fails."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        mocker.patch.object(
+            spawner, "_create_and_attach_provider",
+            side_effect=Exception("gRPC unavailable"),
+        )
+        mock_file_inject = mocker.patch.object(
+            spawner, "_inject_credentials_via_files",
+        )
+
+        await spawner._inject_credentials(
+            "agent-1", "sb-1", "OPENAI_API_KEY",
+            {"OPENAI_API_KEY": "sk-test"},
+        )
+
+        mock_file_inject.assert_called_once_with(
+            "agent-1", "OPENAI_API_KEY", "sk-test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_credential_not_in_env(self, mocker: MockerFixture) -> None:
+        """Logs warning when credential key not found in env."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        await spawner._inject_credentials("agent-1", "sb-1", "MISSING_KEY", {})
+
+        assert "agent-1" not in spawner._provider_ids
+
+
+class TestMCPSecretInjection:
+    """Tests for _inject_mcp_secrets() file injection."""
+
+    @pytest.mark.asyncio
+    async def test_writes_to_correct_path(self, mocker: MockerFixture) -> None:
+        """MCP secrets are written to mount_path + key, not mount_path alone."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        mock_mkdir = mocker.patch.object(spawner, "_exec_mkdir")
+        mock_write = mocker.patch.object(spawner, "_do_write_file")
+
+        mounts = [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")]
+
+        await spawner._inject_mcp_secrets(
+            "agent-1", mounts, {"my-secret": "secret-value"},
+        )
+
+        mock_mkdir.assert_called_once_with("uuid-1", "/var/secrets/mcp/kubectl/")
+        mock_write.assert_called_once_with(
+            "agent-1", "/var/secrets/mcp/kubectl/api-key", "secret-value",
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_missing_secrets(self, mocker: MockerFixture) -> None:
+        """Logs warning and skips when secret not in env."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        mock_write = mocker.patch.object(spawner, "_do_write_file")
+
+        mounts = [("missing-secret", "key", "/var/secrets/mcp/s/")]
+
+        await spawner._inject_mcp_secrets("agent-1", mounts, {})
+
+        mock_write.assert_not_called()
+
+
+class TestTLSAndServiceAccountSkipped:
+    """Tests for TLS and service_account skip-with-info-log."""
+
+    @pytest.mark.asyncio
+    async def test_tls_logged_and_skipped(self, mocker: MockerFixture) -> None:
+        """TLS certs trigger info log but are not injected."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = mocker.Mock(name="sb-1", id="uuid-1")
+        mock_client.wait_ready = mocker.Mock()
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(spawner, "_build_network_policy")
+        mocker.patch.object(spawner, "_expose_service", return_value=("http://gw:8080", "vh"))
+        mocker.patch.object(spawner, "_wait_ready_with_host", return_value=True)
+        mocker.patch.object(spawner, "start_server")
+
+        tls = mocker.Mock()
+        mock_logger = mocker.patch("cloud_agents.spawner.openshell_spawner.logger")
+
+        await spawner._do_spawn(
+            "agent-1", "image:latest", env={}, tls_certs=tls,
+        )
+
+        info_calls = [
+            str(c) for c in mock_logger.info.call_args_list
+            if "TLS" in str(c) or "transport security" in str(c)
+        ]
+        assert len(info_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_service_account_logged_and_skipped(self, mocker: MockerFixture) -> None:
+        """Service account triggers info log but is not applied."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = mocker.Mock(name="sb-1", id="uuid-1")
+        mock_client.wait_ready = mocker.Mock()
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(spawner, "_build_network_policy")
+        mocker.patch.object(spawner, "_expose_service", return_value=("http://gw:8080", "vh"))
+        mocker.patch.object(spawner, "_wait_ready_with_host", return_value=True)
+        mocker.patch.object(spawner, "start_server")
+
+        mock_logger = mocker.patch("cloud_agents.spawner.openshell_spawner.logger")
+
+        await spawner._do_spawn(
+            "agent-1", "image:latest", env={}, service_account="my-sa",
+        )
+
+        info_calls = [
+            str(c) for c in mock_logger.info.call_args_list
+            if "service_account" in str(c) or "identity" in str(c)
+        ]
+        assert len(info_calls) >= 1
+
+
+class TestDestroyWithProviderCleanup:
+    """Tests for _do_destroy() provider cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_detaches_provider_on_destroy(self, mocker: MockerFixture) -> None:
+        """Provider is detached during destroy."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+        spawner._provider_ids["agent-1"] = "provider-123"
+
+        mock_detach = mocker.patch.object(spawner, "_detach_provider")
+        mock_client.delete = mocker.Mock()
+
+        await spawner._do_destroy("agent-1")
+
+        mock_detach.assert_called_once_with("sb-1", "provider-123")
+        assert "agent-1" not in spawner._provider_ids
+
+    @pytest.mark.asyncio
+    async def test_destroy_tolerates_detach_failure(self, mocker: MockerFixture) -> None:
+        """Destroy continues even if provider detach fails."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+        spawner._provider_ids["agent-1"] = "provider-123"
+
+        mocker.patch.object(
+            spawner, "_detach_provider", side_effect=Exception("detach failed"),
+        )
+        mock_client.delete = mocker.Mock()
+
+        await spawner._do_destroy("agent-1")
+
+        mock_client.delete.assert_called_once_with("sb-1")
 
 
 class TestBuildNetworkPolicy:
