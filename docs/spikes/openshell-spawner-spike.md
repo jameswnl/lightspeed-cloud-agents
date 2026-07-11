@@ -305,11 +305,13 @@ Additional changes:
 
 ### Resolved
 
-1. **RESOLVED**: Standalone Podman gateway works on macOS with JWT config. Podman secret file mount is broken in 5.8.x but automated workaround implemented (issue #82).
+1. **RESOLVED**: Standalone Podman gateway works on macOS with JWT config.
 2. **RESOLVED**: Supervisor auth chain works end-to-end with Podman driver (JWT minting, supervisor authentication).
-3. **RESOLVED**: Podman secret file mount workaround implemented in `openshell_spawner.py`.
+3. **RESOLVED**: Podman 5.8.x JWT workaround — **removed**. OpenShell v0.0.79+ (PR NVIDIA/OpenShell#2156) delivers sandbox JWTs natively via Podman secrets when `gateway_jwt` is configured with signing keys. No client-side workaround needed. Requires gateway v0.0.79+.
 4. **RESOLVED**: RHEL 9 verification — gateway + supervisor + sandbox lifecycle works. Seccomp and network namespace isolation confirmed.
 5. **RESOLVED**: UBI 9 sandbox images — requires source-built supervisor (glibc 2.34 compatibility). UBI 10 works with pre-built binaries.
+6. **RESOLVED**: Production gaps closed (PR #105) — skills image, credentials, filesystem policy, MCP secrets, TLS skip, service account skip, provider cleanup. All 7 example workflows pass E2E through OpenShell on RHEL 9 + Kind cluster.
+7. **RESOLVED**: ~~Containerized gateway deployment (DooD pattern)~~ — verified (see "Containerized Gateway" section).
 
 ### Remaining
 
@@ -317,19 +319,122 @@ Additional changes:
 2. Gateway resource overhead measurement in target deployment environments
 3. L7 network policy testing with live gateway (auto-derivation implemented in `_build_network_policy()`)
 4. Sandbox image must include `iproute2`, `nsenter` (`util-linux-core`), and a `sandbox` user
-5. ~~Containerized gateway deployment (DooD pattern)~~ — verified above (see "Containerized Gateway" section)
-6. Upstream: request musl-static supervisor binary or RHEL 9-compatible builds
+5. Upstream: request musl-static supervisor binary or RHEL 9-compatible builds
+6. Skills image extraction for OpenShell + K8s driver (issue #106, see Fragility Analysis below)
 
 **Immediate value**: Eliminates duplicated spawner code and provides defense-in-depth isolation (seccomp + network namespace). Even without L7 policy, this is a security improvement over container securityContext alone.
 
 **If no-go**: The prototype code remains as a third spawner option. No changes to existing K8s/Podman spawners.
 
+## Fragility Analysis
+
+Assessment of each production feature's robustness, what we've done, and known gaps.
+
+### Skills image — moderate fragility
+
+**What we've done**: `_load_skills()` extracts skills from an OCI image locally (Podman SDK or CLI), creates a tar, streams it into the sandbox via `exec_stream`. Works for OpenShell + Podman driver.
+
+**Fragility**:
+- **OpenShell + K8s driver**: Runner is a K8s pod with no Podman socket. Neither Podman SDK nor CLI is available. `_extract_skills_image()` raises `RuntimeError`. Issue #106 tracks this.
+- **Full image pull**: `crane export` or Podman SDK downloads ALL layers of the skills image, not just the `/skills` directory. A fat base image (e.g. `python:3.12` + 5MB of skills) wastes bandwidth.
+
+**Mitigation**: Build skills images as minimal single-layer images (`FROM scratch` + `COPY skills/ /skills/`). This is a convention, not a code change. A 5MB skills directory = 5MB image. The extraction code works efficiently with minimal images.
+
+**Future options for K8s driver**:
+1. Install `crane` in the sandbox image and pull from inside (no runner-side extraction)
+2. OpenShell `driver_config` volume mounts (needs upstream investigation)
+3. Operator pre-populates skills into sandbox spec
+
+### Credentials (Provider API) — moderate fragility
+
+**What we've done**: `_inject_credentials()` first tries the OpenShell Provider API (`CreateProvider` + `AttachSandboxProvider` via raw gRPC), then falls back to file injection via `_do_write_file()`.
+
+**Fragility**:
+- **Raw gRPC**: Uses `grpc.insecure_channel` and accesses `self._client._endpoint` (private attribute). If the OpenShell SDK changes its internal structure, this breaks silently.
+- **Proto compatibility**: `CreateProviderRequest` and `AttachSandboxProviderRequest` protobuf messages must match the gateway version. No version negotiation.
+
+**Mitigation**: File-based fallback catches Provider API failures and writes credentials to `/var/run/secrets/llm-credentials/`. This degraded path works for all providers. Missing credentials now raise `RuntimeError` (fail-closed) instead of silently skipping.
+
+### MCP secret injection — solid
+
+**What we've done**: `_inject_mcp_secrets()` creates directories via `exec_stream(mkdir -p)` and writes secret values via `_do_write_file()` (base64 + exec).
+
+**Why it's solid**: Uses the same proven base64+exec pattern that `_do_write_file()` and `_do_read_file()` use for transcript collection. No external dependencies. Works on any OpenShell driver.
+
+### Filesystem policy — solid
+
+**What we've done**: `_build_filesystem_policy()` sets `spec.policy.filesystem.read_only = ["/"]` with explicit `read_write` exceptions for `/tmp`, `/home/agent`, `/var/log`, `/app/skills`, `/var/secrets/mcp`, `/var/run/secrets/llm-credentials`.
+
+**Why it's solid**: Sets protobuf fields directly on `SandboxSpec.policy` — same mechanism as `_build_network_policy()`. Clean contract with no external dependencies.
+
+### Network policy auto-derivation — solid
+
+**What we've done**: `_build_network_policy()` derives deny-by-default L7 egress rules from `LIGHTSPEED_PROVIDER` (provider-to-host mapping) and `LIGHTSPEED_MCP_SERVERS` (parsed URLs). Uses scheme-based default ports (80 for http, 443 for https).
+
+**Why it's solid**: Same protobuf contract as filesystem policy. Provider host mapping is a static dict. MCP URLs are parsed with stdlib `urlparse`.
+
+### TLS / Service account — solid (not applicable)
+
+**What we've done**: Log info and skip. The gateway provides transport security (TLS) and manages identity (no K8s SA equivalent). These are architectural decisions, not workarounds.
+
+### Provider cleanup — solid
+
+**What we've done**: `_do_destroy()` detaches providers via `DetachSandboxProvider` gRPC before deleting the sandbox. `_cleanup_sandbox()` does the same on spawn failure. Provider IDs are tracked in `self._provider_ids`.
+
+**Minor fragility**: Uses the same raw gRPC pattern as credential injection. If detach fails, it logs a warning and continues with sandbox deletion (non-blocking).
+
+## Spawner Comparison: OpenShell vs K8s vs Podman
+
+### Isolation & Security
+
+| | Podman | Kubernetes | OpenShell |
+|---|---|---|---|
+| **Isolation** | Linux containers (namespaces/cgroups) | K8s pods with hardened security context | MicroVM (strongest) |
+| **Network egress** | Podman network (manual config) | Cluster NetworkPolicy (manual) | Auto-derived deny-by-default from provider + MCP config |
+| **Filesystem** | Optional read-only flag | Always read-only rootfs | Granular read/write path policy |
+| **TLS** | App-level cert injection | App-level cert injection | Not needed — gateway handles transport |
+
+### Feature Parity
+
+| Feature | Podman | Kubernetes | OpenShell |
+|---|---|---|---|
+| **Skills image** | Volume + transient container | Init container + emptyDir | Podman SDK extract + tar stream (Podman driver ✅, K8s driver ❌ issue #106) |
+| **Credentials** | Skipped (warning) | Secret volume + envFrom | Provider API + file fallback |
+| **MCP secrets** | Rejected (ValueError) | Secret volumes | File injection via exec |
+| **Read-only mode** | Container flag | Always enforced | Policy with write exceptions |
+| **Service account** | Ignored | PodSpec SA + projected token | N/A (gateway manages identity) |
+| **Resource limits** | No | CPU/memory via SpawnConfig | No |
+| **Progress streaming** | No | No | Yes (real-time JSONL tail) |
+
+### Architecture
+
+| | Podman | Kubernetes | OpenShell |
+|---|---|---|---|
+| **Primitive** | Container | Job + Service | Sandbox (microVM) |
+| **Readiness** | Base class HTTP poll | Base class HTTP poll | Custom Host-header poll (gateway-routed) |
+| **Routing** | `localhost:{random_port}` | `{name}.{ns}.svc:8080` | Gateway virtual-host (`Host` header) |
+| **Cleanup** | Stop + remove container | Delete Job + Service | gRPC Delete + provider detach |
+| **Instance tracking** | Podman label query | K8s Job label query | In-memory dicts |
+| **Dependencies** | Podman socket | K8s API server | OpenShell gateway (gRPC) v0.0.79+ |
+
+### Key Findings
+
+1. **OpenShell is the most secure** — microVM isolation + auto-derived L7 network policy + gateway-managed credentials. K8s is second (always-hardened securityContext). Podman is weakest (socket access = host-level control).
+
+2. **OpenShell is the most feature-complete** — only spawner with progress streaming, Provider API, auto network policy, and granular filesystem policy. K8s has resource limits that OpenShell lacks.
+
+3. **Podman has the most gaps** — no credential injection, no MCP secrets (ValueError), no resource limits, no progress streaming. It is a dev/demo spawner.
+
+4. **OpenShell eliminates TLS complexity** — gateway handles transport security, removing cert generation/mounting/cleanup code.
+
+5. **Trade-off**: OpenShell adds a gateway infrastructure dependency. K8s/Podman spawners talk directly to the container runtime.
+
 ## Files
 
 | File | Description |
 |---|---|
-| `src/cloud_agents/spawner/openshell_spawner.py` | Spawner implementation |
-| `tests/unit/spawner/test_openshell_spawner.py` | 27 unit tests |
+| `src/cloud_agents/spawner/openshell_spawner.py` | Spawner implementation (52 tests) |
+| `tests/unit/spawner/test_openshell_spawner.py` | Unit tests |
 | `docs/spikes/openshell-standalone-setup.md` | Standalone gateway setup guide |
 | `pyproject.toml` | `openshell` optional dependency |
 | `docs/gaps/gaps-implementation-plan.md` | T53 entry |
