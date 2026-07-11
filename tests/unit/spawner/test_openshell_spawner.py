@@ -988,16 +988,15 @@ class TestCredentialInjection:
         )
 
     @pytest.mark.asyncio
-    async def test_skips_when_credential_not_in_env(self, mocker: MockerFixture) -> None:
-        """Logs warning when credential key not found in env."""
+    async def test_raises_when_credential_not_in_env(self, mocker: MockerFixture) -> None:
+        """Raises RuntimeError when credential key not found in env."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
-        await spawner._inject_credentials("agent-1", "sb-1", "MISSING_KEY", {})
-
-        assert "agent-1" not in spawner._provider_ids
+        with pytest.raises(RuntimeError, match="not found in env"):
+            await spawner._inject_credentials("agent-1", "sb-1", "MISSING_KEY", {})
 
 
 class TestMCPSecretInjection:

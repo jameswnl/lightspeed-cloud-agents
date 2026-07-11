@@ -89,6 +89,7 @@ class OpenShellSpawner(AgentSpawner):
         """
         super().__init__(**kwargs)
         self._client = openshell_client
+        self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
@@ -468,11 +469,10 @@ class OpenShellSpawner(AgentSpawner):
         """
         cred_value = env.get(credential_secret_name)
         if not cred_value:
-            logger.warning(
-                "Credential '%s' not found in env for sandbox '%s'",
-                credential_secret_name, sandbox_name,
+            raise RuntimeError(
+                f"Credential '{credential_secret_name}' not found in env "
+                f"for sandbox '{sandbox_name}' — cannot start agent without credentials"
             )
-            return
 
         try:
             provider_id = await self._create_and_attach_provider(
@@ -583,9 +583,14 @@ class OpenShellSpawner(AgentSpawner):
 
         Extracts skills content from the image locally, then streams
         it into the sandbox via exec_stream with tar.
+
+        Cross-platform: uses the Podman Python SDK (available in the
+        runner container) to run a transient container that copies
+        skills into a temp dir. Falls back to podman CLI if the SDK
+        is not available. The sandbox-side tar upload is the same
+        regardless of extraction method.
         """
         import shutil
-        import subprocess
         import tarfile
         from io import BytesIO
 
@@ -593,25 +598,9 @@ class OpenShellSpawner(AgentSpawner):
         tmp_dir = tempfile.mkdtemp(prefix=f"skills-{agent_name}-")
 
         try:
-            if self._podman_cli:
-                for src_path in copy_paths:
-                    subprocess.run(
-                        [
-                            self._podman_cli, "run", "--rm",
-                            "-v", f"{tmp_dir}:/out:Z",
-                            skills_image,
-                            "sh", "-c", f"cp -r {src_path}/* /out/ 2>/dev/null || true",
-                        ],
-                        check=True,
-                        capture_output=True,
-                        timeout=120,
-                    )
-            else:
-                logger.warning(
-                    "No podman_cli — attempting direct image pull for skills. "
-                    "K8s environments should pre-populate skills.",
-                )
-                return
+            await self._extract_skills_image(
+                skills_image, copy_paths, tmp_dir,
+            )
 
             tar_buf = BytesIO()
             with tarfile.open(fileobj=tar_buf, mode="w") as tar:
@@ -633,6 +622,70 @@ class OpenShellSpawner(AgentSpawner):
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    async def _extract_skills_image(
+        self,
+        skills_image: str,
+        copy_paths: list[str],
+        tmp_dir: str,
+    ) -> None:
+        """Extract skills content from an OCI image to a local directory.
+
+        Uses the Podman Python SDK (cross-platform, works in any
+        container) or falls back to the podman CLI binary.
+        """
+        try:
+            from podman import PodmanClient
+
+            def _sdk_extract() -> None:
+                pclient = PodmanClient(
+                    base_url=f"unix://{os.environ.get('CONTAINER_HOST', '/run/podman/podman.sock').replace('unix://', '')}",
+                )
+                copy_cmd = " && ".join(
+                    f"cp -r {p}/* /out/ 2>/dev/null || true"
+                    for p in copy_paths
+                )
+                pclient.containers.run(
+                    skills_image,
+                    command=["sh", "-c", copy_cmd],
+                    volumes={tmp_dir: {"bind": "/out", "mode": "rw"}},
+                    remove=True,
+                    detach=False,
+                )
+                pclient.close()
+
+            await asyncio.to_thread(_sdk_extract)
+            return
+        except ImportError:
+            pass
+        except Exception:
+            logger.warning(
+                "Podman SDK skills extraction failed, trying CLI",
+                exc_info=True,
+            )
+
+        if self._podman_cli:
+            import subprocess
+
+            for src_path in copy_paths:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        self._podman_cli, "run", "--rm",
+                        "-v", f"{tmp_dir}:/out:Z",
+                        skills_image,
+                        "sh", "-c", f"cp -r {src_path}/* /out/ 2>/dev/null || true",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+            return
+
+        raise RuntimeError(
+            f"Cannot extract skills image '{skills_image}': "
+            "neither Podman SDK nor podman CLI available"
+        )
 
     async def _inject_mcp_secrets(
         self,
