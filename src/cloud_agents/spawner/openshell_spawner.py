@@ -1089,3 +1089,4 @@ class OpenShellSpawner(AgentSpawner):
             List of agent names with active sandboxes.
         """
         return list(self._sandbox_names.keys())
+
