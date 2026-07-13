@@ -922,6 +922,114 @@ class TestToK8sSecretName:
         spawn_call = mock_spawner.spawn.call_args
         assert spawn_call[1].get("credential_secret_name") == "openai-api-key"
 
+    @pytest.mark.asyncio
+    async def test_credential_env_lookup_uses_uppercase_key(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When credentials_secret is K8s-format, env lookup uses UPPER_SNAKE form.
+
+        The K8s secret name 'openai-api-key' maps to env var OPENAI_API_KEY.
+        The env dict passed to the spawner must use a valid env var name,
+        not the K8s secret name (which contains hyphens).
+        """
+        mocker.patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "sk-test-key-123"},
+            clear=False,
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "openai-api-key",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env = spawn_call[1].get("env", {})
+        # Must use UPPER_SNAKE key (valid env var), not K8s kebab-case
+        assert "OPENAI_API_KEY" in env, (
+            f"Expected OPENAI_API_KEY in env but got keys: {list(env.keys())}"
+        )
+        assert env["OPENAI_API_KEY"] == "sk-test-key-123"
+        # K8s-format key must NOT be in env (hyphens invalid for env vars)
+        assert "openai-api-key" not in env
+
+    @pytest.mark.asyncio
+    async def test_credential_env_lookup_direct_match(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When credentials_secret matches the actual env var name, it still works."""
+        mocker.patch.dict(
+            os.environ,
+            {"ANTHROPIC_API_KEY": "sk-ant-key"},
+            clear=False,
+        )
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "claude",
+                    "model": "claude-sonnet-4-20250514",
+                    "credentials_secret": "ANTHROPIC_API_KEY",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        env = spawn_call[1].get("env", {})
+        assert "ANTHROPIC_API_KEY" in env
+        assert env["ANTHROPIC_API_KEY"] == "sk-ant-key"
+
 
 class TestNotificationConfigResolution:
     """Tests for notifier config-ref env var resolution."""

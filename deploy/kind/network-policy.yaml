@@ -68,6 +68,10 @@ spec:
     - ports:
         - port: 8080
           protocol: TCP
+    # OpenShell gateway (gRPC + HTTP proxy)
+    - ports:
+        - port: 17670
+          protocol: TCP
     # K8s API server
     - ports:
         - port: 443
