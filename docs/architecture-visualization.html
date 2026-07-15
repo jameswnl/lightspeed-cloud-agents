@@ -268,40 +268,33 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">How are agents going to be defined? Custom YAML schema?</div>
-  <div class="faq-a">Two levels:<br>
-    &bull; <strong>Workflow definitions</strong> (apiVersion: v1, kind: AgentWorkflow): multi-step workflows with conditions, approval gates, parallel groups. Each step runs in a lightspeed-agentic-sandbox container. This is the primary abstraction.<br>
-    &bull; <strong>Agent definitions</strong> (apiVersion: lightspeed.redhat.com/v1alpha1, kind: AgentDefinition): standalone agent config for the generic runtime (system prompt, tools, output type). Used for single-agent deployments outside workflows.</div>
+  <div class="faq-a"><strong>Workflow definitions</strong> (apiVersion: v1, kind: AgentWorkflow) are the primary abstraction: multi-step workflows with conditions, approval gates, parallel groups. Each step runs in a lightspeed-agentic-sandbox container. Teams write workflow YAML with per-step prompts, output schemas, and conditions. Skills are specified and mounted for each step, providing domain knowledge as OCI images. The API request provides deployment-time config (provider, sandbox image, skills image, MCP servers).</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
   <div class="faq-a"><strong>Implemented:</strong><br>
-    &bull; <strong>Workflow level</strong>: risk_level per step (missing defaults to "high" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
+    &bull; <strong>Workflow level</strong>: risk_level per step (agent steps default to "high", approval steps default to "medium" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
     &bull; <strong>Execution level</strong>: hard timeouts per step, resource limits (CPU/memory via SpawnConfig), ephemeral container isolation (fresh per step, destroyed after), concurrency cap (MAX_SPAWNED_PODS)<br>
-    &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, TLS for Temporal gRPC<br>
+    &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, ephemeral TLS for runner-to-sandbox communication<br>
     &bull; <strong>Cluster level</strong>: K8s RBAC (scoped Roles per spawner), NetworkPolicy (egress to Temporal + sandbox + LLM only), credential Secrets via volume mount (never in pod spec)<br>
     &bull; <strong>MCP</strong>: secret allowlist (MCP_ALLOWED_SECRETS), file-reference headers (secrets never inlined in env vars)<br>
     &bull; <strong>Audit</strong>: structured audit events for workflow start, approval decisions, sandbox spawn/destroy, secret mounts, escalation, orphan cleanup<br><br>
     <strong>Future / not yet in workflow path:</strong><br>
-    &bull; Per-step tool filtering (allowed_tools / denied_tools via PermissionScope) &mdash; model exists, enforced in generic agent runtime but not yet passed through the sandbox /v1/agent/run contract<br>
-    &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet in sandbox path<br>
-    &bull; Risk-level scoped approval (conditions.risk_levels in policy rules)<br>
-    &bull; Dynamic RBAC from agent output (per-proposal ServiceAccount + Roles)<br>
+    &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet wired into the workflow sandbox path<br>
+    &bull; Dynamic RBAC from agent output (per-step ServiceAccount + Roles scoped to agent actions)<br>
     &bull; Tool origin validation allowlist</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Are these agents going to be available as a ready-made template?</div>
-  <div class="faq-a">Workflow definitions serve as templates. The diagnostic workflow in DEPLOYMENT.md is a working example. Teams define their own workflow YAML with custom steps, prompts, and output schemas. Skills (domain knowledge packages) can be distributed as OCI images and mounted into sandbox containers. Template distribution via OCI artifacts is a backlog item.</div>
+  <div class="faq-a">The framework is built for <strong>Lightspeed product teams</strong> to create ready-made agent solutions for Red Hat customers &mdash; not for customers to build their own agents directly. Product teams define workflow YAML with custom steps, prompts, and output schemas, then ship the resulting agent as a productized solution. Skills (domain knowledge packages) can be distributed as OCI images and mounted into sandbox containers. The goal is to re-use as many upstream and Red Hat projects as possible (e.g. OpenShell for sandbox infrastructure). Concrete productization plans are TBD &mdash; we are at the stage of prototyping and validating use cases.</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
-  <div class="faq-a">Yes &mdash; no SDK needed. Three paths, from easiest to most flexible:<br>
-    &bull; <strong>Workflow YAML + skills</strong> (easiest): Teams write a workflow definition with per-step prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image. The skills image is specified at deployment time via the API request (<code>skills_image</code>), not in the YAML itself. No code required.<br>
-    &bull; <strong>+ MCP servers</strong> (external tools): Teams configure external tool servers (ServiceNow, Jira, PagerDuty) via <code>mcp_servers</code> on the API request. The sandbox calls MCP servers as tools during execution. No code changes to the sandbox image. MCP config is deployment-time, not in the YAML definition.<br>
-    &bull; <strong>Custom container image</strong> (most flexible): Teams bring their own container image implementing <strong>POST /v1/agent/run</strong> (query + context + outputSchema in, structured output out). Specified via <code>sandbox_image</code> on the API request. Any image exposing this endpoint works as a workflow step.<br><br>
-    In all paths, the workflow YAML defines <em>what</em> (steps, prompts, output schemas, conditions, approval gates). The API request provides <em>how</em> (which provider, which sandbox image, which skills image, which MCP servers).</div>
+  <div class="faq-a">Yes &mdash; no SDK needed. Teams write a workflow definition with per-step prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image. The skills image is specified at deployment time via the API request (<code>skills_image</code>), not in the YAML itself. No code required.<br><br>
+    The workflow YAML defines <em>what</em> (steps, prompts, output schemas, conditions, approval gates). The API request provides <em>how</em> (which provider, which sandbox image, which skills image, which MCP servers).</div>
 </div>
 
 <div class="faq-card">
@@ -309,15 +302,18 @@ svg { width: 100%; height: auto; display: block; }
   <div class="faq-a">
     <table class="faq-table">
       <tr><th>Component</th><th>Build vs Reuse</th><th>Status</th></tr>
-      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK</td><td>Implemented</td></tr>
-      <tr><td>Spawner (K8s/Podman)</td><td>Build: ~200 lines each</td><td>Implemented</td></tr>
-      <tr><td>Definition store</td><td>Build: CRUD + validation, ~100 lines</td><td>Implemented</td></tr>
-      <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Implemented</td></tr>
-      <tr><td>Durable state</td><td>Reuse: Temporal Server</td><td>Implemented</td></tr>
-      <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Implemented</td></tr>
-      <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Implemented</td></tr>
-      <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Implemented</td></tr>
-      <tr><td>Agents-as-tools</td><td>Build: registry &rarr; LLM tool generation</td><td>Backlog</td></tr>
+      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK</td><td>Explored</td></tr>
+      <tr><td>Spawner (K8s / Podman / OpenShell)</td><td>Build: one per platform, shared abstract interface</td><td>Explored</td></tr>
+      <tr><td>Definition store</td><td>Build: CRUD + validation</td><td>Explored</td></tr>
+      <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Explored</td></tr>
+      <tr><td>Durable state</td><td>Reuse: Temporal Server</td><td>Explored</td></tr>
+      <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Explored</td></tr>
+      <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Explored</td></tr>
+      <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Explored</td></tr>
+      <tr><td>Alert &amp; schedule triggers</td><td>Build: webhook-triggered and cron-based workflow launches</td><td>Explored</td></tr>
+      <tr><td>TLS (runner &harr; sandbox)</td><td>Build: ephemeral EC P-256 certs, per-sandbox CA</td><td>Explored</td></tr>
+      <tr><td>Transcript store</td><td>Build: persistent agent event storage (PostgreSQL)</td><td>Explored</td></tr>
+      <tr><td>Agents-as-tools</td><td>Build: registry &rarr; LLM tool generation</td><td>To be explored</td></tr>
     </table>
   </div>
 </div>
@@ -325,7 +321,8 @@ svg { width: 100%; height: auto; display: block; }
 <div class="faq-card">
   <div class="faq-q">Does it support durable agents with long-running tasks?</div>
   <div class="faq-a">Yes. <strong>Temporal durable execution</strong> handles long-running work: workflow state survives crashes, restarts, and arbitrarily long waits (e.g. approval gates that take days). Each agent step runs in an ephemeral sandbox container, but the workflow execution is durable. Crash recovery uses content-hash pod naming for idempotent retries and startup orphan reconciliation for leaked containers.<br><br>
-    What's missing: agents that maintain conversational memory across multiple workflow invocations. That's a backlog item (agent state persistence / memory).</div>
+    Within a workflow, step outputs are carried forward as context to subsequent steps, and the <strong>transcript store</strong> persists the full agent event history (tool calls, reasoning, results) across all steps in PostgreSQL. This gives later steps and human reviewers full visibility into prior agent work.<br><br>
+    What's missing: agents that maintain conversational memory across <em>separate</em> workflow invocations. That's a backlog item (agent state persistence / cross-workflow memory).</div>
 </div>
 
 </div>
