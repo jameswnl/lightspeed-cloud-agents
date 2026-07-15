@@ -106,11 +106,11 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="tabs">
   <button class="active" onclick="switchTab('goals')">Goals</button>
-  <button onclick="switchTab('dp')">Design Principles</button>
-  <button onclick="switchTab('tr')">Technical Requirements</button>
+  <button onclick="switchTab('dp')">Requirements</button>
   <button onclick="switchTab('faq')">FAQ</button>
-  <button onclick="switchTab('wf')">Diagnostic Workflow</button>
-  <button onclick="switchTab('aat')">Agents-as-Tools</button>
+  <span style="color: #484f58; margin: 0 4px; align-self: center;">|</span>
+  <button onclick="switchTab('wf')">Example: Diagnostic Workflow</button>
+  <button onclick="switchTab('aat')">Example: Agents-as-Tools</button>
 </div>
 <div class="tab-divider"></div>
 
@@ -119,6 +119,9 @@ svg { width: 100%; height: auto; display: block; }
 <!-- ============================================================ -->
 <div id="tab-goals" class="tab-content active">
 <div class="static-content">
+<div style="background: #1c2333; border-left: 3px solid #58a6ff; padding: 12px 16px; margin: 0 0 20px 0; border-radius: 4px;">
+  <span style="color: #f0f6fc; font-size: 14px; line-height: 1.6;">This is a PoC to explore the needs and requirements for Lightspeed product teams' agentic workloads &mdash; AI agents that assist their product users and administrators with operational tasks. The goals and requirements below are derived from conversations with product teams, Jira tickets, requirement documents, and learnings from early prototyping across teams.</span>
+</div>
 <div class="goal-grid">
   <div class="goal-card" id="goal-G1">
     <div class="goal-id">G1</div>
@@ -154,7 +157,7 @@ svg { width: 100%; height: auto; display: block; }
 <!-- ============================================================ -->
 <div id="tab-dp" class="tab-content">
 <div class="static-content">
-<div class="req-section-title">Design Principles</div>
+<div class="req-section-title">Requirements</div>
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R1</span> <span class="req-name">Framework, not pre-built agents</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
@@ -167,88 +170,53 @@ svg { width: 100%; height: auto; display: block; }
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Each agent step spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. human-approval steps do not spawn containers.</div>
+  <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
+  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history &mdash; and hands off to a human operator. Each retry sees prior failure history so the agent can adapt before escalating.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R4</span> <span class="req-name">Human-in-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Diagnose &rarr; Propose &rarr; Gate &rarr; Execute &rarr; Verify. Structured output: confidence, risk, rollback plan. Approval gates pause workflows for human review.</div>
+  <div class="req-header"><span><span class="req-id">R4</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Each agent step spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. Human-approval steps do not spawn containers.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history. <em>(TODO: interactive CLI handoff to Claude Code / Goose with pre-loaded workflow context.)</em></div>
+  <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
+  <div class="req-desc">Workflow state lives in Temporal Server, not in the runner process. Scales horizontally; replica crashes don't lose workflows.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R6</span> <span class="req-name">Retry with escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">Each retry sees full failure history. Exhausted &rarr; R4 (approval) or R5 (interactive handoff).</div>
+  <div class="req-header"><span><span class="req-id">R6</span> <span class="req-name">Agent memory across steps</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
+  <div class="req-desc">Full agent event history (tool calls, reasoning, results) persisted across all workflow steps. Later steps and human reviewers have full visibility into prior agent work.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
-  <div class="req-desc">Workflow state lives in Temporal Server, not in the runner process. Scales horizontally behind a load balancer. Replica crashes don't lose workflows.</div>
-</div>
-
-</div>
-</div>
-
-<!-- ============================================================ -->
-<!-- TAB: TECHNICAL REQUIREMENTS                                   -->
-<!-- ============================================================ -->
-<div id="tab-tr" class="tab-content">
-<div class="static-content">
-<div class="req-section-title">Technical Requirements</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Execution engine</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Temporal workflow engine + sandbox containers behind an HTTP contract.</div>
+  <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Cross-platform deployment</span></span> <span class="req-goals"><a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
+  <div class="req-desc">Shared abstract spawner interface with platform-specific implementations. Must support both Kubernetes and Podman deployment targets.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R9</span> <span class="req-name">Runtime</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">FastAPI + Temporal Worker + sandbox HTTP contract</div>
+  <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Credentials never exposed in plain text. Authenticated access on all endpoints. Encrypted runner-to-sandbox communication. Per-step permission scoping (allowed/denied tools). Structured audit trail.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R10</span> <span class="req-name">Deployment</span></span> <span class="req-goals"><a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
-  <div class="req-desc">K8s: Jobs, Services, ConfigMaps, Secrets, RBAC<br>Podman: containers, volume mounts, port mapping</div>
+  <div class="req-header"><span><span class="req-id">R9</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Per-user/team RBAC with pluggable authorization. Fail-closed when enabled.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R11</span> <span class="req-name">Persistence</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">Temporal Server provides durable workflow execution and state. Definition store supports in-memory or shared persistence backend.</div>
+  <div class="req-header"><span><span class="req-id">R10</span> <span class="req-name">Observability</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Distributed tracing across workflow steps. Metrics for workflow execution. Structured logging. Audit events for all security-relevant actions.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R12</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Secrets via K8s refs + credential volume mounts, bearer auth on all endpoints. TLS for Temporal gRPC. Explicit risk_level, per-step permission scoping. securityContext on pods. MCP secret allowlist. Structured audit trail.</div>
+  <div class="req-header"><span><span class="req-id">R11</span> <span class="req-name">Triggers</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
+  <div class="req-desc">Workflows invocable via API, alert-based triggers, and schedule-based triggers.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R13</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). CallerIdentity extracted from auth middleware, fail-closed when enabled. Per-step tool scoping via PermissionScope forwarded to sandbox contract.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R14</span> <span class="req-name">Observability</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">OTel tracing (with Temporal TracingInterceptor), Prometheus metrics (ls_workflow_*), SSE streaming, structured JSON logging, audit events</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R15</span> <span class="req-name">Triggers</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc">API trigger (POST /v1/workflows/run) is implemented. Chatbot, alert, and schedule triggers are future work.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R16</span> <span class="req-name">Agents-as-tools</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc"><em>(Backlog)</em> Registry auto-generates LLM tools from workflow/agent definitions, enabling chatbot-driven workflow invocation.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R17</span> <span class="req-name">Escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">Context packaging + webhook/log delivery done. <em>(TODO: interactive CLI handoff for operator follow-up.)</em></div>
+  <div class="req-header"><span><span class="req-id">R12</span> <span class="req-name">Agents-as-tools</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
+  <div class="req-desc">Agents composable as tools for other agents or chatbots, enabling conversational workflow invocation.</div>
 </div>
 
 </div>
