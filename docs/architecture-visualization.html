@@ -273,11 +273,12 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
-  <div class="faq-a"><strong>Implemented:</strong><br>
+  <div class="faq-a"><strong>Explored:</strong><br>
+    <em>Note: specific enforcement mechanisms vary by deployment target (K8s, Podman, OpenShell). The guardrails below are implemented across spawners where applicable, with K8s offering the richest native controls.</em><br><br>
     &bull; <strong>Workflow level</strong>: risk_level per step (agent steps default to "high", approval steps default to "medium" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
     &bull; <strong>Execution level</strong>: hard timeouts per step, resource limits (CPU/memory via SpawnConfig), ephemeral container isolation (fresh per step, destroyed after), concurrency cap (MAX_SPAWNED_PODS)<br>
     &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, ephemeral TLS for runner-to-sandbox communication<br>
-    &bull; <strong>Cluster level</strong>: K8s RBAC (scoped Roles per spawner), NetworkPolicy (egress to Temporal + sandbox + LLM only), credential Secrets via volume mount (never in pod spec)<br>
+    &bull; <strong>Network level</strong>: K8s NetworkPolicy or OpenShell per-sandbox policy (derived from provider and MCP config), scoped egress to known services<br>
     &bull; <strong>MCP</strong>: secret allowlist (MCP_ALLOWED_SECRETS), file-reference headers (secrets never inlined in env vars)<br>
     &bull; <strong>Audit</strong>: structured audit events for workflow start, approval decisions, sandbox spawn/destroy, secret mounts, escalation, orphan cleanup<br><br>
     <strong>Future / not yet in workflow path:</strong><br>
