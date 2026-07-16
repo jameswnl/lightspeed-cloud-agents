@@ -196,7 +196,7 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Credentials never exposed in plain text. Authenticated access on all endpoints. Encrypted runner-to-sandbox communication. Per-step permission scoping (allowed/denied tools). Structured audit trail.</div>
+  <div class="req-desc">Credentials never exposed to agent processes. Authenticated access on all endpoints. Encrypted runner-to-sandbox communication. Per-step permission scoping (allowed/denied tools). Structured audit trail.</div>
 </div>
 
 <div class="req-card">
@@ -246,6 +246,7 @@ svg { width: 100%; height: auto; display: block; }
     &bull; <strong>Workflow level</strong>: risk_level per step (agent steps default to "high", approval steps default to "medium" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
     &bull; <strong>Execution level</strong>: hard timeouts per step, resource limits (CPU/memory via SpawnConfig), ephemeral container isolation (fresh per step, destroyed after), concurrency cap (MAX_SPAWNED_PODS)<br>
     &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, ephemeral TLS for runner-to-sandbox communication<br>
+    &bull; <strong>Credential isolation</strong>: OpenShell supervisor inference router injects LLM API keys into outgoing calls at the network level &mdash; the agent process never has access to credentials, preventing exfiltration even if compromised<br>
     &bull; <strong>Network level</strong>: K8s NetworkPolicy or OpenShell per-sandbox policy (derived from provider and MCP config), scoped egress to known services<br>
     &bull; <strong>MCP</strong>: secret allowlist (MCP_ALLOWED_SECRETS), file-reference headers (secrets never inlined in env vars)<br>
     &bull; <strong>Audit</strong>: structured audit events for workflow start, approval decisions, sandbox spawn/destroy, secret mounts, escalation, orphan cleanup<br><br>
