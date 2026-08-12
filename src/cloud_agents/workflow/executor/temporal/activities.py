@@ -27,7 +27,7 @@ from cloud_agents.workflow.notifiers.escalation import LogPackager
 from cloud_agents.workflow.notifiers.notifier import NullNotifier
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
-from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_tls_errors_total
+from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_tls_errors_total
 from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
 from cloud_agents.workflow.security.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
 
@@ -595,7 +595,7 @@ async def _run_sandbox_step_inner(
 
     finally:
         if was_cancelled and endpoint:
-            from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_timeout_total
+            from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_timeout_total
 
             ls_sandbox_timeout_total.labels(step_name=step_name, reason="cancelled").inc()
             emit_audit(
@@ -622,7 +622,7 @@ async def _run_sandbox_step_inner(
                     )
                 except Exception:
                     logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
-                    from cloud_agents.workflow.executor.temporal_metrics import (
+                    from cloud_agents.workflow.executor.temporal.metrics import (
                         ls_sandbox_cleanup_failures_total,
                     )
 

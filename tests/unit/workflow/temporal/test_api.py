@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.executor.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal.api import build_temporal_router
 
 
 @pytest.fixture
@@ -189,7 +189,7 @@ class TestRunWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Starting a workflow emits workflow_started audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
         client.post(
             "/v1/workflows/run",
             json={
@@ -239,7 +239,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Approval emits step_approved audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "approved"},
@@ -258,7 +258,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Denial emits step_denied audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "denied"},
@@ -915,7 +915,7 @@ class TestAuthorizationWiring:
         mock_client: Any,
     ) -> None:
         """Approval emits audit event with approver identity."""
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
 
         app = FastAPI()
         router = build_temporal_router(mock_client)
@@ -945,7 +945,7 @@ class TestAuthorizationWiring:
         mock_client: Any,
     ) -> None:
         """Approval signal passes approver username and uid to workflow."""
-        mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
 
         app = FastAPI()
         router = build_temporal_router(mock_client)
@@ -1600,7 +1600,7 @@ class TestGetWorkflowHandoff:
         }
 
         def side_effect(query_fn):
-            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_status:
                 return status_result
             if query_fn == AgentWorkflow.get_workflow_context:
@@ -1706,7 +1706,7 @@ class TestTranscriptEndpoint:
         }
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return default_transcripts
@@ -1783,7 +1783,7 @@ class TestTranscriptWithPostgres:
         handle = mock_client.get_workflow_handle.return_value
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {
                     "r1": {
@@ -1856,7 +1856,7 @@ class TestTranscriptWithPostgres:
         handle = mock_client.get_workflow_handle.return_value
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {"r1": {"step_name": "diagnose", "events": []}}
             if query_fn == AgentWorkflow.get_authz_context:

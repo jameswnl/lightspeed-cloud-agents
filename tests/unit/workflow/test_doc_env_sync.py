@@ -19,7 +19,7 @@ import pytest
 _PROJECT_ROOT = Path(__file__).parents[3]
 _ARCHITECTURE_MD = _PROJECT_ROOT / "docs" / "ARCHITECTURE.md"
 _TEMPORAL_ACTIVITIES = (
-    _PROJECT_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal_activities.py"
+    _PROJECT_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "activities.py"
 )
 _PODMAN_SPAWNER = _PROJECT_ROOT / "src" / "cloud_agents" / "spawner" / "podman_spawner.py"
 _K8S_SPAWNER = _PROJECT_ROOT / "src" / "cloud_agents" / "spawner" / "kubernetes_spawner.py"

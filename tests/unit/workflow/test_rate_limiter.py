@@ -426,7 +426,7 @@ class TestRateLimitMetrics:
     async def test_counter_incremented_on_rejection(self, mocker: MockerFixture) -> None:
         """ls_rate_limit_rejections_total is incremented when a request is rate limited."""
         from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
-        from cloud_agents.workflow.executor.temporal_metrics import ls_rate_limit_rejections_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_rate_limit_rejections_total
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -459,7 +459,7 @@ class TestRateLimitMetrics:
     async def test_counter_not_incremented_on_pass(self, mocker: MockerFixture) -> None:
         """Counter is not incremented when a request passes."""
         from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
-        from cloud_agents.workflow.executor.temporal_metrics import ls_rate_limit_rejections_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_rate_limit_rejections_total
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -570,7 +570,7 @@ class TestRateLimitEntrypointWiring:
     def test_middleware_not_added_when_disabled(self, mocker: MockerFixture) -> None:
         """RateLimitMiddleware not in middleware stack when RATE_LIMIT_ENABLED=false."""
         mocker.patch.dict("os.environ", {"RATE_LIMIT_ENABLED": "false"}, clear=False)
-        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal.entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
         middleware_types = [type(m.cls).__name__ if hasattr(m, "cls") else type(m).__name__
@@ -588,7 +588,7 @@ class TestRateLimitEntrypointWiring:
             },
             clear=False,
         )
-        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal.entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
         # Check that at least one middleware in the stack is our RateLimitMiddleware
@@ -612,7 +612,7 @@ class TestRateLimitEntrypointWiring:
             },
             clear=False,
         )
-        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal.entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
         from cloud_agents.runtime.rate_limiter import RateLimitMiddleware

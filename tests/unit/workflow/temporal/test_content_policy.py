@@ -431,7 +431,7 @@ class TestEntrypointLoadContentPolicy:
 
     def test_no_env_var_returns_none(self, monkeypatch) -> None:
         """When CONTENT_POLICY_PATH is empty, returns None."""
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep
 
         monkeypatch.setattr(ep, "CONTENT_POLICY_PATH", "")
         result = ep._load_content_policy()
@@ -439,7 +439,7 @@ class TestEntrypointLoadContentPolicy:
 
     def test_valid_path_returns_policy(self, tmp_path, monkeypatch) -> None:
         """When CONTENT_POLICY_PATH points to a valid YAML, returns ContentPolicy."""
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep
 
         policy_file = tmp_path / "policy.yaml"
         policy_file.write_text(yaml.dump({
@@ -461,9 +461,9 @@ class TestEmitContentPolicyAudit:
 
     def test_emits_for_content_policy_errors(self, mocker) -> None:
         """Audit event is emitted when errors contain content policy violations."""
-        from cloud_agents.workflow.executor.temporal_api import _emit_content_policy_audit
+        from cloud_agents.workflow.executor.temporal.api import _emit_content_policy_audit
 
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
         errors = [
             "Content policy violation (max_prompt_length) in step 's0': too long",
             "Step 0 is missing required field 'name'",
@@ -481,9 +481,9 @@ class TestEmitContentPolicyAudit:
 
     def test_no_emit_for_non_policy_errors(self, mocker) -> None:
         """No audit event when errors are purely structural (not policy)."""
-        from cloud_agents.workflow.executor.temporal_api import _emit_content_policy_audit
+        from cloud_agents.workflow.executor.temporal.api import _emit_content_policy_audit
 
-        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal.api.emit_audit")
         errors = ["Workflow must have at least one step"]
         _emit_content_policy_audit(
             workflow_id="wf-123",

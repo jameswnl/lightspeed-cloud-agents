@@ -15,7 +15,7 @@ Procedures for diagnosing and recovering from common failure scenarios. Every se
 
 ## 1. Health Check Failures
 
-The workflow runner exposes three probe endpoints (defined in `src/cloud_agents/workflow/executor/temporal_entrypoint.py`):
+The workflow runner exposes three probe endpoints (defined in `src/cloud_agents/workflow/executor/temporal/entrypoint.py`):
 
 | Endpoint | Purpose | Healthy response |
 |----------|---------|------------------|
@@ -67,7 +67,7 @@ kubectl logs deploy/workflow-runner --previous
 
 ## 2. Orphaned Sandbox Containers
 
-On startup the runner scans for containers labelled `spawned-by=workflow-runner` and destroys them (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/executor/temporal_entrypoint.py`). If this cleanup fails or sandboxes accumulate between restarts, you have orphans.
+On startup the runner scans for containers labelled `spawned-by=workflow-runner` and destroys them (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/executor/temporal/entrypoint.py`). If this cleanup fails or sandboxes accumulate between restarts, you have orphans.
 
 **Metrics**:
 - `ls_sandbox_orphans_cleaned_total` -- incremented when orphans are destroyed on startup

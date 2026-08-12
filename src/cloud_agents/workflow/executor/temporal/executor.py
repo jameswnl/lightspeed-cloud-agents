@@ -19,7 +19,7 @@ from cloud_agents.workflow.executor.base import (
     WorkflowExecutor,
     WorkflowStatus,
 )
-from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 

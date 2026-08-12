@@ -727,7 +727,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
 
         importlib.reload(ep_mod)
 
@@ -748,7 +748,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
 
         importlib.reload(ep_mod)
 
@@ -788,7 +788,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
 
         importlib.reload(ep_mod)
         ep_mod.build_temporal_app()
@@ -819,7 +819,7 @@ class TestScheduleTriggerMetrics:
 
         mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
-        from cloud_agents.workflow.executor.temporal_metrics import ls_schedule_triggers_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_schedule_triggers_total
 
         before = ls_schedule_triggers_total.labels(
             workflow_name="nightly-report", status="created"
@@ -847,7 +847,7 @@ class TestScheduleTriggerMetrics:
 
         mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
-        from cloud_agents.workflow.executor.temporal_metrics import ls_schedule_triggers_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_schedule_triggers_total
 
         before = ls_schedule_triggers_total.labels(
             workflow_name="unknown", status="deleted"

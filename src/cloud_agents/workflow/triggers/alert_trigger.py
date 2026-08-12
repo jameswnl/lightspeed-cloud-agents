@@ -20,10 +20,10 @@ from pydantic import BaseModel, ConfigDict
 
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.workflow.core.definition_store import DefinitionStore
-from cloud_agents.workflow.executor.temporal_metrics import ls_alert_triggers_total
+from cloud_agents.workflow.executor.temporal.metrics import ls_alert_triggers_total
 from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
-from cloud_agents.workflow.executor.temporal_worker import DEFAULT_TASK_QUEUE
-from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.executor.temporal.worker import DEFAULT_TASK_QUEUE
+from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
 if TYPE_CHECKING:
     from cloud_agents.workflow.security.content_policy import ContentPolicy

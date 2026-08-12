@@ -569,7 +569,7 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_pulls_full_transcripts(self) -> None:
         """build_escalation_activity pulls full transcripts from store."""
-        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.executor.temporal.activities import build_escalation_activity
         from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         mock_store = AsyncMock()
@@ -590,7 +590,7 @@ class TestEscalationWithTranscriptStore:
         mock_store.get = AsyncMock(return_value=full_transcript)
 
         with patch(
-            "cloud_agents.workflow.executor.temporal_activities.LogPackager",
+            "cloud_agents.workflow.executor.temporal.activities.LogPackager",
         ) as mock_packager_cls:
             mock_packager = AsyncMock()
             mock_packager_cls.return_value = mock_packager
@@ -609,7 +609,7 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_store_failure_non_fatal(self) -> None:
         """Transcript store failure in escalation is non-fatal."""
-        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.executor.temporal.activities import build_escalation_activity
 
         mock_store = AsyncMock()
         mock_store.get = AsyncMock(side_effect=RuntimeError("DB down"))
@@ -625,7 +625,7 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_no_store_still_works(self) -> None:
         """Escalation works normally without transcript store."""
-        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.executor.temporal.activities import build_escalation_activity
 
         result = await build_escalation_activity(
             {"r1": {"status": "failed", "error": "timeout"}},

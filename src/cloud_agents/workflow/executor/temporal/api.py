@@ -29,8 +29,8 @@ from cloud_agents.workflow.core.models import (
     ProviderConfig,
     WorkflowInput,
 )
-from cloud_agents.workflow.executor.temporal_worker import DEFAULT_TASK_QUEUE
-from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.executor.temporal.worker import DEFAULT_TASK_QUEUE
+from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 

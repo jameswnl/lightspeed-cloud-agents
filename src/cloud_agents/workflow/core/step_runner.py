@@ -28,7 +28,7 @@ from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
 from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
-from cloud_agents.workflow.executor.temporal_metrics import (
+from cloud_agents.workflow.executor.temporal.metrics import (
     ls_sandbox_cleanup_failures_total,
     ls_sandbox_tls_errors_total,
     ls_sandbox_timeout_total,

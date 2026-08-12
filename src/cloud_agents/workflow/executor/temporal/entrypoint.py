@@ -21,8 +21,8 @@ from cloud_agents.runtime.tracing import init_tracing
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
-from cloud_agents.workflow.executor.temporal_api import build_temporal_router
-from cloud_agents.workflow.executor.temporal_worker import build_worker_config
+from cloud_agents.workflow.executor.temporal.api import build_temporal_router
+from cloud_agents.workflow.executor.temporal.worker import build_worker_config
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
     if orphans:
         logger.info("Cleaned up %d/%d orphaned sandbox(es) on startup", cleaned, len(orphans))
         from cloud_agents.runtime.audit import emit_audit
-        from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_orphans_cleaned_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_orphans_cleaned_total
 
         ls_sandbox_orphans_cleaned_total.inc(cleaned)
         emit_audit(

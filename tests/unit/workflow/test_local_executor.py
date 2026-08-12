@@ -55,7 +55,7 @@ def mock_store_fixture(mocker: MockerFixture) -> AsyncMock:
 @pytest.fixture(name="executor")
 def executor_fixture(mock_spawner: AsyncMock, mock_store: AsyncMock) -> Any:
     """Create a LocalExecutor with mocked dependencies."""
-    from cloud_agents.workflow.executor.local_executor import LocalExecutor
+    from cloud_agents.workflow.executor.local.executor import LocalExecutor
 
     return LocalExecutor(spawner=mock_spawner, run_state_store=mock_store)
 
@@ -265,7 +265,7 @@ class TestLocalExecutorNoTemporal:
 
     def test_no_temporal_imports(self) -> None:
         """local_executor module has zero temporalio imports."""
-        from cloud_agents.workflow.executor import local_executor as mod
+        from cloud_agents.workflow.executor.local import executor as mod
 
         source = open(mod.__file__).read()
         assert "from temporalio" not in source
