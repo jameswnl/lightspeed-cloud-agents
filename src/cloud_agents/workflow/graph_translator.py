@@ -15,9 +15,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from pydantic_graph import EndMarker, GraphBuilder, StepContext
+from pydantic_graph import GraphBuilder, StepContext
 
 from cloud_agents.workflow.conditions import evaluate_condition
+from cloud_agents.workflow.state import StepResult, WorkflowState
 from cloud_agents.workflow.step_runner import run_step
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,25 @@ def build_graph(
     return graph, state
 
 
+def _to_workflow_state(state: WorkflowGraphState) -> WorkflowState:
+    """Convert graph state to WorkflowState for condition evaluation."""
+    steps = {}
+    for key, result in state.step_results.items():
+        steps[key] = StepResult(
+            step_name=key,
+            status=result.get("status", "completed"),
+            output=result.get("output"),
+            error=result.get("error"),
+        )
+    return WorkflowState(
+        workflow_id=state.workflow_id,
+        workflow_name=state.workflow_name,
+        steps=steps,
+        created_at="",
+        updated_at="",
+    )
+
+
 def _build_agent_step(
     builder: GraphBuilder,
     step_name: str,
@@ -163,8 +183,14 @@ def _build_agent_step(
         state = ctx.state
         step_def = state.step_defs[step_name]
 
+        if state.paused_at_step:
+            output_key = step_def.get("output_key", step_name)
+            state.step_results[output_key] = {"status": "skipped", "reason": "workflow_paused"}
+            return {"status": "skipped"}
+
         if condition := step_def.get("condition"):
-            if not evaluate_condition(condition, state.step_results):
+            wf_state = _to_workflow_state(state)
+            if not evaluate_condition(condition, wf_state):
                 output_key = step_def.get("output_key", step_name)
                 state.step_results[output_key] = {"status": "skipped"}
                 logger.info("Step '%s' skipped — condition not met", step_name)

@@ -292,6 +292,102 @@ class TestGraphTranslator:
         await graph.run(state=state)
         assert state.step_results["r1"]["status"] == "completed"
 
+    @pytest.mark.asyncio
+    async def test_pause_guard_skips_subsequent_steps(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Steps after approval gate are skipped when workflow is paused."""
+        mock_run = mocker.patch(
+            "cloud_agents.workflow.graph_translator.run_step",
+            return_value={"status": "completed", "output": {}},
+        )
+
+        from cloud_agents.workflow.graph_translator import build_graph
+
+        defn = _make_definition([
+            {
+                "name": "approve",
+                "type": "human-approval",
+                "output_key": "approval",
+                "message": "Approve?",
+            },
+            {
+                "name": "fix",
+                "type": "agent",
+                "prompt": "Fix it",
+                "output_key": "fix_result",
+            },
+        ])
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+        assert state.paused_at_step == "approve"
+        mock_run.assert_not_called()
+        assert state.step_results["fix_result"]["status"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_condition_integration_unmocked(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Condition evaluation works end-to-end without mocking evaluate_condition."""
+        mocker.patch(
+            "cloud_agents.workflow.graph_translator.run_step",
+            return_value={"status": "completed", "output": {"severity": "low"}},
+        )
+
+        from cloud_agents.workflow.graph_translator import build_graph
+
+        defn = _make_definition([
+            {
+                "name": "diagnose",
+                "type": "agent",
+                "prompt": "Diagnose",
+                "output_key": "diagnosis",
+            },
+            {
+                "name": "fix",
+                "type": "agent",
+                "prompt": "Fix",
+                "output_key": "fix_result",
+                "condition": "steps.diagnosis.output.severity == 'high'",
+            },
+        ])
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+        assert state.step_results["fix_result"]["status"] == "skipped"
+
+    def test_parallel_group_warns(self, caplog: Any) -> None:
+        """Step with parallel_group logs a warning."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            from cloud_agents.workflow.graph_translator import build_graph
+
+            defn = _make_definition([
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "parallel_group": "group-a",
+                },
+            ])
+
+            build_graph(defn, workflow_id="wf-1")
+
+        assert any("parallel_group" in r.message for r in caplog.records)
+
     def test_no_temporal_imports(self) -> None:
         """graph_translator module has zero temporalio imports."""
         from cloud_agents.workflow import graph_translator as mod
