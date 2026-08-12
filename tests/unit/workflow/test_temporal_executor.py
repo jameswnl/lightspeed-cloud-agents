@@ -31,7 +31,7 @@ def mock_client_fixture(mocker: MockerFixture) -> AsyncMock:
 @pytest.fixture(name="executor")
 def executor_fixture(mock_client: AsyncMock) -> Any:
     """Create a TemporalExecutor with mocked client."""
-    from cloud_agents.workflow.executor.temporal_executor import TemporalExecutor
+    from cloud_agents.workflow.executor.temporal.executor import TemporalExecutor
 
     return TemporalExecutor(client=mock_client)
 
@@ -240,13 +240,13 @@ class TestTemporalExecutorInterface:
     def test_implements_all_methods(self) -> None:
         """TemporalExecutor implements WorkflowExecutor ABC."""
         from cloud_agents.workflow.executor.base import WorkflowExecutor
-        from cloud_agents.workflow.executor.temporal_executor import TemporalExecutor
+        from cloud_agents.workflow.executor.temporal.executor import TemporalExecutor
 
         assert issubclass(TemporalExecutor, WorkflowExecutor)
 
     def test_has_temporalio_imports(self) -> None:
         """TemporalExecutor SHOULD have temporalio imports."""
-        from cloud_agents.workflow.executor import temporal_executor as mod
+        from cloud_agents.workflow.executor.temporal import executor as mod
 
         source = open(mod.__file__).read()
         assert "temporalio" in source

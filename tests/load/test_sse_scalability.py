@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from temporalio.client import WorkflowExecutionStatus
 
-from cloud_agents.workflow.executor.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal.api import build_temporal_router
 
 from tests.load.helpers import WorkflowFactory
 

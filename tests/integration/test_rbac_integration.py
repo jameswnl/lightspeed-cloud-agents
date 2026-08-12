@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from cloud_agents.workflow.security.authorization import CallerIdentity
 from cloud_agents.workflow.security.policy_authorizer import PolicyFileAuthorizer
-from cloud_agents.workflow.executor.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal.api import build_temporal_router
 
 
 def _make_policy_file(rules: list[dict], defaults: dict | None = None) -> str:

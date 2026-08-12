@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from starlette.responses import JSONResponse
 
 from cloud_agents.runtime.audit import emit_audit
-from cloud_agents.workflow.executor.temporal_metrics import ls_rate_limit_rejections_total
+from cloud_agents.workflow.executor.temporal.metrics import ls_rate_limit_rejections_total
 
 logger = logging.getLogger(__name__)
 

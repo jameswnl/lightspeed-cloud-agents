@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.executor.temporal_activities import run_sandbox_step
+from cloud_agents.workflow.executor.temporal.activities import run_sandbox_step
 
 
 def _make_input() -> dict[str, Any]:
@@ -42,7 +42,7 @@ def _mock_http_success(mocker: MockerFixture) -> Any:
     }
 
     mock_http = mocker.patch(
-        "cloud_agents.workflow.executor.temporal_activities.httpx.AsyncClient",
+        "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
     )
     mock_client_instance = mocker.MagicMock(
         post=mocker.AsyncMock(return_value=mock_response),

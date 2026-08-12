@@ -132,12 +132,12 @@ class TestAlertTriggerE2E:
         )
         from cloud_agents.workflow.core.definition import WorkflowDefinition
         from cloud_agents.workflow.core.definition_store import DefinitionStore
-        from cloud_agents.workflow.executor.temporal_activities import (
+        from cloud_agents.workflow.executor.temporal.activities import (
             build_escalation_activity,
             run_sandbox_step,
             send_approval_notification,
         )
-        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
         queue = f"e2e-alert-{uuid.uuid4().hex[:8]}"
@@ -196,12 +196,12 @@ class TestAlertTriggerE2E:
         )
         from cloud_agents.workflow.core.definition import WorkflowDefinition
         from cloud_agents.workflow.core.definition_store import DefinitionStore
-        from cloud_agents.workflow.executor.temporal_activities import (
+        from cloud_agents.workflow.executor.temporal.activities import (
             build_escalation_activity,
             run_sandbox_step,
             send_approval_notification,
         )
-        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
 

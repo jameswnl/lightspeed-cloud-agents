@@ -6,7 +6,7 @@ import pytest
 from prometheus_client import REGISTRY
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.executor.temporal_activities import run_sandbox_step
+from cloud_agents.workflow.executor.temporal.activities import run_sandbox_step
 
 
 def _get_counter_value(name: str, labels: dict | None = None) -> float:
@@ -35,7 +35,7 @@ class TestCleanupFailureMetrics:
         mock_response.status_code = 200
         mock_response.json.return_value = {"success": True, "output": {}}
 
-        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal_activities.httpx.AsyncClient")
+        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
@@ -66,7 +66,7 @@ class TestCleanupFailureMetrics:
         mock_response.status_code = 200
         mock_response.json.return_value = {"success": True, "output": {}}
 
-        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal_activities.httpx.AsyncClient")
+        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
@@ -93,7 +93,7 @@ class TestOrphanCleanupMetrics:
     @pytest.mark.asyncio
     async def test_orphan_cleanup_increments_counter(self, mocker: MockerFixture) -> None:
         """Orphan reconciliation increments orphan cleanup counter."""
-        from cloud_agents.workflow.executor.temporal_entrypoint import reconcile_orphaned_sandboxes
+        from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
         mock_spawner.list_active.return_value = ["orphan-1", "orphan-2"]
@@ -108,7 +108,7 @@ class TestOrphanCleanupMetrics:
     @pytest.mark.asyncio
     async def test_no_orphans_no_increment(self, mocker: MockerFixture) -> None:
         """No orphans means no counter increment."""
-        from cloud_agents.workflow.executor.temporal_entrypoint import reconcile_orphaned_sandboxes
+        from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
         mock_spawner.list_active.return_value = []
@@ -123,7 +123,7 @@ class TestOrphanCleanupMetrics:
     @pytest.mark.asyncio
     async def test_partial_destroy_failure_counts_only_successes(self, mocker: MockerFixture) -> None:
         """Only successfully destroyed orphans are counted in the metric."""
-        from cloud_agents.workflow.executor.temporal_entrypoint import reconcile_orphaned_sandboxes
+        from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
         mock_spawner.list_active.return_value = ["orphan-ok", "orphan-fail", "orphan-ok2"]
@@ -152,7 +152,7 @@ class TestSandboxTimeoutMetrics:
 
     def test_counter_increments_with_timeout_reason(self) -> None:
         """ls_sandbox_timeout_total increments with reason=timeout."""
-        from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_timeout_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_timeout_total
 
         before = _get_counter_value(
             "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "timeout"}
@@ -165,7 +165,7 @@ class TestSandboxTimeoutMetrics:
 
     def test_counter_increments_with_cancelled_reason(self) -> None:
         """ls_sandbox_timeout_total increments with reason=cancelled."""
-        from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_timeout_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_timeout_total
 
         before = _get_counter_value(
             "ls_sandbox_timeout", {"step_name": "t2-step", "reason": "cancelled"}

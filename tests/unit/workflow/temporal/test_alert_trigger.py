@@ -713,7 +713,7 @@ class TestAlertTriggerEntrypointWiring:
         """Endpoint not registered when ALERT_TRIGGER_ENABLED=false."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "false")
         import importlib
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
@@ -727,7 +727,7 @@ class TestAlertTriggerEntrypointWiring:
         """Endpoint registered when ALERT_TRIGGER_ENABLED=true."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "true")
         import importlib
-        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
@@ -754,7 +754,7 @@ class TestAlertTriggerMetrics:
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
         mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
-        from cloud_agents.workflow.executor.temporal_metrics import ls_alert_triggers_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_alert_triggers_total
         before = ls_alert_triggers_total.labels(
             workflow_name="diagnose-cpu", status="started"
         )._value.get()
@@ -776,7 +776,7 @@ class TestAlertTriggerMetrics:
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
         mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
-        from cloud_agents.workflow.executor.temporal_metrics import ls_alert_triggers_total
+        from cloud_agents.workflow.executor.temporal.metrics import ls_alert_triggers_total
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
