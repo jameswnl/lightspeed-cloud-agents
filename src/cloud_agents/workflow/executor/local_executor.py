@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from pydantic_graph import EndMarker
 
@@ -59,6 +59,7 @@ class LocalExecutor(WorkflowExecutor):
         self._store = run_state_store
         self._transcript_store = transcript_store
         self._running: dict[str, asyncio.Task] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self, input: dict[str, Any]) -> str:
         """Start a new workflow execution.
@@ -72,6 +73,8 @@ class LocalExecutor(WorkflowExecutor):
         sandbox_image = input.get("sandbox_image", "sandbox:latest")
         metadata = definition.get("metadata", {})
         workflow_name = metadata.get("name", "unnamed")
+
+        self._locks[workflow_id] = asyncio.Lock()
 
         if self._store:
             await self._store.create(
@@ -120,6 +123,7 @@ class LocalExecutor(WorkflowExecutor):
         state: WorkflowGraphState,
     ) -> None:
         """Execute the workflow graph, persisting state at each step."""
+        persisted_keys: set[str] = set(state.step_results.keys())
         try:
             async with graph.iter(state=state) as run:
                 while True:
@@ -138,9 +142,11 @@ class LocalExecutor(WorkflowExecutor):
                                 {"type": "step.started", "step": node_id},
                             )
 
-                    # Persist step results incrementally
+                    # Persist only new/changed step results
                     if self._store:
-                        for key, step_result in state.step_results.items():
+                        new_keys = set(state.step_results.keys()) - persisted_keys
+                        for key in new_keys:
+                            step_result = state.step_results[key]
                             await self._store.update_step(
                                 workflow_id,
                                 key,
@@ -148,6 +154,7 @@ class LocalExecutor(WorkflowExecutor):
                                 output=step_result.get("output"),
                                 error=step_result.get("error"),
                             )
+                        persisted_keys.update(new_keys)
 
                     if state.paused_at_step:
                         if self._store:
@@ -193,6 +200,20 @@ class LocalExecutor(WorkflowExecutor):
         if not self._store:
             raise RuntimeError("RunStateStore required for approval")
 
+        lock = self._locks.get(workflow_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[workflow_id] = lock
+
+        async with lock:
+            return await self._approve_inner(workflow_id, decision)
+
+    async def _approve_inner(
+        self,
+        workflow_id: str,
+        decision: ApprovalDecision,
+    ) -> None:
+        """Inner approval logic — called under per-workflow lock."""
         state = await self._store.get(workflow_id)
         if state is None:
             raise KeyError(f"Workflow '{workflow_id}' not found")
@@ -207,9 +228,15 @@ class LocalExecutor(WorkflowExecutor):
                 f"not '{decision.step_name}'"
             )
 
+        # Look up output_key from the definition (graph keys by output_key, not step name)
+        definition = state.get("definition", {})
+        step_defs = {s["name"]: s for s in definition.get("spec", {}).get("steps", [])}
+        step_def = step_defs.get(decision.step_name, {})
+        output_key = step_def.get("output_key", decision.step_name)
+
         await self._store.update_step(
             workflow_id,
-            decision.step_name,
+            output_key,
             status="completed",
             output={"approved": decision.decision == "approved"},
         )

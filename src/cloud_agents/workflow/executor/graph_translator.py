@@ -183,8 +183,15 @@ def _build_agent_step(
         state = ctx.state
         step_def = state.step_defs[step_name]
 
+        output_key = step_def.get("output_key", step_name)
+
+        # Skip if already completed (resume after approval)
+        existing = state.step_results.get(output_key, {})
+        if existing.get("status") in ("completed", "failed"):
+            logger.info("Step '%s' already %s — skipping on resume", step_name, existing["status"])
+            return existing
+
         if state.paused_at_step:
-            output_key = step_def.get("output_key", step_name)
             state.step_results[output_key] = {"status": "skipped", "reason": "workflow_paused"}
             return {"status": "skipped"}
 
@@ -214,7 +221,6 @@ def _build_agent_step(
             attempt=1,
         )
 
-        output_key = step_def.get("output_key", step_name)
         state.step_results[output_key] = {
             "status": result.get("status", "completed"),
             "output": result.get("output"),
@@ -239,6 +245,11 @@ def _build_approval_step(
         state = ctx.state
         step_def = state.step_defs[step_name]
         output_key = step_def.get("output_key", step_name)
+
+        # Skip if already completed (resume after approval)
+        existing = state.step_results.get(output_key, {})
+        if existing.get("status") == "completed":
+            return {"status": "completed", "output": existing.get("output")}
 
         auto_approve = False
         if state.approval_policy:
