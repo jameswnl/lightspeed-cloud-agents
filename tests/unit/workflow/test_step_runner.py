@@ -254,6 +254,53 @@ class TestRunStep:
         assert result["error"] == "agent failed"
 
     @pytest.mark.asyncio
+    async def test_run_step_mcp_secrets_require_allowlist(
+        self,
+        mock_spawner: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """MCP secrets fail-closed when MCP_ALLOWED_SECRETS is unset."""
+        mocker.patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "sk-test", "MCP_ALLOWED_SECRETS": ""},
+            clear=False,
+        )
+
+        from cloud_agents.workflow.step_runner import run_step
+
+        input_data = {
+            "step": {
+                "name": "s1",
+                "prompt": "test",
+                "output_key": "r1",
+                "mcp_servers": ["my-server"],
+            },
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4o",
+                "credentials_secret": "openai-api-key",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+            "mcp_servers": [
+                {
+                    "name": "my-server",
+                    "url": "http://mcp:8080",
+                    "secret_headers": {
+                        "Authorization": {
+                            "secret_name": "my-secret",
+                            "key": "token",
+                        },
+                    },
+                },
+            ],
+        }
+
+        with pytest.raises(ValueError, match="MCP_ALLOWED_SECRETS is not set"):
+            await run_step(input_data, spawner=mock_spawner, attempt=1)
+
+    @pytest.mark.asyncio
     async def test_run_step_credential_env_key_normalization(
         self,
         mock_spawner: AsyncMock,
