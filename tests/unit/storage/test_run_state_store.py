@@ -171,6 +171,40 @@ class TestRunStateStorePauseResume:
         assert result == ["wf-1", "wf-2"]
 
 
+class TestRunStateStoreKeyErrors:
+    """Tests for KeyError on missing workflows."""
+
+    @pytest.mark.asyncio
+    async def test_update_step_missing_raises(
+        self, store: Any, mock_pool: Any
+    ) -> None:
+        """update_step() raises KeyError for nonexistent workflow."""
+        mock_pool.execute.return_value = "UPDATE 0"
+
+        with pytest.raises(KeyError, match="not found"):
+            await store.update_step("wf-missing", "s1", "completed")
+
+    @pytest.mark.asyncio
+    async def test_append_event_missing_raises(
+        self, store: Any, mock_pool: Any
+    ) -> None:
+        """append_event() raises KeyError for nonexistent workflow."""
+        mock_pool.execute.return_value = "UPDATE 0"
+
+        with pytest.raises(KeyError, match="not found"):
+            await store.append_event("wf-missing", {"type": "test"})
+
+    @pytest.mark.asyncio
+    async def test_set_paused_missing_raises(
+        self, store: Any, mock_pool: Any
+    ) -> None:
+        """set_paused() raises KeyError for nonexistent workflow."""
+        mock_pool.execute.return_value = "UPDATE 0"
+
+        with pytest.raises(KeyError, match="not found"):
+            await store.set_paused("wf-missing", "approve")
+
+
 class TestRunStateStoreTerminal:
     """Tests for marking workflows terminal."""
 
@@ -183,6 +217,14 @@ class TestRunStateStoreTerminal:
         )
 
         mock_pool.execute.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_mark_terminal_invalid_status(
+        self, store: Any
+    ) -> None:
+        """mark_terminal() rejects non-terminal status."""
+        with pytest.raises(ValueError, match="not a terminal status"):
+            await store.mark_terminal("wf-1", "running")
 
 
 class TestRunStateStoreFromEnv:

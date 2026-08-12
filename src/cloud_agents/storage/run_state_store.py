@@ -152,6 +152,12 @@ class RunStateStore:
             raise RuntimeError("RunStateStore not connected — call connect() first")
         return self._pool
 
+    @staticmethod
+    def _check_updated(result: str, workflow_id: str) -> None:
+        """Raise KeyError if no rows were affected by an UPDATE."""
+        if result == "UPDATE 0":
+            raise KeyError(f"Workflow '{workflow_id}' not found")
+
     async def create(
         self,
         workflow_id: str,
@@ -257,13 +263,14 @@ class RunStateStore:
             "output": output,
             "error": error,
         }
-        await pool.execute(
+        result = await pool.execute(
             _UPDATE_STEP_SQL,
             workflow_id,
             step_name,
             json.dumps(step_data),
             now,
         )
+        self._check_updated(result, workflow_id)
 
     async def append_event(
         self,
@@ -283,12 +290,13 @@ class RunStateStore:
         now = datetime.now(UTC).isoformat()
         if "timestamp" not in event:
             event["timestamp"] = now
-        await pool.execute(
+        result = await pool.execute(
             _APPEND_EVENT_SQL,
             workflow_id,
             json.dumps([event]),
             now,
         )
+        self._check_updated(result, workflow_id)
 
     async def set_paused(
         self,
@@ -302,11 +310,13 @@ class RunStateStore:
             step_name: The approval step waiting for a signal.
 
         Raises:
+            KeyError: If workflow does not exist.
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
         now = datetime.now(UTC).isoformat()
-        await pool.execute(_SET_STATUS_SQL, workflow_id, "paused", step_name, now)
+        result = await pool.execute(_SET_STATUS_SQL, workflow_id, "paused", step_name, now)
+        self._check_updated(result, workflow_id)
 
     async def resume(
         self,
@@ -318,11 +328,15 @@ class RunStateStore:
             workflow_id: Workflow execution ID.
 
         Raises:
+            KeyError: If workflow does not exist.
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
         now = datetime.now(UTC).isoformat()
-        await pool.execute(_SET_STATUS_SQL, workflow_id, "running", None, now)
+        result = await pool.execute(_SET_STATUS_SQL, workflow_id, "running", None, now)
+        self._check_updated(result, workflow_id)
+
+    _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
     async def mark_terminal(
         self,
@@ -336,11 +350,16 @@ class RunStateStore:
             status: Terminal status string.
 
         Raises:
+            ValueError: If status is not a terminal status.
+            KeyError: If workflow does not exist.
             RuntimeError: If not connected.
         """
+        if status not in self._TERMINAL_STATUSES:
+            raise ValueError(f"'{status}' is not a terminal status")
         pool = self._ensure_connected()
         now = datetime.now(UTC).isoformat()
-        await pool.execute(_SET_STATUS_SQL, workflow_id, status, None, now)
+        result = await pool.execute(_SET_STATUS_SQL, workflow_id, status, None, now)
+        self._check_updated(result, workflow_id)
 
     async def update_workflow_context(
         self,
@@ -354,16 +373,18 @@ class RunStateStore:
             context: Workflow context dict.
 
         Raises:
+            KeyError: If workflow does not exist.
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
         now = datetime.now(UTC).isoformat()
-        await pool.execute(
+        result = await pool.execute(
             _UPDATE_CONTEXT_SQL,
             workflow_id,
             json.dumps(context),
             now,
         )
+        self._check_updated(result, workflow_id)
 
     async def list_paused(self) -> list[str]:
         """List workflow IDs that are paused at approval steps.
