@@ -311,6 +311,7 @@ async def _run_step_inner(
         )
 
     endpoint = None
+    spawn_attempted = False
     was_cancelled = False
     try:
         try:
@@ -319,6 +320,7 @@ async def _run_step_inner(
             if advisory and not sa:
                 sa = "advisory-sa"
 
+            spawn_attempted = True
             endpoint = await spawner.spawn(
                 pod_name,
                 sandbox_image,
@@ -402,7 +404,7 @@ async def _run_step_inner(
                             json=request_body,
                             headers=http_headers or None,
                         )
-                    except ssl.SSLError as tls_exc:
+                    except (ssl.SSLError, httpx.ConnectError) as tls_exc:
                         emit_audit(
                             event_type="tls_error",
                             workflow_id=workflow_id,
@@ -500,7 +502,7 @@ async def _run_step_inner(
                 details={"pod_name": pod_name, "reason": "cancelled"},
             )
 
-        if endpoint and spawner:
+        if spawn_attempted and spawner:
             if os.environ.get("SKIP_SANDBOX_DESTROY", "").lower() in ("1", "true"):
                 logger.info(
                     "SKIP_SANDBOX_DESTROY set — keeping sandbox '%s' for inspection",
