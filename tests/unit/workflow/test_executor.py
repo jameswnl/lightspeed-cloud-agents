@@ -2,7 +2,7 @@
 
 import pytest
 
-from cloud_agents.workflow.executor import (
+from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
     WorkflowExecutor,
     WorkflowStatus,

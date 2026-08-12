@@ -131,14 +131,14 @@ class TestFullStackWorkflow:
         from temporalio.client import Client
         from temporalio.worker import Worker
 
-        from cloud_agents.workflow.temporal_activities import (
+        from cloud_agents.workflow.executor.temporal_activities import (
             build_escalation_activity,
             run_sandbox_step,
             send_approval_notification,
         )
-        from cloud_agents.workflow.temporal_models import ProviderConfig, WorkflowInput
-        from cloud_agents.workflow.temporal_worker import build_worker_config
-        from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
+        from cloud_agents.workflow.executor.temporal_worker import build_worker_config
+        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
         queue = f"e2e-full-{uuid.uuid4().hex[:8]}"
@@ -209,9 +209,9 @@ class TestFullStackWorkflow:
         from temporalio.client import Client
         from temporalio.worker import Worker
 
-        from cloud_agents.workflow.temporal_models import ProviderConfig, WorkflowInput
-        from cloud_agents.workflow.temporal_worker import build_worker_config
-        from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
+        from cloud_agents.workflow.executor.temporal_worker import build_worker_config
+        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
         queue = f"e2e-cleanup-{uuid.uuid4().hex[:8]}"

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from cloud_agents.workflow.tls import (
+from cloud_agents.workflow.security.tls import (
     EphemeralCerts,
     TLSMode,
     generate_ephemeral_certs,

@@ -20,14 +20,14 @@ class TestTokenBucket:
 
     def test_first_request_allowed(self) -> None:
         """First request is allowed (bucket starts full)."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=5)
         assert bucket.allow("user-1") is True
 
     def test_burst_requests_all_allowed(self) -> None:
         """Up to burst-count requests are allowed without waiting."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=5)
         results = [bucket.allow("user-1") for _ in range(5)]
@@ -35,7 +35,7 @@ class TestTokenBucket:
 
     def test_request_after_burst_exhaustion_rejected(self) -> None:
         """Request after burst exhaustion is rejected."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=3)
         for _ in range(3):
@@ -44,14 +44,14 @@ class TestTokenBucket:
 
     def test_tokens_refill_after_waiting(self) -> None:
         """After waiting, tokens refill and request is allowed."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=10.0, burst=1)
         bucket.allow("user-1")  # consume the 1 token
         assert bucket.allow("user-1") is False
 
         # Simulate time passing (0.2s at rate=10 => 2 tokens refilled)
-        with patch("cloud_agents.workflow.rate_limiter.time") as mock_time:
+        with patch("cloud_agents.runtime.rate_limiter.time") as mock_time:
             # First call was at some time T; set monotonic to T + 0.2
             original_time = time.monotonic()
             mock_time.monotonic.return_value = original_time + 0.2
@@ -62,7 +62,7 @@ class TestTokenBucket:
 
     def test_different_keys_independent(self) -> None:
         """Different keys have independent rate limits."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=1)
         bucket.allow("user-1")  # exhaust user-1
@@ -71,7 +71,7 @@ class TestTokenBucket:
 
     def test_stale_keys_cleaned_up(self) -> None:
         """Stale keys are cleaned up after cleanup interval."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=1)
         bucket.allow("old-user")
@@ -84,7 +84,7 @@ class TestTokenBucket:
 
     def test_rate_zero_means_unlimited(self) -> None:
         """rate=0 means unlimited -- all requests pass."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=0, burst=0)
         results = [bucket.allow("user-1") for _ in range(100)]
@@ -92,7 +92,7 @@ class TestTokenBucket:
 
     def test_burst_zero_with_positive_rate_rejects_all(self) -> None:
         """burst=0 with positive rate rejects all requests."""
-        from cloud_agents.workflow.rate_limiter import TokenBucket
+        from cloud_agents.runtime.rate_limiter import TokenBucket
 
         bucket = TokenBucket(rate=1.0, burst=0)
         assert bucket.allow("user-1") is False
@@ -109,7 +109,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_requests_below_limit_pass_through(self) -> None:
         """Requests below rate limit pass through to the app."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         app_called = False
 
@@ -140,7 +140,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_requests_above_limit_return_429(self) -> None:
         """Requests above rate limit return 429."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -174,7 +174,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_429_includes_retry_after_header(self) -> None:
         """429 response includes Retry-After header."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -207,7 +207,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_health_endpoints_exempt(self) -> None:
         """Health, liveness, readiness, and metrics endpoints are exempt."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         call_count = 0
 
@@ -241,7 +241,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_different_bearer_tokens_independent(self) -> None:
         """Different bearer tokens get independent rate limits."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -287,7 +287,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_rate_zero_disables_limiting(self) -> None:
         """rate=0 disables rate limiting -- all requests pass."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         app_called = 0
 
@@ -318,7 +318,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_non_http_scope_passes_through(self) -> None:
         """Non-HTTP scopes (e.g., WebSocket) pass through without rate limiting."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         app_called = False
 
@@ -333,7 +333,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_key_from_bearer_token_is_hashed(self) -> None:
         """Key extracted from bearer token is sha256-hashed, not raw token."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -363,7 +363,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_key_fallback_to_client_ip(self) -> None:
         """Falls back to client IP when no Authorization header."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -390,7 +390,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_anonymous_key_when_no_auth_no_client(self) -> None:
         """Falls back to 'anonymous' when no auth header and no client IP."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -425,8 +425,8 @@ class TestRateLimitMetrics:
     @pytest.mark.asyncio
     async def test_counter_incremented_on_rejection(self, mocker: MockerFixture) -> None:
         """ls_rate_limit_rejections_total is incremented when a request is rate limited."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
-        from cloud_agents.workflow.temporal_metrics import ls_rate_limit_rejections_total
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
+        from cloud_agents.workflow.executor.temporal_metrics import ls_rate_limit_rejections_total
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -458,8 +458,8 @@ class TestRateLimitMetrics:
     @pytest.mark.asyncio
     async def test_counter_not_incremented_on_pass(self, mocker: MockerFixture) -> None:
         """Counter is not incremented when a request passes."""
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
-        from cloud_agents.workflow.temporal_metrics import ls_rate_limit_rejections_total
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
+        from cloud_agents.workflow.executor.temporal_metrics import ls_rate_limit_rejections_total
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -496,9 +496,9 @@ class TestRateLimitAudit:
     @pytest.mark.asyncio
     async def test_audit_emitted_on_first_rejection(self, mocker: MockerFixture) -> None:
         """Audit event emitted on first rate limit rejection."""
-        mock_emit = mocker.patch("cloud_agents.workflow.rate_limiter.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.runtime.rate_limiter.emit_audit")
 
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -528,9 +528,9 @@ class TestRateLimitAudit:
     @pytest.mark.asyncio
     async def test_audit_throttled_for_same_key(self, mocker: MockerFixture) -> None:
         """Subsequent rapid rejections for the same key do not emit duplicate audit events."""
-        mock_emit = mocker.patch("cloud_agents.workflow.rate_limiter.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.runtime.rate_limiter.emit_audit")
 
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         async def inner_app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -570,7 +570,7 @@ class TestRateLimitEntrypointWiring:
     def test_middleware_not_added_when_disabled(self, mocker: MockerFixture) -> None:
         """RateLimitMiddleware not in middleware stack when RATE_LIMIT_ENABLED=false."""
         mocker.patch.dict("os.environ", {"RATE_LIMIT_ENABLED": "false"}, clear=False)
-        from cloud_agents.workflow.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
         middleware_types = [type(m.cls).__name__ if hasattr(m, "cls") else type(m).__name__
@@ -588,11 +588,11 @@ class TestRateLimitEntrypointWiring:
             },
             clear=False,
         )
-        from cloud_agents.workflow.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
         # Check that at least one middleware in the stack is our RateLimitMiddleware
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         found = any(
             m.cls is RateLimitMiddleware
@@ -612,10 +612,10 @@ class TestRateLimitEntrypointWiring:
             },
             clear=False,
         )
-        from cloud_agents.workflow.temporal_entrypoint import build_temporal_app
+        from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         # Find the middleware kwargs
         for m in getattr(app, "user_middleware", []):

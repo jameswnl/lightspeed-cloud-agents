@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cloud_agents.workflow.redact import redact_secrets
+from cloud_agents.workflow.security.redact import redact_secrets
 
 
 class TestRedactSecrets:

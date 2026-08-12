@@ -21,7 +21,7 @@ from cloud_agents.runtime.auth import (
     get_api_token,
     get_api_tokens,
 )
-from cloud_agents.workflow.audit import AuditEvent
+from cloud_agents.runtime.audit import AuditEvent
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +356,7 @@ class TestAuditEventType:
 
     def test_emit_audit_with_optional_workflow_id(self) -> None:
         """emit_audit() works without workflow_id for pre-workflow events."""
-        from cloud_agents.workflow.audit import emit_audit
+        from cloud_agents.runtime.audit import emit_audit
 
         event = emit_audit(event_type="auth_rejected", details={"token_prefix": "test"})
         assert event.event_type == "auth_rejected"

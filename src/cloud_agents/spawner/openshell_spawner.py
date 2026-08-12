@@ -27,7 +27,7 @@ from cloud_agents.spawner.base import AgentSpawner
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import SpawnConfig
-    from cloud_agents.workflow.tls import EphemeralCerts
+    from cloud_agents.workflow.security.tls import EphemeralCerts
 
     from openshell._proto import openshell_pb2
 

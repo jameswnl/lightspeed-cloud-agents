@@ -2,8 +2,8 @@
 
 import pytest
 
-from cloud_agents.workflow.interpolation import interpolate, resolve_path
-from cloud_agents.workflow.state import StepResult, WorkflowState
+from cloud_agents.workflow.core.interpolation import interpolate, resolve_path
+from cloud_agents.workflow.core.state import StepResult, WorkflowState
 
 
 def _make_state(**step_outputs: dict) -> WorkflowState:
@@ -209,7 +209,7 @@ class TestInterpolationSanitization:
 
     def test_large_value_truncated(self) -> None:
         """Step output over MAX_INTERPOLATED_VALUE_LENGTH is truncated."""
-        from cloud_agents.workflow.interpolation import MAX_INTERPOLATED_VALUE_LENGTH
+        from cloud_agents.workflow.core.interpolation import MAX_INTERPOLATED_VALUE_LENGTH
 
         large_value = "x" * 20000
         state = _make_state(s1={"big": large_value})

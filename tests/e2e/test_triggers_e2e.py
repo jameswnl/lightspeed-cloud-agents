@@ -126,18 +126,18 @@ class TestAlertTriggerE2E:
         from temporalio.client import Client
         from temporalio.worker import Worker
 
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertTriggerConfig,
             build_alert_router,
         )
-        from cloud_agents.workflow.definition import WorkflowDefinition
-        from cloud_agents.workflow.definition_store import DefinitionStore
-        from cloud_agents.workflow.temporal_activities import (
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+        from cloud_agents.workflow.executor.temporal_activities import (
             build_escalation_activity,
             run_sandbox_step,
             send_approval_notification,
         )
-        from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
         queue = f"e2e-alert-{uuid.uuid4().hex[:8]}"
@@ -190,18 +190,18 @@ class TestAlertTriggerE2E:
         from temporalio.client import Client
         from temporalio.worker import Worker
 
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertTriggerConfig,
             build_alert_router,
         )
-        from cloud_agents.workflow.definition import WorkflowDefinition
-        from cloud_agents.workflow.definition_store import DefinitionStore
-        from cloud_agents.workflow.temporal_activities import (
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+        from cloud_agents.workflow.executor.temporal_activities import (
             build_escalation_activity,
             run_sandbox_step,
             send_approval_notification,
         )
-        from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+        from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
 
@@ -248,11 +248,11 @@ class TestAlertTriggerE2E:
         """Alert referencing non-existent workflow definition produces an error."""
         from temporalio.client import Client
 
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertTriggerConfig,
             build_alert_router,
         )
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         client = await Client.connect(TEMPORAL_URL)
 
@@ -291,9 +291,9 @@ class TestScheduleTriggerE2E:
         """Create, get, and delete a schedule against real Temporal."""
         from temporalio.client import Client
 
-        from cloud_agents.workflow.definition import WorkflowDefinition
-        from cloud_agents.workflow.definition_store import DefinitionStore
-        from cloud_agents.workflow.schedule_trigger import build_schedule_router
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+        from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
         client = await Client.connect(TEMPORAL_URL)
 
@@ -367,9 +367,9 @@ class TestScheduleTriggerE2E:
         """Creating a schedule with duplicate ID returns 409."""
         from temporalio.client import Client
 
-        from cloud_agents.workflow.definition import WorkflowDefinition
-        from cloud_agents.workflow.definition_store import DefinitionStore
-        from cloud_agents.workflow.schedule_trigger import build_schedule_router
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+        from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
         client = await Client.connect(TEMPORAL_URL)
 
@@ -414,8 +414,8 @@ class TestScheduleTriggerE2E:
         """Creating a schedule for a nonexistent workflow returns 404."""
         from temporalio.client import Client
 
-        from cloud_agents.workflow.definition_store import DefinitionStore
-        from cloud_agents.workflow.schedule_trigger import build_schedule_router
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+        from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
         client = await Client.connect(TEMPORAL_URL)
 

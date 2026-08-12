@@ -15,8 +15,8 @@ import pytest
 REPO_ROOT = Path(__file__).parents[2]
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "runbook.md"
 DEPLOYMENT_MD = REPO_ROOT / "docs" / "DEPLOYMENT.md"
-METRICS_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "temporal_metrics.py"
-ENTRYPOINT_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "temporal_entrypoint.py"
+METRICS_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal_metrics.py"
+ENTRYPOINT_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal_entrypoint.py"
 MAKEFILE = REPO_ROOT / "Makefile"
 HELM_PROMETHEUSRULE = REPO_ROOT / "deploy" / "helm" / "templates" / "prometheusrule.yaml"
 

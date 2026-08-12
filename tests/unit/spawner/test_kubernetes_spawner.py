@@ -492,7 +492,7 @@ class TestKubernetesSpawnerTLS:
 
     def _make_tls_certs(self) -> "EphemeralCerts":
         """Create a mock EphemeralCerts for testing."""
-        from cloud_agents.workflow.tls import EphemeralCerts
+        from cloud_agents.workflow.security.tls import EphemeralCerts
 
         return EphemeralCerts(
             ca_cert_pem=b"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",

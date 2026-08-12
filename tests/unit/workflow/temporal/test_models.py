@@ -2,7 +2,7 @@
 
 import pytest
 
-from cloud_agents.workflow.temporal_models import (
+from cloud_agents.workflow.core.models import (
     ProviderConfig,
     SandboxStepInput,
     StepResult,
@@ -141,7 +141,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_basic(self) -> None:
         """MCPServerConfig stores name and URL."""
-        from cloud_agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.core.models import MCPServerConfig
 
         cfg = MCPServerConfig(name="sn", url="http://mcp.local/sse")
         assert cfg.name == "sn"
@@ -151,7 +151,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_with_headers(self) -> None:
         """MCPServerConfig stores plain text headers."""
-        from cloud_agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.core.models import MCPServerConfig
 
         cfg = MCPServerConfig(
             name="sn",
@@ -162,7 +162,7 @@ class TestMCPModels:
 
     def test_mcp_server_config_with_secret_headers(self) -> None:
         """MCPServerConfig stores Secret-backed header references."""
-        from cloud_agents.workflow.temporal_models import MCPServerConfig, SecretHeaderRef
+        from cloud_agents.workflow.core.models import MCPServerConfig, SecretHeaderRef
 
         cfg = MCPServerConfig(
             name="sn",
@@ -178,7 +178,7 @@ class TestMCPModels:
 
     def test_secret_header_ref_fields(self) -> None:
         """SecretHeaderRef stores secret_name and key."""
-        from cloud_agents.workflow.temporal_models import SecretHeaderRef
+        from cloud_agents.workflow.core.models import SecretHeaderRef
 
         ref = SecretHeaderRef(secret_name="my-secret", key="api-key")
         assert ref.secret_name == "my-secret"
@@ -186,7 +186,7 @@ class TestMCPModels:
 
     def test_workflow_input_accepts_mcp_servers(self) -> None:
         """WorkflowInput accepts an optional mcp_servers list."""
-        from cloud_agents.workflow.temporal_models import MCPServerConfig
+        from cloud_agents.workflow.core.models import MCPServerConfig
 
         wi = WorkflowInput(
             definition={"spec": {"steps": []}},
@@ -218,7 +218,7 @@ class TestTranscriptEvent:
 
     def test_tool_call_event(self) -> None:
         """Tool call event captures name, input, output, duration."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:00Z",
@@ -231,7 +231,7 @@ class TestTranscriptEvent:
 
     def test_thinking_event(self) -> None:
         """Thinking event captures reasoning text."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:01Z",
@@ -242,7 +242,7 @@ class TestTranscriptEvent:
 
     def test_result_event(self) -> None:
         """Result event captures final output."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:02Z",
@@ -253,7 +253,7 @@ class TestTranscriptEvent:
 
     def test_error_event(self) -> None:
         """Error event captures error details."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:03Z",
@@ -264,7 +264,7 @@ class TestTranscriptEvent:
 
     def test_tool_result_event(self) -> None:
         """Tool result event is a valid type."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:04Z",
@@ -275,14 +275,14 @@ class TestTranscriptEvent:
 
     def test_default_data(self) -> None:
         """TranscriptEvent defaults data to empty dict when omitted."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(ts="2026-01-01T00:00:00Z", type="result")
         assert event.data == {}
 
     def test_invalid_type_rejected(self) -> None:
         """Invalid event type is rejected."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         with pytest.raises(Exception):
             TranscriptEvent(
@@ -293,7 +293,7 @@ class TestTranscriptEvent:
 
     def test_serialization_roundtrip(self) -> None:
         """TranscriptEvent serializes and deserializes cleanly."""
-        from cloud_agents.workflow.temporal_models import TranscriptEvent
+        from cloud_agents.workflow.core.models import TranscriptEvent
 
         event = TranscriptEvent(
             ts="2026-01-01T00:00:00Z",
@@ -312,7 +312,7 @@ class TestStepTranscript:
 
     def test_empty_transcript(self) -> None:
         """Empty transcript has no events and zero counters."""
-        from cloud_agents.workflow.temporal_models import StepTranscript
+        from cloud_agents.workflow.core.models import StepTranscript
 
         transcript = StepTranscript(step_name="diagnose")
         assert transcript.step_name == "diagnose"
@@ -324,7 +324,7 @@ class TestStepTranscript:
 
     def test_full_transcript(self) -> None:
         """Full transcript with events and metrics."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(
@@ -352,7 +352,7 @@ class TestStepTranscript:
 
     def test_serialization_roundtrip(self) -> None:
         """StepTranscript serializes and deserializes for Temporal memo."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         transcript = StepTranscript(
             step_name="fix",
@@ -374,7 +374,7 @@ class TestStepTranscript:
 
     def test_full_transcript_roundtrip(self) -> None:
         """Full transcript with non-None tokens survives dump/restore."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         transcript = StepTranscript(
             step_name="fix",
@@ -394,7 +394,7 @@ class TestStepTranscript:
 
     def test_truncate_large_transcript(self) -> None:
         """truncate() keeps first/last events plus summary counts."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(
@@ -413,7 +413,7 @@ class TestStepTranscript:
 
     def test_truncate_max_events_1(self) -> None:
         """truncate() with max_events=1 does not crash (half=0 edge case)."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(ts=f"t{i}", type="tool_call", data={"name": f"tool_{i}"})
@@ -427,7 +427,7 @@ class TestStepTranscript:
 
     def test_truncate_small_transcript_unchanged(self) -> None:
         """truncate() on a small transcript returns it unchanged."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(
@@ -442,7 +442,7 @@ class TestStepTranscript:
 
     def test_truncate_preserves_tool_names_drops_payloads(self) -> None:
         """Smart truncation keeps tool names/durations but drops large payloads."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(

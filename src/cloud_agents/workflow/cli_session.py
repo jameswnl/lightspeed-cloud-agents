@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from pydantic import BaseModel
 
-from cloud_agents.workflow.audit import emit_audit
+from cloud_agents.runtime.audit import emit_audit
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import AgentSpawner

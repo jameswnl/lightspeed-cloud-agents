@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cloud Agents — Technical Overview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; overflow: hidden; }
+
+  .slide { display: none; width: 100vw; height: 100vh; padding: 60px 80px; position: relative; flex-direction: column; justify-content: center; }
+  .slide.active { display: flex; }
+
+  h1 { font-size: 44px; color: #f0f6fc; margin-bottom: 12px; font-weight: 700; line-height: 1.2; }
+  h2 { font-size: 34px; color: #58a6ff; margin-bottom: 28px; font-weight: 600; line-height: 1.3; }
+  h3 { font-size: 22px; color: #a371f7; margin-bottom: 16px; font-weight: 600; }
+  p { font-size: 20px; line-height: 1.7; color: #8b949e; margin-bottom: 16px; }
+  .subtitle { font-size: 22px; color: #8b949e; margin-bottom: 8px; }
+  .date { font-size: 16px; color: #484f58; }
+  .presenter { font-size: 18px; color: #58a6ff; margin-top: 8px; }
+
+  ul { list-style: none; padding: 0; }
+  ul li { font-size: 20px; line-height: 1.8; color: #c9d1d9; padding: 4px 0 4px 28px; position: relative; }
+  ul li::before { content: ""; position: absolute; left: 6px; top: 15px; width: 8px; height: 8px; background: #58a6ff; border-radius: 50%; }
+  ul.green li::before { background: #3fb950; }
+  ul.purple li::before { background: #a371f7; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px; }
+  .card.green { border-left: 4px solid #3fb950; }
+  .card.blue { border-left: 4px solid #58a6ff; }
+  .card.purple { border-left: 4px solid #a371f7; }
+  .card.red { border-left: 4px solid #f85149; }
+  .card.yellow { border-left: 4px solid #d29922; }
+  .card h3 { margin-top: 0; }
+  .card p { font-size: 17px; }
+  .card ul li { font-size: 17px; line-height: 1.7; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th { text-align: left; padding: 12px 16px; background: #161b22; color: #58a6ff; font-size: 15px; border-bottom: 1px solid #30363d; }
+  td { padding: 12px 16px; border-bottom: 1px solid #21262d; font-size: 16px; color: #c9d1d9; }
+  tr:hover td { background: #1c2128; }
+
+  .highlight-box { background: #1c2128; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+
+  .nav { position: fixed; bottom: 20px; right: 30px; font-size: 14px; color: #484f58; z-index: 100; user-select: none; }
+  .nav span { cursor: pointer; padding: 4px 10px; border-radius: 4px; }
+  .nav span:hover { background: #21262d; color: #c9d1d9; }
+
+  .section-label { font-size: 12px; color: #484f58; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; font-weight: 600; }
+
+  .g { color: #3fb950; } .b { color: #58a6ff; } .p { color: #a371f7; } .r { color: #f85149; } .y { color: #d29922; } .dim { color: #484f58; }
+</style>
+</head>
+<body>
+
+<!-- ==================== SLIDE 1: Title ==================== -->
+<div class="slide active" id="s1">
+  <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
+    <div class="section-label">Lightspeed Core</div>
+    <h1 style="font-size: 52px;">Cloud Agents Framework</h1>
+    <p class="subtitle">Technical Overview</p>
+    <div style="margin-top: 32px;">
+      <p class="presenter">James Wong &nbsp;|&nbsp; UIE / Lightspeed Core</p>
+      <p class="date">July 2026</p>
+    </div>
+    <div style="margin-top: 48px;">
+      <p style="font-size: 16px; color: #484f58;">Arrow keys to navigate &nbsp;&bull;&nbsp; <span style="color: #58a6ff;">7 slides</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 2: What It Is ==================== -->
+<div class="slide" id="s2">
+  <h2>What Cloud Agents Does</h2>
+  <div class="two-col">
+    <div>
+      <p style="font-size: 22px; color: #c9d1d9; margin-bottom: 24px;">A server-side engine for multi-step AI agent workflows with human oversight.</p>
+      <ul>
+        <li>Define workflows in <strong style="color: #f0f6fc;">YAML</strong> &mdash; no framework code changes</li>
+        <li>Each step runs in an <strong style="color: #f0f6fc;">ephemeral container</strong> with scoped permissions</li>
+        <li><strong style="color: #f0f6fc;">Temporal</strong> provides durable execution &mdash; crash-safe, retriable</li>
+        <li><strong style="color: #f0f6fc;">MCP tools</strong> injected per step with allow/deny filtering</li>
+        <li><strong style="color: #f0f6fc;">Approval gates</strong> pause workflows for human review</li>
+        <li>Runs on <strong style="color: #f0f6fc;">K8s and Podman</strong></li>
+      </ul>
+    </div>
+    <div>
+      <div style="background: #161b22; border: 2px solid #58a6ff; border-radius: 12px; padding: 20px;">
+        <p style="font-size: 14px; color: #58a6ff; font-weight: 700; margin-bottom: 12px;">WORKFLOW PATTERN</p>
+        <div style="font-family: monospace; font-size: 16px; line-height: 2; color: #c9d1d9;">
+          <span class="b">1.</span> <span class="g">Diagnose</span> &nbsp;<span class="dim">(agent, read-only tools)</span><br/>
+          <span class="dim">&nbsp;&nbsp;&nbsp;&#8595;</span><br/>
+          <span class="b">2.</span> <span class="y">Approve</span> &nbsp;<span class="dim">(human gate, risk=high)</span><br/>
+          <span class="dim">&nbsp;&nbsp;&nbsp;&#8595;</span><br/>
+          <span class="b">3.</span> <span class="p">Remediate</span> &nbsp;<span class="dim">(agent, scoped write tools)</span><br/>
+          <span class="dim">&nbsp;&nbsp;&nbsp;&#8595;</span><br/>
+          <span class="b">4.</span> <span class="g">Verify</span> &nbsp;<span class="dim">(agent, read-only tools)</span>
+        </div>
+      </div>
+      <div class="highlight-box" style="margin-top: 16px;">
+        <p style="font-size: 15px; margin: 0; color: #8b949e;">The sandbox runs <strong style="color:#c9d1d9;">any OCI image</strong> that speaks the HTTP contract. Swap agent runtimes without changing the workflow.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 3: Architecture ==================== -->
+<div class="slide" id="s3">
+  <h2>Architecture</h2>
+  <div style="display: flex; gap: 32px; align-items: stretch;">
+    <div style="flex: 1;">
+      <!-- Triggers -->
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <div style="flex:1; background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <span style="font-size:13px; color:#58a6ff; font-weight:600;">API</span>
+        </div>
+        <div style="flex:1; background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <span style="font-size:13px; color:#58a6ff; font-weight:600;">Alert</span>
+        </div>
+        <div style="flex:1; background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <span style="font-size:13px; color:#58a6ff; font-weight:600;">Schedule</span>
+        </div>
+      </div>
+      <div style="text-align: center; color: #30363d; font-size: 18px; margin: -4px 0 4px;">&#9660;</div>
+      <!-- Runner -->
+      <div style="background: #161b22; border: 2px solid #58a6ff; border-radius: 12px; padding: 18px; margin-bottom: 12px;">
+        <p style="font-size: 18px; font-weight: 700; color: #58a6ff; margin-bottom: 6px;">Workflow Runner</p>
+        <p style="font-size: 13px; color: #484f58; margin-bottom: 12px;">FastAPI + Temporal Worker &mdash; stateless, horizontally scalable</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+          <div style="background:#0d1117; border:1px solid #30363d; border-radius:5px; padding:8px; text-align:center;">
+            <p style="font-size:12px; color:#3fb950; margin:0; font-weight:600;">Definitions</p>
+          </div>
+          <div style="background:#0d1117; border:1px solid #30363d; border-radius:5px; padding:8px; text-align:center;">
+            <p style="font-size:12px; color:#3fb950; margin:0; font-weight:600;">Spawner</p>
+            <p style="font-size:10px; color:#484f58; margin:2px 0 0;">K8s / Podman</p>
+          </div>
+          <div style="background:#0d1117; border:1px solid #30363d; border-radius:5px; padding:8px; text-align:center;">
+            <p style="font-size:12px; color:#3fb950; margin:0; font-weight:600;">Auth / RBAC</p>
+          </div>
+        </div>
+      </div>
+      <!-- Temporal + Sandbox -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div style="background: #161b22; border: 2px solid #a371f7; border-radius: 10px; padding: 14px; text-align: center;">
+          <p style="font-size: 15px; font-weight: 700; color: #a371f7; margin: 0;">Temporal</p>
+          <p style="font-size: 11px; color: #484f58; margin: 4px 0 0;">durable state + retry</p>
+        </div>
+        <div style="background: #161b22; border: 2px solid #3fb950; border-radius: 10px; padding: 14px;">
+          <p style="font-size: 15px; font-weight: 700; color: #3fb950; margin: 0 0 4px; text-align:center;">Sandbox</p>
+          <p style="font-size: 11px; color: #c9d1d9; margin: 2px 0; text-align:center;">POST /v1/agent/run</p>
+          <p style="font-size: 10px; color: #f85149; margin: 4px 0 0; text-align:center;">isolated &bull; scoped creds &bull; timeout</p>
+        </div>
+      </div>
+      <!-- Bottom -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+        <div style="background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <p style="font-size:12px; color:#a371f7; margin:0; font-weight:600;">PostgreSQL</p>
+        </div>
+        <div style="background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <p style="font-size:12px; color:#58a6ff; margin:0; font-weight:600;">LLM Provider</p>
+        </div>
+        <div style="background:#161b22; border:1px solid #30363d; border-radius:6px; padding:8px; text-align:center;">
+          <p style="font-size:12px; color:#d29922; margin:0; font-weight:600;">MCP Servers</p>
+        </div>
+      </div>
+    </div>
+    <div style="flex: 0 0 380px; display: flex; flex-direction: column; gap: 14px; justify-content: center;">
+      <div class="card green">
+        <h3 style="color: #3fb950;">Key Design Decisions</h3>
+        <ul class="green">
+          <li><strong style="color:#f0f6fc;">Stateless runner</strong> &mdash; all state in Temporal. Pod crash = zero data loss</li>
+          <li><strong style="color:#f0f6fc;">Ephemeral sandbox</strong> &mdash; fresh container per step, destroyed after</li>
+          <li><strong style="color:#f0f6fc;">HTTP contract</strong> &mdash; sandbox is a black box. Swap runtimes freely</li>
+          <li><strong style="color:#f0f6fc;">Pluggable spawner</strong> &mdash; same workflow on K8s and Podman</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 4: Per-Step Tool Scoping ==================== -->
+<div class="slide" id="s4">
+  <h2>Per-Step Tool Scoping</h2>
+  <div class="two-col">
+    <div>
+      <p>Each workflow step declares which MCP tools it can access. One MCP server, different tool sets per step.</p>
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:20px; margin-top:20px; font-family:monospace; font-size:15px; line-height:1.8;">
+        <span class="b">Diagnose step:</span><br/>
+        &nbsp;&nbsp;<span class="g">allowed_tools:</span><br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_get_pods<br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_get_events<br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_describe<br/>
+        <br/>
+        <span class="b">Fix step</span> <span class="dim">(after approval)</span><span class="b">:</span><br/>
+        &nbsp;&nbsp;<span class="g">allowed_tools:</span><br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_apply<br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_scale<br/>
+        &nbsp;&nbsp;<span class="r">denied_tools:</span><br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_delete<br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;- kubectl_exec
+      </div>
+    </div>
+    <div>
+      <div class="card blue">
+        <h3 style="color: #58a6ff;">Security Model</h3>
+        <ul>
+          <li>Per-step <strong style="color:#f0f6fc;">ServiceAccount</strong> &mdash; reader SA for diagnose, writer SA for fix</li>
+          <li>Per-step <strong style="color:#f0f6fc;">credentials_secret</strong> mount</li>
+          <li><strong style="color:#f0f6fc;">Network egress policy</strong> &mdash; DNS + LLM CIDRs only</li>
+          <li>Non-root, read-only rootfs, no privilege escalation</li>
+          <li>App-level TLS between runner and sandbox</li>
+          <li><strong style="color:#f0f6fc;">Approval gates</strong> with risk-level auto-approve</li>
+        </ul>
+      </div>
+      <div class="card yellow" style="margin-top: 16px;">
+        <h3 style="color: #d29922;">GitOps Write Pattern</h3>
+        <p style="margin-bottom: 0;">Agent drafts changes &rarr; Git commit / PR &rarr; human approval &rarr; controlled application. The framework supports this via agent step + Git MCP server + approval gate.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 5: Deployment ==================== -->
+<div class="slide" id="s5">
+  <h2>Deployment Targets</h2>
+  <div class="two-col">
+    <div>
+      <table>
+        <tr><th style="width:35%;">Capability</th><th>Kubernetes</th><th>Podman</th></tr>
+        <tr><td><strong>Sandbox spawn</strong></td><td>K8s Jobs</td><td>Podman containers</td></tr>
+        <tr><td><strong>Networking</strong></td><td>ClusterIP + DNS</td><td>Podman network + DNS</td></tr>
+        <tr><td><strong>RBAC</strong></td><td>ServiceAccounts</td><td>OS-level ACLs</td></tr>
+        <tr><td><strong>Network policy</strong></td><td>NetworkPolicy (CNI)</td><td>Host firewall</td></tr>
+        <tr><td><strong>Temporal</strong></td><td>Deployment</td><td>Container</td></tr>
+        <tr><td><strong>Config</strong></td><td>Secrets + env</td><td>Env vars</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="card purple">
+        <h3 style="color: #a371f7;">OpenShell Integration (Planned)</h3>
+        <p>OpenShell Gateway adds <strong style="color:#f0f6fc;">Landlock + seccomp + L7 network policy</strong> on top of container isolation.</p>
+        <ul class="purple">
+          <li>One spawner, unified across K8s / Podman / Docker / MicroVM</li>
+          <li>NVIDIA-led upstream (Red Hat, Docker, Google, Microsoft)</li>
+          <li>Agent HTTP contract stays identical</li>
+        </ul>
+        <p style="font-size:14px; color:#484f58; margin-bottom:0;">Spike in progress &mdash; RHEL verification pending</p>
+      </div>
+      <div class="highlight-box" style="margin-top: 16px;">
+        <p style="font-size: 15px; margin: 0; color: #8b949e;"><strong style="color:#c9d1d9;">Air-gapped / sovereign cloud:</strong> same workflow runs disconnected. ProviderConfig is model-agnostic &mdash; works with local/offline LLMs.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 6: Workflow Definition ==================== -->
+<div class="slide" id="s6">
+  <h2>Workflow Definition Contract</h2>
+  <div class="two-col">
+    <div>
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:20px; font-family:monospace; font-size:14px; line-height:1.6;">
+<span class="dim"># yaml-language-server: $schema=...schema.json</span>
+<span class="b">apiVersion:</span> v1
+<span class="b">kind:</span> AgentWorkflow
+<span class="b">metadata:</span>
+  <span class="b">name:</span> cve-patch-workflow
+
+<span class="b">spec:</span>
+  <span class="b">steps:</span>
+    - <span class="g">name:</span> scan
+      <span class="g">type:</span> agent
+      <span class="g">prompt:</span> "Scan for CVE {{ input }}"
+      <span class="g">output_key:</span> scan_result
+      <span class="y">permissions:</span>
+        <span class="y">allowed_tools:</span>
+          - rhdh_list_components
+
+    - <span class="r">name:</span> approve
+      <span class="r">type:</span> human-approval
+      <span class="r">risk_level:</span> high
+      <span class="r">message:</span> |
+        {{ steps.scan_result.output }}
+
+    - <span class="g">name:</span> patch
+      <span class="g">type:</span> agent
+      <span class="g">prompt:</span> "Create PRs for patches"
+      <span class="g">condition:</span> |
+        steps.approve.output.approved
+      </div>
+    </div>
+    <div>
+      <div class="card blue">
+        <h3 style="color: #58a6ff;">Contract Features</h3>
+        <ul>
+          <li><strong style="color:#f0f6fc;">Step types</strong> &mdash; <code style="color:#3fb950;">agent</code> or <code style="color:#f85149;">human-approval</code></li>
+          <li><strong style="color:#f0f6fc;">Interpolation</strong> &mdash; <code style="color:#a371f7;">{{ steps.X.output.Y }}</code></li>
+          <li><strong style="color:#f0f6fc;">Conditions</strong> &mdash; skip steps based on prior outputs</li>
+          <li><strong style="color:#f0f6fc;">Per-step tool filtering</strong></li>
+          <li><strong style="color:#f0f6fc;">Risk levels</strong> &mdash; auto-approve low, gate high</li>
+          <li><strong style="color:#f0f6fc;">Structured output</strong> via output_schema</li>
+          <li><strong style="color:#f0f6fc;">Parallel groups</strong> for concurrent steps</li>
+          <li><strong style="color:#f0f6fc;">Retry</strong> with full failure context</li>
+        </ul>
+      </div>
+      <div class="card green" style="margin-top: 16px;">
+        <h3 style="color: #3fb950;">JSON Schema</h3>
+        <p style="margin-bottom: 0;">Auto-generated from Pydantic models. VS Code validates workflow YAML as you type. CI test catches schema drift.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 7: What's Next ==================== -->
+<div class="slide" id="s7">
+  <h2>Open Questions &amp; Next Steps</h2>
+  <div class="two-col">
+    <div>
+      <div class="card blue">
+        <h3 style="color: #58a6ff;">Active Investigations</h3>
+        <ul>
+          <li><strong style="color:#f0f6fc;">OpenShell spike</strong> &mdash; RHEL verification, supervisor entrypoint, containerized gateway</li>
+          <li><strong style="color:#f0f6fc;">Nexus patterns</strong> &mdash; reusable Temporal components from Ansible Nexus</li>
+          <li><strong style="color:#f0f6fc;">Kagenti</strong> &mdash; complementary K8s platform layer (does not replace workflow engine)</li>
+        </ul>
+      </div>
+      <div class="card purple" style="margin-top: 16px;">
+        <h3 style="color: #a371f7;">Backlog</h3>
+        <ul class="purple">
+          <li>CLI for workflow operations</li>
+          <li>MCP server registry / catalog</li>
+          <li>Sandbox-side tool enforcement</li>
+          <li>Chatbot trigger (agents-as-tools)</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="card green">
+        <h3 style="color: #3fb950;">Discussion Topics</h3>
+        <ul class="green">
+          <li>How does this map to your upgrade workflow?</li>
+          <li>Per-user credential scoping (Keystone integration)</li>
+          <li>What MCP tools does OpenStack need?</li>
+          <li>OpenShell as shared sandbox layer?</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== Navigation ==================== -->
+<div class="nav">
+  <span onclick="prev()">&larr; Prev</span>
+  <span id="counter">1 / 7</span>
+  <span onclick="next()">Next &rarr;</span>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+  function show(n) {
+    slides[current].classList.remove('active');
+    current = Math.max(0, Math.min(n, slides.length - 1));
+    slides[current].classList.add('active');
+    document.getElementById('counter').textContent = `${current + 1} / ${slides.length}`;
+  }
+  function next() { show(current + 1); }
+  function prev() { show(current - 1); }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); prev(); }
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.nav')) return;
+    if (e.clientX > window.innerWidth / 2) next(); else prev();
+  });
+</script>
+
+</body>
+</html>

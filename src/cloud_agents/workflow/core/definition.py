@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from cloud_agents.spawner.base import SpawnConfig
-from cloud_agents.workflow.permissions import PermissionScope
+from cloud_agents.workflow.core.permissions import PermissionScope
 
 
 class WorkflowStepSpec(BaseModel):

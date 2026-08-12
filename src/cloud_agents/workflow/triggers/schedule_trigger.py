@@ -15,17 +15,17 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from cloud_agents.workflow.content_policy import ContentPolicy
+    from cloud_agents.workflow.security.content_policy import ContentPolicy
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from cloud_agents.workflow.audit import emit_audit
-from cloud_agents.workflow.definition_store import DefinitionStore
-from cloud_agents.workflow.temporal_metrics import ls_schedule_triggers_total
-from cloud_agents.workflow.temporal_models import ProviderConfig, WorkflowInput
-from cloud_agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
-from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.runtime.audit import emit_audit
+from cloud_agents.workflow.core.definition_store import DefinitionStore
+from cloud_agents.workflow.executor.temporal_metrics import ls_schedule_triggers_total
+from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
+from cloud_agents.workflow.executor.temporal_worker import DEFAULT_TASK_QUEUE
+from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ def build_schedule_router(
         ScheduleState,
     )
 
-    from cloud_agents.workflow.authorization import (
+    from cloud_agents.workflow.security.authorization import (
         NoopAuthorizer,
         WorkflowAction,
         WorkflowAuthzContext,
@@ -287,7 +287,7 @@ def build_schedule_router(
 
         # Validate definition against content policy
         if content_policy is not None:
-            from cloud_agents.workflow.temporal_validation import validate_definition
+            from cloud_agents.workflow.core.validation import validate_definition
 
             validation_errors = validate_definition(
                 definition, content_policy=content_policy

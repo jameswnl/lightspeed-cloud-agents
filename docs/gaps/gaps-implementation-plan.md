@@ -606,7 +606,7 @@ Image signing attestation and software bill of materials.
 **Problem**: `POST /v1/workflows/run` accepts arbitrarily large definition/prompt payloads. A malicious or misconfigured client could submit a multi-MB definition to exhaust memory or Temporal payload limits.
 
 **What was built**:
-- `ContentSizeLimitMiddleware` ASGI middleware in `src/cloud_agents/workflow/middleware.py`
+- `ContentSizeLimitMiddleware` ASGI middleware in `src/cloud_agents/runtime/middleware.py`
 - Checks Content-Length header (fast path) and counts bytes from receive() (chunked encoding)
 - Returns 413 with descriptive error when exceeded
 - Wired into `temporal_entrypoint.py` after CORS middleware

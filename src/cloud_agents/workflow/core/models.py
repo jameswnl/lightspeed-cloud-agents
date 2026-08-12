@@ -11,7 +11,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from cloud_agents.workflow.authorization import WorkflowAuthzContext
+from cloud_agents.workflow.security.authorization import WorkflowAuthzContext
 
 
 class SecretHeaderRef(BaseModel):

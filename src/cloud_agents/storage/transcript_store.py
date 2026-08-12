@@ -17,7 +17,7 @@ from typing import Optional
 
 import asyncpg
 
-from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 
 @pytest.fixture
@@ -189,7 +189,7 @@ class TestRunWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Starting a workflow emits workflow_started audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/run",
             json={
@@ -239,7 +239,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Approval emits step_approved audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "approved"},
@@ -258,7 +258,7 @@ class TestApproveWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Denial emits step_denied audit event."""
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
         client.post(
             "/v1/workflows/wf-test-1/approve",
             json={"step_name": "approve-step", "decision": "denied"},
@@ -321,7 +321,7 @@ class TestDefinitionRoutes:
 
     def test_get_definitions_returns_list(self, mocker: MockerFixture) -> None:
         """GET /definitions returns a list, not workflow status."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
@@ -401,7 +401,7 @@ class TestDefinitionManagement:
 
     def test_post_definition(self, mocker: MockerFixture) -> None:
         """POST /definitions creates a definition."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -437,7 +437,7 @@ class TestDefinitionManagement:
         self, mocker: MockerFixture
     ) -> None:
         """POST /definitions with invalid output_schema returns 422."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -476,7 +476,7 @@ class TestDefinitionManagement:
 
     def test_get_definition_by_name(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns a stored definition."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -512,7 +512,7 @@ class TestDefinitionManagement:
 
     def test_get_definition_not_found(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns 404 for unknown name."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         store = DefinitionStore()
@@ -706,7 +706,7 @@ VALID_RUN_PAYLOAD: dict[str, Any] = {
 
 def _make_deny_all_authorizer():
     """Create an authorizer that denies all requests."""
-    from cloud_agents.workflow.authorization import (
+    from cloud_agents.workflow.security.authorization import (
         AuthzDecision,
         CallerIdentity,
         WorkflowAction,
@@ -842,7 +842,7 @@ class TestAuthorizationWiring:
         mocker: MockerFixture,
     ) -> None:
         """GET /definitions with deny-all authorizer returns 403."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
@@ -859,7 +859,7 @@ class TestAuthorizationWiring:
         mocker: MockerFixture,
     ) -> None:
         """POST /definitions with deny-all authorizer returns 403."""
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
@@ -915,7 +915,7 @@ class TestAuthorizationWiring:
         mock_client: Any,
     ) -> None:
         """Approval emits audit event with approver identity."""
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
 
         app = FastAPI()
         router = build_temporal_router(mock_client)
@@ -945,7 +945,7 @@ class TestAuthorizationWiring:
         mock_client: Any,
     ) -> None:
         """Approval signal passes approver username and uid to workflow."""
-        mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
 
         app = FastAPI()
         router = build_temporal_router(mock_client)
@@ -975,7 +975,7 @@ class TestSSEEventStream:
 
     def _make_status(self, steps, events):
         """Build a mock WorkflowStatus."""
-        from cloud_agents.workflow.temporal_models import StepResult, WorkflowEvent, WorkflowStatus
+        from cloud_agents.workflow.core.models import StepResult, WorkflowEvent, WorkflowStatus
 
         step_results = {
             k: StepResult(**v) if isinstance(v, dict) else v
@@ -1385,7 +1385,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mocker: MockerFixture,
     ) -> None:
         """Approve endpoint queries authz context before authorization."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             CallerIdentity,
             WorkflowAction,
@@ -1441,7 +1441,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mocker: MockerFixture,
     ) -> None:
         """GET /{workflow_id} queries authz context before authorization."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             CallerIdentity,
             WorkflowAction,
@@ -1491,7 +1491,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mocker: MockerFixture,
     ) -> None:
         """POST /{workflow_id}/cancel queries authz context before authorization."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             CallerIdentity,
             WorkflowAction,
@@ -1600,7 +1600,7 @@ class TestGetWorkflowHandoff:
         }
 
         def side_effect(query_fn):
-            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_status:
                 return status_result
             if query_fn == AgentWorkflow.get_workflow_context:
@@ -1706,7 +1706,7 @@ class TestTranscriptEndpoint:
         }
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return default_transcripts
@@ -1783,7 +1783,7 @@ class TestTranscriptWithPostgres:
         handle = mock_client.get_workflow_handle.return_value
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {
                     "r1": {
@@ -1808,7 +1808,7 @@ class TestTranscriptWithPostgres:
         mock_store: Any, mocker: MockerFixture,
     ) -> None:
         """Transcript endpoint reads from Postgres when available."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
         full_transcript = StepTranscript(
             step_name="diagnose",
             events=[
@@ -1856,7 +1856,7 @@ class TestTranscriptWithPostgres:
         handle = mock_client.get_workflow_handle.return_value
 
         async def mock_query(query_fn):
-            from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+            from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {"r1": {"step_name": "diagnose", "events": []}}
             if query_fn == AgentWorkflow.get_authz_context:

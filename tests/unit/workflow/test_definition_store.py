@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from cloud_agents.workflow.definition import (
+from cloud_agents.workflow.core.definition import (
     WorkflowDefinition,
     WorkflowSpec,
     WorkflowStepSpec,
 )
-from cloud_agents.workflow.definition_store import DefinitionStore
+from cloud_agents.workflow.core.definition_store import DefinitionStore
 
 
 def _make_defn(name: str = "test-wf") -> WorkflowDefinition:

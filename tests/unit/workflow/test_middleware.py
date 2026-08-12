@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.middleware import ContentSizeLimitMiddleware
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.runtime.middleware import ContentSizeLimitMiddleware
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 
 @pytest.fixture

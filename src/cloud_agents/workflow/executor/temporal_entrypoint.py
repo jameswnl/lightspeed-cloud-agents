@@ -19,10 +19,10 @@ from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
 from cloud_agents.storage.transcript_store import TranscriptStore
-from cloud_agents.workflow.definition_store import DefinitionStore
-from cloud_agents.workflow.structured_logging import configure_logging
-from cloud_agents.workflow.temporal_api import build_temporal_router
-from cloud_agents.workflow.temporal_worker import build_worker_config
+from cloud_agents.workflow.core.definition_store import DefinitionStore
+from cloud_agents.runtime.logging import configure_logging
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal_worker import build_worker_config
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,8 @@ async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
             failed_names.append(name)
     if orphans:
         logger.info("Cleaned up %d/%d orphaned sandbox(es) on startup", cleaned, len(orphans))
-        from cloud_agents.workflow.audit import emit_audit
-        from cloud_agents.workflow.temporal_metrics import ls_sandbox_orphans_cleaned_total
+        from cloud_agents.runtime.audit import emit_audit
+        from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_orphans_cleaned_total
 
         ls_sandbox_orphans_cleaned_total.inc(cleaned)
         emit_audit(
@@ -149,7 +149,7 @@ def _load_content_policy():
         logger.info("CONTENT_POLICY_PATH not set — content policy disabled")
         return None
 
-    from cloud_agents.workflow.content_policy import load_content_policy
+    from cloud_agents.workflow.security.content_policy import load_content_policy
 
     policy = load_content_policy(CONTENT_POLICY_PATH)
     logger.info("Content policy loaded from %s", CONTENT_POLICY_PATH)
@@ -298,14 +298,14 @@ def build_temporal_app(
             allow_headers=["*"],
         )
 
-    from cloud_agents.workflow.middleware import ContentSizeLimitMiddleware
+    from cloud_agents.runtime.middleware import ContentSizeLimitMiddleware
 
     max_body = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "1048576"))
     app.add_middleware(ContentSizeLimitMiddleware, max_content_size=max_body)
 
     rate_limit_enabled = os.environ.get("RATE_LIMIT_ENABLED", "false").lower() == "true"
     if rate_limit_enabled:
-        from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+        from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
         rate = float(os.environ.get("RATE_LIMIT_RATE", "10"))
         burst = int(os.environ.get("RATE_LIMIT_BURST", "20"))
@@ -328,7 +328,7 @@ def build_temporal_app(
 
     alert_trigger_enabled = os.environ.get("ALERT_TRIGGER_ENABLED", "false").lower() == "true"
     if alert_trigger_enabled:
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertTriggerConfig,
             build_alert_router,
         )
@@ -359,7 +359,7 @@ def build_temporal_app(
         os.environ.get("SCHEDULE_TRIGGER_ENABLED", "false").lower() == "true"
     )
     if schedule_trigger_enabled:
-        from cloud_agents.workflow.schedule_trigger import build_schedule_router
+        from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
         schedule_router = build_schedule_router(
             temporal_client=placeholder_client,  # type: ignore[arg-type]

@@ -1,10 +1,10 @@
 """Unit tests for policy-driven auto-approval."""
 
-from cloud_agents.workflow.auto_approve import (
+from cloud_agents.workflow.security.auto_approve import (
     ApprovalPolicy,
     classify_step_risk,
 )
-from cloud_agents.workflow.definition import WorkflowStepSpec
+from cloud_agents.workflow.core.definition import WorkflowStepSpec
 
 
 def _make_step(

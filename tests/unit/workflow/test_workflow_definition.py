@@ -4,7 +4,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from cloud_agents.workflow.definition import WorkflowDefinition
+from cloud_agents.workflow.core.definition import WorkflowDefinition
 
 MINIMAL_WORKFLOW = """
 apiVersion: lightspeed.redhat.com/v1alpha1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.temporal_entrypoint import build_temporal_app
+from cloud_agents.workflow.executor.temporal_entrypoint import build_temporal_app
 
 
 class TestTemporalEntrypoint:
@@ -32,7 +32,7 @@ class TestTemporalEntrypoint:
     def test_tracing_initialized_on_build(self, mocker: MockerFixture) -> None:
         """build_temporal_app calls init_tracing."""
         mock_init = mocker.patch(
-            "cloud_agents.workflow.temporal_entrypoint.init_tracing",
+            "cloud_agents.workflow.executor.temporal_entrypoint.init_tracing",
         )
         build_temporal_app(temporal_url="localhost:7233")
         mock_init.assert_called_once_with("workflow-runner")
@@ -54,7 +54,7 @@ class TestTemporalEntrypoint:
             },
         )
         mocker.patch("builtins.open", mocker.mock_open(read_data=b"cert-data"))
-        from cloud_agents.workflow.temporal_entrypoint import _build_tls_config
+        from cloud_agents.workflow.executor.temporal_entrypoint import _build_tls_config
 
         tls = _build_tls_config()
         assert tls is not None
@@ -62,7 +62,7 @@ class TestTemporalEntrypoint:
     def test_no_tls_by_default(self, mocker: MockerFixture) -> None:
         """TLS is disabled by default."""
         mocker.patch.dict("os.environ", {}, clear=False)
-        from cloud_agents.workflow.temporal_entrypoint import _build_tls_config
+        from cloud_agents.workflow.executor.temporal_entrypoint import _build_tls_config
 
         tls = _build_tls_config()
         assert tls is None
@@ -90,7 +90,7 @@ class TestTemporalEntrypoint:
 
     def test_worker_has_tracing_interceptor(self) -> None:
         """_get_tracing_interceptors returns a list."""
-        from cloud_agents.workflow.temporal_entrypoint import _get_tracing_interceptors
+        from cloud_agents.workflow.executor.temporal_entrypoint import _get_tracing_interceptors
 
         interceptors = _get_tracing_interceptors()
         assert isinstance(interceptors, list)
@@ -115,7 +115,7 @@ class TestTranscriptStoreWiring:
         """TranscriptStore is created when TRANSCRIPT_DB_URL is set."""
         monkeypatch.setenv("TRANSCRIPT_DB_URL", "postgresql://localhost/transcripts")
         mock_store_cls = mocker.patch(
-            "cloud_agents.workflow.temporal_entrypoint.TranscriptStore",
+            "cloud_agents.workflow.executor.temporal_entrypoint.TranscriptStore",
         )
         mock_store_cls.from_env.return_value = mocker.MagicMock()
         build_temporal_app(temporal_url="localhost:7233")
@@ -127,7 +127,7 @@ class TestTranscriptStoreWiring:
         """TranscriptStore is None when TRANSCRIPT_DB_URL is not set."""
         monkeypatch.delenv("TRANSCRIPT_DB_URL", raising=False)
         mock_store_cls = mocker.patch(
-            "cloud_agents.workflow.temporal_entrypoint.TranscriptStore",
+            "cloud_agents.workflow.executor.temporal_entrypoint.TranscriptStore",
         )
         mock_store_cls.from_env.return_value = None
         build_temporal_app(temporal_url="localhost:7233")
@@ -140,11 +140,11 @@ class TestTranscriptStoreWiring:
         monkeypatch.setenv("TRANSCRIPT_DB_URL", "postgresql://localhost/transcripts")
         mock_store = mocker.MagicMock()
         mock_store_cls = mocker.patch(
-            "cloud_agents.workflow.temporal_entrypoint.TranscriptStore",
+            "cloud_agents.workflow.executor.temporal_entrypoint.TranscriptStore",
         )
         mock_store_cls.from_env.return_value = mock_store
         mock_router_fn = mocker.patch(
-            "cloud_agents.workflow.temporal_entrypoint.build_temporal_router",
+            "cloud_agents.workflow.executor.temporal_entrypoint.build_temporal_router",
         )
         from fastapi import APIRouter
         mock_router_fn.return_value = APIRouter()

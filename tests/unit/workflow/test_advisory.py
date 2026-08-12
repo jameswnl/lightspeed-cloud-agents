@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cloud_agents.workflow.advisory import ADVISORY_PROMPT_SUFFIX, AdvisoryEnforcer
+from cloud_agents.workflow.security.advisory import ADVISORY_PROMPT_SUFFIX, AdvisoryEnforcer
 
 
 class TestAdvisoryEnforcerDisabled:

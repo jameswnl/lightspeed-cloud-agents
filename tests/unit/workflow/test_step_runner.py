@@ -14,7 +14,7 @@ class TestRunStep:
     @pytest.fixture(autouse=True)
     def reset_circuit_breaker(self) -> None:
         """Reset the module-level circuit breaker between tests."""
-        from cloud_agents.workflow.step_runner import _circuit_breaker
+        from cloud_agents.workflow.core.step_runner import _circuit_breaker
 
         _circuit_breaker._providers.clear()
 
@@ -40,7 +40,7 @@ class TestRunStep:
         mock_client.post = mocker.AsyncMock(return_value=mock_response)
         mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
 
-        mock_http = mocker.patch("cloud_agents.workflow.step_runner.httpx.AsyncClient")
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
@@ -74,7 +74,7 @@ class TestRunStep:
         """Successful step returns completed status with output."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         result = await run_step(step_input, spawner=mock_spawner, attempt=1)
         assert result["status"] == "completed"
@@ -83,7 +83,7 @@ class TestRunStep:
     @pytest.mark.asyncio
     async def test_run_step_no_temporal_imports(self) -> None:
         """step_runner module has zero temporalio imports."""
-        import cloud_agents.workflow.step_runner as mod
+        import cloud_agents.workflow.core.step_runner as mod
 
         source = open(mod.__file__).read()
         assert "from temporalio" not in source
@@ -101,7 +101,7 @@ class TestRunStep:
         """Step runner calls spawner.spawn with correct args."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         await run_step(step_input, spawner=mock_spawner, attempt=1)
 
@@ -115,7 +115,7 @@ class TestRunStep:
         self, step_input: dict[str, Any]
     ) -> None:
         """Without a spawner, returns a stub result."""
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         result = await run_step(step_input, spawner=None, attempt=1)
         assert result["status"] == "completed"
@@ -132,7 +132,7 @@ class TestRunStep:
         """Attempt number affects the pod name (content-hash)."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         await run_step(step_input, spawner=mock_spawner, attempt=1)
         pod_name_1 = mock_spawner.spawn.call_args[0][0]
@@ -154,7 +154,7 @@ class TestRunStep:
         """Sandbox is destroyed after step completes."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         await run_step(step_input, spawner=mock_spawner, attempt=1)
         mock_spawner.destroy.assert_called_once()
@@ -175,11 +175,11 @@ class TestRunStep:
         mock_client = mocker.MagicMock()
         mock_client.post = mocker.AsyncMock(return_value=mock_response)
 
-        mock_http = mocker.patch("cloud_agents.workflow.step_runner.httpx.AsyncClient")
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         with pytest.raises(RuntimeError, match="Infrastructure error"):
             await run_step(step_input, spawner=mock_spawner, attempt=1)
@@ -193,11 +193,11 @@ class TestRunStep:
     ) -> None:
         """Circuit breaker open returns failed without spawning."""
         mocker.patch(
-            "cloud_agents.workflow.step_runner._circuit_breaker.is_open",
+            "cloud_agents.workflow.core.step_runner._circuit_breaker.is_open",
             return_value=True,
         )
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         result = await run_step(step_input, spawner=mock_spawner, attempt=1)
         assert result["status"] == "failed"
@@ -215,7 +215,7 @@ class TestRunStep:
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
         mock_spawner.wait_ready.return_value = False
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         with pytest.raises(RuntimeError, match="never became ready"):
             await run_step(step_input, spawner=mock_spawner, attempt=1)
@@ -243,11 +243,11 @@ class TestRunStep:
         mock_client.post = mocker.AsyncMock(return_value=mock_response)
         mock_client.get = mocker.AsyncMock(return_value=mock_transcript)
 
-        mock_http = mocker.patch("cloud_agents.workflow.step_runner.httpx.AsyncClient")
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
         mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         result = await run_step(step_input, spawner=mock_spawner, attempt=1)
         assert result["status"] == "failed"
@@ -266,7 +266,7 @@ class TestRunStep:
             clear=False,
         )
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         input_data = {
             "step": {
@@ -310,7 +310,7 @@ class TestRunStep:
         """Credential lookup normalizes K8s secret name to env var format."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}, clear=False)
 
-        from cloud_agents.workflow.step_runner import run_step
+        from cloud_agents.workflow.core.step_runner import run_step
 
         input_data = {
             "step": {"name": "s1", "prompt": "test", "output_key": "r1"},

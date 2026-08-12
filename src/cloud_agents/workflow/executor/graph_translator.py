@@ -17,9 +17,9 @@ from typing import Any, Optional
 
 from pydantic_graph import GraphBuilder, StepContext
 
-from cloud_agents.workflow.conditions import evaluate_condition
-from cloud_agents.workflow.state import StepResult, WorkflowState
-from cloud_agents.workflow.step_runner import run_step
+from cloud_agents.workflow.core.conditions import evaluate_condition
+from cloud_agents.workflow.core.state import StepResult, WorkflowState
+from cloud_agents.workflow.core.step_runner import run_step
 
 logger = logging.getLogger(__name__)
 

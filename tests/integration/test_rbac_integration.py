@@ -15,9 +15,9 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from cloud_agents.workflow.authorization import CallerIdentity
-from cloud_agents.workflow.policy_authorizer import PolicyFileAuthorizer
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.security.authorization import CallerIdentity
+from cloud_agents.workflow.security.policy_authorizer import PolicyFileAuthorizer
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 
 def _make_policy_file(rules: list[dict], defaults: dict | None = None) -> str:
@@ -179,7 +179,7 @@ class TestRBACIntegration:
         policy_path = _make_policy_file([
             {"identity": "user:viewer", "actions": ["view_defs"], "workflows": ["*"]},
         ])
-        from cloud_agents.workflow.definition_store import DefinitionStore
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
 
         authorizer = PolicyFileAuthorizer(policy_path)
         app = FastAPI()

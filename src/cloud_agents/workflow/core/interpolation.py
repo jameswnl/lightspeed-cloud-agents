@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Any, Final
 
-from cloud_agents.workflow.state import WorkflowState
+from cloud_agents.workflow.core.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from cloud_agents.workflow.audit import AuditEvent, emit_audit
+from cloud_agents.runtime.audit import AuditEvent, emit_audit
 
 
 class TestAuditEvent:
@@ -61,7 +61,7 @@ class TestEmitAudit:
 
     def test_emit_audit_logs_json(self, caplog: pytest.LogCaptureFixture) -> None:
         """emit_audit writes audit event to the audit logger."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.audit"):
+        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
             emit_audit(
                 event_type="workflow_started",
                 workflow_id="wf-test",
@@ -71,7 +71,7 @@ class TestEmitAudit:
 
     def test_emit_audit_includes_workflow_id(self, caplog: pytest.LogCaptureFixture) -> None:
         """emit_audit log message includes workflow_id."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.audit"):
+        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
             emit_audit(
                 event_type="sandbox_destroyed",
                 workflow_id="wf-xyz",
@@ -138,7 +138,7 @@ class TestCLISessionAuditEvents:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """emit_audit with cli_session_launched logs correctly."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.audit"):
+        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
             event = emit_audit(
                 event_type="cli_session_launched",
                 workflow_id="wf-launch-test",

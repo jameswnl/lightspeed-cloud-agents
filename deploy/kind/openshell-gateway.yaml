@@ -1,0 +1,119 @@
+# OpenShell gateway deployment for Kind
+# Uses Podman compute driver with DooD (host socket mount).
+# Requires Kind extraMounts for /run/podman/podman.sock on the node.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openshell-gateway-config
+  labels:
+    app: openshell-gateway
+    environment: cloud-agents
+data:
+  gateway.toml: |
+    [openshell]
+    version = 1
+
+    [openshell.gateway]
+    bind_address        = "0.0.0.0:17670"
+    health_bind_address = "0.0.0.0:17671"
+    log_level           = "info"
+    compute_drivers     = ["podman"]
+    disable_tls         = true
+    enable_loopback_service_http = true
+
+    [openshell.gateway.auth]
+    allow_unauthenticated_users = true
+
+    [openshell.drivers.podman]
+    socket_path       = "/run/podman/podman.sock"
+    default_image     = "lightspeed-agentic-sandbox:latest"
+    supervisor_image  = "ghcr.io/nvidia/openshell/supervisor:latest"
+    image_pull_policy = "missing"
+
+    # Required when running inside K8s: gateway auto-enables JWT
+    # and checks for this section during SA bootstrap.
+    [openshell.drivers.kubernetes]
+    sandbox_namespace = "openshell"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshell-gateway
+  labels:
+    app: openshell-gateway
+    environment: cloud-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openshell-gateway
+  template:
+    metadata:
+      labels:
+        app: openshell-gateway
+        environment: cloud-agents
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: gateway
+          image: localhost/openshell-gateway:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 17670
+              name: grpc
+            - containerPort: 17671
+              name: health
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openshell/gateway.toml
+              subPath: gateway.toml
+              readOnly: true
+            - name: podman-socket
+              mountPath: /run/podman/podman.sock
+          env:
+            - name: HOME
+              value: /tmp
+            - name: KUBERNETES_SERVICE_HOST
+              value: ""
+            - name: KUBERNETES_SERVICE_PORT
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 17671
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: openshell-gateway-config
+        - name: podman-socket
+          hostPath:
+            path: /run/podman/podman.sock
+            type: Socket
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshell-gateway
+  labels:
+    app: openshell-gateway
+    environment: cloud-agents
+spec:
+  selector:
+    app: openshell-gateway
+  ports:
+    - name: grpc
+      port: 17670
+      targetPort: 17670
+    - name: health
+      port: 17671
+      targetPort: 17671
+  type: ClusterIP

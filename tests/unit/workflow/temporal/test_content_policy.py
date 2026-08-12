@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cloud_agents.workflow.content_policy import (
+from cloud_agents.workflow.security.content_policy import (
     BlockedPattern,
     ContentPolicy,
     ContentPolicyViolation,
@@ -385,7 +385,7 @@ class TestValidateDefinitionIntegration:
 
     def test_validate_definition_with_policy_rejects(self) -> None:
         """validate_definition with content_policy returns policy violations."""
-        from cloud_agents.workflow.temporal_validation import validate_definition
+        from cloud_agents.workflow.core.validation import validate_definition
 
         policy = ContentPolicy(max_prompt_length=5)
         defn = _make_defn(prompt="x" * 20)
@@ -394,7 +394,7 @@ class TestValidateDefinitionIntegration:
 
     def test_validate_definition_without_policy_backward_compat(self) -> None:
         """validate_definition without content_policy still works."""
-        from cloud_agents.workflow.temporal_validation import validate_definition
+        from cloud_agents.workflow.core.validation import validate_definition
 
         defn = _make_defn(prompt="x" * 100_000)
         errors = validate_definition(defn)
@@ -411,7 +411,7 @@ class TestAuditEventType:
 
     def test_content_policy_violation_audit_event(self) -> None:
         """content_policy_violation is a valid AuditEventType."""
-        from cloud_agents.workflow.audit import emit_audit
+        from cloud_agents.runtime.audit import emit_audit
 
         event = emit_audit(
             event_type="content_policy_violation",
@@ -431,7 +431,7 @@ class TestEntrypointLoadContentPolicy:
 
     def test_no_env_var_returns_none(self, monkeypatch) -> None:
         """When CONTENT_POLICY_PATH is empty, returns None."""
-        import cloud_agents.workflow.temporal_entrypoint as ep
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep
 
         monkeypatch.setattr(ep, "CONTENT_POLICY_PATH", "")
         result = ep._load_content_policy()
@@ -439,7 +439,7 @@ class TestEntrypointLoadContentPolicy:
 
     def test_valid_path_returns_policy(self, tmp_path, monkeypatch) -> None:
         """When CONTENT_POLICY_PATH points to a valid YAML, returns ContentPolicy."""
-        import cloud_agents.workflow.temporal_entrypoint as ep
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep
 
         policy_file = tmp_path / "policy.yaml"
         policy_file.write_text(yaml.dump({
@@ -461,9 +461,9 @@ class TestEmitContentPolicyAudit:
 
     def test_emits_for_content_policy_errors(self, mocker) -> None:
         """Audit event is emitted when errors contain content policy violations."""
-        from cloud_agents.workflow.temporal_api import _emit_content_policy_audit
+        from cloud_agents.workflow.executor.temporal_api import _emit_content_policy_audit
 
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
         errors = [
             "Content policy violation (max_prompt_length) in step 's0': too long",
             "Step 0 is missing required field 'name'",
@@ -481,9 +481,9 @@ class TestEmitContentPolicyAudit:
 
     def test_no_emit_for_non_policy_errors(self, mocker) -> None:
         """No audit event when errors are purely structural (not policy)."""
-        from cloud_agents.workflow.temporal_api import _emit_content_policy_audit
+        from cloud_agents.workflow.executor.temporal_api import _emit_content_policy_audit
 
-        mock_emit = mocker.patch("cloud_agents.workflow.temporal_api.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.executor.temporal_api.emit_audit")
         errors = ["Workflow must have at least one step"]
         _emit_content_policy_audit(
             workflow_id="wf-123",

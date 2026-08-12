@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cloud_agents.workflow.permissions import PermissionScope
+from cloud_agents.workflow.core.permissions import PermissionScope
 
 
 class TestPermissionScope:
