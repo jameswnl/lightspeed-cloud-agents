@@ -225,26 +225,72 @@ class TestGraphTranslator:
         assert "my_diagnosis" in state.step_results
         assert state.step_results["my_diagnosis"]["output"]["found"] == "bug"
 
-    def test_unsupported_condition_warns(self, caplog: Any) -> None:
-        """Step with condition logs a warning."""
-        import logging
+    @pytest.mark.asyncio
+    async def test_condition_false_skips_step(self, mocker: MockerFixture) -> None:
+        """Step with false condition is skipped."""
+        mock_run = mocker.patch(
+            "cloud_agents.workflow.graph_translator.run_step",
+            return_value={"status": "completed", "output": {}},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.graph_translator.evaluate_condition",
+            return_value=False,
+        )
 
-        with caplog.at_level(logging.WARNING):
-            from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.graph_translator import build_graph
 
-            defn = _make_definition([
-                {
-                    "name": "s1",
-                    "type": "agent",
-                    "prompt": "test",
-                    "output_key": "r1",
-                    "condition": "steps.diag.output.severity == 'high'",
-                },
-            ])
+        defn = _make_definition([
+            {
+                "name": "s1",
+                "type": "agent",
+                "prompt": "test",
+                "output_key": "r1",
+                "condition": "steps.diag.output.severity == 'high'",
+            },
+        ])
 
-            build_graph(defn, workflow_id="wf-1")
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
 
-        assert any("condition" in r.message for r in caplog.records)
+        await graph.run(state=state)
+        mock_run.assert_not_called()
+        assert state.step_results["r1"]["status"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_condition_true_runs_step(self, mocker: MockerFixture) -> None:
+        """Step with true condition runs normally."""
+        mocker.patch(
+            "cloud_agents.workflow.graph_translator.run_step",
+            return_value={"status": "completed", "output": {"ok": True}},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.graph_translator.evaluate_condition",
+            return_value=True,
+        )
+
+        from cloud_agents.workflow.graph_translator import build_graph
+
+        defn = _make_definition([
+            {
+                "name": "s1",
+                "type": "agent",
+                "prompt": "test",
+                "output_key": "r1",
+                "condition": "steps.diag.output.severity == 'high'",
+            },
+        ])
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+        assert state.step_results["r1"]["status"] == "completed"
 
     def test_no_temporal_imports(self) -> None:
         """graph_translator module has zero temporalio imports."""

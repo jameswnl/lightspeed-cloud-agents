@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from pydantic_graph import EndMarker, GraphBuilder, StepContext
 
+from cloud_agents.workflow.conditions import evaluate_condition
 from cloud_agents.workflow.step_runner import run_step
 
 logger = logging.getLogger(__name__)
@@ -99,11 +100,6 @@ def build_graph(
     step_defs = {}
     for step in steps:
         step_defs[step["name"]] = step
-        if step.get("condition"):
-            logger.warning(
-                "Step '%s' has a condition — not yet supported in local executor, will run unconditionally",
-                step["name"],
-            )
         if step.get("parallel_group"):
             logger.warning(
                 "Step '%s' has parallel_group '%s' — not yet supported in local executor, will run sequentially",
@@ -166,6 +162,13 @@ def _build_agent_step(
         """Execute an agent step in a sandbox container."""
         state = ctx.state
         step_def = state.step_defs[step_name]
+
+        if condition := step_def.get("condition"):
+            if not evaluate_condition(condition, state.step_results):
+                output_key = step_def.get("output_key", step_name)
+                state.step_results[output_key] = {"status": "skipped"}
+                logger.info("Step '%s' skipped — condition not met", step_name)
+                return {"status": "skipped"}
 
         step_input = {
             "step": step_def,
