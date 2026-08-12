@@ -461,7 +461,9 @@ async def _run_step_inner(
                 }
 
             _circuit_breaker.record_success(provider_name)
-            output = data.get("output", {})
+            output = data.get("output") or {}
+            if not isinstance(output, dict):
+                output = {"raw": output}
             for k, v in data.items():
                 if k not in ("success", "output", "summary"):
                     output[k] = v

@@ -11,6 +11,13 @@ from pytest_mock import MockerFixture
 class TestRunStep:
     """Tests for the extracted run_step function."""
 
+    @pytest.fixture(autouse=True)
+    def reset_circuit_breaker(self) -> None:
+        """Reset the module-level circuit breaker between tests."""
+        from cloud_agents.workflow.step_runner import _circuit_breaker
+
+        _circuit_breaker._providers.clear()
+
     @pytest.fixture(name="mock_spawner")
     def mock_spawner_fixture(self, mocker: MockerFixture) -> AsyncMock:
         """Create a mock spawner."""

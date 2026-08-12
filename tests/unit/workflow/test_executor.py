@@ -1,5 +1,7 @@
 """Tests for the WorkflowExecutor interface and data models."""
 
+import pytest
+
 from cloud_agents.workflow.executor import (
     ApprovalDecision,
     WorkflowExecutor,
@@ -60,11 +62,8 @@ class TestWorkflowExecutorIsAbstract:
 
     def test_cannot_instantiate(self) -> None:
         """ABC prevents direct instantiation."""
-        try:
+        with pytest.raises(TypeError):
             WorkflowExecutor()  # type: ignore[abstract]
-            assert False, "Should have raised TypeError"
-        except TypeError:
-            pass
 
     def test_requires_all_methods(self) -> None:
         """Subclass missing any method cannot be instantiated."""
@@ -73,8 +72,5 @@ class TestWorkflowExecutorIsAbstract:
             async def start(self, input):
                 return "wf-1"
 
-        try:
+        with pytest.raises(TypeError):
             PartialExecutor()  # type: ignore[abstract]
-            assert False, "Should have raised TypeError"
-        except TypeError:
-            pass
