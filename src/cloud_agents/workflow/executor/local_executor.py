@@ -81,6 +81,16 @@ class LocalExecutor(WorkflowExecutor):
                 provider=provider,
                 authz_context=input.get("authz_context", {}),
             )
+            await self._store.update_workflow_context(
+                workflow_id,
+                {
+                    "sandbox_image": sandbox_image,
+                    "skills_image": input.get("skills_image"),
+                    "skills_paths": input.get("skills_paths"),
+                    "mcp_servers": input.get("mcp_servers"),
+                    "approval_policy": input.get("approval_policy"),
+                },
+            )
 
         graph, state = build_graph(
             definition,
@@ -224,18 +234,32 @@ class LocalExecutor(WorkflowExecutor):
 
         definition = state.get("definition", {})
         provider = state.get("provider", {})
+        wf_ctx = state.get("workflow_context", {})
 
         graph, graph_state = build_graph(
             definition,
             workflow_id=workflow_id,
             provider=provider,
+            sandbox_image=wf_ctx.get("sandbox_image", "sandbox:latest"),
+            skills_image=wf_ctx.get("skills_image"),
+            skills_paths=wf_ctx.get("skills_paths"),
+            mcp_servers=wf_ctx.get("mcp_servers"),
             spawner=self._spawner,
             transcript_store=self._transcript_store,
+            approval_policy=wf_ctx.get("approval_policy"),
         )
+
+        # Clear pause flag so the graph doesn't skip remaining steps
+        graph_state.paused_at_step = None
 
         # Restore prior step results into the graph state
         for key, result in state.get("steps", {}).items():
             graph_state.step_results[key] = result
+
+        # Check if cancelled between resume() and here
+        refreshed = await self._store.get(workflow_id)
+        if refreshed and refreshed.get("status") == "cancelled":
+            return
 
         task = asyncio.create_task(
             self._execute(workflow_id, graph, graph_state),
