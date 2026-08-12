@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cloud Agents Framework — OpenStack Team Briefing</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; overflow: hidden; }
+
+  .slide { display: none; width: 100vw; height: 100vh; padding: 60px 80px; position: relative; flex-direction: column; justify-content: center; }
+  .slide.active { display: flex; }
+
+  h1 { font-size: 42px; color: #f0f6fc; margin-bottom: 12px; font-weight: 700; line-height: 1.2; }
+  h2 { font-size: 32px; color: #58a6ff; margin-bottom: 24px; font-weight: 600; line-height: 1.3; }
+  h3 { font-size: 22px; color: #a371f7; margin-bottom: 16px; font-weight: 600; }
+  p { font-size: 20px; line-height: 1.6; color: #8b949e; margin-bottom: 16px; }
+  .subtitle { font-size: 22px; color: #8b949e; margin-bottom: 8px; }
+  .date { font-size: 16px; color: #484f58; }
+  .presenter { font-size: 18px; color: #58a6ff; margin-top: 8px; }
+
+  ul { list-style: none; padding: 0; }
+  ul li { font-size: 20px; line-height: 1.7; color: #c9d1d9; padding: 4px 0 4px 28px; position: relative; }
+  ul li::before { content: ""; position: absolute; left: 6px; top: 14px; width: 8px; height: 8px; background: #58a6ff; border-radius: 50%; }
+  ul.green li::before { background: #3fb950; }
+  ul.purple li::before { background: #a371f7; }
+  ul.yellow li::before { background: #d29922; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px; align-items: start; }
+
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px; }
+  .card.green { border-left: 4px solid #3fb950; }
+  .card.blue { border-left: 4px solid #58a6ff; }
+  .card.purple { border-left: 4px solid #a371f7; }
+  .card.red { border-left: 4px solid #f85149; }
+  .card.yellow { border-left: 4px solid #d29922; }
+  .card h3 { margin-top: 0; }
+  .card p { font-size: 16px; }
+  .card ul li { font-size: 16px; line-height: 1.6; }
+
+  .badge { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 4px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle; margin-left: 8px; }
+  .badge-done { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+  .badge-partial { background: #1c2333; color: #58a6ff; border: 1px solid #1f6feb; }
+  .badge-todo { background: #2d1b00; color: #d29922; border: 1px solid #9e6a03; }
+  .badge-new { background: #1a0d2e; color: #a371f7; border: 1px solid #6e40c9; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th { text-align: left; padding: 10px 14px; background: #161b22; color: #58a6ff; font-size: 14px; border-bottom: 1px solid #30363d; }
+  td { padding: 10px 14px; border-bottom: 1px solid #21262d; font-size: 15px; color: #c9d1d9; }
+  tr:hover td { background: #1c2128; }
+  td.dim { color: #484f58; }
+  td strong { color: #f0f6fc; }
+
+  .ascii { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 20px 24px; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 15px; line-height: 1.6; white-space: pre; overflow-x: auto; color: #e6edf3; }
+  .g { color: #3fb950; }
+  .b { color: #58a6ff; }
+  .p { color: #a371f7; }
+  .r { color: #f85149; }
+  .y { color: #d29922; }
+  .dim { color: #484f58; }
+
+  .nav { position: fixed; bottom: 20px; right: 30px; font-size: 14px; color: #484f58; z-index: 100; user-select: none; }
+  .nav span { cursor: pointer; padding: 4px 10px; border-radius: 4px; }
+  .nav span:hover { background: #21262d; color: #c9d1d9; }
+
+  .section-label { font-size: 12px; color: #484f58; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; font-weight: 600; }
+
+  .big-number { font-size: 48px; font-weight: 800; color: #58a6ff; }
+  .big-number.green { color: #3fb950; }
+  .big-number.purple { color: #a371f7; }
+  .big-number.yellow { color: #d29922; }
+
+  .quote { border-left: 3px solid #484f58; padding: 12px 20px; margin: 16px 0; font-style: italic; color: #8b949e; font-size: 18px; }
+
+  .highlight-box { background: #1c2128; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+</style>
+</head>
+<body>
+
+<!-- ==================== SLIDE 1: Title ==================== -->
+<div class="slide active" id="s1">
+  <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
+    <div class="section-label">Lightspeed Core</div>
+    <h1 style="font-size: 52px;">Cloud Agents Framework</h1>
+    <p class="subtitle">Server-side agent workflow orchestration for Red Hat products</p>
+    <div style="margin-top: 32px;">
+      <p class="presenter">James Wong &nbsp;|&nbsp; UIE / Lightspeed Core</p>
+      <p class="date">OpenStack Team Briefing &mdash; July 2026</p>
+    </div>
+    <div style="margin-top: 48px;">
+      <p style="font-size: 16px; color: #484f58;">Arrow keys or click to navigate &nbsp;&bull;&nbsp; <span style="color: #58a6ff;">12 slides</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 2: The Problem ==================== -->
+<div class="slide" id="s2">
+  <div class="section-label">Context</div>
+  <h2>The Problem We're Solving</h2>
+  <div class="two-col">
+    <div>
+      <ul>
+        <li>Product teams need AI agents that <strong style="color: #f0f6fc;">act</strong>, not just answer</li>
+        <li>Upgrades, diagnostics, remediation, compliance &mdash; multi-step workflows with real consequences</li>
+        <li>Customers are already using frontier models without guardrails</li>
+        <li>Every team is building their own agent harness &mdash; duplicated effort, inconsistent security</li>
+      </ul>
+      <div class="quote" style="margin-top: 24px;">
+        "If we don't provide native AI capabilities, customers will use uncontrolled frontier models."
+        <div style="font-size: 14px; margin-top: 6px; font-style: normal; color: #484f58;">&mdash; Dan Prince, June 2026</div>
+      </div>
+    </div>
+    <div>
+      <div class="card red">
+        <h3 style="color: #f85149;">Without a framework</h3>
+        <ul>
+          <li>Each team builds sandbox, auth, retry, escalation from scratch</li>
+          <li>No consistent security model for AI writes</li>
+          <li>No approval gates &mdash; or inconsistent ones</li>
+          <li>No audit trail across products</li>
+        </ul>
+      </div>
+      <div class="card green" style="margin-top: 16px;">
+        <h3 style="color: #3fb950;">With Cloud Agents</h3>
+        <ul>
+          <li>Define workflows in YAML, no framework code</li>
+          <li>Security, isolation, approval gates built in</li>
+          <li>Same workflow runs on K8s and Podman</li>
+          <li>Full observability + audit trail</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 3: Architecture ==================== -->
+<div class="slide" id="s3">
+  <div class="section-label">Architecture</div>
+  <h2>How It Works</h2>
+  <div style="display: flex; gap: 24px; align-items: stretch;">
+    <div style="flex: 1;">
+      <div class="card blue" style="margin-bottom: 16px; text-align: center;">
+        <p style="font-size: 14px; margin: 0; color: #58a6ff; font-weight: 600;">TRIGGERS</p>
+        <p style="font-size: 13px; margin: 4px 0 0; color: #8b949e;">API &bull; Alert &bull; Schedule &bull; Chatbot</p>
+      </div>
+      <div style="text-align: center; color: #30363d; font-size: 20px; margin: -8px 0;">▼</div>
+      <div style="background: #161b22; border: 2px solid #58a6ff; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+        <p style="font-size: 18px; font-weight: 700; color: #58a6ff; margin-bottom: 12px;">Workflow Runner</p>
+        <p style="font-size: 13px; color: #8b949e; margin-bottom: 16px;">FastAPI + Temporal Worker &mdash; stateless, horizontally scalable</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+          <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; text-align: center;">
+            <p style="font-size: 13px; color: #3fb950; margin: 0; font-weight: 600;">Definition Store</p>
+            <p style="font-size: 11px; color: #484f58; margin: 4px 0 0;">YAML CRUD</p>
+          </div>
+          <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; text-align: center;">
+            <p style="font-size: 13px; color: #3fb950; margin: 0; font-weight: 600;">Spawner ABC</p>
+            <p style="font-size: 11px; color: #484f58; margin: 4px 0 0;">K8s / Podman</p>
+          </div>
+          <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; text-align: center;">
+            <p style="font-size: 13px; color: #3fb950; margin: 0; font-weight: 600;">Auth / RBAC</p>
+            <p style="font-size: 11px; color: #484f58; margin: 4px 0 0;">PolicyFile</p>
+          </div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div style="text-align: center;">
+          <div style="color: #30363d; font-size: 12px; margin-bottom: 4px;">gRPC ▼</div>
+          <div style="background: #161b22; border: 2px solid #a371f7; border-radius: 10px; padding: 14px; text-align: center;">
+            <p style="font-size: 15px; font-weight: 700; color: #a371f7; margin: 0;">Temporal Server</p>
+            <p style="font-size: 12px; color: #484f58; margin: 4px 0 0;">durable execution + state</p>
+          </div>
+        </div>
+        <div style="text-align: center;">
+          <div style="color: #30363d; font-size: 12px; margin-bottom: 4px;">spawn ▼</div>
+          <div style="background: #161b22; border: 2px solid #3fb950; border-radius: 10px; padding: 14px;">
+            <p style="font-size: 15px; font-weight: 700; color: #3fb950; margin: 0 0 8px;">Sandbox Container</p>
+            <p style="font-size: 12px; color: #c9d1d9; margin: 2px 0;"><span class="g">POST</span> /v1/agent/run</p>
+            <p style="font-size: 12px; color: #c9d1d9; margin: 2px 0;"><span class="g">GET</span> /v1/agent/events</p>
+            <p style="font-size: 11px; color: #f85149; margin: 8px 0 0;">non-root &bull; read-only fs &bull; timeout &bull; scoped creds</p>
+          </div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px; text-align: center;">
+          <p style="font-size: 13px; color: #a371f7; margin: 0; font-weight: 600;">PostgreSQL</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">state + transcripts</p>
+        </div>
+        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px; text-align: center;">
+          <p style="font-size: 13px; color: #58a6ff; margin: 0; font-weight: 600;">LLM Provider</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">OpenAI / Vertex / Anthropic / local</p>
+        </div>
+      </div>
+    </div>
+    <div style="flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px; justify-content: center;">
+      <div class="highlight-box"><strong style="color:#3fb950;">Stateless runner</strong> &mdash; all state in Temporal + Postgres. Scales horizontally. Pod crash = zero data loss.</div>
+      <div class="highlight-box"><strong style="color:#a371f7;">Ephemeral sandbox</strong> &mdash; each step gets a fresh container. No shared state. Destroyed after use.</div>
+      <div class="highlight-box"><strong style="color:#58a6ff;">Bring your own agent</strong> &mdash; the sandbox runs any OCI image with the HTTP contract. Swap runtimes freely.</div>
+    </div>
+  </div>
+  <div style="margin-top: 16px; display: flex; gap: 16px;">
+    <div class="highlight-box" style="flex:1;"><strong style="color:#3fb950;">Stateless runner</strong> &mdash; all state in Temporal + Postgres. Scales horizontally. Pod crash = zero data loss.</div>
+    <div class="highlight-box" style="flex:1;"><strong style="color:#a371f7;">Ephemeral sandbox</strong> &mdash; each step gets a fresh container. No shared state between steps. Destroyed after use.</div>
+    <div class="highlight-box" style="flex:1;"><strong style="color:#58a6ff;">Bring your own agent</strong> &mdash; the sandbox runs any OCI image that speaks the HTTP contract. Swap runtimes freely.</div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 4: Workflow Definition ==================== -->
+<div class="slide" id="s4">
+  <div class="section-label">Workflow Model</div>
+  <h2>Declarative YAML &mdash; No Code Changes</h2>
+  <div class="two-col">
+    <div>
+      <div class="ascii" style="font-size: 13px; line-height: 1.5;">
+<span class="dim"># cve-patch-workflow.yaml</span>
+<span class="b">apiVersion:</span> v1
+<span class="b">kind:</span> AgentWorkflow
+<span class="b">metadata:</span>
+  <span class="b">name:</span> cve-patch-workflow
+
+<span class="b">spec:</span>
+  <span class="b">steps:</span>
+    - <span class="g">name:</span> scan-components
+      <span class="g">type:</span> agent
+      <span class="g">prompt:</span> |
+        Scan the RHDH catalog for
+        components affected by {{ input }}
+      <span class="g">output_key:</span> scan_result
+      <span class="y">permissions:</span>
+        <span class="y">allowed_tools:</span>
+          - <span class="p">rhdh_list_components</span>
+          - <span class="p">rhdh_get_component</span>
+
+    - <span class="r">name:</span> approve-patch
+      <span class="r">type:</span> human-approval
+      <span class="r">risk_level:</span> high
+      <span class="r">message:</span> |
+        Review affected components:
+        {{ steps.scan_result.output }}
+
+    - <span class="g">name:</span> apply-patches
+      <span class="g">type:</span> agent
+      <span class="g">prompt:</span> |
+        Create PRs patching each
+        affected component...
+      <span class="g">condition:</span> |
+        steps.approval.output.approved
+      </div>
+    </div>
+    <div>
+      <h3>Key Concepts</h3>
+      <ul>
+        <li><strong style="color: #f0f6fc;">Steps</strong> &mdash; agent (AI does work) or human-approval (human gates)</li>
+        <li><strong style="color: #f0f6fc;">Conditions</strong> &mdash; steps run only when prior outputs satisfy rules</li>
+        <li><strong style="color: #f0f6fc;">Interpolation</strong> &mdash; <code style="color:#a371f7;">{{ steps.X.output.Y }}</code> passes data between steps</li>
+        <li><strong style="color: #f0f6fc;">Per-step tool filtering</strong> &mdash; each step gets only the MCP tools it needs</li>
+        <li><strong style="color: #f0f6fc;">Risk levels</strong> &mdash; low = auto-approve, high = human review</li>
+        <li><strong style="color: #f0f6fc;">Output schema</strong> &mdash; agents return structured Pydantic models</li>
+      </ul>
+
+      <div class="card blue" style="margin-top: 24px;">
+        <h3 style="color: #58a6ff;">OpenStack Relevance</h3>
+        <p>Your upgrade workflow maps directly: <strong>pre-flight check</strong> (read-only agent step) &rarr; <strong>admin approval</strong> (human gate) &rarr; <strong>execute upgrade</strong> (scoped agent step) &rarr; <strong>verify</strong> (agent step).</p>
+        <p style="margin-bottom:0;">GitOps pattern: the "execute" step creates a Git commit/PR rather than running destructive ops directly.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 5: Security ==================== -->
+<div class="slide" id="s5">
+  <div class="section-label">Security &amp; Governance</div>
+  <h2>Defense in Depth for Agent Execution</h2>
+  <div class="three-col">
+    <div class="card red">
+      <h3 style="color: #f85149;">Sandbox Isolation</h3>
+      <ul>
+        <li>Fresh container per step</li>
+        <li>Non-root, read-only rootfs</li>
+        <li>No privilege escalation</li>
+        <li>Hard timeout enforcement</li>
+        <li>CPU/memory resource limits</li>
+        <li>Network egress policy<br/><span class="dim" style="font-size:13px;">(DNS + LLM CIDRs only)</span></li>
+      </ul>
+    </div>
+    <div class="card purple">
+      <h3 style="color: #a371f7;">Credential Scoping</h3>
+      <ul>
+        <li>Per-step K8s Secrets mount</li>
+        <li>Per-step ServiceAccount</li>
+        <li>MCP secret allowlist</li>
+        <li>File-ref headers &mdash; secrets never in env vars</li>
+        <li>App-level TLS<br/><span class="dim" style="font-size:13px;">(ephemeral CA + per-sandbox certs)</span></li>
+        <li>Bearer auth runner &harr; sandbox</li>
+      </ul>
+    </div>
+    <div class="card blue">
+      <h3 style="color: #58a6ff;">Governance</h3>
+      <ul>
+        <li>RBAC: who can trigger, approve, view, cancel</li>
+        <li>Risk-level driven approval gates</li>
+        <li>Per-step tool allow/deny lists</li>
+        <li>Structured audit trail</li>
+        <li>Advisory mode (dry-run)</li>
+        <li>Concurrency cap on pods</li>
+      </ul>
+    </div>
+  </div>
+  <div style="margin-top: 24px;">
+    <div class="card yellow">
+      <h3 style="color: #d29922;">GitOps as the Write Pattern</h3>
+      <p style="margin-bottom: 0;">For AI-driven write operations: agent drafts changes &rarr; Git commit / PR &rarr; human approval &rarr; controlled application (ArgoCD/Flux). This is the pattern that gets PM buy-in for agentic writes. The framework supports it natively via agent step + GitHub/GitLab MCP server + approval gate.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 6: Per-Step Tool Filtering ==================== -->
+<div class="slide" id="s6">
+  <div class="section-label">Tool Scoping</div>
+  <h2>Per-Step Tool Filtering via MCP</h2>
+  <div class="two-col">
+    <div>
+      <p>One MCP server exposes many tools. Each workflow step declares which tools it can use &mdash; the framework enforces the boundary.</p>
+      <div class="ascii" style="font-size: 13px; margin-top: 16px;">
+<span class="b">kubectl MCP server</span> exposes:
+  <span class="g">kubectl_get_pods</span>
+  <span class="g">kubectl_get_nodes</span>
+  <span class="g">kubectl_get_events</span>
+  <span class="g">kubectl_describe</span>
+  <span class="y">kubectl_apply</span>       <span class="dim">← write</span>
+  <span class="y">kubectl_delete</span>      <span class="dim">← write</span>
+  <span class="y">kubectl_scale</span>       <span class="dim">← write</span>
+  <span class="r">kubectl_exec</span>        <span class="dim">← dangerous</span>
+
+<span class="b">Diagnose step:</span>
+  <span class="g">allowed_tools:</span> [get_pods, get_nodes,
+                   get_events, describe]
+  <span class="dim">→ read-only investigation</span>
+
+<span class="b">Fix step</span> <span class="dim">(after approval)</span><span class="b">:</span>
+  <span class="g">allowed_tools:</span> [get_pods, apply, scale]
+  <span class="r">denied_tools:</span>  [delete, exec]
+  <span class="dim">→ controlled remediation</span>
+      </div>
+    </div>
+    <div>
+      <div class="card green">
+        <h3 style="color: #3fb950;">How This Maps to OpenStack</h3>
+        <ul>
+          <li><strong>Upgrade agent</strong>: read-only tools for pre-flight checks</li>
+          <li><strong>Health check agent</strong>: diagnostic tools only</li>
+          <li><strong>Remediation agent</strong>: scoped write tools, gated by approval</li>
+        </ul>
+        <p style="margin-top: 12px;">Same MCP server, different tool sets per step. No need to build separate servers for read vs write.</p>
+      </div>
+      <div class="card purple" style="margin-top: 16px;">
+        <h3 style="color: #a371f7;">Credential Isolation</h3>
+        <p>Each step can mount a different <code>credentials_secret</code> and use a different <code>service_account</code>. The diagnose step gets a reader SA; the fix step gets a writer SA.</p>
+        <p style="margin-bottom: 0;">Per-user credential derivation (e.g. Keystone tokens) is a planned integration point.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 7: Dual Deployment ==================== -->
+<div class="slide" id="s7">
+  <div class="section-label">Deployment</div>
+  <h2>K8s and Podman &mdash; Same Workflow Model</h2>
+  <div class="two-col">
+    <div>
+      <div class="ascii" style="font-size: 13px;">
+<span class="b">Kubernetes (OCP)</span>
+├── Temporal Server      <span class="y">(Deployment)</span>
+├── PostgreSQL           <span class="y">(StatefulSet)</span>
+├── Workflow Runner      <span class="y">(Deployment)</span>
+├── MCP Servers          <span class="y">(Deployments)</span>
+└── Sandbox steps        <span class="r">(K8s Jobs, ephemeral)</span>
+    ├── NetworkPolicy    <span class="dim">(egress restrict)</span>
+    ├── ServiceAccount   <span class="dim">(per-step RBAC)</span>
+    └── securityContext  <span class="dim">(non-root, ro-fs)</span>
+
+<span class="p">Podman (RHEL)</span>
+├── Temporal Server      <span class="y">(container)</span>
+├── PostgreSQL           <span class="y">(container)</span>
+├── Workflow Runner      <span class="y">(container)</span>
+├── MCP Servers          <span class="y">(containers)</span>
+└── Sandbox steps        <span class="r">(Podman containers)</span>
+    ├── Podman network   <span class="dim">(DNS isolation)</span>
+    ├── Host firewall    <span class="dim">(egress restrict)</span>
+    └── rootless Podman  <span class="dim">(no root needed)</span>
+      </div>
+    </div>
+    <div>
+      <div class="card blue">
+        <h3 style="color: #58a6ff;">Why This Matters for OpenStack</h3>
+        <ul>
+          <li><strong>Air-gapped / sovereign cloud</strong> &mdash; same workflow runs disconnected from external services</li>
+          <li><strong>On-prem RHEL</strong> &mdash; Podman deployment, no K8s dependency</li>
+          <li><strong>OCP</strong> &mdash; full K8s native with RBAC, NetworkPolicy, ServiceAccounts</li>
+          <li><strong>Model flexibility</strong> &mdash; ProviderConfig is provider-agnostic; works with local/offline LLMs</li>
+        </ul>
+      </div>
+      <div class="card green" style="margin-top: 16px;">
+        <h3 style="color: #3fb950;">OpenShell Integration (Planned)</h3>
+        <p>OpenShell Gateway adds Landlock + seccomp + L7 network policy on top of container isolation. One spawner, unified across K8s and Podman.</p>
+        <p style="margin-bottom: 0;">Agent HTTP contract stays identical &mdash; the security layer is transparent to the workflow.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 8: What We've Built ==================== -->
+<div class="slide" id="s8">
+  <div class="section-label">Status</div>
+  <h2>What's Built Today</h2>
+  <table>
+    <tr><th style="width:30%;">Capability</th><th style="width:50%;">Details</th><th>Status</th></tr>
+    <tr><td><strong>Temporal workflow engine</strong></td><td>AgentWorkflow interprets any YAML definition. Conditions, parallel groups, retry with context.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Ephemeral sandbox</strong></td><td>K8s Jobs + Podman containers. Spawn &rarr; call &rarr; collect &rarr; destroy.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Human approval gates</strong></td><td>Risk-level driven. Auto-approve (low) or manual (high). Temporal signals.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>MCP tool injection</strong></td><td>Per-workflow MCP servers. Per-step allowed/denied tool lists.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>RBAC / Authorization</strong></td><td>PolicyFile authorizer. Per-user/team identity. Fail-closed.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Observability</strong></td><td>OTel tracing, Prometheus metrics, structured audit events, SSE streaming.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Alert + Schedule triggers</strong></td><td>Alertmanager webhook &rarr; workflow. Cron schedules via Temporal.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Transcript persistence</strong></td><td>Full agent step transcripts (tool calls, LLM thinking) in PostgreSQL.</td><td><span class="badge badge-done">Done</span></td></tr>
+    <tr><td><strong>Escalation + CLI handoff</strong></td><td>Failed workflow &rarr; context package &rarr; human follow-up / CLI session.</td><td><span class="badge badge-partial">Partial</span></td></tr>
+    <tr><td><strong>Sandbox-side tool enforcement</strong></td><td>Runner forwards tool filter; sandbox enforces. Pending in sandbox repo.</td><td><span class="badge badge-todo">In Progress</span></td></tr>
+  </table>
+</div>
+
+<!-- ==================== SLIDE 9: OpenStack Alignment ==================== -->
+<div class="slide" id="s9">
+  <div class="section-label">Alignment</div>
+  <h2>How Cloud Agents Maps to OpenStack Needs</h2>
+  <div class="two-col">
+    <div>
+      <table style="font-size: 14px;">
+        <tr><th>OpenStack Requirement</th><th>Cloud Agents</th></tr>
+        <tr><td>Server-side workflow orchestration</td><td><span class="badge badge-done">Done</span> Temporal</td></tr>
+        <tr><td>Modular / a la carte adoption</td><td><span class="badge badge-done">Done</span> Separate repo</td></tr>
+        <tr><td>Pod-as-sandbox execution</td><td><span class="badge badge-done">Done</span> Ephemeral containers</td></tr>
+        <tr><td>Scoped credentials per step</td><td><span class="badge badge-done">Done</span> Secret mount + SA</td></tr>
+        <tr><td>Per-agent tool scoping</td><td><span class="badge badge-done">Done</span> allow/deny lists</td></tr>
+        <tr><td>RBAC / authorization</td><td><span class="badge badge-done">Done</span> PolicyFile</td></tr>
+        <tr><td>Approval gates</td><td><span class="badge badge-done">Done</span> Risk-level driven</td></tr>
+        <tr><td>K8s + Podman deployment</td><td><span class="badge badge-done">Done</span> Both spawners</td></tr>
+        <tr><td>Model flexibility</td><td><span class="badge badge-done">Done</span> Any provider</td></tr>
+        <tr><td>GitOps write pattern</td><td><span class="badge badge-done">Done</span> Workflow pattern</td></tr>
+        <tr><td>Per-user creds (Keystone)</td><td><span class="badge badge-todo">Planned</span></td></tr>
+        <tr><td>CLI for operations</td><td><span class="badge badge-todo">Planned</span></td></tr>
+        <tr><td>MCP server registry</td><td><span class="badge badge-todo">Planned</span></td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="card green">
+        <h3 style="color: #3fb950;">The Hybrid Model &mdash; Agreed Architecture</h3>
+        <p><strong style="color: #f0f6fc;">Cloud Agents = server-side platform</strong></p>
+        <ul>
+          <li>Well-defined workflows (RCA, upgrades, compliance)</li>
+          <li>Central portal for triggering agentic workflows</li>
+          <li>Approval gates, audit trail, observability</li>
+        </ul>
+        <p style="margin-top: 12px;"><strong style="color: #f0f6fc;">Client agents (Goose/equivalent) = ad hoc</strong></p>
+        <ul>
+          <li>Interactive CLI troubleshooting</li>
+          <li>Local action execution with user-scoped creds</li>
+          <li>Tasks requiring direct cluster access</li>
+        </ul>
+        <p style="margin-top: 12px; margin-bottom: 0; color: #484f58; font-size: 14px;">Cloud Agents is not trying to replace client-side agents. Both coexist.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 10: Demo Scenarios ==================== -->
+<div class="slide" id="s10">
+  <div class="section-label">Demos</div>
+  <h2>Working Demo Scenarios</h2>
+  <div class="three-col" style="grid-template-columns: 1fr 1fr; gap: 20px;">
+    <div class="card green">
+      <h3 style="color: #3fb950;">K8s Incident Response</h3>
+      <p>Diagnose &rarr; Approve &rarr; Fix &rarr; Verify</p>
+      <p style="font-size: 14px; color: #484f58;">Uses kubectl MCP server with real cluster access. Per-step tool filtering: read-only for diagnose, scoped writes for fix.</p>
+    </div>
+    <div class="card purple">
+      <h3 style="color: #a371f7;">CVE Patch Workflow</h3>
+      <p>Scan RHDH catalog &rarr; Approve &rarr; Create PRs &rarr; Verify</p>
+      <p style="font-size: 14px; color: #484f58;">Uses RHDH catalog MCP server. GitOps pattern: agent creates PRs, human reviews.</p>
+    </div>
+    <div class="card blue">
+      <h3 style="color: #58a6ff;">Security Audit</h3>
+      <p>Scan &rarr; Assess risk &rarr; Approve &rarr; Remediate</p>
+      <p style="font-size: 14px; color: #484f58;">Multi-step with condition evaluation. Advisory mode for dry-run audits.</p>
+    </div>
+    <div class="card yellow">
+      <h3 style="color: #d29922;">Escalation &amp; Handoff</h3>
+      <p>Agent fails &rarr; Package context &rarr; Human follow-up</p>
+      <p style="font-size: 14px; color: #484f58;">Full transcript persistence. Context includes tool call history, LLM reasoning, prior attempts.</p>
+    </div>
+  </div>
+  <div class="highlight-box" style="margin-top: 24px;">
+    <strong style="color: #58a6ff;">OpenStack Upgrade Workflow</strong> maps directly to these patterns: pre-flight health check (read-only agent) &rarr; admin reviews findings (approval gate) &rarr; execute upgrade steps (scoped agent, GitOps) &rarr; verify cluster health (read-only agent). All with per-step tool filtering and credential scoping.
+  </div>
+</div>
+
+<!-- ==================== SLIDE 11: Integration Points ==================== -->
+<div class="slide" id="s11">
+  <div class="section-label">Integration</div>
+  <h2>LCORE Ecosystem &mdash; A La Carte</h2>
+  <div style="margin-bottom: 20px;">
+    <div style="text-align: center; margin-bottom: 8px;">
+      <span style="font-size: 13px; color: #8b949e;">RHDH &nbsp;&bull;&nbsp; OpenStack LS &nbsp;&bull;&nbsp; Ansible LS &nbsp;&bull;&nbsp; RHEL LS &nbsp;&bull;&nbsp; Ask Red Hat</span>
+    </div>
+    <div style="text-align: center; color: #30363d; font-size: 16px; margin-bottom: 8px;">▼ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ▼ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ▼</div>
+    <div style="background: #161b22; border: 2px solid #58a6ff; border-radius: 10px; padding: 16px 20px;">
+      <p style="font-size: 16px; font-weight: 700; color: #58a6ff; margin: 0 0 4px; text-align: center;">LCORE API</p>
+      <p style="font-size: 12px; color: #484f58; margin: 0 0 12px; text-align: center;">/v1/responses &nbsp;&bull;&nbsp; /v1/workflows/run &nbsp;&bull;&nbsp; /a2a</p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+        <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; text-align: center;">
+          <p style="font-size: 13px; color: #3fb950; margin: 0; font-weight: 600;">RAG / OKP</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">knowledge</p>
+        </div>
+        <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; text-align: center;">
+          <p style="font-size: 13px; color: #3fb950; margin: 0; font-weight: 600;">Safety</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">guardrails</p>
+        </div>
+        <div style="background: #0d1117; border: 1px solid #a371f7; border-radius: 6px; padding: 8px; text-align: center;">
+          <p style="font-size: 13px; color: #a371f7; margin: 0; font-weight: 600;">Cloud Agents</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">workflows</p>
+        </div>
+        <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; text-align: center;">
+          <p style="font-size: 13px; color: #d29922; margin: 0; font-weight: 600;">Skills</p>
+          <p style="font-size: 11px; color: #484f58; margin: 2px 0 0;">runtime</p>
+        </div>
+      </div>
+      <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; text-align: center;">
+        <span style="font-size: 12px; color: #484f58;">Provider routing &nbsp;&bull;&nbsp; Credentials &nbsp;&bull;&nbsp; Observability &nbsp;&bull;&nbsp; OpenAI, Vertex, local models, air-gapped</span>
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="card blue">
+      <h3 style="color: #58a6ff;">What OpenStack Picks</h3>
+      <ul>
+        <li><strong>Cloud Agents</strong> &mdash; server-side workflows for upgrades, health checks</li>
+        <li><strong>RAG/OKP</strong> &mdash; OpenStack docs, release notes, KCS articles</li>
+        <li><strong>Provider routing</strong> &mdash; model flexibility, air-gapped LLM support</li>
+        <li><strong>Skills</strong> &mdash; upgrade recipes, diagnostic playbooks</li>
+      </ul>
+    </div>
+    <div class="card purple">
+      <h3 style="color: #a371f7;">What Stays with OpenStack</h3>
+      <ul>
+        <li><strong>Client agent choice</strong> &mdash; Goose, OpenCode, or future runtime</li>
+        <li><strong>CRD / Operator</strong> &mdash; OpenStackAssistant pod lifecycle</li>
+        <li><strong>Keystone integration</strong> &mdash; per-user credential scoping</li>
+        <li><strong>Domain MCP tools</strong> &mdash; OpenStack CLI wrappers, recipes</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 12: Next Steps ==================== -->
+<div class="slide" id="s12">
+  <div class="section-label">Next Steps</div>
+  <h2>Working Together</h2>
+  <div class="two-col">
+    <div>
+      <h3 style="color: #3fb950;">Collaboration Opportunities</h3>
+      <ul class="green">
+        <li><strong style="color: #f0f6fc;">OpenStack upgrade workflow PoC</strong><br/><span style="font-size: 15px; color: #8b949e;">Build a real upgrade workflow definition using Cloud Agents + OpenStack MCP tools</span></li>
+        <li><strong style="color: #f0f6fc;">Keystone credential integration</strong><br/><span style="font-size: 15px; color: #8b949e;">Per-user credential derivation for sandbox steps</span></li>
+        <li><strong style="color: #f0f6fc;">Evaluation framework</strong><br/><span style="font-size: 15px; color: #8b949e;">Standardized eval pipeline for customers running local models (Core42 use case)</span></li>
+        <li><strong style="color: #f0f6fc;">OpenShell hardening</strong><br/><span style="font-size: 15px; color: #8b949e;">Joint testing of Landlock/seccomp sandbox on RHEL</span></li>
+      </ul>
+    </div>
+    <div>
+      <h3 style="color: #58a6ff;">Key Takeaways</h3>
+      <ul>
+        <li><strong style="color: #f0f6fc;">Framework, not monolith</strong> &mdash; adopt what you need</li>
+        <li><strong style="color: #f0f6fc;">Your use cases shaped this</strong> &mdash; the June meetings directly informed the design</li>
+        <li><strong style="color: #f0f6fc;">Same HTTP contract</strong> &mdash; swap runtimes (Goose &rarr; Pydantic AI &rarr; future) without changing workflows</li>
+        <li><strong style="color: #f0f6fc;">Server-side + client-side coexist</strong> &mdash; we're not replacing Goose, we're making server-side workflows compelling</li>
+      </ul>
+      <div class="card yellow" style="margin-top: 24px;">
+        <h3 style="color: #d29922;">Timeline</h3>
+        <p style="margin-bottom: 0;"><strong>Q3 2026</strong> &mdash; Cloud Agents GA-ready. Skills shipping. MCP at LCORE layer.<br/>
+        <strong>Q4 2026</strong> &mdash; CLI, MCP registry, A2A protocol, OpenShell integration.<br/>
+        <strong>Your RHOSO 19 target</strong> &mdash; server-side workflows available for the upgrade agent.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== Navigation ==================== -->
+<div class="nav">
+  <span onclick="prev()">&larr; Prev</span>
+  <span id="counter">1 / 12</span>
+  <span onclick="next()">Next &rarr;</span>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function show(n) {
+    slides[current].classList.remove('active');
+    current = Math.max(0, Math.min(n, slides.length - 1));
+    slides[current].classList.add('active');
+    document.getElementById('counter').textContent = `${current + 1} / ${slides.length}`;
+  }
+
+  function next() { show(current + 1); }
+  function prev() { show(current - 1); }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); prev(); }
+    if (e.key === 'Home') { e.preventDefault(); show(0); }
+    if (e.key === 'End') { e.preventDefault(); show(slides.length - 1); }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.nav')) return;
+    if (e.clientX > window.innerWidth / 2) next();
+    else prev();
+  });
+</script>
+
+</body>
+</html>

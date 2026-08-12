@@ -1,0 +1,9 @@
+# Kind cluster config with host Podman socket mount for OpenShell gateway DooD
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cloud-agents
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /run/podman/podman.sock
+        containerPath: /run/podman/podman.sock

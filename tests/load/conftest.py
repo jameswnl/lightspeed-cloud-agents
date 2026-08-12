@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 from tests.load.helpers import LatencyTracker, ResponseCollector, WorkflowFactory
 
@@ -83,7 +83,7 @@ def rate_limited_app(mock_temporal_client: Any) -> FastAPI:
 
     Rate: 10 req/s, burst: 20. Allows testing rate limiter under load.
     """
-    from cloud_agents.workflow.rate_limiter import RateLimitMiddleware
+    from cloud_agents.runtime.rate_limiter import RateLimitMiddleware
 
     app = FastAPI()
     router = build_temporal_router(mock_temporal_client)

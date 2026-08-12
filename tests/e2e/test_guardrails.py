@@ -98,7 +98,7 @@ class TestPodmanGuardrails:
         """Orphan reconciliation finds and destroys containers with runner label."""
         from podman import PodmanClient
 
-        from cloud_agents.workflow.temporal_entrypoint import reconcile_orphaned_sandboxes
+        from cloud_agents.workflow.executor.temporal_entrypoint import reconcile_orphaned_sandboxes
 
         name = "guardrail-orphan-test"
         await spawner.spawn(

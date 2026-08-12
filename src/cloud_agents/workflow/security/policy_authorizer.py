@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-from cloud_agents.workflow.authorization import (
+from cloud_agents.workflow.security.authorization import (
     AuthzDecision,
     CallerIdentity,
     WorkflowAction,

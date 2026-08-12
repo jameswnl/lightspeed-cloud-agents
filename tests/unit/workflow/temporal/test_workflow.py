@@ -11,16 +11,16 @@ import pytest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from cloud_agents.workflow.temporal_activities import (
+from cloud_agents.workflow.executor.temporal_activities import (
     build_escalation_activity,
     run_sandbox_step,
 )
-from cloud_agents.workflow.temporal_models import (
+from cloud_agents.workflow.core.models import (
     ProviderConfig,
     WorkflowInput,
     WorkflowStatus,
 )
-from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
 
 def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowInput:
@@ -723,7 +723,7 @@ class TestTranscriptStorage:
         wf = AgentWorkflow()
 
         # Simulate what the workflow does: process an activity result with transcript
-        from cloud_agents.workflow.temporal_models import StepTranscript
+        from cloud_agents.workflow.core.models import StepTranscript
 
         # Direct test of transcript storage logic
         transcript_data = {
@@ -782,8 +782,8 @@ class TestTranscriptStorage:
         wf = AgentWorkflow()
 
         # Store an empty transcript for a failed step (what the workflow does on ActivityError)
-        from cloud_agents.workflow.temporal_models import StepResult as StepResultModel
-        from cloud_agents.workflow.temporal_models import StepTranscript
+        from cloud_agents.workflow.core.models import StepResult as StepResultModel
+        from cloud_agents.workflow.core.models import StepTranscript
 
         wf._step_transcripts["r1"] = StepTranscript(step_name="failing_step").model_dump()
         wf._steps["r1"] = StepResultModel(status="failed", error="retries exhausted")
@@ -796,7 +796,7 @@ class TestTranscriptStorage:
     @pytest.mark.asyncio
     async def test_transcript_truncated_for_large_events(self) -> None:
         """Large transcripts are truncated before storage in workflow state."""
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         events = [
             TranscriptEvent(

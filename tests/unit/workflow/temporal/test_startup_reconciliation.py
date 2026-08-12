@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cloud_agents.workflow.temporal_entrypoint import reconcile_orphaned_sandboxes
+from cloud_agents.workflow.executor.temporal_entrypoint import reconcile_orphaned_sandboxes
 
 
 class TestStartupReconciliation:

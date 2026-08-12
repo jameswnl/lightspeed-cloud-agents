@@ -1,0 +1,25 @@
+# OpenShell gateway overlay for Cloud Agents Podman deployment
+services:
+  openshell-gateway:
+    image: ghcr.io/nvidia/openshell/gateway:latest
+    restart: unless-stopped
+    command: []
+    user: "0"
+    ports:
+      - "127.0.0.1:17670:8080"
+      - "127.0.0.1:17671:8081"
+    volumes:
+      - ${PODMAN_SOCK:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
+      - openshell-data:/var/lib/openshell
+      - type: bind
+        source: ./gateway.toml
+        target: /etc/openshell/gateway.toml
+        read_only: true
+    environment:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
+      XDG_DATA_HOME: /var/lib/openshell
+      HOME: /var/lib/openshell
+
+volumes:
+  openshell-data:

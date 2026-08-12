@@ -23,7 +23,7 @@ from pytest_mock import MockerFixture
 
 def _make_stored_definition(name: str = "nightly-report") -> Any:
     """Create a mock StoredDefinition for testing."""
-    from cloud_agents.workflow.definition import WorkflowDefinition
+    from cloud_agents.workflow.core.definition import WorkflowDefinition
 
     defn = WorkflowDefinition.model_validate(
         {
@@ -62,8 +62,8 @@ def _build_schedule_app(
     content_policy: Any = None,
 ) -> FastAPI:
     """Build a FastAPI app with the schedule router for testing."""
-    from cloud_agents.workflow.definition_store import DefinitionStore
-    from cloud_agents.workflow.schedule_trigger import build_schedule_router
+    from cloud_agents.workflow.core.definition_store import DefinitionStore
+    from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
     store = definition_store or DefinitionStore()
     app = FastAPI()
@@ -127,7 +127,7 @@ class TestScheduleModels:
 
     def test_valid_schedule_spec(self) -> None:
         """Valid ScheduleSpec with defaults."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="0 */6 * * *")
         assert spec.cron == "0 */6 * * *"
@@ -137,7 +137,7 @@ class TestScheduleModels:
 
     def test_schedule_spec_custom_values(self) -> None:
         """ScheduleSpec with custom values."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(
             cron="0 0 * * 1",
@@ -151,8 +151,8 @@ class TestScheduleModels:
 
     def test_schedule_input_defaults(self) -> None:
         """ScheduleInput generates schedule_id when not provided."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleInput
-        from cloud_agents.workflow.temporal_models import ProviderConfig
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleInput
+        from cloud_agents.workflow.core.models import ProviderConfig
 
         inp = ScheduleInput(
             workflow_name="test-wf",
@@ -168,8 +168,8 @@ class TestScheduleModels:
 
     def test_schedule_input_explicit_id(self) -> None:
         """ScheduleInput uses provided schedule_id."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleInput
-        from cloud_agents.workflow.temporal_models import ProviderConfig
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleInput
+        from cloud_agents.workflow.core.models import ProviderConfig
 
         inp = ScheduleInput(
             schedule_id="my-schedule",
@@ -183,7 +183,7 @@ class TestScheduleModels:
 
     def test_schedule_info_model(self) -> None:
         """ScheduleInfo holds schedule details."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleInfo
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleInfo
 
         info = ScheduleInfo(
             schedule_id="sched-1",
@@ -208,28 +208,28 @@ class TestCronValidation:
 
     def test_valid_standard_cron(self) -> None:
         """Standard 5-field cron expression accepted."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="0 */6 * * *")
         assert spec.cron == "0 */6 * * *"
 
     def test_valid_at_daily(self) -> None:
         """Temporal-supported @daily shorthand accepted."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="@daily")
         assert spec.cron == "@daily"
 
     def test_valid_at_hourly(self) -> None:
         """Temporal-supported @hourly shorthand accepted."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="@hourly")
         assert spec.cron == "@hourly"
 
     def test_valid_at_every_with_interval(self) -> None:
         """@every with interval argument accepted."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="@every 5m")
         assert spec.cron == "@every 5m"
@@ -238,7 +238,7 @@ class TestCronValidation:
         """Bare @every without interval argument rejected."""
         from pydantic import ValidationError
 
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         with pytest.raises(ValidationError, match="@every requires an interval"):
             ScheduleSpec(cron="@every")
@@ -247,7 +247,7 @@ class TestCronValidation:
         """Empty string cron expression rejected."""
         from pydantic import ValidationError
 
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         with pytest.raises(ValidationError, match="cron"):
             ScheduleSpec(cron="")
@@ -256,14 +256,14 @@ class TestCronValidation:
         """Garbage string rejected."""
         from pydantic import ValidationError
 
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         with pytest.raises(ValidationError, match="cron"):
             ScheduleSpec(cron="not a cron")
 
     def test_feb_30_accepted(self) -> None:
         """Feb 30 edge case accepted --- let Temporal handle it."""
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         spec = ScheduleSpec(cron="0 0 30 2 *")
         assert spec.cron == "0 0 30 2 *"
@@ -272,7 +272,7 @@ class TestCronValidation:
         """Six-field (seconds) cron rejected --- only 5-field supported."""
         from pydantic import ValidationError
 
-        from cloud_agents.workflow.schedule_trigger import ScheduleSpec
+        from cloud_agents.workflow.triggers.schedule_trigger import ScheduleSpec
 
         with pytest.raises(ValidationError, match="cron"):
             ScheduleSpec(cron="0 0 0 * * *")
@@ -297,7 +297,7 @@ class TestScheduleCreateEndpoint:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -363,7 +363,7 @@ class TestScheduleCreateEndpoint:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         input_with_id = {
             **SAMPLE_SCHEDULE_INPUT,
@@ -387,7 +387,7 @@ class TestScheduleCreateEndpoint:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mock_emit = mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -413,7 +413,7 @@ class TestScheduleCreateEndpoint:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mock_emit = mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -464,7 +464,7 @@ class TestScheduleCreateEndpoint:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -579,7 +579,7 @@ class TestScheduleDeleteEndpoint:
         mock_temporal = mocker.MagicMock()
         mock_temporal.get_schedule_handle = mocker.MagicMock(return_value=mock_handle)
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal)
         client = TestClient(app, raise_server_exceptions=False)
@@ -600,7 +600,7 @@ class TestScheduleDeleteEndpoint:
         mock_temporal = mocker.MagicMock()
         mock_temporal.get_schedule_handle = mocker.MagicMock(return_value=mock_handle)
 
-        mock_emit = mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         app = _build_schedule_app(mock_temporal)
         client = TestClient(app, raise_server_exceptions=False)
@@ -727,7 +727,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
 
         importlib.reload(ep_mod)
 
@@ -748,7 +748,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
 
         importlib.reload(ep_mod)
 
@@ -779,7 +779,7 @@ class TestScheduleTriggerEntrypointWiring:
         monkeypatch.setenv("SCHEDULE_TRIGGER_ENABLED", "true")
 
         mock_build = mocker.patch(
-            "cloud_agents.workflow.schedule_trigger.build_schedule_router",
+            "cloud_agents.workflow.triggers.schedule_trigger.build_schedule_router",
         )
         # Return a minimal router so include_router doesn't fail
         from fastapi import APIRouter
@@ -788,7 +788,7 @@ class TestScheduleTriggerEntrypointWiring:
 
         import importlib
 
-        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
 
         importlib.reload(ep_mod)
         ep_mod.build_temporal_app()
@@ -817,9 +817,9 @@ class TestScheduleTriggerMetrics:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
-        from cloud_agents.workflow.temporal_metrics import ls_schedule_triggers_total
+        from cloud_agents.workflow.executor.temporal_metrics import ls_schedule_triggers_total
 
         before = ls_schedule_triggers_total.labels(
             workflow_name="nightly-report", status="created"
@@ -845,9 +845,9 @@ class TestScheduleTriggerMetrics:
         mock_temporal = mocker.MagicMock()
         mock_temporal.get_schedule_handle = mocker.MagicMock(return_value=mock_handle)
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
-        from cloud_agents.workflow.temporal_metrics import ls_schedule_triggers_total
+        from cloud_agents.workflow.executor.temporal_metrics import ls_schedule_triggers_total
 
         before = ls_schedule_triggers_total.labels(
             workflow_name="unknown", status="deleted"
@@ -873,7 +873,7 @@ class TestScheduleAuthorizationActions:
 
     def test_schedule_actions_exist(self) -> None:
         """Schedule-specific actions exist in WorkflowAction enum."""
-        from cloud_agents.workflow.authorization import WorkflowAction
+        from cloud_agents.workflow.security.authorization import WorkflowAction
 
         assert hasattr(WorkflowAction, "SCHEDULE_CREATE")
         assert hasattr(WorkflowAction, "SCHEDULE_VIEW")
@@ -883,7 +883,7 @@ class TestScheduleAuthorizationActions:
 
     def test_schedule_actions_are_strings(self) -> None:
         """Schedule actions have string values."""
-        from cloud_agents.workflow.authorization import WorkflowAction
+        from cloud_agents.workflow.security.authorization import WorkflowAction
 
         assert WorkflowAction.SCHEDULE_CREATE.value == "schedule_create"
         assert WorkflowAction.SCHEDULE_VIEW.value == "schedule_view"
@@ -902,7 +902,7 @@ class TestScheduleAuditEventTypes:
 
     def test_schedule_event_types_in_literal(self) -> None:
         """Schedule event types are valid AuditEventType values."""
-        from cloud_agents.workflow.audit import AuditEvent
+        from cloud_agents.runtime.audit import AuditEvent
 
         # These should not raise ValidationError
         AuditEvent(
@@ -929,7 +929,7 @@ class TestScheduleRBACEnforcement:
 
     def _make_deny_authorizer(self, mocker: MockerFixture) -> Any:
         """Create an authorizer that denies all actions."""
-        from cloud_agents.workflow.authorization import AuthzDecision
+        from cloud_agents.workflow.security.authorization import AuthzDecision
 
         authz = mocker.AsyncMock()
         authz.authorize = mocker.AsyncMock(
@@ -1046,15 +1046,15 @@ class TestScheduleContentPolicy:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         # Mock validate_definition to return errors
         mocker.patch(
-            "cloud_agents.workflow.temporal_validation.validate_definition",
+            "cloud_agents.workflow.core.validation.validate_definition",
             return_value=["content policy: prompt too long"],
         )
 
-        from cloud_agents.workflow.content_policy import ContentPolicy
+        from cloud_agents.workflow.security.content_policy import ContentPolicy
 
         policy = ContentPolicy(max_prompt_length=5)
 
@@ -1079,7 +1079,7 @@ class TestScheduleContentPolicy:
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
-        mocker.patch("cloud_agents.workflow.schedule_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.schedule_trigger.emit_audit")
 
         # No content_policy passed --- should skip validation
         app = _build_schedule_app(mock_temporal, definition_store=store)

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from cloud_agents.workflow.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 
 
 class TestProviderCircuitBreaker:

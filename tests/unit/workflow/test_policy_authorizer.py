@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cloud_agents.workflow.authorization import (
+from cloud_agents.workflow.security.authorization import (
     CallerIdentity,
     WorkflowAction,
     WorkflowResource,
 )
-from cloud_agents.workflow.policy_authorizer import PolicyFileAuthorizer
+from cloud_agents.workflow.security.policy_authorizer import PolicyFileAuthorizer
 
 
 def _write_policy(tmp_path: Path, data: dict) -> str:

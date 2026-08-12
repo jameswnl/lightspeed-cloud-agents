@@ -17,7 +17,7 @@ from cloud_agents.workflow.cli_session import (
     CLISessionLauncher,
     CLISessionStatus,
 )
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 
 @pytest.fixture
@@ -253,7 +253,7 @@ class TestCLISessionAuthz:
 
     def _make_deny_authorizer(self) -> Any:
         """Create an authorizer that denies all requests."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             CallerIdentity,
             WorkflowAction,
@@ -468,7 +468,7 @@ class TestPostCLISessionMessage:
         self, mock_temporal: Any, launcher: CLISessionLauncher, spawner: AsyncMock
     ) -> None:
         """POST message with deny-all authorizer returns 403."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             CallerIdentity,
             WorkflowAction,
@@ -640,7 +640,7 @@ class TestMessageSizeLimits:
         sanitization while the raw input is arbitrarily large. The early guard
         must reject raw inputs exceeding MAX_MESSAGE_BYTES * 4 before sanitization.
         """
-        from cloud_agents.workflow.temporal_api import MAX_MESSAGE_BYTES
+        from cloud_agents.workflow.executor.temporal_api import MAX_MESSAGE_BYTES
 
         # Build a payload that is huge raw but would be tiny after stripping
         # control chars. 4x the max size + 1 to exceed the raw guard.
@@ -806,7 +806,7 @@ class TestGetCLISessionOutput:
         self, mock_temporal: Any, launcher: CLISessionLauncher, spawner: AsyncMock
     ) -> None:
         """GET output with deny-all authorizer returns 403."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             WorkflowAuthorizer,
         )

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from cloud_agents.workflow.temporal_activities import (
+from cloud_agents.workflow.executor.temporal_activities import (
     _truncate_heartbeat_payload,
     compute_pod_name,
     run_sandbox_step,
@@ -51,7 +51,7 @@ def _mock_http_success(mocker: MockerFixture) -> MagicMock:
     }
 
     mock_http = mocker.patch(
-        "cloud_agents.workflow.temporal_activities.httpx.AsyncClient",
+        "cloud_agents.workflow.executor.temporal_activities.httpx.AsyncClient",
     )
     mock_client_instance = mocker.MagicMock(
         post=mocker.AsyncMock(return_value=mock_response),
@@ -99,7 +99,7 @@ class TestProgressStreamingWithOpenShell:
         mocker.patch.object(spawner, "stream_progress", side_effect=mock_stream_progress)
 
         mock_heartbeat = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.activity.heartbeat"
+            "cloud_agents.workflow.executor.temporal_activities.activity.heartbeat"
         )
         _mock_http_success(mocker)
 
@@ -138,7 +138,7 @@ class TestProgressStreamingWithOpenShell:
         mocker.patch.object(spawner, "stream_progress", side_effect=mock_stream_progress)
 
         mock_heartbeat = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.activity.heartbeat"
+            "cloud_agents.workflow.executor.temporal_activities.activity.heartbeat"
         )
         _mock_http_success(mocker)
 
@@ -181,7 +181,7 @@ class TestProgressStreamingWithOpenShell:
 
         mocker.patch.object(spawner, "stream_progress", side_effect=slow_stream_progress)
 
-        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+        mocker.patch("cloud_agents.workflow.executor.temporal_activities.activity.heartbeat")
         _mock_http_success(mocker)
 
         result = await run_sandbox_step(_make_step_input(), spawner=spawner)
@@ -205,7 +205,7 @@ class TestGracefulDegradation:
         mock_spawner.wait_ready.return_value = True
 
         mock_heartbeat = mocker.patch(
-            "cloud_agents.workflow.temporal_activities.activity.heartbeat"
+            "cloud_agents.workflow.executor.temporal_activities.activity.heartbeat"
         )
         _mock_http_success(mocker)
 
@@ -232,7 +232,7 @@ class TestGracefulDegradation:
         mock_spawner.wait_ready.return_value = True
 
         _mock_http_success(mocker)
-        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+        mocker.patch("cloud_agents.workflow.executor.temporal_activities.activity.heartbeat")
 
         result = await run_sandbox_step(_make_step_input(), spawner=mock_spawner)
 
@@ -261,7 +261,7 @@ class TestProgressStreamError:
 
         mocker.patch.object(spawner, "stream_progress", side_effect=failing_stream_progress)
 
-        mocker.patch("cloud_agents.workflow.temporal_activities.activity.heartbeat")
+        mocker.patch("cloud_agents.workflow.executor.temporal_activities.activity.heartbeat")
         _mock_http_success(mocker)
 
         result = await run_sandbox_step(_make_step_input(), spawner=spawner)

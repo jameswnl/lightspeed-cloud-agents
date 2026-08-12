@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cloud_agents.workflow.temporal_models import StepResult
+from cloud_agents.workflow.core.models import StepResult
 
 
 def build_sandbox_context(

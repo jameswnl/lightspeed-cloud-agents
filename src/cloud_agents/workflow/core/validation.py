@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from cloud_agents.workflow.content_policy import ContentPolicy, evaluate_content_policy
+from cloud_agents.workflow.security.content_policy import ContentPolicy, evaluate_content_policy
 
 
 def _validate_schema(

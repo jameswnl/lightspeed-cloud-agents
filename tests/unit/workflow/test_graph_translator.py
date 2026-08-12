@@ -23,7 +23,7 @@ class TestGraphTranslator:
 
     def test_single_agent_step(self) -> None:
         """Single agent step produces a graph with start → agent → end."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -40,7 +40,7 @@ class TestGraphTranslator:
 
     def test_two_sequential_steps(self) -> None:
         """Two agent steps produce start → A → B → end."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -62,7 +62,7 @@ class TestGraphTranslator:
 
     def test_approval_step_included(self) -> None:
         """Human-approval step translates to a graph node."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -84,7 +84,7 @@ class TestGraphTranslator:
 
     def test_state_has_workflow_id(self) -> None:
         """Workflow state carries the workflow_id."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -100,7 +100,7 @@ class TestGraphTranslator:
 
     def test_state_has_step_definitions(self) -> None:
         """Workflow state carries the step definitions for runtime access."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -120,14 +120,14 @@ class TestGraphTranslator:
     ) -> None:
         """Agent step node calls step_runner.run_step during execution."""
         mock_run_step = mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={
                 "status": "completed",
                 "output": {"summary": "all good"},
             },
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -152,7 +152,7 @@ class TestGraphTranslator:
     @pytest.mark.asyncio
     async def test_auto_approve_completes(self, mocker: MockerFixture) -> None:
         """Approval step with auto_approve=True completes without pausing."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -177,7 +177,7 @@ class TestGraphTranslator:
     @pytest.mark.asyncio
     async def test_approval_signals_pause(self, mocker: MockerFixture) -> None:
         """Approval step without auto_approve signals pause."""
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -200,11 +200,11 @@ class TestGraphTranslator:
     ) -> None:
         """Agent step stores results under output_key, not step name."""
         mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={"status": "completed", "output": {"found": "bug"}},
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -229,15 +229,15 @@ class TestGraphTranslator:
     async def test_condition_false_skips_step(self, mocker: MockerFixture) -> None:
         """Step with false condition is skipped."""
         mock_run = mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={"status": "completed", "output": {}},
         )
         mocker.patch(
-            "cloud_agents.workflow.graph_translator.evaluate_condition",
+            "cloud_agents.workflow.executor.graph_translator.evaluate_condition",
             return_value=False,
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -263,15 +263,15 @@ class TestGraphTranslator:
     async def test_condition_true_runs_step(self, mocker: MockerFixture) -> None:
         """Step with true condition runs normally."""
         mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={"status": "completed", "output": {"ok": True}},
         )
         mocker.patch(
-            "cloud_agents.workflow.graph_translator.evaluate_condition",
+            "cloud_agents.workflow.executor.graph_translator.evaluate_condition",
             return_value=True,
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -298,11 +298,11 @@ class TestGraphTranslator:
     ) -> None:
         """Steps after approval gate are skipped when workflow is paused."""
         mock_run = mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={"status": "completed", "output": {}},
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -336,11 +336,11 @@ class TestGraphTranslator:
     ) -> None:
         """Condition evaluation works end-to-end without mocking evaluate_condition."""
         mocker.patch(
-            "cloud_agents.workflow.graph_translator.run_step",
+            "cloud_agents.workflow.executor.graph_translator.run_step",
             return_value={"status": "completed", "output": {"severity": "low"}},
         )
 
-        from cloud_agents.workflow.graph_translator import build_graph
+        from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
             {
@@ -372,7 +372,7 @@ class TestGraphTranslator:
         import logging
 
         with caplog.at_level(logging.WARNING):
-            from cloud_agents.workflow.graph_translator import build_graph
+            from cloud_agents.workflow.executor.graph_translator import build_graph
 
             defn = _make_definition([
                 {
@@ -390,7 +390,7 @@ class TestGraphTranslator:
 
     def test_no_temporal_imports(self) -> None:
         """graph_translator module has zero temporalio imports."""
-        from cloud_agents.workflow import graph_translator as mod
+        from cloud_agents.workflow.executor import graph_translator as mod
 
         source = open(mod.__file__).read()
         assert "from temporalio" not in source

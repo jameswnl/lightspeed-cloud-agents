@@ -43,7 +43,7 @@ Recommended fix: record provider failures for exception paths that represent pro
   - `src/cloud_agents/runtime/auth.py`
   - `src/cloud_agents/workflow/authorization.py`
   - `src/cloud_agents/workflow/policy_authorizer.py`
-  - `src/cloud_agents/workflow/circuit_breaker.py`
+  - `src/cloud_agents/runtime/circuit_breaker.py`
   - `src/cloud_agents/workflow/temporal_api.py`
   - `src/cloud_agents/workflow/temporal_activities.py`
   - `src/cloud_agents/workflow/temporal_workflow.py`

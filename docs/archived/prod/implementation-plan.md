@@ -108,7 +108,7 @@ Workflow authors can reference K8s Secrets in `secret_headers`. To prevent arbit
 
 **Files:**
 - `src/agents/workflow/temporal_activities.py` — validate secret references against allowlist before spawning
-- `src/agents/workflow/audit.py` — emit audit event on secret mount
+- `src/cloud_agents/runtime/audit.py` — emit audit event on secret mount
 
 ---
 
@@ -145,7 +145,7 @@ Switch to structured JSON logging. Add audit event model for security-relevant a
 
 **Files:**
 - `src/agents/workflow/temporal_entrypoint.py` — configure `structlog` in lifespan based on `LOG_FORMAT` env var
-- `src/agents/workflow/audit.py` (new) — `AuditEvent` Pydantic model + `emit_audit()` helper:
+- `src/cloud_agents/runtime/audit.py` (new) — `AuditEvent` Pydantic model + `emit_audit()` helper:
   ```python
   class AuditEvent(BaseModel):
       event_type: str  # workflow_started, step_approved, sandbox_spawned, etc.

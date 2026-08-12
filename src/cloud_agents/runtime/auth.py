@@ -18,8 +18,8 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from cloud_agents.workflow.audit import emit_audit
-from cloud_agents.workflow.authorization import CallerIdentity
+from cloud_agents.runtime.audit import emit_audit
+from cloud_agents.workflow.security.authorization import CallerIdentity
 
 logger = logging.getLogger(__name__)
 

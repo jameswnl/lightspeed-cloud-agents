@@ -124,7 +124,7 @@ Track recent sandbox step failures. After N consecutive failures in M seconds, f
 
 ### Code changes
 
-**`src/cloud_agents/workflow/circuit_breaker.py`** (new):
+**`src/cloud_agents/runtime/circuit_breaker.py`** (new):
 ```python
 class ProviderCircuitBreaker:
     """Per-provider circuit breaker. Tracks consecutive failures keyed by provider name.

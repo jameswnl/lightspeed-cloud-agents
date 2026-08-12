@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cloud_agents.workflow.definition import WorkflowDefinition
-from cloud_agents.workflow.temporal_validation import validate_definition
+from cloud_agents.workflow.core.definition import WorkflowDefinition
+from cloud_agents.workflow.core.validation import validate_definition
 
 EXAMPLES_DIR = Path(__file__).parents[3] / "examples" / "workflow-definitions"
 

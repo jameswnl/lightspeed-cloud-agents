@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from cloud_agents.workflow.definition import WorkflowDefinition
+from cloud_agents.workflow.core.definition import WorkflowDefinition
 
 SCHEMA_PATH = Path(__file__).parent / "workflow-definition.schema.json"
 

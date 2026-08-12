@@ -15,22 +15,22 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from cloud_agents.workflow.content_policy import ContentPolicy
+    from cloud_agents.workflow.security.content_policy import ContentPolicy
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from temporalio.client import Client, WorkflowExecutionStatus
 
-from cloud_agents.workflow.audit import emit_audit
-from cloud_agents.workflow.definition_store import DefinitionStore
-from cloud_agents.workflow.temporal_models import (
+from cloud_agents.runtime.audit import emit_audit
+from cloud_agents.workflow.core.definition_store import DefinitionStore
+from cloud_agents.workflow.core.models import (
     MCPServerConfig,
     ProviderConfig,
     WorkflowInput,
 )
-from cloud_agents.workflow.temporal_worker import DEFAULT_TASK_QUEUE
-from cloud_agents.workflow.temporal_workflow import AgentWorkflow
+from cloud_agents.workflow.executor.temporal_worker import DEFAULT_TASK_QUEUE
+from cloud_agents.workflow.executor.temporal_workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ def build_temporal_router(
     Returns:
         APIRouter with workflow endpoints.
     """
-    from cloud_agents.workflow.authorization import (
+    from cloud_agents.workflow.security.authorization import (
         NoopAuthorizer,
         WorkflowAction,
         WorkflowResource,
@@ -301,7 +301,7 @@ def build_temporal_router(
                 detail="Provider configuration is required",
             )
 
-        from cloud_agents.workflow.temporal_validation import validate_definition
+        from cloud_agents.workflow.core.validation import validate_definition
 
         validation_errors = validate_definition(definition, content_policy=content_policy)
         if validation_errors:
@@ -326,7 +326,7 @@ def build_temporal_router(
 
         workflow_id = request.workflow_id or f"wf-{uuid.uuid4().hex[:12]}"
 
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             WorkflowAuthzContext,
             parse_namespace_from_sa_username,
         )
@@ -401,8 +401,8 @@ def build_temporal_router(
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
-            from cloud_agents.workflow.definition import WorkflowDefinition
-            from cloud_agents.workflow.temporal_validation import validate_definition
+            from cloud_agents.workflow.core.definition import WorkflowDefinition
+            from cloud_agents.workflow.core.validation import validate_definition
 
             validation_errors = validate_definition(body, content_policy=content_policy)
             if validation_errors:
@@ -490,7 +490,7 @@ def build_temporal_router(
 
         from datetime import UTC, datetime
 
-        from cloud_agents.workflow.authorization import ApproverInfo
+        from cloud_agents.workflow.security.authorization import ApproverInfo
 
         approver = ApproverInfo(
             username=caller.username,
@@ -564,7 +564,7 @@ def build_temporal_router(
                 detail=f"Workflow '{workflow_id}' not found or not queryable: {exc}",
             ) from exc
 
-        from cloud_agents.workflow.escalation import (
+        from cloud_agents.workflow.notifiers.escalation import (
             EscalationPackage,
             serialize_handoff_context,
         )

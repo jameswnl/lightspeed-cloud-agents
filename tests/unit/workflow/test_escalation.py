@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cloud_agents.workflow.escalation import (
+from cloud_agents.workflow.notifiers.escalation import (
     CLIHandoffPackager,
     EscalationPackage,
     JiraPackager,
@@ -98,7 +98,7 @@ class TestWebhookPackager:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.notifiers.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -115,7 +115,7 @@ class TestWebhookPackager:
     @pytest.mark.asyncio
     async def test_failure_does_not_raise(self) -> None:
         """Test that webhook failures are logged, not raised."""
-        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.notifiers.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("down"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -135,7 +135,7 @@ class TestJiraPackager:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("cloud_agents.workflow.escalation.httpx.AsyncClient") as mock_cls:
+        with patch("cloud_agents.workflow.notifiers.escalation.httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -300,7 +300,7 @@ class TestCLIHandoffPackager:
         """CLIHandoffPackager logs the context file path and launch command."""
         import logging
 
-        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.escalation"):
+        with caplog.at_level(logging.INFO, logger="cloud_agents.workflow.notifiers.escalation"):
             packager = CLIHandoffPackager(output_dir=str(tmp_path))
             pkg = _make_enriched_package()
             await packager.package(pkg)
@@ -569,8 +569,8 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_pulls_full_transcripts(self) -> None:
         """build_escalation_activity pulls full transcripts from store."""
-        from cloud_agents.workflow.temporal_activities import build_escalation_activity
-        from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
         mock_store = AsyncMock()
         full_transcript = StepTranscript(
@@ -590,7 +590,7 @@ class TestEscalationWithTranscriptStore:
         mock_store.get = AsyncMock(return_value=full_transcript)
 
         with patch(
-            "cloud_agents.workflow.temporal_activities.LogPackager",
+            "cloud_agents.workflow.executor.temporal_activities.LogPackager",
         ) as mock_packager_cls:
             mock_packager = AsyncMock()
             mock_packager_cls.return_value = mock_packager
@@ -609,7 +609,7 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_store_failure_non_fatal(self) -> None:
         """Transcript store failure in escalation is non-fatal."""
-        from cloud_agents.workflow.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
 
         mock_store = AsyncMock()
         mock_store.get = AsyncMock(side_effect=RuntimeError("DB down"))
@@ -625,7 +625,7 @@ class TestEscalationWithTranscriptStore:
     @pytest.mark.asyncio
     async def test_escalation_activity_no_store_still_works(self) -> None:
         """Escalation works normally without transcript store."""
-        from cloud_agents.workflow.temporal_activities import build_escalation_activity
+        from cloud_agents.workflow.executor.temporal_activities import build_escalation_activity
 
         result = await build_escalation_activity(
             {"r1": {"status": "failed", "error": "timeout"}},

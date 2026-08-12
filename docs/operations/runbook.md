@@ -15,7 +15,7 @@ Procedures for diagnosing and recovering from common failure scenarios. Every se
 
 ## 1. Health Check Failures
 
-The workflow runner exposes three probe endpoints (defined in `src/cloud_agents/workflow/temporal_entrypoint.py`):
+The workflow runner exposes three probe endpoints (defined in `src/cloud_agents/workflow/executor/temporal_entrypoint.py`):
 
 | Endpoint | Purpose | Healthy response |
 |----------|---------|------------------|
@@ -67,7 +67,7 @@ kubectl logs deploy/workflow-runner --previous
 
 ## 2. Orphaned Sandbox Containers
 
-On startup the runner scans for containers labelled `spawned-by=workflow-runner` and destroys them (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/temporal_entrypoint.py`). If this cleanup fails or sandboxes accumulate between restarts, you have orphans.
+On startup the runner scans for containers labelled `spawned-by=workflow-runner` and destroys them (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/executor/temporal_entrypoint.py`). If this cleanup fails or sandboxes accumulate between restarts, you have orphans.
 
 **Metrics**:
 - `ls_sandbox_orphans_cleaned_total` -- incremented when orphans are destroyed on startup
@@ -181,7 +181,7 @@ tctl workflow cancel -w <workflow_id>
 
 ## 4. LLM Provider Errors
 
-The circuit breaker (`src/cloud_agents/workflow/circuit_breaker.py`) tracks consecutive failures per LLM provider. After `CIRCUIT_BREAKER_THRESHOLD` (default: 5) consecutive failures, it opens and fails fast for `CIRCUIT_BREAKER_RESET_SECONDS` (default: 60).
+The circuit breaker (`src/cloud_agents/runtime/circuit_breaker.py`) tracks consecutive failures per LLM provider. After `CIRCUIT_BREAKER_THRESHOLD` (default: 5) consecutive failures, it opens and fails fast for `CIRCUIT_BREAKER_RESET_SECONDS` (default: 60).
 
 **Metrics**:
 - `ls_workflow_step_runs_total{status="failed"}` -- step failures (all causes)
@@ -269,7 +269,7 @@ Relevant env vars:
 
 ## 6. Rate Limiting Issues
 
-Per-caller rate limiting is controlled by the `RateLimitMiddleware` (in `src/cloud_agents/workflow/rate_limiter.py`).
+Per-caller rate limiting is controlled by the `RateLimitMiddleware` (in `src/cloud_agents/runtime/rate_limiter.py`).
 
 **Metrics**:
 - `ls_rate_limit_rejections_total` -- total rejected requests, labelled by `path`
@@ -298,7 +298,7 @@ kubectl logs deploy/workflow-runner | grep "rate_limit_exceeded"
 
 ## 7. TLS Errors
 
-When `SANDBOX_TLS_MODE=app`, the runner generates ephemeral CA and per-sandbox server certificates (see `src/cloud_agents/workflow/tls.py`). Certs are valid for 10 minutes.
+When `SANDBOX_TLS_MODE=app`, the runner generates ephemeral CA and per-sandbox server certificates (see `src/cloud_agents/workflow/security/tls.py`). Certs are valid for 10 minutes.
 
 **Metrics**:
 - `ls_sandbox_tls_errors_total` -- TLS errors during sandbox communication, labelled by `step_name` and `error_type`

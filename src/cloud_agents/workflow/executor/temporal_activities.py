@@ -21,15 +21,15 @@ from temporalio import activity
 
 from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer
-from cloud_agents.workflow.audit import emit_audit
-from cloud_agents.workflow.circuit_breaker import ProviderCircuitBreaker
-from cloud_agents.workflow.escalation import LogPackager
-from cloud_agents.workflow.notifier import NullNotifier
-from cloud_agents.workflow.redact import redact_secrets
-from cloud_agents.workflow.temporal_context import build_sandbox_context
-from cloud_agents.workflow.temporal_metrics import ls_sandbox_tls_errors_total
-from cloud_agents.workflow.temporal_models import StepResult, StepTranscript, TranscriptEvent
-from cloud_agents.workflow.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
+from cloud_agents.runtime.audit import emit_audit
+from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.workflow.notifiers.escalation import LogPackager
+from cloud_agents.workflow.notifiers.notifier import NullNotifier
+from cloud_agents.workflow.security.redact import redact_secrets
+from cloud_agents.workflow.core.context import build_sandbox_context
+from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_tls_errors_total
+from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
+from cloud_agents.workflow.security.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
 
@@ -595,7 +595,7 @@ async def _run_sandbox_step_inner(
 
     finally:
         if was_cancelled and endpoint:
-            from cloud_agents.workflow.temporal_metrics import ls_sandbox_timeout_total
+            from cloud_agents.workflow.executor.temporal_metrics import ls_sandbox_timeout_total
 
             ls_sandbox_timeout_total.labels(step_name=step_name, reason="cancelled").inc()
             emit_audit(
@@ -622,7 +622,7 @@ async def _run_sandbox_step_inner(
                     )
                 except Exception:
                     logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
-                    from cloud_agents.workflow.temporal_metrics import (
+                    from cloud_agents.workflow.executor.temporal_metrics import (
                         ls_sandbox_cleanup_failures_total,
                     )
 
@@ -652,13 +652,13 @@ async def _send_notification_inner(input: dict[str, Any]) -> dict[str, Any]:
         config = input.get("notifier_config") or {}
         notifier_type = config.get("type", "null")
         if notifier_type == "slack":
-            from cloud_agents.workflow.notifier import SlackNotifier
+            from cloud_agents.workflow.notifiers.notifier import SlackNotifier
 
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             webhook_url = os.environ.get(f"NOTIFIER_SLACK_{ref}_WEBHOOK_URL", "")
             notifier = SlackNotifier(webhook_url=webhook_url)
         elif notifier_type == "webhook":
-            from cloud_agents.workflow.notifier import WebhookNotifier
+            from cloud_agents.workflow.notifiers.notifier import WebhookNotifier
 
             ref = _normalize_config_ref(config.get("config_ref", "DEFAULT"))
             url = os.environ.get(f"NOTIFIER_WEBHOOK_{ref}_URL", "")
@@ -743,20 +743,20 @@ async def _build_escalation_inner(
     try:
         config_type = (escalation_config or {}).get("type", "log")
         if config_type == "webhook":
-            from cloud_agents.workflow.escalation import WebhookPackager
+            from cloud_agents.workflow.notifiers.escalation import WebhookPackager
 
             ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
             url = os.environ.get(f"ESCALATION_WEBHOOK_{ref}_URL", "")
             packager = WebhookPackager(url=url)
         elif config_type == "jira":
-            from cloud_agents.workflow.escalation import JiraPackager
+            from cloud_agents.workflow.notifiers.escalation import JiraPackager
 
             ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
             url = os.environ.get(f"ESCALATION_JIRA_{ref}_URL", "")
             project_key = os.environ.get(f"ESCALATION_JIRA_{ref}_PROJECT_KEY", "")
             packager = JiraPackager(url=url, project_key=project_key)
         elif config_type == "cli_handoff":
-            from cloud_agents.workflow.escalation import CLIHandoffPackager
+            from cloud_agents.workflow.notifiers.escalation import CLIHandoffPackager
 
             ref = _normalize_config_ref((escalation_config or {}).get("config_ref", "DEFAULT"))
             output_dir = os.environ.get(
@@ -769,7 +769,7 @@ async def _build_escalation_inner(
 
         from datetime import datetime
 
-        from cloud_agents.workflow.escalation import EscalationPackage
+        from cloud_agents.workflow.notifiers.escalation import EscalationPackage
 
         # Pull full transcripts from PostgreSQL for escalation context
         step_transcripts: dict[str, Any] | None = None

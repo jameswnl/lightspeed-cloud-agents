@@ -17,12 +17,12 @@ from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 from temporalio.client import WorkflowExecutionStatus
 
-from cloud_agents.workflow.temporal_api import build_temporal_router
+from cloud_agents.workflow.executor.temporal_api import build_temporal_router
 
 
 def _make_status(steps, events):
     """Build a mock WorkflowStatus."""
-    from cloud_agents.workflow.temporal_models import (
+    from cloud_agents.workflow.core.models import (
         StepResult,
         WorkflowEvent,
         WorkflowStatus,

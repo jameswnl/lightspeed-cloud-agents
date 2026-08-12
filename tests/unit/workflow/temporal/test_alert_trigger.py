@@ -59,7 +59,7 @@ class TestAlertmanagerModels:
 
     def test_valid_payload_parses(self) -> None:
         """Valid Alertmanager v4 payload parses correctly."""
-        from cloud_agents.workflow.alert_trigger import AlertmanagerPayload
+        from cloud_agents.workflow.triggers.alert_trigger import AlertmanagerPayload
 
         payload = AlertmanagerPayload.model_validate(SAMPLE_PAYLOAD)
         assert payload.version == "4"
@@ -69,7 +69,7 @@ class TestAlertmanagerModels:
 
     def test_payload_with_missing_optional_fields(self) -> None:
         """Payload with missing optional fields parses with defaults."""
-        from cloud_agents.workflow.alert_trigger import AlertmanagerPayload
+        from cloud_agents.workflow.triggers.alert_trigger import AlertmanagerPayload
 
         minimal = {
             "version": "4",
@@ -97,7 +97,7 @@ class TestAlertmanagerModels:
 
     def test_payload_accepts_extra_fields(self) -> None:
         """Payload with unknown extra fields is accepted (forward compat)."""
-        from cloud_agents.workflow.alert_trigger import AlertmanagerPayload
+        from cloud_agents.workflow.triggers.alert_trigger import AlertmanagerPayload
 
         extended = {**SAMPLE_PAYLOAD, "truncatedAlerts": 0, "futureField": "value"}
         payload = AlertmanagerPayload.model_validate(extended)
@@ -105,7 +105,7 @@ class TestAlertmanagerModels:
 
     def test_alert_trigger_config_defaults(self) -> None:
         """AlertTriggerConfig has sensible defaults."""
-        from cloud_agents.workflow.alert_trigger import AlertTriggerConfig
+        from cloud_agents.workflow.triggers.alert_trigger import AlertTriggerConfig
 
         config = AlertTriggerConfig()
         assert config.workflow_name_label == "cloud_agents_workflow"
@@ -124,7 +124,7 @@ class TestAlertToWorkflowMapping:
 
     def test_alert_with_workflow_label_maps_to_workflow(self) -> None:
         """Alert with cloud_agents_workflow label maps to that workflow name."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             map_alert_to_workflow_input,
@@ -138,7 +138,7 @@ class TestAlertToWorkflowMapping:
 
     def test_alert_without_label_uses_default_workflow(self) -> None:
         """Alert without workflow label falls back to default_workflow."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             map_alert_to_workflow_input,
@@ -152,7 +152,7 @@ class TestAlertToWorkflowMapping:
 
     def test_alert_without_label_and_no_default_raises(self) -> None:
         """Alert without workflow label and no default raises ValueError."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             map_alert_to_workflow_input,
@@ -166,7 +166,7 @@ class TestAlertToWorkflowMapping:
 
     def test_input_prompt_includes_alert_details(self) -> None:
         """Input prompt includes alertname, severity, and description."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             map_alert_to_workflow_input,
@@ -181,7 +181,7 @@ class TestAlertToWorkflowMapping:
 
     def test_only_firing_alerts_trigger_by_default(self) -> None:
         """Only firing alerts trigger workflows by default."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             should_process_alert,
@@ -198,7 +198,7 @@ class TestAlertToWorkflowMapping:
 
     def test_resolved_alerts_trigger_when_configured(self) -> None:
         """Resolved alerts trigger when fire_on_resolved=True."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             should_process_alert,
@@ -211,7 +211,7 @@ class TestAlertToWorkflowMapping:
 
     def test_long_labels_truncated_in_prompt(self) -> None:
         """Labels exceeding max chars are truncated in the input prompt."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             _MAX_ALERT_FIELD_CHARS,
@@ -232,7 +232,7 @@ class TestAlertToWorkflowMapping:
 
     def test_short_labels_not_truncated(self) -> None:
         """Labels within limit are not truncated."""
-        from cloud_agents.workflow.alert_trigger import (
+        from cloud_agents.workflow.triggers.alert_trigger import (
             AlertmanagerAlert,
             AlertTriggerConfig,
             map_alert_to_workflow_input,
@@ -254,14 +254,14 @@ class TestAlertDedupTracker:
 
     def test_first_occurrence_returns_true(self) -> None:
         """First occurrence of a fingerprint returns True."""
-        from cloud_agents.workflow.alert_trigger import AlertDedupTracker
+        from cloud_agents.workflow.triggers.alert_trigger import AlertDedupTracker
 
         tracker = AlertDedupTracker(window_seconds=300)
         assert tracker.should_fire("fp-new") is True
 
     def test_same_fingerprint_within_window_returns_false(self) -> None:
         """Same fingerprint within dedup window returns False."""
-        from cloud_agents.workflow.alert_trigger import AlertDedupTracker
+        from cloud_agents.workflow.triggers.alert_trigger import AlertDedupTracker
 
         tracker = AlertDedupTracker(window_seconds=300)
         tracker.should_fire("fp-dup")
@@ -269,7 +269,7 @@ class TestAlertDedupTracker:
 
     def test_same_fingerprint_after_window_returns_true(self) -> None:
         """Same fingerprint after dedup window expires returns True."""
-        from cloud_agents.workflow.alert_trigger import AlertDedupTracker
+        from cloud_agents.workflow.triggers.alert_trigger import AlertDedupTracker
 
         tracker = AlertDedupTracker(window_seconds=0)
         tracker.should_fire("fp-expired")
@@ -278,7 +278,7 @@ class TestAlertDedupTracker:
 
     def test_different_fingerprints_independent(self) -> None:
         """Different fingerprints are tracked independently."""
-        from cloud_agents.workflow.alert_trigger import AlertDedupTracker
+        from cloud_agents.workflow.triggers.alert_trigger import AlertDedupTracker
 
         tracker = AlertDedupTracker(window_seconds=300)
         assert tracker.should_fire("fp-a") is True
@@ -288,7 +288,7 @@ class TestAlertDedupTracker:
 
     def test_pruning_removes_old_entries(self) -> None:
         """Old entries are pruned to keep memory bounded."""
-        from cloud_agents.workflow.alert_trigger import AlertDedupTracker
+        from cloud_agents.workflow.triggers.alert_trigger import AlertDedupTracker
 
         tracker = AlertDedupTracker(window_seconds=0)
         tracker.should_fire("fp-old-1")
@@ -311,11 +311,11 @@ def _build_alert_app(
     content_policy: Any = None,
 ) -> FastAPI:
     """Build a FastAPI app with the alert webhook router for testing."""
-    from cloud_agents.workflow.alert_trigger import (
+    from cloud_agents.workflow.triggers.alert_trigger import (
         AlertTriggerConfig,
         build_alert_router,
     )
-    from cloud_agents.workflow.definition_store import DefinitionStore
+    from cloud_agents.workflow.core.definition_store import DefinitionStore
 
     store = definition_store or DefinitionStore()
     config = alert_config or AlertTriggerConfig()
@@ -336,7 +336,7 @@ def _make_stored_definition(name: str = "diagnose-cpu") -> Any:
     """Create a mock StoredDefinition for testing."""
     from unittest.mock import MagicMock
 
-    from cloud_agents.workflow.definition import WorkflowDefinition
+    from cloud_agents.workflow.core.definition import WorkflowDefinition
 
     defn = WorkflowDefinition.model_validate(
         {
@@ -376,7 +376,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -394,7 +394,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
         resolved_payload = {**SAMPLE_PAYLOAD, "alerts": [{**SAMPLE_ALERT, "status": "resolved"}]}
 
         app = _build_alert_app(mock_temporal, definition_store=store)
@@ -411,7 +411,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=None)
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -427,7 +427,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -443,7 +443,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -464,7 +464,7 @@ class TestAlertWebhookEndpoint:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         second_alert = {
             **SAMPLE_ALERT,
@@ -502,13 +502,13 @@ class TestAlertTriggerAuthorization:
 
     def test_authorizer_called_before_workflow_start(self, mocker: MockerFixture) -> None:
         """Authorizer is called with TRIGGER action before starting workflow."""
-        from cloud_agents.workflow.authorization import AuthzDecision, WorkflowAction
+        from cloud_agents.workflow.security.authorization import AuthzDecision, WorkflowAction
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         mock_authorizer = mocker.AsyncMock()
         mock_authorizer.authorize = mocker.AsyncMock(
@@ -527,13 +527,13 @@ class TestAlertTriggerAuthorization:
 
     def test_authorizer_denies_blocks_workflow(self, mocker: MockerFixture) -> None:
         """Denied authorization prevents workflow start."""
-        from cloud_agents.workflow.authorization import AuthzDecision
+        from cloud_agents.workflow.security.authorization import AuthzDecision
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         mock_authorizer = mocker.AsyncMock()
         mock_authorizer.authorize = mocker.AsyncMock(
@@ -555,7 +555,7 @@ class TestAlertTriggerAuthorization:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -573,7 +573,7 @@ class TestAlertTriggerAuthorization:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -588,13 +588,13 @@ class TestAlertTriggerAuthorization:
 
     def test_authorization_denied_audit_event(self, mocker: MockerFixture) -> None:
         """Audit event emitted when authorization is denied."""
-        from cloud_agents.workflow.authorization import AuthzDecision
+        from cloud_agents.workflow.security.authorization import AuthzDecision
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         mock_authorizer = mocker.AsyncMock()
         mock_authorizer.authorize = mocker.AsyncMock(
@@ -625,13 +625,13 @@ class TestAlertTriggerContentPolicy:
 
     def test_content_policy_blocks_violating_definition(self, mocker: MockerFixture) -> None:
         """Content policy violations prevent workflow start."""
-        from cloud_agents.workflow.content_policy import ContentPolicy
+        from cloud_agents.workflow.security.content_policy import ContentPolicy
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         policy = ContentPolicy(max_prompt_length=3)
         app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
@@ -645,13 +645,13 @@ class TestAlertTriggerContentPolicy:
 
     def test_content_policy_allows_compliant_definition(self, mocker: MockerFixture) -> None:
         """Compliant definitions pass content policy check."""
-        from cloud_agents.workflow.content_policy import ContentPolicy
+        from cloud_agents.workflow.security.content_policy import ContentPolicy
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         policy = ContentPolicy(max_prompt_length=10000)
         app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
@@ -666,7 +666,7 @@ class TestAlertTriggerContentPolicy:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)
@@ -676,13 +676,13 @@ class TestAlertTriggerContentPolicy:
 
     def test_content_policy_violation_audit_event(self, mocker: MockerFixture) -> None:
         """Audit event emitted for content policy violations."""
-        from cloud_agents.workflow.content_policy import ContentPolicy
+        from cloud_agents.workflow.security.content_policy import ContentPolicy
 
         mock_temporal = mocker.MagicMock()
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mock_emit = mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mock_emit = mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         policy = ContentPolicy(max_prompt_length=3)
         app = _build_alert_app(mock_temporal, definition_store=store, content_policy=policy)
@@ -713,7 +713,7 @@ class TestAlertTriggerEntrypointWiring:
         """Endpoint not registered when ALERT_TRIGGER_ENABLED=false."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "false")
         import importlib
-        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
@@ -727,7 +727,7 @@ class TestAlertTriggerEntrypointWiring:
         """Endpoint registered when ALERT_TRIGGER_ENABLED=true."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "true")
         import importlib
-        import cloud_agents.workflow.temporal_entrypoint as ep_mod
+        import cloud_agents.workflow.executor.temporal_entrypoint as ep_mod
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
@@ -752,9 +752,9 @@ class TestAlertTriggerMetrics:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
-        from cloud_agents.workflow.temporal_metrics import ls_alert_triggers_total
+        from cloud_agents.workflow.executor.temporal_metrics import ls_alert_triggers_total
         before = ls_alert_triggers_total.labels(
             workflow_name="diagnose-cpu", status="started"
         )._value.get()
@@ -774,9 +774,9 @@ class TestAlertTriggerMetrics:
         mock_temporal.start_workflow = mocker.AsyncMock()
         store = mocker.AsyncMock()
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
-        mocker.patch("cloud_agents.workflow.alert_trigger.emit_audit")
+        mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
-        from cloud_agents.workflow.temporal_metrics import ls_alert_triggers_total
+        from cloud_agents.workflow.executor.temporal_metrics import ls_alert_triggers_total
 
         app = _build_alert_app(mock_temporal, definition_store=store)
         client = TestClient(app, raise_server_exceptions=False)

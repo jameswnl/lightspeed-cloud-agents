@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cloud_agents.workflow.temporal_models import StepTranscript, TranscriptEvent
+from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
 
 class TestTranscriptStoreInit:

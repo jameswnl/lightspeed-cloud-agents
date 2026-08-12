@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from cloud_agents.workflow.authorization import (
+from cloud_agents.workflow.security.authorization import (
     ApproverInfo,
     AuthzDecision,
     CallerIdentity,
@@ -359,7 +359,7 @@ class TestOwnerScopedAuthzDeniesNonOwner:
 
     async def test_owner_scoped_policy_denies_non_owner(self) -> None:
         """An owner-scoped policy rule denies a non-owner on an existing workflow."""
-        from cloud_agents.workflow.authorization import (
+        from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
             WorkflowAuthorizer,
         )
