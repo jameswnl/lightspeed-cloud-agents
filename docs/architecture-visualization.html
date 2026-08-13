@@ -272,11 +272,11 @@ svg { width: 100%; height: auto; display: block; }
   <div class="faq-a">
     <table class="faq-table">
       <tr><th>Component</th><th>Build vs Reuse</th><th>Status</th></tr>
-      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK</td><td>Explored</td></tr>
+      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK + Build: pydantic-graph local executor</td><td>Explored</td></tr>
       <tr><td>Spawner (K8s / Podman / OpenShell)</td><td>Build: one per platform, shared abstract interface</td><td>Explored</td></tr>
       <tr><td>Definition store</td><td>Build: CRUD + validation</td><td>Explored</td></tr>
       <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Explored</td></tr>
-      <tr><td>Durable state</td><td>Reuse: Temporal Server</td><td>Explored</td></tr>
+      <tr><td>Durable state</td><td>Reuse: Temporal Server + Build: PostgreSQL RunStateStore (local mode)</td><td>Explored</td></tr>
       <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Explored</td></tr>
       <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Explored</td></tr>
       <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Explored</td></tr>

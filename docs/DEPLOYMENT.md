@@ -22,16 +22,29 @@ The sandbox image must be built from our fork ([jameswnl/lightspeed-agentic-sand
 
 ## Deploying the Platform
 
+The platform supports two workflow execution modes, selected via the `WORKFLOW_ENGINE` environment variable:
+
+- **`WORKFLOW_ENGINE=local`** (default) — uses pydantic-graph for orchestration with PostgreSQL for state storage. No Temporal needed. Suitable for most deployments.
+- **`WORKFLOW_ENGINE=temporal`** — uses Temporal for durable execution with full crash recovery. Requires Temporal Server deployment.
+
+Both modes share the same workflow YAML definitions, REST API, and sandbox contracts.
+
 ### Option A: Podman (compose)
 
-See [Quick Start](../README.md#quick-start).
+```bash
+make up                          # local mode (default) — just PostgreSQL + runner
+make up WORKFLOW_ENGINE=temporal # Temporal mode — full Temporal stack
+```
+
+See [Quick Start](../README.md#quick-start) for details.
 
 ### Option B: Kubernetes (Kind)
 
 ```bash
 export OPENAI_API_KEY="sk-..."
 
-make kind-up    # creates cluster, loads images, deploys Temporal + runner
+make kind-up                        # local mode (default)
+make kind-up WORKFLOW_ENGINE=temporal # with Temporal
 
 kubectl port-forward svc/workflow-runner 8080:8080 &
 curl -s http://localhost:8080/readyz
@@ -137,6 +150,13 @@ Adjust the interface name and CIDRs for your environment. These rules apply to a
 
 ## Configuration Reference
 
+### Workflow Engine
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `WORKFLOW_ENGINE` | `local` | `local` (pydantic-graph, no Temporal) or `temporal` |
+| `RUN_STATE_DB_URL` | | PostgreSQL URL for workflow state (local executor only) |
+
 ### Rate Limiting
 
 | Env Var | Default | Description |
@@ -162,6 +182,8 @@ When `SANDBOX_TLS_MODE=app`, the runner generates an ephemeral CA and per-sandbo
 | `ALERT_TRIGGER_WORKFLOW_LABEL` | `cloud_agents_workflow` | Prometheus label that maps alerts to workflow names |
 | `ALERT_TRIGGER_DEDUP_WINDOW` | `300` | Seconds to deduplicate identical alerts |
 | `ALERT_TRIGGER_NAMESPACE` | `system` | Namespace for RBAC identity of alert-triggered workflows |
+
+**Note:** Alert and schedule triggers require `WORKFLOW_ENGINE=temporal`.
 
 ### Schedule Trigger
 
@@ -301,7 +323,7 @@ These are validated by CI against the Pydantic schema.
 ## Cleanup
 
 ```bash
-make down       # Podman (core)
+make down       # Podman (core) — works for both local and Temporal modes
 make demo-down  # Podman (demo stack)
 make kind-down  # Kubernetes
 make clean      # stop + remove leftover sandbox containers
