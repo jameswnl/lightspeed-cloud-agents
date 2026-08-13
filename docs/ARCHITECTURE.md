@@ -94,9 +94,21 @@ graph TD
 
 ### Workflow Runner
 
-The stateless workflow engine. A FastAPI app that embeds a Temporal worker. Receives workflow run requests via REST, starts Temporal workflow executions, and dispatches steps as Temporal activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
+The stateless workflow engine. A FastAPI app that uses pluggable executors for workflow orchestration. Receives workflow run requests via REST, starts workflow executions, and dispatches steps as activities to sandbox pods. Callers can supply their own `workflow_id` for idempotency; if omitted, a random ID is generated. Duplicate submissions with the same `workflow_id` return `409 Conflict`.
 
-- **Temporal AgentWorkflow** — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
+#### Executor Architecture
+
+The runner uses a `WorkflowExecutor` interface with two implementations, selected via `WORKFLOW_ENGINE` env var:
+
+- **LocalExecutor** (`WORKFLOW_ENGINE=local`, default) — orchestration via pydantic-graph with workflow state persisted to PostgreSQL via `RunStateStore`. No Temporal Server needed. Suitable for most deployments. Does not recover in-progress steps on crash (completes steps that finished before crash; resets incomplete steps on restart).
+
+- **TemporalExecutor** (`WORKFLOW_ENGINE=temporal`) — delegates to Temporal SDK for durable execution. Full crash recovery via Temporal Server. Required for alert and schedule triggers.
+
+Both executors share the same workflow YAML definitions, REST API, and sandbox contracts. The factory (`get_workflow_executor`) selects the implementation at startup.
+
+#### Components
+
+- **Temporal AgentWorkflow** (TemporalExecutor only) — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
 - **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls the runtime HTTP interface, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to pluggable notifiers. `build_escalation_activity` packages failed workflow context for follow-up.
 - **DefinitionStore** — CRUD for workflow definitions with versioning. The current app wiring uses an in-memory store. Shared persistence is an extension point rather than the default runtime behavior.
 - **Spawner** — `AgentSpawner` ABC with `KubernetesSpawner`, `PodmanSpawner`, and `OpenShellSpawner` implementations. Handles `spawn()` → endpoint URL, `wait_ready()` → readiness polling, `destroy()` → cleanup, and `list_active()` → orphan detection. `OpenShellSpawner` uses gateway ExposeService for HTTP routing and auto-derives L7 network policy from provider and MCP config.
