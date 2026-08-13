@@ -68,6 +68,10 @@ spec:
     - ports:
         - port: 8080
           protocol: TCP
+    # PostgreSQL (run-state store)
+    - ports:
+        - port: 5432
+          protocol: TCP
     # K8s API server
     - ports:
         - port: 443

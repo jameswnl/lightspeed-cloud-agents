@@ -3,8 +3,10 @@
 SANDBOX_REPO ?= ../lightspeed-agentic-sandbox
 SANDBOX_BRANCH ?= lcs-main
 COMPOSE_FILE = deploy/podman/docker-compose.yaml
+COMPOSE_LOCAL_FILE = deploy/podman/docker-compose.local.yaml
 DEMO_COMPOSE_FILE = deploy/podman/docker-compose.demo.yaml
 export PODMAN_SOCK ?= /run/user/$(shell id -u)/podman/podman.sock
+WORKFLOW_ENGINE ?= local
 
 ## Quick start: make build up
 ## Demo:        make demo-up dashboard
@@ -52,19 +54,31 @@ ensure-podman:
 
 .PHONY: up down restart status logs
 
-up: ensure-podman  ## Start core platform (Temporal + runner)
+up: ensure-podman  ## Start platform (WORKFLOW_ENGINE=local|temporal)
+ifeq ($(WORKFLOW_ENGINE),temporal)
 	podman compose -f $(COMPOSE_FILE) up -d
 	@echo ""
 	@echo "Services:"
 	@echo "  Workflow Runner API: http://localhost:8080"
 	@echo "  Temporal UI:        http://localhost:8233"
+else
+	podman compose -f $(COMPOSE_LOCAL_FILE) up -d
+	@echo ""
+	@echo "Services:"
+	@echo "  Workflow Runner API: http://localhost:8080"
+	@echo "  (No Temporal — WORKFLOW_ENGINE=local)"
+endif
 
-down:  ## Stop core platform
+down:  ## Stop platform
+ifeq ($(WORKFLOW_ENGINE),temporal)
 	podman compose -f $(COMPOSE_FILE) down
+else
+	podman compose -f $(COMPOSE_LOCAL_FILE) down
+endif
 
-restart: ensure-podman  ## Restart core platform
-	podman compose -f $(COMPOSE_FILE) down
-	podman compose -f $(COMPOSE_FILE) up -d
+restart: ensure-podman  ## Restart platform
+	$(MAKE) down
+	$(MAKE) up
 
 status:  ## Show running containers
 	@podman ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -121,7 +135,7 @@ KIND_CLUSTER ?= cloud-agents
 
 .PHONY: kind-up kind-down
 
-kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
+kind-up: build-demo  ## Create Kind cluster and deploy cloud agents (WORKFLOW_ENGINE=local|temporal)
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
 	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar
 	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/workflow-runner.tar --name $(KIND_CLUSTER)
@@ -144,8 +158,10 @@ kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
 		localhost/mcp-kubectl:latest docker.io/library/mcp-kubectl:latest
 	kubectl apply -f deploy/kind/postgres.yaml
 	kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
+ifeq ($(WORKFLOW_ENGINE),temporal)
 	kubectl apply -f deploy/kind/temporal.yaml
 	kubectl wait --for=condition=ready pod -l app=temporal-server --timeout=120s
+endif
 	kubectl create secret generic llm-api-key \
 		--from-literal=OPENAI_API_KEY="$$OPENAI_API_KEY" 2>/dev/null || true
 	kubectl create secret generic openai-api-key \
@@ -156,14 +172,18 @@ kind-up: build-demo  ## Create Kind cluster and deploy cloud agents + MCP demo
 		--from-file=examples/demo-data/ 2>/dev/null || true
 	kubectl apply -f deploy/kind/rbac.yaml
 	kubectl apply -f deploy/kind/network-policy.yaml
+ifeq ($(WORKFLOW_ENGINE),temporal)
 	kubectl apply -f deploy/kind/workflow-runner.yaml
+else
+	kubectl apply -f deploy/kind/workflow-runner-local.yaml
+endif
 	kubectl wait --for=condition=ready pod -l app=workflow-runner --timeout=60s
 	kubectl apply -f examples/kind-mcp-filesystem.yaml
 	kubectl wait --for=condition=ready pod -l app=mcp-filesystem --timeout=60s
 	kubectl apply -f examples/kind-mcp-kubectl.yaml
 	kubectl wait --for=condition=ready pod -l app=mcp-kubectl --timeout=60s
 	@echo ""
-	@echo "Kind cluster '$(KIND_CLUSTER)' ready."
+	@echo "Kind cluster '$(KIND_CLUSTER)' ready (WORKFLOW_ENGINE=$(WORKFLOW_ENGINE))."
 	@echo "Run: kubectl port-forward svc/workflow-runner 8080:8080"
 	@echo "Then: curl http://localhost:8080/readyz"
 

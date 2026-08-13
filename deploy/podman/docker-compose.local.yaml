@@ -1,0 +1,48 @@
+# Cloud Agents — local executor stack (no Temporal).
+#
+# Usage:
+#   export OPENAI_API_KEY="sk-..."
+#   podman compose -f deploy/podman/docker-compose.local.yaml up -d
+#   podman compose -f deploy/podman/docker-compose.local.yaml down
+#
+# Workflow runner API: http://localhost:8080
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: workflow-pass
+      POSTGRES_DB: cloud_agents
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  workflow-runner:
+    image: localhost/workflow-runner:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    privileged: true
+    user: "0"
+    environment:
+      WORKFLOW_ENGINE: local
+      WORKFLOW_SPAWNER: podman
+      SPAWNER_NETWORK: podman_default
+      AUTH_REQUIRED: "false"
+      CONTAINER_HOST: unix:///run/podman/podman.sock
+      RUN_STATE_DB_URL: postgresql://workflow:workflow-pass@postgres:5432/cloud_agents
+      TRANSCRIPT_DB_URL: postgresql://workflow:workflow-pass@postgres:5432/cloud_agents
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ${PODMAN_SOCK}:/run/podman/podman.sock
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:

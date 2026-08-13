@@ -180,7 +180,7 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         try:
             await pool.execute(
                 _INSERT_SQL,
@@ -256,7 +256,7 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         step_data = {
             "step_name": step_name,
             "status": status,
@@ -287,9 +287,9 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         if "timestamp" not in event:
-            event["timestamp"] = now
+            event["timestamp"] = now.isoformat()
         result = await pool.execute(
             _APPEND_EVENT_SQL,
             workflow_id,
@@ -314,7 +314,7 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         result = await pool.execute(_SET_STATUS_SQL, workflow_id, "paused", step_name, now)
         self._check_updated(result, workflow_id)
 
@@ -332,7 +332,7 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         result = await pool.execute(_SET_STATUS_SQL, workflow_id, "running", None, now)
         self._check_updated(result, workflow_id)
 
@@ -357,7 +357,7 @@ class RunStateStore:
         if status not in self._TERMINAL_STATUSES:
             raise ValueError(f"'{status}' is not a terminal status")
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         result = await pool.execute(_SET_STATUS_SQL, workflow_id, status, None, now)
         self._check_updated(result, workflow_id)
 
@@ -377,7 +377,7 @@ class RunStateStore:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
         result = await pool.execute(
             _UPDATE_CONTEXT_SQL,
             workflow_id,
