@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=../../schema/workflow-definition.schema.json
+#
+# Triage + Classify workflow — demonstrates spawn: none (LLM-only steps).
+# No sandbox containers needed. Runs entirely in-process via direct LLM calls.
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: triage-classify-alerts
+spec:
+  steps:
+    - name: triage
+      type: agent
+      spawn: none
+      output_key: triage_result
+      prompt: >
+        An alert fired: "High memory usage on node worker-3: 95% RSS,
+        OOM killer active, 3 pods evicted in the last 10 minutes."
+        Classify the severity and category of this alert.
+      output_schema:
+        type: object
+        properties:
+          severity:
+            type: string
+            enum: [low, medium, high, critical]
+          category:
+            type: string
+            enum: [resource, network, storage, security, application]
+          summary:
+            type: string
+          recommended_action:
+            type: string
+        required: [severity, category, summary]
+      timeout_seconds: 30
+
+    - name: approve-escalation
+      type: human-approval
+      output_key: approval
+      message: >
+        Triage result ready. Approve escalation based on severity?
+      risk_level: low
+
+    - name: generate-runbook
+      type: agent
+      spawn: none
+      output_key: runbook
+      prompt: >
+        Based on the triage result, generate a concise runbook for the
+        on-call engineer to follow. Include specific kubectl commands
+        and expected outcomes.
+      instructions: >
+        You are a senior SRE. Write clear, actionable runbook steps.
+        Each step should have a command and expected output.
+      output_schema:
+        type: object
+        properties:
+          title:
+            type: string
+          steps:
+            type: array
+            items:
+              type: object
+              properties:
+                action:
+                  type: string
+                command:
+                  type: string
+                expected_output:
+                  type: string
+          estimated_time_minutes:
+            type: integer
+        required: [title, steps]
+      timeout_seconds: 30
