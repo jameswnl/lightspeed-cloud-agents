@@ -165,7 +165,7 @@ async def _call_llm(
         response.raise_for_status()
         data = response.json()
 
-    content = data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"].get("content") or ""
     usage = data.get("usage", {})
 
     return {
@@ -268,6 +268,9 @@ def _parse_output(content: str) -> dict[str, Any]:
         Parsed dict output, or {"response": content} if not valid JSON.
     """
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
         return {"response": content}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"response": content}

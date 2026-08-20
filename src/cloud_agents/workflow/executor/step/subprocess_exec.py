@@ -193,6 +193,14 @@ class SubprocessExecutor(StepExecutor):
         """
         start_ms = time.monotonic_ns() // 1_000_000
 
+        if step_input.tools:
+            logger.warning(
+                "Step '%s' specifies tools %s but spawn: local does not yet "
+                "support tool execution — tools will be ignored (Phase 3)",
+                step_input.step_name,
+                step_input.tools,
+            )
+
         try:
             step_dict = _step_input_to_dict(step_input)
 

@@ -1,4 +1,4 @@
-"""Tests for SubprocessExecutor — spawn: local pydantic-ai agent in subprocess."""
+"""Tests for SubprocessExecutor — spawn: local LLM execution in a child process."""
 
 from __future__ import annotations
 
@@ -200,6 +200,38 @@ class TestSubprocessExecutorRun:
 
         assert "context" in captured_input
         assert captured_input["context"]["diagnosis"]["output"]["issue"] == "OOM"
+
+
+    @pytest.mark.asyncio
+    async def test_tools_ignored_with_warning(self, mocker: MockerFixture, caplog: Any) -> None:
+        """SubprocessExecutor warns when tools are specified but not executed."""
+        import logging
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_exec._run_in_subprocess",
+            return_value={
+                "status": "completed",
+                "output": {"ok": True},
+                "transcript": [],
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
+        )
+
+        with caplog.at_level(logging.WARNING):
+            executor = SubprocessExecutor()
+            result = await executor.run(StepInput(
+                prompt="Investigate",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get", "read_logs"],
+                step_name="investigate",
+            ))
+
+        assert result.status == "completed"
+        assert any("tools" in r.message and "ignored" in r.message for r in caplog.records)
 
 
 class TestSubprocessExecutorDispatch:

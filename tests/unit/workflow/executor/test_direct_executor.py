@@ -402,6 +402,27 @@ class TestParseOutput:
         result = _parse_output("Just text")
         assert result == {"response": "Just text"}
 
+    def test_none_content_wrapped(self) -> None:
+        """None content (refusal) falls back to response wrapper."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        result = _parse_output("")
+        assert result == {"response": ""}
+
+    def test_json_array_wrapped(self) -> None:
+        """JSON array is wrapped in response dict, not returned raw."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        result = _parse_output("[1, 2, 3]")
+        assert result == {"response": "[1, 2, 3]"}
+
+    def test_json_scalar_wrapped(self) -> None:
+        """JSON scalar string is wrapped in response dict."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        result = _parse_output('"just a string"')
+        assert result == {"response": '"just a string"'}
+
 
 class TestUnsupportedProviders:
     """Tests for provider validation."""
