@@ -338,7 +338,7 @@ class TestCvePatchWorkflow:
 
     def test_no_dead_fields(self, workflow_data: dict) -> None:
         """Steps must not use dead fields."""
-        dead_fields = {"agent", "spawn"}
+        dead_fields = {"agent"}
         for step in workflow_data["spec"]["steps"]:
             used_dead = dead_fields & set(step.keys())
             assert not used_dead, (

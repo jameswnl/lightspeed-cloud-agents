@@ -291,6 +291,7 @@ curl -s -X POST http://localhost:8080/v1/workflows/<workflow_id>/cancel
 | `max_retries` | No | Number of retry attempts (default: 1) |
 | `parallel_group` | No | Steps sharing the same group run concurrently |
 | `mcp_servers` | No | List of MCP server names (from run request catalog) to inject into this step |
+| `spawn` | No | `ephemeral` (container, default), `local` (subprocess), `none` (LLM-only) |
 
 ### API request fields
 

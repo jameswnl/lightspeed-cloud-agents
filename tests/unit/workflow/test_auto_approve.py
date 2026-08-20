@@ -15,7 +15,7 @@ def _make_step(
         type=type,
         prompt=prompt,
         output_key=f"{name}_result",
-        spawn="pre-deployed",
+        spawn="ephemeral",
         risk_level=risk_level,
     )
 
