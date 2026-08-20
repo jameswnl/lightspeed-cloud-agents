@@ -1,11 +1,12 @@
-"""SubprocessExecutor — spawn: local agent execution in a child process.
+"""SubprocessExecutor — spawn: local LLM execution in a child process.
 
-Runs an LLM agent with tools in a forked subprocess for process-level
+Executes a single LLM call in a forked subprocess for process-level
 isolation. The child process dies on crash/timeout/memory leak without
-affecting the workflow runner.
+affecting the workflow runner. Reuses DirectExecutor's _call_llm and
+_build_messages to avoid logic duplication.
 
-Uses asyncio.create_subprocess_exec to spawn a child that runs the
-agent logic and returns results via stdout (JSON serialized).
+Uses asyncio.create_subprocess_exec to spawn a child that imports and
+runs the LLM call logic, returning results via stdout (JSON serialized).
 
 No temporalio imports.
 """
@@ -18,7 +19,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Optional
+from typing import Any
 
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
 
@@ -47,22 +48,6 @@ def _step_input_to_dict(step_input: StepInput) -> dict[str, Any]:
         "step_name": step_input.step_name,
         "output_key": step_input.output_key,
     }
-
-
-def _resolve_api_key(provider: dict[str, Any]) -> str | None:
-    """Resolve LLM API key from provider config and environment.
-
-    Parameters:
-        provider: Provider configuration dict.
-
-    Returns:
-        API key string or None if not found.
-    """
-    cred_secret = provider.get("credentials_secret", "")
-    if cred_secret:
-        env_key = cred_secret.upper().replace("-", "_")
-        return os.environ.get(env_key) or os.environ.get(cred_secret)
-    return None
 
 
 async def _run_in_subprocess(
@@ -132,87 +117,52 @@ async def _run_in_subprocess(
 
 
 _CHILD_PROCESS_SCRIPT = '''
+import asyncio
 import json
 import sys
-import os
 
 def main():
     input_data = json.loads(sys.stdin.read())
-    prompt = input_data["prompt"]
-    system_prompt = input_data.get("system_prompt")
-    output_schema = input_data.get("output_schema")
     provider = input_data.get("provider", {})
-    context = input_data.get("context", {})
     step_name = input_data.get("step_name", "unknown")
+    timeout_seconds = input_data.get("timeout_seconds", 600)
 
-    cred_secret = provider.get("credentials_secret", "")
-    env_key = cred_secret.upper().replace("-", "_") if cred_secret else ""
-    api_key = os.environ.get(env_key) or os.environ.get(cred_secret) if cred_secret else None
+    from cloud_agents.workflow.executor.step.base import StepInput
+    from cloud_agents.workflow.executor.step.direct import (
+        _build_messages, _call_llm, _parse_output,
+    )
 
-    if not api_key:
-        provider_name = provider.get("name", "openai")
-        default_keys = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-        default_key = default_keys.get(provider_name, "")
-        api_key = os.environ.get(default_key) if default_key else None
-
-    if not api_key:
-        result = {"status": "failed", "output": None, "error": "API key not found",
-                  "transcript": [], "input_tokens": 0, "output_tokens": 0}
-        print(json.dumps(result))
-        return
-
-    import httpx
-
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-
-    user_content = prompt
-    if context:
-        context_parts = []
-        for key, value in context.items():
-            if isinstance(value, dict) and value.get("output"):
-                context_parts.append(f"Previous step \\'{key}\\': {json.dumps(value['output'])}")
-        if context_parts:
-            user_content = user_content + "\\n\\n--- Prior step outputs ---\\n" + "\\n\\n".join(context_parts)
-
-    if output_schema:
-        user_content += "\\n\\nRespond with JSON matching this schema:\\n" + json.dumps(output_schema, indent=2)
-
-    messages.append({"role": "user", "content": user_content})
-
-    base_urls = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1"}
-    base_url = provider.get("base_url", base_urls.get(provider.get("name", "openai"), base_urls["openai"]))
-    model = provider.get("model", "gpt-4o")
-
-    request_body = {"model": model, "messages": messages}
-    if output_schema:
-        request_body["response_format"] = {"type": "json_object"}
+    step_input = StepInput(
+        prompt=input_data["prompt"],
+        system_prompt=input_data.get("system_prompt"),
+        output_schema=input_data.get("output_schema"),
+        tools=input_data.get("tools", []),
+        context=input_data.get("context", {}),
+        provider=provider,
+        timeout_seconds=timeout_seconds,
+        workflow_id=input_data.get("workflow_id", ""),
+        step_name=step_name,
+        output_key=input_data.get("output_key", ""),
+    )
 
     try:
-        with httpx.Client(timeout=300) as client:
-            response = client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=request_body,
-            )
-            response.raise_for_status()
-            data = response.json()
+        messages = _build_messages(step_input)
+        llm_result = asyncio.run(_call_llm(
+            provider=provider,
+            messages=messages,
+            output_schema=step_input.output_schema,
+            timeout_seconds=timeout_seconds,
+        ))
 
-        content = data["choices"][0]["message"]["content"]
-        usage = data.get("usage", {})
-
-        try:
-            output = json.loads(content)
-        except json.JSONDecodeError:
-            output = {"response": content}
+        content = llm_result["content"]
+        output = _parse_output(content)
 
         result = {
             "status": "completed",
             "output": output,
-            "transcript": [{"type": "llm.call", "model": model, "step_name": step_name}],
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
+            "transcript": [{"type": "llm.call", "model": provider.get("model", "unknown"), "step_name": step_name}],
+            "input_tokens": llm_result.get("input_tokens", 0),
+            "output_tokens": llm_result.get("output_tokens", 0),
         }
     except Exception as e:
         result = {"status": "failed", "output": None, "error": str(e),

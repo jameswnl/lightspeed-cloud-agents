@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 _PROVIDER_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
-    "azure": "",
-    "anthropic": "https://api.anthropic.com/v1",
 }
+
+_UNSUPPORTED_NATIVE_PROVIDERS: set[str] = {"anthropic", "azure"}
 
 _PROVIDER_ENV_KEYS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
@@ -62,10 +62,18 @@ def _resolve_base_url(provider: dict[str, Any]) -> str:
 
     Returns:
         Base URL string for the API endpoint.
+
+    Raises:
+        ValueError: If the provider requires a non-OpenAI API and no base_url is set.
     """
     if base_url := provider.get("base_url"):
         return base_url
     provider_name = provider.get("name", "openai")
+    if provider_name in _UNSUPPORTED_NATIVE_PROVIDERS:
+        raise ValueError(
+            f"Provider '{provider_name}' uses a non-OpenAI-compatible API. "
+            "Set 'base_url' to an OpenAI-compatible proxy, or use spawn: ephemeral."
+        )
     return _PROVIDER_BASE_URLS.get(provider_name, _PROVIDER_BASE_URLS["openai"])
 
 
@@ -200,7 +208,7 @@ class DirectExecutor(StepExecutor):
             input_tokens = llm_result["input_tokens"]
             output_tokens = llm_result["output_tokens"]
 
-            output = _parse_output(content, step_input.output_schema)
+            output = _parse_output(content)
 
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
@@ -250,22 +258,15 @@ class DirectExecutor(StepExecutor):
             )
 
 
-def _parse_output(content: str, output_schema: dict[str, Any] | None) -> dict[str, Any]:
+def _parse_output(content: str) -> dict[str, Any]:
     """Parse LLM response content into structured output.
 
     Parameters:
         content: Raw LLM response string.
-        output_schema: Expected JSON Schema, if any.
 
     Returns:
-        Parsed dict output.
+        Parsed dict output, or {"response": content} if not valid JSON.
     """
-    if output_schema:
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {"response": content}
-
     try:
         return json.loads(content)
     except json.JSONDecodeError:

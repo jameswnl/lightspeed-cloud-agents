@@ -385,26 +385,68 @@ class TestParseOutput:
         """Valid JSON string is parsed to dict."""
         from cloud_agents.workflow.executor.step.direct import _parse_output
 
-        result = _parse_output('{"severity": "high"}', {"type": "object"})
+        result = _parse_output('{"severity": "high"}')
         assert result == {"severity": "high"}
 
     def test_invalid_json_wrapped(self) -> None:
         """Invalid JSON falls back to response wrapper."""
         from cloud_agents.workflow.executor.step.direct import _parse_output
 
-        result = _parse_output("Not JSON", {"type": "object"})
+        result = _parse_output("Not JSON")
         assert result == {"response": "Not JSON"}
 
-    def test_no_schema_parses_json(self) -> None:
-        """Without schema, still attempts JSON parse."""
+    def test_plain_text_wrapped(self) -> None:
+        """Plain text wrapped in response dict."""
         from cloud_agents.workflow.executor.step.direct import _parse_output
 
-        result = _parse_output('{"ok": true}', None)
-        assert result == {"ok": True}
-
-    def test_no_schema_plain_text(self) -> None:
-        """Without schema, plain text wrapped in response dict."""
-        from cloud_agents.workflow.executor.step.direct import _parse_output
-
-        result = _parse_output("Just text", None)
+        result = _parse_output("Just text")
         assert result == {"response": "Just text"}
+
+
+class TestUnsupportedProviders:
+    """Tests for provider validation."""
+
+    @pytest.mark.asyncio
+    async def test_anthropic_without_base_url_fails(self, mocker: MockerFixture) -> None:
+        """Anthropic provider without base_url raises ValueError."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=False)
+
+        executor = DirectExecutor()
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "anthropic", "model": "claude-sonnet-5", "credentials_secret": "anthropic-api-key"},
+        ))
+
+        assert result.status == "failed"
+        assert "non-openai-compatible" in result.error.lower() or "proxy" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_with_base_url_works(self, mocker: MockerFixture) -> None:
+        """Anthropic provider with explicit base_url (proxy) proceeds normally."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct._call_llm",
+            return_value={
+                "content": '{"ok": true}',
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={
+                "name": "anthropic",
+                "model": "claude-sonnet-5",
+                "credentials_secret": "anthropic-api-key",
+                "base_url": "https://my-proxy.example.com/v1",
+            },
+        ))
+
+        assert result.status == "completed"
