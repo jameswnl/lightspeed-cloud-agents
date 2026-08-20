@@ -70,7 +70,7 @@ class TestExampleWorkflowDefinitions:
         """Steps don't use fields that the Temporal workflow ignores."""
         with open(yaml_path) as f:
             data = yaml.safe_load(f)
-        dead_fields = {"agent", "spawn"}
+        dead_fields = {"agent"}
         for step in data["spec"]["steps"]:
             used_dead = dead_fields & set(step.keys())
             assert not used_dead, (

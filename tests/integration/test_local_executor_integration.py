@@ -90,10 +90,17 @@ class TestSingleAgentStep:
         mocker: MockerFixture,
     ) -> None:
         """Single agent step runs and completes."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"summary": "all good"},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"summary": "all good"}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_workflow_input([
@@ -120,17 +127,24 @@ class TestMultiStepWorkflow:
         mocker: MockerFixture,
     ) -> None:
         """Two agent steps execute in order."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
         call_order = []
 
-        async def mock_run_step(input_data, **kwargs):
-            step_name = input_data["step"]["name"]
+        async def mock_run(step_input):
+            step_name = step_input.step_name
             call_order.append(step_name)
-            return {"status": "completed", "output": {"step": step_name}}
+            return StepResult(
+                status="completed",
+                output={"step": step_name},
+            )
 
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = mock_run
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            side_effect=mock_run_step,
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_workflow_input([
@@ -155,10 +169,17 @@ class TestApprovalGate:
         mocker: MockerFixture,
     ) -> None:
         """Workflow with auto_approve=True completes without pausing."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"ok": True},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"ok": True}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_workflow_input(
@@ -183,10 +204,17 @@ class TestApprovalGate:
         mocker: MockerFixture,
     ) -> None:
         """Workflow pauses at approval step when no auto_approve."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"ok": True},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"ok": True}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_workflow_input([
@@ -214,18 +242,25 @@ class TestConditionEvaluation:
         mocker: MockerFixture,
     ) -> None:
         """Step with false condition is skipped."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
         call_count = 0
 
-        async def mock_run_step(input_data, **kwargs):
+        async def mock_run(step_input):
             nonlocal call_count
             call_count += 1
-            return {"status": "completed", "output": {"severity": "low"}}
+            return StepResult(
+                status="completed",
+                output={"severity": "low"},
+            )
 
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = mock_run
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            side_effect=mock_run_step,
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_workflow_input([
@@ -310,10 +345,17 @@ class TestParallelWorkflows:
         mocker: MockerFixture,
     ) -> None:
         """Multiple workflows can execute concurrently."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"ok": True},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"ok": True}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input1 = _make_workflow_input(

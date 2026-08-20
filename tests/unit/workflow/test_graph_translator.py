@@ -119,12 +119,16 @@ class TestGraphTranslator:
         self, mocker: MockerFixture
     ) -> None:
         """Agent step node calls step_runner.run_step during execution."""
-        mock_run_step = mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={
-                "status": "completed",
-                "output": {"summary": "all good"},
-            },
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"summary": "all good"},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -146,7 +150,7 @@ class TestGraphTranslator:
         )
 
         result = await graph.run(state=state)
-        mock_run_step.assert_called_once()
+        mock_executor.run.assert_called_once()
         assert result is not None
 
     @pytest.mark.asyncio
@@ -199,9 +203,16 @@ class TestGraphTranslator:
         self, mocker: MockerFixture
     ) -> None:
         """Agent step stores results under output_key, not step name."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"found": "bug"},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"found": "bug"}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -228,9 +239,16 @@ class TestGraphTranslator:
     @pytest.mark.asyncio
     async def test_condition_false_skips_step(self, mocker: MockerFixture) -> None:
         """Step with false condition is skipped."""
-        mock_run = mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {}},
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.evaluate_condition",
@@ -256,15 +274,22 @@ class TestGraphTranslator:
         )
 
         await graph.run(state=state)
-        mock_run.assert_not_called()
+        mock_executor.run.assert_not_called()
         assert state.step_results["r1"]["status"] == "skipped"
 
     @pytest.mark.asyncio
     async def test_condition_true_runs_step(self, mocker: MockerFixture) -> None:
         """Step with true condition runs normally."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"ok": True},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"ok": True}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.evaluate_condition",
@@ -297,9 +322,16 @@ class TestGraphTranslator:
         self, mocker: MockerFixture
     ) -> None:
         """Steps after approval gate are skipped when workflow is paused."""
-        mock_run = mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {}},
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -327,7 +359,7 @@ class TestGraphTranslator:
 
         await graph.run(state=state)
         assert state.paused_at_step == "approve"
-        mock_run.assert_not_called()
+        mock_executor.run.assert_not_called()
         assert state.step_results["fix_result"]["status"] == "skipped"
 
     @pytest.mark.asyncio
@@ -335,9 +367,16 @@ class TestGraphTranslator:
         self, mocker: MockerFixture
     ) -> None:
         """Condition evaluation works end-to-end without mocking evaluate_condition."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"severity": "low"},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"severity": "low"}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph

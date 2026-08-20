@@ -60,7 +60,7 @@ class TestDemoYaml:
 
     def test_demo_yaml_no_dead_fields(self, demo_yaml: dict) -> None:
         """DEMO.md workflow YAML doesn't use dead fields."""
-        dead_fields = {"agent", "spawn"}
+        dead_fields = {"agent"}
         for step in demo_yaml["spec"]["steps"]:
             used_dead = dead_fields & set(step.keys())
             assert not used_dead, f"Step '{step.get('name')}' uses dead fields: {used_dead}"

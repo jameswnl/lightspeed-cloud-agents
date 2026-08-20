@@ -26,7 +26,7 @@ def _make_defn(name: str = "test-wf") -> WorkflowDefinition:
                     agent="diag",
                     prompt="test",
                     output_key="r1",
-                    spawn="pre-deployed",
+                    spawn="ephemeral",
                 ),
             ]
         ),

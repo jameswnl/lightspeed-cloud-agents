@@ -424,7 +424,7 @@ class TestDefinitionManagement:
                             "agent": "diag",
                             "prompt": "test",
                             "output_key": "r1",
-                            "spawn": "pre-deployed",
+                            "spawn": "ephemeral",
                         },
                     ]
                 },
@@ -499,7 +499,7 @@ class TestDefinitionManagement:
                             "agent": "diag",
                             "prompt": "test",
                             "output_key": "r1",
-                            "spawn": "pre-deployed",
+                            "spawn": "ephemeral",
                         },
                     ]
                 },
@@ -882,7 +882,7 @@ class TestAuthorizationWiring:
                             "agent": "diag",
                             "prompt": "test",
                             "output_key": "r1",
-                            "spawn": "pre-deployed",
+                            "spawn": "ephemeral",
                         }
                     ]
                 },

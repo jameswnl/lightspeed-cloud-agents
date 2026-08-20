@@ -68,10 +68,17 @@ class TestLocalExecutorStart:
         self, executor: Any, mocker: MockerFixture
     ) -> None:
         """start() returns a workflow ID."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"summary": "done"},
+        )
         mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator.run_step",
-            return_value={"status": "completed", "output": {"summary": "done"}},
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
         )
 
         input_data = _make_input([

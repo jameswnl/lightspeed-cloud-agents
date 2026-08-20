@@ -3,7 +3,7 @@
 Converts WorkflowDefinition steps into a pydantic-graph Graph that
 can be executed in-process. Each step type maps to a graph node:
 
-- type: agent → calls step_runner.run_step()
+- type: agent → dispatches to StepExecutor based on spawn mode
 - type: human-approval → signals pause for approval
 
 No temporalio imports. Used by the LocalExecutor.
@@ -19,7 +19,8 @@ from pydantic_graph import GraphBuilder, StepContext
 
 from cloud_agents.workflow.core.conditions import evaluate_condition
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
-from cloud_agents.workflow.core.step_runner import run_step
+from cloud_agents.workflow.executor.step.base import StepInput
+from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
 
@@ -203,31 +204,43 @@ def _build_agent_step(
                 logger.info("Step '%s' skipped — condition not met", step_name)
                 return {"status": "skipped"}
 
-        step_input = {
-            "step": step_def,
-            "workflow_id": state.workflow_id,
-            "provider": state.provider,
-            "sandbox_image": state.sandbox_image,
-            "skills_image": state.skills_image,
-            "skills_paths": state.skills_paths,
-            "mcp_servers": state.mcp_servers,
-            "context": state.step_results,
-        }
-
-        result = await run_step(
-            step_input,
+        executor = get_step_executor(
+            step=step_def,
             spawner=state.spawner,
             transcript_store=state.transcript_store,
-            attempt=1,
         )
 
+        step_input = StepInput(
+            prompt=step_def.get("prompt", ""),
+            provider=state.provider,
+            system_prompt=step_def.get("instructions"),
+            output_schema=step_def.get("output_schema"),
+            tools=step_def.get("tools", []),
+            context=state.step_results,
+            timeout_seconds=step_def.get("timeout_seconds", 600),
+            sandbox_image=state.sandbox_image,
+            skills_image=state.skills_image,
+            skills_paths=state.skills_paths,
+            mcp_servers=state.mcp_servers,
+            workflow_id=state.workflow_id,
+            raw_step=step_def,
+            step_name=step_name,
+            output_key=output_key,
+        )
+
+        exec_result = await executor.run(step_input)
+
         state.step_results[output_key] = {
-            "status": result.get("status", "completed"),
-            "output": result.get("output"),
-            "error": result.get("error"),
+            "status": exec_result.status,
+            "output": exec_result.output,
+            "error": exec_result.error,
         }
 
-        return result
+        return {
+            "status": exec_result.status,
+            "output": exec_result.output,
+            "error": exec_result.error,
+        }
 
     return agent_step
 

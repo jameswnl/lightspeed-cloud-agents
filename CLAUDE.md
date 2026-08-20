@@ -31,12 +31,18 @@ Cloud Agents uses **Temporal** for workflow execution and **lightspeed-agentic-s
 
 ### Dead fields in WorkflowStepSpec
 
-These fields exist in the Pydantic model but are NOT read by `temporal_workflow.py` or `temporal_activities.py`:
-- `spawn` — always ephemeral in practice
-- `agent` — agent registry lookup not used in Temporal path
+These fields exist in the Pydantic model but are NOT read by the workflow engine:
+- `agent` — agent registry lookup not used
 - `spawn_config` — resource limits come from SpawnConfig defaults
 
-Do NOT use these in examples or documentation. The test `test_example_definitions.py::test_no_dead_fields` will catch it.
+Do NOT use these in examples or documentation. The test `test_no_dead_fields` will catch it.
+
+### Active fields: spawn mode
+
+The `spawn` field controls step execution isolation:
+- `none` — direct LLM call, no tools (not yet implemented)
+- `local` — pydantic-ai agent in subprocess (not yet implemented)
+- `ephemeral` — full OpenShell sandbox container (default)
 
 ## Schema Validation
 
@@ -113,7 +119,7 @@ When updating documentation:
 
 ## Common Mistakes
 
-- Using `spawn: ephemeral` or `agent: some-agent` in YAML examples — these fields are dead
+- Using `agent: some-agent` in YAML examples — this field is dead (spawn is now active with values none/local/ephemeral)
 - Referencing `pydantic-ai` in the workflow context — pydantic-ai is not used in this repo; the sandbox uses OpenAI agents SDK
 - Claiming `PermissionScope` (allowed_tools/denied_tools) is fully enforced — the runner forwards `allowedTools`/`deniedTools` in the sandbox POST body, but sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox)
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
