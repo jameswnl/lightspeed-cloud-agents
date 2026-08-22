@@ -1,7 +1,7 @@
 """DirectExecutor — spawn: none LLM-only step executor.
 
 Executes a single LLM call with no tools or agent loop.
-Uses the OpenAI-compatible chat completions API via httpx.
+Uses pydantic-ai model_request for provider-agnostic LLM access.
 
 No temporalio imports.
 """
@@ -10,63 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
-from typing import Any, Optional
+from typing import Any
 
-import httpx
+from pydantic_ai.direct import model_request
+from pydantic_ai.messages import ModelRequest
 
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
+from cloud_agents.workflow.executor.step.provider import ensure_credentials_env, to_model_string
 
 logger = logging.getLogger(__name__)
-
-_UNSUPPORTED_NATIVE_PROVIDERS = frozenset({"anthropic"})
-
-_PROVIDER_BASE_URLS: dict[str, str] = {
-    "openai": "https://api.openai.com/v1",
-    "azure": "",
-}
-
-_PROVIDER_ENV_KEYS: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "azure": "AZURE_OPENAI_API_KEY",
-}
-
-
-def _resolve_api_key(provider: dict[str, Any]) -> str | None:
-    """Resolve LLM API key from provider config and environment.
-
-    Parameters:
-        provider: Provider configuration dict.
-
-    Returns:
-        API key string or None if not found.
-    """
-    cred_secret = provider.get("credentials_secret", "")
-    if cred_secret:
-        env_key = cred_secret.upper().replace("-", "_")
-        return os.environ.get(env_key) or os.environ.get(cred_secret)
-
-    provider_name = provider.get("name", "openai")
-    default_key = _PROVIDER_ENV_KEYS.get(provider_name, "")
-    if default_key:
-        return os.environ.get(default_key)
-    return None
-
-
-def _resolve_base_url(provider: dict[str, Any]) -> str:
-    """Resolve LLM API base URL from provider config.
-
-    Parameters:
-        provider: Provider configuration dict.
-
-    Returns:
-        Base URL string for the API endpoint.
-    """
-    if base_url := provider.get("base_url"):
-        return base_url
-    provider_name = provider.get("name", "openai")
-    return _PROVIDER_BASE_URLS.get(provider_name, _PROVIDER_BASE_URLS["openai"])
 
 
 def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
@@ -98,9 +51,7 @@ def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
 
     if step_input.output_schema:
         schema_str = json.dumps(step_input.output_schema, indent=2)
-        user_content = (
-            f"{user_content}\n\nRespond with JSON matching this schema:\n{schema_str}"
-        )
+        user_content = f"{user_content}\n\nRespond with JSON matching this schema:\n{schema_str}"
 
     messages.append({"role": "user", "content": user_content})
     return messages
@@ -109,68 +60,43 @@ def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
 async def _call_llm(
     provider: dict[str, Any],
     messages: list[dict[str, str]],
-    output_schema: dict[str, Any] | None = None,
     timeout_seconds: int = 600,
 ) -> dict[str, Any]:
-    """Call LLM via OpenAI-compatible chat completions API.
+    """Call LLM via pydantic-ai model_request.
 
     Parameters:
         provider: Provider config (name, model, credentials_secret).
         messages: Chat messages list.
-        output_schema: Optional JSON Schema for structured output.
         timeout_seconds: Request timeout.
 
     Returns:
         Dict with content, input_tokens, output_tokens.
 
     Raises:
-        ValueError: If API key cannot be resolved.
-        httpx.HTTPStatusError: If API returns error status.
+        ValueError: If provider name is unknown.
     """
-    provider_name = provider.get("name", "openai")
-    if provider_name in _UNSUPPORTED_NATIVE_PROVIDERS and not provider.get("base_url"):
-        raise ValueError(
-            f"Provider '{provider_name}' uses a non-OpenAI-compatible API. "
-            f"Set base_url to an OpenAI-compatible proxy, or use provider 'openai'."
-        )
+    ensure_credentials_env(provider)
+    model_string = to_model_string(provider)
 
-    api_key = _resolve_api_key(provider)
-    if not api_key:
-        raise ValueError(
-            f"Could not resolve API key for provider '{provider.get('name', 'unknown')}'. "
-            f"Set the credential environment variable (e.g. OPENAI_API_KEY)."
-        )
+    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    user_parts = [m["content"] for m in messages if m["role"] == "user"]
 
-    base_url = _resolve_base_url(provider)
-    model = provider.get("model", "gpt-4o")
+    instructions = system_parts[0] if system_parts else None
+    user_prompt = "\n\n".join(user_parts)
 
-    request_body: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-    }
+    request = ModelRequest.user_text_prompt(user_prompt, instructions=instructions)
 
-    if output_schema:
-        request_body["response_format"] = {"type": "json_object"}
+    response = await model_request(
+        model_string,
+        [request],
+        model_settings={"timeout": timeout_seconds},
+    )
 
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=request_body,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    content = data["choices"][0]["message"]["content"]
-    usage = data.get("usage", {})
-
+    usage = response.usage
     return {
-        "content": content,
-        "input_tokens": usage.get("prompt_tokens", 0),
-        "output_tokens": usage.get("completion_tokens", 0),
+        "content": response.text,
+        "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
     }
 
 
@@ -196,7 +122,7 @@ class DirectExecutor(StepExecutor):
         if step_input.tools:
             logger.warning(
                 "DirectExecutor (spawn: none) ignores tools %s for step '%s'. "
-                "Use spawn: local or spawn: ephemeral for tool support.",
+                "Use spawn: ephemeral for tool support.",
                 step_input.tools,
                 step_input.step_name,
             )
@@ -207,7 +133,6 @@ class DirectExecutor(StepExecutor):
             llm_result = await _call_llm(
                 provider=step_input.provider,
                 messages=messages,
-                output_schema=step_input.output_schema,
                 timeout_seconds=step_input.timeout_seconds,
             )
 
@@ -248,7 +173,11 @@ class DirectExecutor(StepExecutor):
 
         except ValueError as exc:
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            logger.error("DirectExecutor credential error for step '%s': %s", step_input.step_name, exc)
+            logger.error(
+                "DirectExecutor failed for step '%s': %s",
+                step_input.step_name,
+                exc,
+            )
             return StepResult(
                 status="failed",
                 error=str(exc),
@@ -257,7 +186,9 @@ class DirectExecutor(StepExecutor):
 
         except Exception as exc:
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            logger.error("DirectExecutor failed for step '%s': %s", step_input.step_name, exc)
+            logger.error(
+                "DirectExecutor failed for step '%s': %s", step_input.step_name, exc
+            )
             return StepResult(
                 status="failed",
                 error=str(exc),
@@ -265,11 +196,11 @@ class DirectExecutor(StepExecutor):
             )
 
 
-def _parse_output(content: str, output_schema: dict[str, Any] | None) -> dict[str, Any]:
+def _parse_output(content: str | None, output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Parse LLM response content into structured output.
 
     Parameters:
-        content: Raw LLM response string.
+        content: Raw LLM response string (may be None for refusals).
         output_schema: Expected JSON Schema, if any.
 
     Returns:
@@ -278,6 +209,11 @@ def _parse_output(content: str, output_schema: dict[str, Any] | None) -> dict[st
     Raises:
         ValueError: If output_schema is set but response is not valid JSON.
     """
+    if content is None:
+        if output_schema:
+            raise ValueError("LLM returned null content but output_schema was requested")
+        return {"response": None}
+
     if output_schema:
         try:
             return json.loads(content)
