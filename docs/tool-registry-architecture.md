@@ -14,7 +14,7 @@ flowchart TD
     dispatch -->|"spawn: local"| subprocess["SubprocessExecutor<br/>pydantic-ai in subprocess<br/>Process isolation"]
     dispatch -->|"spawn: ephemeral"| sandbox["SandboxExecutor<br/>OpenShell container<br/>+ MCP tools"]
 
-    direct --> result["StepResult<br/>.status .output .transcript<br/>.input_tokens .output_tokens"]
+    direct --> result["StepResult<br/>.status .output .error"]
     subprocess --> result
     sandbox --> result
 ```
@@ -30,7 +30,7 @@ flowchart TD
 | **Tool source** | ToolRegistry + MCP + skills *(planned)* | ToolRegistry + MCP + skills *(planned)* | Sandbox image + MCP servers |
 | **Agent loop** | Single call; `Agent.run` if tools *(planned)* | Single call; `Agent.run` if tools *(planned)* | Yes (agent SDK in container) |
 | **LLM transport** | pydantic-ai `model_request` | pydantic-ai `model_request` (in subprocess) | Agent SDK in sandbox |
-| **Timeout enforcement** | Cooperative (`asyncio.wait_for`) | Hard kill (`proc.kill()`) | Container terminate |
+| **Timeout enforcement** | pydantic-ai `model_settings.timeout` | Hard kill (`proc.kill()`) | Container terminate |
 | **Providers** | All (via pydantic-ai) | All (via pydantic-ai) | Configured in sandbox env vars |
 | **Infrastructure needed** | Nothing (just PostgreSQL) | Nothing (just PostgreSQL) | OpenShell gateway + sandbox image |
 | **Best for** | Trusted tools, low latency | Semi-trusted tools, crash safety | Untrusted code, shell access |
@@ -127,7 +127,7 @@ flowchart TD
         sb_spawn --> sb_run --> sb_events --> sb_destroy
     end
 
-    direct --> result["StepResult<br/>.status  .output  .transcript<br/>.input_tokens  .output_tokens  .duration_ms"]
+    direct --> result["StepResult<br/>.status  .output  .error"]
     subprocess --> result
     sandbox --> result
 
@@ -147,14 +147,14 @@ flowchart LR
     end
 
     subgraph mapper["to_model_string()"]
-        map["_PROVIDER_NAME_MAP:<br/>openai → openai<br/>anthropic → anthropic<br/>gemini → google-gla<br/>azure → openai<br/>bedrock → bedrock"]
+        map["_PROVIDER_NAME_MAP:<br/>openai → openai<br/>anthropic → anthropic<br/>gemini → google-gla<br/>azure → azure<br/>bedrock → bedrock"]
     end
 
     subgraph output["pydantic-ai Model String"]
         openai_out["openai:gpt-4o"]
         anthropic_out["anthropic:claude-sonnet-5"]
         gemini_out["google-gla:gemini-2.5-pro"]
-        azure_out["openai:gpt-4o<br/>with Azure endpoint"]
+        azure_out["azure:gpt-4o"]
         bedrock_out["bedrock:us.anthropic.claude-..."]
     end
 
