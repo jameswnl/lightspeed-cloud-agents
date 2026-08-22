@@ -166,3 +166,37 @@ class TestEnsureCredentialsEnv:
 
         # Should not raise
         ensure_credentials_env({"name": "bedrock", "credentials_secret": "k"})
+
+    def test_azure_sets_endpoint_env(self, mocker: MockerFixture) -> None:
+        """Azure provider sets AZURE_OPENAI_ENDPOINT from base_url."""
+        from cloud_agents.workflow.executor.step.provider import ensure_credentials_env
+
+        env_copy = {k: v for k, v in os.environ.items()
+                    if k not in ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT")}
+        env_copy["MY_AZURE_KEY"] = "sk-azure-123"
+        mocker.patch.dict(os.environ, env_copy, clear=True)
+
+        ensure_credentials_env({
+            "name": "azure",
+            "credentials_secret": "my-azure-key",
+            "base_url": "https://myorg.openai.azure.com",
+        })
+
+        assert os.environ.get("AZURE_OPENAI_API_KEY") == "sk-azure-123"
+        assert os.environ.get("AZURE_OPENAI_ENDPOINT") == "https://myorg.openai.azure.com"
+
+    def test_azure_does_not_overwrite_endpoint(self, mocker: MockerFixture) -> None:
+        """Azure does not overwrite existing AZURE_OPENAI_ENDPOINT."""
+        from cloud_agents.workflow.executor.step.provider import ensure_credentials_env
+
+        mocker.patch.dict(os.environ, {
+            "AZURE_OPENAI_API_KEY": "sk-existing",
+            "AZURE_OPENAI_ENDPOINT": "https://existing.azure.com",
+        }, clear=False)
+
+        ensure_credentials_env({
+            "name": "azure",
+            "base_url": "https://new.azure.com",
+        })
+
+        assert os.environ.get("AZURE_OPENAI_ENDPOINT") == "https://existing.azure.com"

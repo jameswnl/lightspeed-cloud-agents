@@ -80,11 +80,13 @@ def resolve_api_key(provider: dict[str, Any]) -> str | None:
 
 
 def ensure_credentials_env(provider: dict[str, Any]) -> None:
-    """Ensure the provider's API key is set in the env var pydantic-ai expects.
+    """Ensure the provider's API key and endpoint are set for pydantic-ai.
 
     pydantic-ai reads credentials from well-known env vars (OPENAI_API_KEY,
     ANTHROPIC_API_KEY, etc.). This function resolves the key from the workflow
     provider config and sets it if not already present.
+
+    For Azure, also sets AZURE_OPENAI_ENDPOINT from the provider's base_url.
 
     Parameters:
         provider: Provider config dict.
@@ -101,3 +103,9 @@ def ensure_credentials_env(provider: dict[str, Any]) -> None:
     if api_key:
         os.environ[target_env] = api_key
         logger.debug("Set %s from credentials_secret for pydantic-ai", target_env)
+
+    if name == "azure":
+        base_url = provider.get("base_url")
+        if base_url and not os.environ.get("AZURE_OPENAI_ENDPOINT"):
+            os.environ["AZURE_OPENAI_ENDPOINT"] = base_url
+            logger.debug("Set AZURE_OPENAI_ENDPOINT from provider base_url")

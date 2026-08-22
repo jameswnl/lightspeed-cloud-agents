@@ -63,23 +63,51 @@ async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
     system_prompt = input_data.get("system_prompt")
     output_schema = input_data.get("output_schema")
     context = input_data.get("context", {})
+    timeout_seconds = input_data.get("timeout_seconds", 600)
 
-    # Build user message with context and schema instructions
     user_content = prompt
     if context:
-        context_text = json.dumps(context, indent=2)
-        user_content = f"Prior step results:\n{context_text}\n\n{prompt}"
+        context_parts = []
+        for key, value in context.items():
+            if isinstance(value, dict) and "output" in value:
+                context_parts.append(
+                    f"Previous step '{key}': {json.dumps(value['output'], indent=2)}"
+                )
+        if context_parts:
+            context_block = "\n\n".join(context_parts)
+            user_content = f"{user_content}\n\n--- Prior step outputs ---\n{context_block}"
     if output_schema:
         schema_text = json.dumps(output_schema, indent=2)
         user_content += f"\n\nRespond with valid JSON matching this schema:\n{schema_text}"
 
     request = ModelRequest.user_text_prompt(user_content, instructions=system_prompt)
-    response = await model_request(model_string, [request])
+    response = await model_request(
+        model_string,
+        [request],
+        model_settings={"timeout": timeout_seconds},
+    )
 
-    content = response.text or ""
+    content = response.text
     usage = response.usage
 
-    # Parse output
+    if content is None:
+        if output_schema:
+            return {
+                "status": "failed",
+                "error": "LLM returned null content but output_schema was requested",
+                "output": None,
+                "transcript": [],
+                "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            }
+        return {
+            "status": "completed",
+            "output": {"response": None},
+            "transcript": [],
+            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        }
+
     output: dict[str, Any] | None
     try:
         output = json.loads(content)

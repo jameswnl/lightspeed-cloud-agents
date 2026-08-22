@@ -75,14 +75,6 @@ async def _run_in_subprocess(
     """
     env = os.environ.copy()
 
-    provider = step_input_dict.get("provider", {})
-    cred_secret = provider.get("credentials_secret", "")
-    if cred_secret:
-        env_key = cred_secret.upper().replace("-", "_")
-        api_key = os.environ.get(env_key) or os.environ.get(cred_secret)
-        if api_key:
-            env[env_key] = api_key
-
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",

@@ -60,7 +60,6 @@ def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
 async def _call_llm(
     provider: dict[str, Any],
     messages: list[dict[str, str]],
-    output_schema: dict[str, Any] | None = None,
     timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     """Call LLM via pydantic-ai model_request.
@@ -68,7 +67,6 @@ async def _call_llm(
     Parameters:
         provider: Provider config (name, model, credentials_secret).
         messages: Chat messages list.
-        output_schema: Optional JSON Schema for structured output.
         timeout_seconds: Request timeout.
 
     Returns:
@@ -80,7 +78,6 @@ async def _call_llm(
     ensure_credentials_env(provider)
     model_string = to_model_string(provider)
 
-    # Extract system and user parts from messages
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
     user_parts = [m["content"] for m in messages if m["role"] == "user"]
 
@@ -89,7 +86,11 @@ async def _call_llm(
 
     request = ModelRequest.user_text_prompt(user_prompt, instructions=instructions)
 
-    response = await model_request(model_string, [request])
+    response = await model_request(
+        model_string,
+        [request],
+        model_settings={"timeout": timeout_seconds},
+    )
 
     usage = response.usage
     return {
@@ -132,7 +133,6 @@ class DirectExecutor(StepExecutor):
             llm_result = await _call_llm(
                 provider=step_input.provider,
                 messages=messages,
-                output_schema=step_input.output_schema,
                 timeout_seconds=step_input.timeout_seconds,
             )
 
