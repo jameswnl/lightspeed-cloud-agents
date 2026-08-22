@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Cloud Agents uses **Temporal** for workflow execution and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (WorkflowExecutor, StepDispatcher, RecoveryPoller, pydantic-ai agents, PostgreSQL persistence) — it was deleted in PoC2.
+Cloud Agents uses **Temporal** or **pydantic-graph** (local executor) for workflow execution, **pydantic-ai** for LLM calls in spawn: none/local steps, and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (WorkflowExecutor, StepDispatcher, RecoveryPoller, PostgreSQL persistence) — it was deleted in PoC2.
 
 ### Key components
 
@@ -40,9 +40,11 @@ Do NOT use these in examples or documentation. The test `test_no_dead_fields` wi
 ### Active fields: spawn mode
 
 The `spawn` field controls step execution isolation:
-- `none` — direct LLM call, no tools (not yet implemented)
-- `local` — pydantic-ai agent in subprocess (not yet implemented)
+- `none` — direct LLM call via pydantic-ai `model_request`, no tools, runs in-process
+- `local` — LLM call via pydantic-ai in a forked subprocess, process-level isolation
 - `ephemeral` — full OpenShell sandbox container (default)
+
+Tool support for `none` and `local` is planned (#131 PR B).
 
 ## Schema Validation
 
@@ -120,7 +122,7 @@ When updating documentation:
 ## Common Mistakes
 
 - Using `agent: some-agent` in YAML examples — this field is dead (spawn is now active with values none/local/ephemeral)
-- Referencing `pydantic-ai` in the workflow context — pydantic-ai is not used in this repo; the sandbox uses OpenAI agents SDK
+- Claiming spawn: none/local support tools — tool support via pydantic-ai Agent is planned (#131 PR B); currently both modes do single LLM calls only
 - Claiming `PermissionScope` (allowed_tools/denied_tools) is fully enforced — the runner forwards `allowedTools`/`deniedTools` in the sandbox POST body, but sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox)
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`

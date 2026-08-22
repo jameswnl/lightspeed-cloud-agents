@@ -32,7 +32,7 @@ The framework provides the workflow engine, spawner, and observability. Product 
 Chain agents with conditions, retry, approval gates, escalation. Low-risk steps auto-approve; high-risk steps require human review.
 
 ### R3. Ephemeral-by-default [G2]
-Each agent step with `spawn: ephemeral` spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. `human-approval` steps do not spawn containers. Steps dispatch through a `StepExecutor` interface based on `spawn` mode: `ephemeral` (default) runs in sandbox containers, `local` runs pydantic-ai agents in subprocesses (planned), `none` makes direct LLM calls without tools (planned).
+Each agent step with `spawn: ephemeral` spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. `human-approval` steps do not spawn containers. Steps dispatch through a `StepExecutor` interface based on `spawn` mode: `ephemeral` (default) runs in sandbox containers, `local` runs pydantic-ai LLM calls in forked subprocesses for process-level isolation, `none` makes direct pydantic-ai LLM calls in-process. Tool support for `none` and `local` is planned (#131 PR B).
 
 ### R4. Human-in-the-loop [G2]
 Diagnose → Propose → Gate → Execute → Verify. Structured output with risk levels. Approval gates pause workflows for human review.
