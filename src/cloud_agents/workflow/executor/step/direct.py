@@ -174,7 +174,7 @@ class DirectExecutor(StepExecutor):
         except ValueError as exc:
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
             logger.error(
-                "DirectExecutor credential error for step '%s': %s",
+                "DirectExecutor failed for step '%s': %s",
                 step_input.step_name,
                 exc,
             )

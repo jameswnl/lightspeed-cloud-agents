@@ -319,15 +319,20 @@ class TestSubprocessChildModuleInvocation:
 
     def test_no_httpx_import(self) -> None:
         """SubprocessExecutor does not import httpx."""
+        from pathlib import Path
+
         from cloud_agents.workflow.executor.step import subprocess_exec as mod
 
-        source = open(mod.__file__).read()
+        source = Path(mod.__file__).read_text()
         assert "import httpx" not in source
+        assert "from httpx" not in source
 
     def test_anthropic_works_natively(self, mocker: MockerFixture) -> None:
         """Anthropic provider is no longer rejected (pydantic-ai handles it)."""
+        from pathlib import Path
+
         from cloud_agents.workflow.executor.step import subprocess_exec as mod
 
-        source = open(mod.__file__).read()
+        source = Path(mod.__file__).read_text()
         assert "non-OpenAI-compatible" not in source
         assert "_UNSUPPORTED_NATIVE_PROVIDERS" not in source

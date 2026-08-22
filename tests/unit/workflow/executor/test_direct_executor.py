@@ -343,6 +343,7 @@ class TestDirectExecutorRun:
         mock_fn.assert_called_once()
         call_args = mock_fn.call_args
         assert call_args[0][0] == "openai:gpt-4o"
+        assert call_args.kwargs["model_settings"]["timeout"] == 600
 
 
 class TestDirectExecutorDispatch:

@@ -207,6 +207,44 @@ class TestSubprocessChildMain:
         assert result["status"] == "completed"
         assert result["output"] == {"response": "Just a summary."}
 
+    def test_none_content_without_schema(self, mocker: MockerFixture) -> None:
+        """main() handles None content without schema gracefully."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = None
+        mock_response.usage = RequestUsage(input_tokens=10, output_tokens=0)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        input_data = {
+            "prompt": "Summarize",
+            "provider": {"name": "openai", "model": "gpt-4o"},
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "completed"
+        assert result["output"] == {"response": None}
+
     def test_context_included_in_user_prompt(self, mocker: MockerFixture) -> None:
         """main() includes prior step context in the user prompt."""
         from pydantic_ai.usage import RequestUsage

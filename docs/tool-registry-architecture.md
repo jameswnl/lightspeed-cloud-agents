@@ -27,9 +27,9 @@ flowchart TD
 | **Tool support** | pydantic-ai `@tool` *(planned)* | pydantic-ai `@tool` *(planned)* | MCP + Shell + Filesystem + Skills |
 | **MCP servers** | Remote (HTTP/SSE) *(planned)* | Remote (HTTP/SSE) *(planned)* | Local + remote (inside container) |
 | **Skills** | pip packages or skills_dir *(planned)* | pip packages or skills_dir *(planned)* | OCI image via init container |
-| **Tool source** | ToolRegistry + MCP + skills | ToolRegistry + MCP + skills | Sandbox image + MCP servers |
-| **Agent loop** | Yes if tools, single call if not | Yes (`Agent.run` in subprocess) | Yes (agent SDK in container) |
-| **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `Agent.run` | Agent SDK in sandbox |
+| **Tool source** | ToolRegistry + MCP + skills *(planned)* | ToolRegistry + MCP + skills *(planned)* | Sandbox image + MCP servers |
+| **Agent loop** | Single call; `Agent.run` if tools *(planned)* | Single call; `Agent.run` if tools *(planned)* | Yes (agent SDK in container) |
+| **LLM transport** | pydantic-ai `model_request` | pydantic-ai `model_request` (in subprocess) | Agent SDK in sandbox |
 | **Timeout enforcement** | Cooperative (`asyncio.wait_for`) | Hard kill (`proc.kill()`) | Container terminate |
 | **Providers** | All (via pydantic-ai) | All (via pydantic-ai) | Configured in sandbox env vars |
 | **Infrastructure needed** | Nothing (just PostgreSQL) | Nothing (just PostgreSQL) | OpenShell gateway + sandbox image |
@@ -105,22 +105,16 @@ flowchart TD
 
     subgraph direct["DirectExecutor (no isolation)"]
         d_provider["provider.py:<br/>to_model_string()<br/>ensure_credentials_env()"]
-        d_check{"tools?"}
-        d_agent["pydantic-ai:<br/>Agent.run() in-process"]
         d_llm["pydantic-ai:<br/>model_request()"]
-        d_provider --> d_check
-        d_check -->|"yes"| d_agent
-        d_check -->|"no"| d_llm
+        d_provider --> d_llm
     end
 
     subgraph subprocess["SubprocessExecutor (process isolation)"]
         s_fork["Fork subprocess:<br/>python -m subprocess_child"]
         subgraph child_proc["Child Process"]
             s_provider["provider.py:<br/>to_model_string()"]
-            s_tools["tools.py:<br/>get_tools()"]
-            s_agent["pydantic-ai:<br/>Agent.run()"]
-            s_provider --> s_agent
-            s_tools --> s_agent
+            s_llm["pydantic-ai:<br/>model_request()"]
+            s_provider --> s_llm
         end
         s_fork --> child_proc
     end

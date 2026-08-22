@@ -33,11 +33,11 @@ class TestToModelString:
         assert result == "google-gla:gemini-2.5-pro"
 
     def test_azure_provider(self) -> None:
-        """Azure provider maps to openai: prefix (uses OpenAI-compatible API)."""
+        """Azure provider maps to azure: prefix (native pydantic-ai Azure support)."""
         from cloud_agents.workflow.executor.step.provider import to_model_string
 
         result = to_model_string({"name": "azure", "model": "gpt-4o"})
-        assert result == "openai:gpt-4o"
+        assert result == "azure:gpt-4o"
 
     def test_bedrock_provider(self) -> None:
         """Bedrock provider maps to bedrock: prefix."""

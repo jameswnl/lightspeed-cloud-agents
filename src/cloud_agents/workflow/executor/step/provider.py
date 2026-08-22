@@ -17,7 +17,7 @@ _PROVIDER_NAME_MAP: dict[str, str] = {
     "anthropic": "anthropic",
     "claude": "anthropic",
     "gemini": "google-gla",
-    "azure": "openai",
+    "azure": "azure",
     "bedrock": "bedrock",
 }
 
@@ -98,6 +98,13 @@ def ensure_credentials_env(provider: dict[str, Any]) -> None:
         provider: Provider config dict.
     """
     name = provider.get("name", "")
+
+    if name == "azure":
+        base_url = provider.get("base_url")
+        if base_url and not os.environ.get("AZURE_OPENAI_ENDPOINT"):
+            os.environ["AZURE_OPENAI_ENDPOINT"] = base_url
+            logger.debug("Set AZURE_OPENAI_ENDPOINT from provider base_url")
+
     target_env = _PROVIDER_ENV_KEYS.get(name)
     if not target_env:
         return
@@ -109,9 +116,3 @@ def ensure_credentials_env(provider: dict[str, Any]) -> None:
     if api_key:
         os.environ[target_env] = api_key
         logger.debug("Set %s from credentials_secret for pydantic-ai", target_env)
-
-    if name == "azure":
-        base_url = provider.get("base_url")
-        if base_url and not os.environ.get("AZURE_OPENAI_ENDPOINT"):
-            os.environ["AZURE_OPENAI_ENDPOINT"] = base_url
-            logger.debug("Set AZURE_OPENAI_ENDPOINT from provider base_url")
