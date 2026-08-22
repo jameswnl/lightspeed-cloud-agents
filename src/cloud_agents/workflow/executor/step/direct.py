@@ -122,7 +122,7 @@ class DirectExecutor(StepExecutor):
         if step_input.tools:
             logger.warning(
                 "DirectExecutor (spawn: none) ignores tools %s for step '%s'. "
-                "Use spawn: local or spawn: ephemeral for tool support.",
+                "Use spawn: ephemeral for tool support.",
                 step_input.tools,
                 step_input.step_name,
             )

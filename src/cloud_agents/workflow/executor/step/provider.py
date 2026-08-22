@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _PROVIDER_NAME_MAP: dict[str, str] = {
     "openai": "openai",
     "anthropic": "anthropic",
+    "claude": "anthropic",
     "gemini": "google-gla",
     "azure": "openai",
     "bedrock": "bedrock",
@@ -23,6 +24,7 @@ _PROVIDER_NAME_MAP: dict[str, str] = {
 _PROVIDER_ENV_KEYS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
     "gemini": "GOOGLE_API_KEY",
     "azure": "AZURE_OPENAI_API_KEY",
 }
@@ -87,6 +89,10 @@ def ensure_credentials_env(provider: dict[str, Any]) -> None:
     provider config and sets it if not already present.
 
     For Azure, also sets AZURE_OPENAI_ENDPOINT from the provider's base_url.
+
+    Note: This mutates os.environ. First-key-wins — if the env var is already
+    set, it is not overwritten. This is intentional: pydantic-ai has no API to
+    pass credentials directly, so env vars are the only injection point.
 
     Parameters:
         provider: Provider config dict.

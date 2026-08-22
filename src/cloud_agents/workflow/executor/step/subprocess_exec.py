@@ -1,8 +1,8 @@
-"""SubprocessExecutor — spawn: local agent execution in a child process.
+"""SubprocessExecutor — spawn: local LLM execution in a child process.
 
-Runs an LLM agent with tools in a forked subprocess for process-level
-isolation. The child process dies on crash/timeout/memory leak without
-affecting the workflow runner.
+Runs an LLM call in a forked subprocess for process-level isolation.
+The child process dies on crash/timeout/memory leak without affecting
+the workflow runner. Tool support is planned for PR B of #131.
 
 Uses asyncio.create_subprocess_exec to spawn a child that runs the
 agent logic and returns results via stdout (JSON serialized).

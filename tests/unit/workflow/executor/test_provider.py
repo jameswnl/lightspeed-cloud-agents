@@ -46,6 +46,13 @@ class TestToModelString:
         result = to_model_string({"name": "bedrock", "model": "us.anthropic.claude-sonnet-5"})
         assert result == "bedrock:us.anthropic.claude-sonnet-5"
 
+    def test_claude_alias(self) -> None:
+        """'claude' is an alias for 'anthropic'."""
+        from cloud_agents.workflow.executor.step.provider import to_model_string
+
+        result = to_model_string({"name": "claude", "model": "claude-sonnet-5"})
+        assert result == "anthropic:claude-sonnet-5"
+
     def test_unknown_provider_raises(self) -> None:
         """Unknown provider raises ValueError with supported list."""
         from cloud_agents.workflow.executor.step.provider import to_model_string
