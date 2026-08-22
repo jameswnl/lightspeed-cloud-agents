@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/workflow-definition.schema.json
+#
+# Local investigation workflow — demonstrates spawn: local (subprocess execution).
+# No sandbox containers needed. Agent runs in a subprocess with process-level isolation.
+apiVersion: v1
+kind: AgentWorkflow
+metadata:
+  name: local-investigate-alerts
+spec:
+  steps:
+    - name: triage
+      type: agent
+      spawn: none
+      output_key: triage_result
+      prompt: >
+        Alert: "Pod api-server-7d8b4c6f9-xyz in namespace production has
+        been in CrashLoopBackOff for 15 minutes. Last exit code: 137 (OOMKilled)."
+        Classify severity and category.
+      output_schema:
+        type: object
+        properties:
+          severity:
+            type: string
+            enum: [low, medium, high, critical]
+          category:
+            type: string
+          summary:
+            type: string
+        required: [severity, category, summary]
+      timeout_seconds: 30
+
+    - name: investigate
+      type: agent
+      spawn: local
+      output_key: investigation
+      prompt: >
+        Based on the triage, investigate the root cause. The pod was
+        OOMKilled (exit code 137). Consider: memory limits vs actual usage,
+        recent deployments, application memory leaks, JVM heap settings.
+        Provide specific kubectl commands to run and expected findings.
+      instructions: >
+        You are a Kubernetes debugging specialist. Provide structured
+        investigation steps with specific commands and expected outputs.
+      output_schema:
+        type: object
+        properties:
+          root_cause:
+            type: string
+          confidence:
+            type: string
+            enum: [low, medium, high]
+          investigation_steps:
+            type: array
+            items:
+              type: object
+              properties:
+                description:
+                  type: string
+                command:
+                  type: string
+          recommended_fix:
+            type: string
+        required: [root_cause, confidence, recommended_fix]
+      timeout_seconds: 60
+
+    - name: approve-fix
+      type: human-approval
+      output_key: approval
+      message: >
+        Investigation complete. Approve the recommended fix?
+      risk_level: medium
+
+    - name: generate-fix
+      type: agent
+      spawn: local
+      output_key: fix_plan
+      prompt: >
+        Generate a detailed fix plan based on the investigation findings.
+        Include kubectl commands, expected outcomes, and rollback steps.
+      output_schema:
+        type: object
+        properties:
+          fix_steps:
+            type: array
+            items:
+              type: object
+              properties:
+                action:
+                  type: string
+                command:
+                  type: string
+                rollback_command:
+                  type: string
+          estimated_downtime_minutes:
+            type: integer
+          risk_assessment:
+            type: string
+        required: [fix_steps, risk_assessment]
+      timeout_seconds: 60

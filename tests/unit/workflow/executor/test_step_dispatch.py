@@ -43,25 +43,27 @@ class TestGetStepExecutor:
                 spawner=None,
             )
 
-    def test_none_raises_not_implemented(self) -> None:
-        """spawn: none raises NotImplementedError (Phase 1 work)."""
+    def test_none_returns_direct_executor(self) -> None:
+        """spawn: none returns DirectExecutor."""
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
         from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
-        with pytest.raises(NotImplementedError, match="none"):
-            get_step_executor(
-                step={"name": "s1", "spawn": "none"},
-                spawner=None,
-            )
+        executor = get_step_executor(
+            step={"name": "s1", "spawn": "none"},
+            spawner=None,
+        )
+        assert isinstance(executor, DirectExecutor)
 
-    def test_local_raises_not_implemented(self) -> None:
-        """spawn: local raises NotImplementedError (Phase 2 work)."""
+    def test_local_returns_subprocess_executor(self) -> None:
+        """spawn: local returns SubprocessExecutor."""
         from cloud_agents.workflow.executor.step.dispatch import get_step_executor
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
 
-        with pytest.raises(NotImplementedError, match="local"):
-            get_step_executor(
-                step={"name": "s1", "spawn": "local"},
-                spawner=None,
-            )
+        executor = get_step_executor(
+            step={"name": "s1", "spawn": "local"},
+            spawner=None,
+        )
+        assert isinstance(executor, SubprocessExecutor)
 
     def test_unknown_spawn_raises(self) -> None:
         """Unknown spawn mode raises ValueError."""

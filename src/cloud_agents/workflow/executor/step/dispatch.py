@@ -37,16 +37,14 @@ def get_step_executor(
     step_name = step.get("name", "unknown")
 
     if mode == "none":
-        raise NotImplementedError(
-            f"spawn: none is not yet implemented (step '{step_name}'). "
-            "Use spawn: ephemeral for now."
-        )
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        return DirectExecutor()
 
     if mode == "local":
-        raise NotImplementedError(
-            f"spawn: local is not yet implemented (step '{step_name}'). "
-            "Use spawn: ephemeral for now."
-        )
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        return SubprocessExecutor()
 
     if mode == "ephemeral":
         if spawner is None:

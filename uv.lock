@@ -741,11 +741,9 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "prometheus-client" },
     { name = "pydantic" },
-    { name = "pydantic-graph" },
     { name = "python-json-logger" },
     { name = "pyyaml" },
     { name = "starlette" },
-    { name = "temporalio" },
     { name = "uvicorn" },
 ]
 
@@ -753,11 +751,17 @@ dependencies = [
 kubernetes = [
     { name = "kubernetes" },
 ]
+local = [
+    { name = "pydantic-graph" },
+]
 openshell = [
     { name = "openshell" },
 ]
 podman = [
     { name = "podman" },
+]
+temporal = [
+    { name = "temporalio" },
 ]
 tls = [
     { name = "cryptography" },
@@ -768,11 +772,13 @@ dev = [
     { name = "black" },
     { name = "cryptography" },
     { name = "kubernetes" },
+    { name = "pydantic-graph" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-bdd" },
     { name = "pytest-mock" },
     { name = "ruff" },
+    { name = "temporalio" },
 ]
 load = [
     { name = "pytest" },
@@ -793,25 +799,27 @@ requires-dist = [
     { name = "podman", marker = "extra == 'podman'", specifier = ">=5.0.0" },
     { name = "prometheus-client", specifier = ">=0.21.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pydantic-graph", specifier = ">=2.28.0" },
+    { name = "pydantic-graph", marker = "extra == 'local'", specifier = ">=2.28.0" },
     { name = "python-json-logger", specifier = ">=4.1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.41.0" },
-    { name = "temporalio", specifier = ">=1.9.0" },
+    { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.9.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
 ]
-provides-extras = ["kubernetes", "podman", "tls", "openshell"]
+provides-extras = ["temporal", "local", "kubernetes", "podman", "tls", "openshell"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black" },
     { name = "cryptography", specifier = ">=44.0" },
     { name = "kubernetes", specifier = ">=30.1.0" },
+    { name = "pydantic-graph", specifier = ">=2.28.0" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-asyncio", specifier = ">=1.4" },
     { name = "pytest-bdd", specifier = ">=8.0" },
     { name = "pytest-mock", specifier = ">=3.15" },
     { name = "ruff" },
+    { name = "temporalio", specifier = ">=1.9.0" },
 ]
 load = [
     { name = "pytest", specifier = ">=9.0" },
