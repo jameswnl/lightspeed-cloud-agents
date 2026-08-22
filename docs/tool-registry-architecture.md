@@ -1,5 +1,8 @@
 # Tool Registry & Spawn Mode Architecture
 
+> **Note:** Diagrams marked *(Planned)* describe the target architecture from issue #131.
+> Items marked *(planned)* in the comparison table are not yet implemented.
+
 ## Spawn Mode Dispatch
 
 ```mermaid
@@ -7,8 +10,8 @@ flowchart TD
     YAML["Workflow Definition (YAML)<br/>steps with spawn: none / local / ephemeral"]
     YAML --> dispatch["get_step_executor()<br/>dispatch.py"]
 
-    dispatch -->|"spawn: none"| direct["DirectExecutor<br/>Single LLM call<br/>No tools, no agent loop"]
-    dispatch -->|"spawn: local"| subprocess["SubprocessExecutor<br/>pydantic-ai Agent<br/>+ registered tools<br/>in subprocess"]
+    dispatch -->|"spawn: none"| direct["DirectExecutor<br/>pydantic-ai in-process<br/>No isolation"]
+    dispatch -->|"spawn: local"| subprocess["SubprocessExecutor<br/>pydantic-ai in subprocess<br/>Process isolation"]
     dispatch -->|"spawn: ephemeral"| sandbox["SandboxExecutor<br/>OpenShell container<br/>+ MCP tools"]
 
     direct --> result["StepResult<br/>.status .output .transcript<br/>.input_tokens .output_tokens"]
@@ -20,51 +23,70 @@ flowchart TD
 
 | | spawn: none | spawn: local | spawn: ephemeral |
 |---|---|---|---|
-| **Tool support** | None | pydantic-ai `@tool` functions | MCP + Shell + Filesystem + Skills |
-| **Tool source** | N/A | ToolRegistry (in-process) | Sandbox image + MCP servers |
-| **Tool isolation** | N/A | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
-| **Agent loop** | No (single call) | Yes (`Agent.run`) | Yes (agent SDK in container) |
-| **LLM transport** | pydantic-ai `model_request` | pydantic-ai `Agent.run` | Agent SDK in sandbox |
+| **Isolation** | None (in-process) | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
+| **Tool support** | pydantic-ai `@tool` *(planned)* | pydantic-ai `@tool` *(planned)* | MCP + Shell + Filesystem + Skills |
+| **MCP servers** | Remote (HTTP/SSE) *(planned)* | Remote (HTTP/SSE) *(planned)* | Local + remote (inside container) |
+| **Skills** | pip packages or skills_dir *(planned)* | pip packages or skills_dir *(planned)* | OCI image via init container |
+| **Tool source** | ToolRegistry + MCP + skills | ToolRegistry + MCP + skills | Sandbox image + MCP servers |
+| **Agent loop** | Yes if tools, single call if not | Yes (`Agent.run` in subprocess) | Yes (agent SDK in container) |
+| **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `Agent.run` | Agent SDK in sandbox |
+| **Timeout enforcement** | Cooperative (`asyncio.wait_for`) | Hard kill (`proc.kill()`) | Container terminate |
 | **Providers** | All (via pydantic-ai) | All (via pydantic-ai) | Configured in sandbox env vars |
 | **Infrastructure needed** | Nothing (just PostgreSQL) | Nothing (just PostgreSQL) | OpenShell gateway + sandbox image |
+| **Best for** | Trusted tools, low latency | Semi-trusted tools, crash safety | Untrusted code, shell access |
 
-## Tool Registry Architecture (spawn: local)
+## Tool Registry Architecture (spawn: none + local) — *Planned (#131 PR B)*
 
 ```mermaid
 flowchart TD
-    subgraph startup["Application Startup"]
-        decorator["@step_tool('kubectl_get')<br/>def kubectl_get(resource, ns): ..."]
-        programmatic["register_tool('http_request', http_fn)"]
+    subgraph sources["Tool Sources"]
+        decorators["@step_tool decorated<br/>functions (code)"]
+        packages["pip-installed skill<br/>packages (import-time)"]
+        scan["skills_dir scan<br/>(startup discovery)"]
+        mcp["MCP servers<br/>(HTTP/SSE remote)"]
     end
 
     subgraph registry["ToolRegistry — tools.py"]
         store["_REGISTRY: dict[str, pydantic_ai.Tool]"]
-        entries["kubectl_get → Tool(fn)<br/>read_logs → Tool(fn)<br/>http_request → Tool(fn)<br/>read_file → Tool(fn)"]
         api["register_tool(name, func)<br/>get_tools(names) → list of Tool<br/>list_tools() → list of str"]
     end
 
-    decorator --> store
-    programmatic --> store
-    store --- entries
+    decorators --> store
+    packages --> store
+    scan --> store
     store --- api
 
     step_tools["step.tools: ['kubectl_get', 'read_logs']"]
     api -->|"get_tools()"| resolved["Returns: [Tool(kubectl_get), Tool(read_logs)]<br/>Raises ValueError for unknown names"]
 
     step_tools --> resolved
-    resolved --> executor["SubprocessExecutor.run()<br/>Serializes tool names via stdin JSON"]
 
-    subgraph child["Child Process — subprocess_child.py"]
+    resolved --> direct_exec["spawn: none → DirectExecutor<br/>Agent runs in-process<br/>No isolation"]
+    resolved --> subprocess_exec["spawn: local → SubprocessExecutor<br/>Tool names serialized via stdin"]
+
+    subgraph direct_agent["In-Process (DirectExecutor)"]
         direction TB
-        load["tools = get_tools(input['tools'])"]
-        agent["agent = Agent(<br/>    model_string,<br/>    instructions=system_prompt,<br/>    tools=tools,<br/>)"]
-        run["result = agent.run(prompt)"]
-        loop["Agent loop:<br/>LLM → tool_call → execute → LLM<br/>→ ... → final answer"]
-
-        load --> agent --> run --> loop
+        d_agent["agent = Agent(model, tools=tools)"]
+        d_run["result = await agent.run(prompt)"]
+        d_loop["Agent loop in runner process"]
+        d_agent --> d_run --> d_loop
     end
 
-    executor -->|"subprocess<br/>boundary"| child
+    subgraph child["Child Process (SubprocessExecutor)"]
+        direction TB
+        c_load["tools = get_tools(input['tools'])"]
+        c_agent["agent = Agent(model, tools=tools)"]
+        c_run["result = agent.run(prompt)"]
+        c_loop["Agent loop in subprocess<br/>Hard kill on timeout"]
+        c_load --> c_agent --> c_run --> c_loop
+    end
+
+    direct_exec --> direct_agent
+    subprocess_exec -->|"subprocess<br/>boundary"| child
+
+    mcp --> mcp_toolset["MCPServerHTTP toolset<br/>passed to Agent"]
+    mcp_toolset --> direct_agent
+    mcp_toolset --> child
 ```
 
 ## Data Flow: Step Execution Across Spawn Modes
@@ -81,14 +103,17 @@ flowchart TD
     dispatch -->|"spawn: local"| subprocess
     dispatch -->|"spawn: ephemeral"| sandbox
 
-    subgraph direct["DirectExecutor"]
+    subgraph direct["DirectExecutor (no isolation)"]
         d_provider["provider.py:<br/>to_model_string()<br/>ensure_credentials_env()"]
+        d_check{"tools?"}
+        d_agent["pydantic-ai:<br/>Agent.run() in-process"]
         d_llm["pydantic-ai:<br/>model_request()"]
-        d_tools["Tools: NONE"]
-        d_provider --> d_llm
+        d_provider --> d_check
+        d_check -->|"yes"| d_agent
+        d_check -->|"no"| d_llm
     end
 
-    subgraph subprocess["SubprocessExecutor"]
+    subgraph subprocess["SubprocessExecutor (process isolation)"]
         s_fork["Fork subprocess:<br/>python -m subprocess_child"]
         subgraph child_proc["Child Process"]
             s_provider["provider.py:<br/>to_model_string()"]
@@ -100,7 +125,7 @@ flowchart TD
         s_fork --> child_proc
     end
 
-    subgraph sandbox["SandboxExecutor"]
+    subgraph sandbox["SandboxExecutor (container isolation)"]
         sb_spawn["step_runner.py:<br/>spawn container"]
         sb_run["POST /v1/agent/run"]
         sb_events["GET /v1/agent/events"]
@@ -177,7 +202,7 @@ flowchart TD
     subgraph stage2["Stage 2: + cloud agents — spawn: none + local"]
         lcs2["lightspeed-stack + cloud agents + PostgreSQL"]
         cap2["/v1/workflows/*<br/>Multi-step workflows, approval gates<br/>Structured LLM calls, pydantic-ai tools<br/>NO new infrastructure"]
-        modes2["spawn: none → triage, classify, summarize<br/>spawn: local → K8s queries, log reading"]
+        modes2["spawn: none → triage, classify, K8s queries (trusted tools)<br/>spawn: local → same tools with crash isolation"]
     end
 
     stage2 -->|"Deploy OpenShell<br/>gateway"| stage3
