@@ -196,11 +196,11 @@ class DirectExecutor(StepExecutor):
             )
 
 
-def _parse_output(content: str, output_schema: dict[str, Any] | None) -> dict[str, Any]:
+def _parse_output(content: str | None, output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Parse LLM response content into structured output.
 
     Parameters:
-        content: Raw LLM response string.
+        content: Raw LLM response string (may be None for refusals).
         output_schema: Expected JSON Schema, if any.
 
     Returns:
@@ -209,6 +209,11 @@ def _parse_output(content: str, output_schema: dict[str, Any] | None) -> dict[st
     Raises:
         ValueError: If output_schema is set but response is not valid JSON.
     """
+    if content is None:
+        if output_schema:
+            raise ValueError("LLM returned null content but output_schema was requested")
+        return {"response": None}
+
     if output_schema:
         try:
             return json.loads(content)

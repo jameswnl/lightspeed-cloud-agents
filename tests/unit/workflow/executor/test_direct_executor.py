@@ -490,6 +490,20 @@ class TestParseOutput:
         result = _parse_output("Just text", None)
         assert result == {"response": "Just text"}
 
+    def test_none_content_without_schema(self) -> None:
+        """None content without schema returns response: None."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        result = _parse_output(None, None)
+        assert result == {"response": None}
+
+    def test_none_content_with_schema_raises(self) -> None:
+        """None content with output_schema raises ValueError."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        with pytest.raises(ValueError, match="null content"):
+            _parse_output(None, {"type": "object"})
+
 
 class TestFalsyOutputPreservation:
     """Tests for preserving falsy prior-step outputs."""
