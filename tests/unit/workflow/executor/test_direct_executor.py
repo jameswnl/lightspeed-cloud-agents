@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -35,6 +34,35 @@ class TestDirectExecutorInstantiation:
         assert "import temporalio" not in source
 
 
+def _mock_model_response(
+    mocker: MockerFixture, text: str, input_tokens: int = 0, output_tokens: int = 0
+) -> AsyncMock:
+    """Create a mock for pydantic_ai.direct.model_request that returns a ModelResponse.
+
+    Parameters:
+        mocker: Pytest mocker fixture.
+        text: Text content of the response.
+        input_tokens: Input token count for usage.
+        output_tokens: Output token count for usage.
+
+    Returns:
+        The mock object.
+    """
+    from pydantic_ai.usage import RequestUsage
+
+    mock_response = mocker.MagicMock()
+    mock_response.text = text
+    mock_usage = RequestUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+    mock_response.usage = mock_usage
+
+    mock_fn = mocker.patch(
+        "cloud_agents.workflow.executor.step.direct.model_request",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    )
+    return mock_fn
+
+
 class TestDirectExecutorRun:
     """Tests for DirectExecutor.run() — LLM-only execution."""
 
@@ -45,29 +73,36 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": '{"severity": "high", "category": "security"}',
-                "input_tokens": 100,
-                "output_tokens": 50,
-            },
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text='{"severity": "high", "category": "security"}',
+            input_tokens=100,
+            output_tokens=50,
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Classify this alert by severity",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "severity": {"type": "string"},
-                    "category": {"type": "string"},
+        result = await executor.run(
+            StepInput(
+                prompt="Classify this alert by severity",
+                provider={
+                    "name": "openai",
+                    "model": "gpt-4o",
+                    "credentials_secret": "openai-api-key",
                 },
-            },
-            workflow_id="wf-1",
-            step_name="triage",
-            output_key="triage_result",
-        ))
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string"},
+                        "category": {"type": "string"},
+                    },
+                },
+                workflow_id="wf-1",
+                step_name="triage",
+                output_key="triage_result",
+            )
+        )
 
         assert result.status == "completed"
         assert result.output == {"severity": "high", "category": "security"}
@@ -80,11 +115,13 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Classify this alert",
-            system_prompt="You are a security analyst.",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        messages = _build_messages(
+            StepInput(
+                prompt="Classify this alert",
+                system_prompt="You are a security analyst.",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert any(m["role"] == "system" for m in messages)
         system_msg = next(m for m in messages if m["role"] == "system")
@@ -96,16 +133,18 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Based on the diagnosis, recommend a fix",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            context={
-                "diagnosis": {
-                    "status": "completed",
-                    "output": {"severity": "high", "issue": "OOM"},
+        messages = _build_messages(
+            StepInput(
+                prompt="Based on the diagnosis, recommend a fix",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context={
+                    "diagnosis": {
+                        "status": "completed",
+                        "output": {"severity": "high", "issue": "OOM"},
+                    },
                 },
-            },
-        ))
+            )
+        )
 
         user_msg = next(m for m in messages if m["role"] == "user")
         assert "OOM" in user_msg["content"]
@@ -117,19 +156,22 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": "The alert is a false positive.",
-                "input_tokens": 40,
-                "output_tokens": 15,
-            },
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text="The alert is a false positive.",
+            input_tokens=40,
+            output_tokens=15,
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Summarize this alert",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Summarize this alert",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "completed"
         assert result.output == {"response": "The alert is a false positive."}
@@ -141,15 +183,21 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
             side_effect=Exception("API rate limit exceeded"),
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Classify this alert",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Classify this alert",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "failed"
         assert "rate limit" in result.error.lower()
@@ -161,20 +209,23 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": "Not valid JSON",
-                "input_tokens": 30,
-                "output_tokens": 10,
-            },
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text="Not valid JSON",
+            input_tokens=30,
+            output_tokens=10,
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Classify this",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            output_schema={"type": "object"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Classify this",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                output_schema={"type": "object"},
+            )
+        )
 
         assert result.status == "failed"
         assert "non-json" in result.error.lower()
@@ -186,20 +237,23 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": '{"ok": true}',
-                "input_tokens": 50,
-                "output_tokens": 20,
-            },
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=50,
+            output_tokens=20,
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Check it",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            step_name="check",
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Check it",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                step_name="check",
+            )
+        )
 
         assert len(result.transcript) >= 1
         assert any(e.get("type") == "llm.call" for e in result.transcript)
@@ -211,70 +265,84 @@ class TestDirectExecutorRun:
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": '{"ok": true}',
-                "input_tokens": 50,
-                "output_tokens": 20,
-            },
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=50,
+            output_tokens=20,
         )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="Check",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Check",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.duration_ms >= 0
 
-
-class TestDirectExecutorCredentials:
-    """Tests for credential resolution."""
-
-    def test_resolves_credentials_from_env(self, mocker: MockerFixture) -> None:
-        """_resolve_api_key resolves credentials_secret from environment."""
-        from cloud_agents.workflow.executor.step.direct import _resolve_api_key
-
-        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"}, clear=False)
-
-        key = _resolve_api_key({"name": "openai", "credentials_secret": "openai-api-key"})
-        assert key == "sk-test-123"
-
-    def test_resolves_uppercased_env_var(self, mocker: MockerFixture) -> None:
-        """_resolve_api_key normalizes credential secret to UPPER_SNAKE."""
-        from cloud_agents.workflow.executor.step.direct import _resolve_api_key
-
-        mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-123"}, clear=False)
-
-        key = _resolve_api_key({"name": "anthropic", "credentials_secret": "anthropic-api-key"})
-        assert key == "sk-ant-123"
-
-    def test_falls_back_to_provider_default(self, mocker: MockerFixture) -> None:
-        """_resolve_api_key falls back to provider default env var."""
-        from cloud_agents.workflow.executor.step.direct import _resolve_api_key
-
-        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-default"}, clear=False)
-
-        key = _resolve_api_key({"name": "openai"})
-        assert key == "sk-default"
-
     @pytest.mark.asyncio
-    async def test_missing_credentials_returns_failed(self, mocker: MockerFixture) -> None:
-        """DirectExecutor fails gracefully when credentials are missing."""
+    async def test_anthropic_provider_works(self, mocker: MockerFixture) -> None:
+        """Anthropic provider works natively via pydantic-ai (no longer rejected)."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
-        env_copy = {k: v for k, v in os.environ.items() if "OPENAI" not in k and "ANTHROPIC" not in k}
-        mocker.patch.dict(os.environ, env_copy, clear=True)
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
 
         executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={
+                    "name": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "credentials_secret": "anthropic-api-key",
+                },
+            )
+        )
 
-        assert result.status == "failed"
-        assert "api key" in result.error.lower()
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_model_request_called_with_correct_model_string(
+        self, mocker: MockerFixture
+    ) -> None:
+        """model_request is called with correct pydantic-ai model string."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mock_fn = _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        mock_fn.assert_called_once()
+        call_args = mock_fn.call_args
+        assert call_args[0][0] == "openai:gpt-4o"
 
 
 class TestDirectExecutorDispatch:
@@ -306,10 +374,12 @@ class TestBuildMessages:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Hello",
-            provider={"name": "openai", "model": "gpt-4o"},
-        ))
+        messages = _build_messages(
+            StepInput(
+                prompt="Hello",
+                provider={"name": "openai", "model": "gpt-4o"},
+            )
+        )
 
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
@@ -320,11 +390,13 @@ class TestBuildMessages:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Hello",
-            system_prompt="Be helpful",
-            provider={"name": "openai", "model": "gpt-4o"},
-        ))
+        messages = _build_messages(
+            StepInput(
+                prompt="Hello",
+                system_prompt="Be helpful",
+                provider={"name": "openai", "model": "gpt-4o"},
+            )
+        )
 
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
@@ -335,11 +407,16 @@ class TestBuildMessages:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Classify",
-            provider={"name": "openai", "model": "gpt-4o"},
-            output_schema={"type": "object", "properties": {"severity": {"type": "string"}}},
-        ))
+        messages = _build_messages(
+            StepInput(
+                prompt="Classify",
+                provider={"name": "openai", "model": "gpt-4o"},
+                output_schema={
+                    "type": "object",
+                    "properties": {"severity": {"type": "string"}},
+                },
+            )
+        )
 
         user_content = messages[-1]["content"]
         assert "JSON" in user_content
@@ -350,16 +427,18 @@ class TestBuildMessages:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Fix the issue",
-            provider={"name": "openai", "model": "gpt-4o"},
-            context={
-                "diagnosis": {
-                    "status": "completed",
-                    "output": {"issue": "disk full"},
+        messages = _build_messages(
+            StepInput(
+                prompt="Fix the issue",
+                provider={"name": "openai", "model": "gpt-4o"},
+                context={
+                    "diagnosis": {
+                        "status": "completed",
+                        "output": {"issue": "disk full"},
+                    },
                 },
-            },
-        ))
+            )
+        )
 
         user_content = messages[-1]["content"]
         assert "disk full" in user_content
@@ -369,11 +448,13 @@ class TestBuildMessages:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Hello",
-            provider={"name": "openai", "model": "gpt-4o"},
-            context={},
-        ))
+        messages = _build_messages(
+            StepInput(
+                prompt="Hello",
+                provider={"name": "openai", "model": "gpt-4o"},
+                context={},
+            )
+        )
 
         assert "Prior step" not in messages[-1]["content"]
 
@@ -409,54 +490,19 @@ class TestParseOutput:
         result = _parse_output("Just text", None)
         assert result == {"response": "Just text"}
 
+    def test_none_content_without_schema(self) -> None:
+        """None content without schema returns response: None."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
 
-class TestAntropicProviderRejection:
-    """Tests for native Anthropic provider rejection."""
+        result = _parse_output(None, None)
+        assert result == {"response": None}
 
-    @pytest.mark.asyncio
-    async def test_anthropic_without_base_url_fails(self, mocker: MockerFixture) -> None:
-        """DirectExecutor rejects native Anthropic provider without base_url."""
-        from cloud_agents.workflow.executor.step.base import StepInput
-        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+    def test_none_content_with_schema_raises(self) -> None:
+        """None content with output_schema raises ValueError."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
 
-        mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=False)
-
-        executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "anthropic", "model": "claude-sonnet-5", "credentials_secret": "anthropic-api-key"},
-        ))
-
-        assert result.status == "failed"
-        assert "non-openai-compatible" in result.error.lower()
-
-    @pytest.mark.asyncio
-    async def test_anthropic_with_base_url_allowed(self, mocker: MockerFixture) -> None:
-        """Anthropic provider with explicit base_url (proxy) is allowed."""
-        from cloud_agents.workflow.executor.step.base import StepInput
-        from cloud_agents.workflow.executor.step.direct import DirectExecutor
-
-        mocker.patch(
-            "cloud_agents.workflow.executor.step.direct._call_llm",
-            return_value={
-                "content": '{"ok": true}',
-                "input_tokens": 10,
-                "output_tokens": 5,
-            },
-        )
-
-        executor = DirectExecutor()
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={
-                "name": "anthropic",
-                "model": "claude-sonnet-5",
-                "credentials_secret": "k",
-                "base_url": "https://my-proxy.example.com/v1",
-            },
-        ))
-
-        assert result.status == "completed"
+        with pytest.raises(ValueError, match="null content"):
+            _parse_output(None, {"type": "object"})
 
 
 class TestFalsyOutputPreservation:
@@ -467,16 +513,18 @@ class TestFalsyOutputPreservation:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Check results",
-            provider={"name": "openai", "model": "gpt-4o"},
-            context={
-                "scan": {
-                    "status": "completed",
-                    "output": [],
+        messages = _build_messages(
+            StepInput(
+                prompt="Check results",
+                provider={"name": "openai", "model": "gpt-4o"},
+                context={
+                    "scan": {
+                        "status": "completed",
+                        "output": [],
+                    },
                 },
-            },
-        ))
+            )
+        )
 
         user_content = messages[-1]["content"]
         assert "Prior step" in user_content
@@ -487,16 +535,18 @@ class TestFalsyOutputPreservation:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import _build_messages
 
-        messages = _build_messages(StepInput(
-            prompt="Check count",
-            provider={"name": "openai", "model": "gpt-4o"},
-            context={
-                "count": {
-                    "status": "completed",
-                    "output": 0,
+        messages = _build_messages(
+            StepInput(
+                prompt="Check count",
+                provider={"name": "openai", "model": "gpt-4o"},
+                context={
+                    "count": {
+                        "status": "completed",
+                        "output": 0,
+                    },
                 },
-            },
-        ))
+            )
+        )
 
         user_content = messages[-1]["content"]
         assert "Prior step" in user_content

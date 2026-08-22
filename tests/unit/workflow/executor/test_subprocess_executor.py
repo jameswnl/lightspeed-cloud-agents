@@ -59,14 +59,20 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="Investigate the disk usage",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
-            tools=["kubectl_get", "read_logs"],
-            workflow_id="wf-1",
-            step_name="investigate",
-            output_key="investigation",
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Investigate the disk usage",
+                provider={
+                    "name": "openai",
+                    "model": "gpt-4o",
+                    "credentials_secret": "openai-api-key",
+                },
+                tools=["kubectl_get", "read_logs"],
+                workflow_id="wf-1",
+                step_name="investigate",
+                output_key="investigation",
+            )
+        )
 
         assert result.status == "completed"
         assert result.output == {"finding": "disk full on /var"}
@@ -85,10 +91,12 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="Investigate",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Investigate",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "failed"
         assert "crashed" in result.error.lower()
@@ -107,11 +115,13 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="Slow task",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            timeout_seconds=5,
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Slow task",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                timeout_seconds=5,
+            )
+        )
 
         assert result.status == "failed"
         assert "timed out" in result.error.lower()
@@ -122,7 +132,9 @@ class TestSubprocessExecutorRun:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
 
-        env_copy = {k: v for k, v in os.environ.items() if "OPENAI" not in k and "ANTHROPIC" not in k}
+        env_copy = {
+            k: v for k, v in os.environ.items() if "OPENAI" not in k and "ANTHROPIC" not in k
+        }
         mocker.patch.dict(os.environ, env_copy, clear=True)
 
         mocker.patch(
@@ -131,10 +143,16 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={
+                    "name": "openai",
+                    "model": "gpt-4o",
+                    "credentials_secret": "openai-api-key",
+                },
+            )
+        )
 
         assert result.status == "failed"
 
@@ -156,10 +174,12 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="Quick check",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Quick check",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.duration_ms >= 0
 
@@ -169,9 +189,9 @@ class TestSubprocessExecutorRun:
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
 
-        captured_input = {}
+        captured_input: dict[str, Any] = {}
 
-        async def mock_subprocess(step_input_dict, **kwargs):
+        async def mock_subprocess(step_input_dict: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
             captured_input.update(step_input_dict)
             return {
                 "status": "completed",
@@ -187,16 +207,18 @@ class TestSubprocessExecutorRun:
         )
 
         executor = SubprocessExecutor()
-        await executor.run(StepInput(
-            prompt="Fix based on diagnosis",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            context={
-                "diagnosis": {
-                    "status": "completed",
-                    "output": {"issue": "OOM"},
+        await executor.run(
+            StepInput(
+                prompt="Fix based on diagnosis",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context={
+                    "diagnosis": {
+                        "status": "completed",
+                        "output": {"issue": "OOM"},
+                    },
                 },
-            },
-        ))
+            )
+        )
 
         assert "context" in captured_input
         assert captured_input["context"]["diagnosis"]["output"]["issue"] == "OOM"
@@ -271,37 +293,41 @@ class TestSubprocessCancellation:
 
         executor = SubprocessExecutor()
         with pytest.raises(asyncio.CancelledError):
-            await executor.run(StepInput(
-                prompt="Long task",
-                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            ))
+            await executor.run(
+                StepInput(
+                    prompt="Long task",
+                    provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                )
+            )
 
 
-class TestSubprocessAntropicRejection:
-    """Tests for native Anthropic provider rejection in subprocess."""
+class TestSubprocessChildModuleInvocation:
+    """Tests verifying subprocess uses module invocation."""
 
-    @pytest.mark.asyncio
-    async def test_anthropic_without_base_url_fails(self, mocker: MockerFixture) -> None:
-        """SubprocessExecutor rejects native Anthropic provider."""
-        from cloud_agents.workflow.executor.step.base import StepInput
-        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+    def test_child_module_constant(self) -> None:
+        """SubprocessExecutor uses module invocation, not inline script."""
+        from cloud_agents.workflow.executor.step import subprocess_exec as mod
 
-        mocker.patch(
-            "cloud_agents.workflow.executor.step.subprocess_exec._run_in_subprocess",
-            return_value={
-                "status": "failed",
-                "output": None,
-                "error": "Provider 'anthropic' uses a non-OpenAI-compatible API.",
-                "transcript": [],
-                "input_tokens": 0,
-                "output_tokens": 0,
-            },
-        )
+        assert hasattr(mod, "_CHILD_MODULE")
+        assert mod._CHILD_MODULE == "cloud_agents.workflow.executor.step.subprocess_child"
 
-        executor = SubprocessExecutor()
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "anthropic", "model": "claude-sonnet-5"},
-        ))
+    def test_no_inline_child_script(self) -> None:
+        """SubprocessExecutor no longer contains inline child script."""
+        from cloud_agents.workflow.executor.step import subprocess_exec as mod
 
-        assert result.status == "failed"
+        assert not hasattr(mod, "_CHILD_PROCESS_SCRIPT")
+
+    def test_no_httpx_import(self) -> None:
+        """SubprocessExecutor does not import httpx."""
+        from cloud_agents.workflow.executor.step import subprocess_exec as mod
+
+        source = open(mod.__file__).read()
+        assert "import httpx" not in source
+
+    def test_anthropic_works_natively(self, mocker: MockerFixture) -> None:
+        """Anthropic provider is no longer rejected (pydantic-ai handles it)."""
+        from cloud_agents.workflow.executor.step import subprocess_exec as mod
+
+        source = open(mod.__file__).read()
+        assert "non-OpenAI-compatible" not in source
+        assert "_UNSUPPORTED_NATIVE_PROVIDERS" not in source

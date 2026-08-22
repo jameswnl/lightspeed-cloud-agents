@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 temporal = ["temporalio>=1.9.0"]
-local = ["pydantic-graph>=2.28.0"]
+local = ["pydantic-graph>=2.28.0", "pydantic-ai>=2.27"]
 kubernetes = ["kubernetes>=30.1.0"]
 podman = ["podman>=5.0.0"]
 tls = ["cryptography>=44.0"]
@@ -33,6 +33,7 @@ dev = [
     "pytest-mock>=3.15",
     "temporalio>=1.9.0",
     "pydantic-graph>=2.28.0",
+    "pydantic-ai>=2.27",
     "kubernetes>=30.1.0",
     "cryptography>=44.0",
     "black",
