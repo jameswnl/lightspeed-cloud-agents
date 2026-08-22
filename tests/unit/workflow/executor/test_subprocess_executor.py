@@ -251,3 +251,57 @@ class TestChildProcessPayload:
 
         roundtrip = json.dumps(payload)
         assert isinstance(roundtrip, str)
+
+
+class TestSubprocessCancellation:
+    """Tests for cancellation handling."""
+
+    @pytest.mark.asyncio
+    async def test_cancellation_returns_failed(self, mocker: MockerFixture) -> None:
+        """SubprocessExecutor propagates CancelledError after cleanup."""
+        import asyncio
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_exec._run_in_subprocess",
+            side_effect=asyncio.CancelledError(),
+        )
+
+        executor = SubprocessExecutor()
+        with pytest.raises(asyncio.CancelledError):
+            await executor.run(StepInput(
+                prompt="Long task",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            ))
+
+
+class TestSubprocessAntropicRejection:
+    """Tests for native Anthropic provider rejection in subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_anthropic_without_base_url_fails(self, mocker: MockerFixture) -> None:
+        """SubprocessExecutor rejects native Anthropic provider."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_exec._run_in_subprocess",
+            return_value={
+                "status": "failed",
+                "output": None,
+                "error": "Provider 'anthropic' uses a non-OpenAI-compatible API.",
+                "transcript": [],
+                "input_tokens": 0,
+                "output_tokens": 0,
+            },
+        )
+
+        executor = SubprocessExecutor()
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "anthropic", "model": "claude-sonnet-5"},
+        ))
+
+        assert result.status == "failed"

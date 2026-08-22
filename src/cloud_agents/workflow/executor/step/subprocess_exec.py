@@ -114,6 +114,10 @@ async def _run_in_subprocess(
             proc.communicate(input=input_bytes),
             timeout=timeout_seconds,
         )
+    except asyncio.CancelledError:
+        proc.kill()
+        await proc.wait()
+        raise
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
@@ -171,7 +175,7 @@ def main():
     if context:
         context_parts = []
         for key, value in context.items():
-            if isinstance(value, dict) and value.get("output"):
+            if isinstance(value, dict) and "output" in value:
                 context_parts.append(f"Previous step \\'{key}\\': {json.dumps(value['output'])}")
         if context_parts:
             user_content = user_content + "\\n\\n--- Prior step outputs ---\\n" + "\\n\\n".join(context_parts)
@@ -181,8 +185,17 @@ def main():
 
     messages.append({"role": "user", "content": user_content})
 
-    base_urls = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com/v1"}
-    base_url = provider.get("base_url", base_urls.get(provider.get("name", "openai"), base_urls["openai"]))
+    provider_name = provider.get("name", "openai")
+    if provider_name == "anthropic" and not provider.get("base_url"):
+        result = {"status": "failed", "output": None,
+                  "error": "Provider 'anthropic' uses a non-OpenAI-compatible API. "
+                           "Set base_url to an OpenAI-compatible proxy, or use provider 'openai'.",
+                  "transcript": [], "input_tokens": 0, "output_tokens": 0}
+        print(json.dumps(result))
+        return
+
+    base_urls = {"openai": "https://api.openai.com/v1"}
+    base_url = provider.get("base_url", base_urls.get(provider_name, base_urls["openai"]))
     model = provider.get("model", "gpt-4o")
 
     request_body = {"model": model, "messages": messages}
@@ -205,6 +218,13 @@ def main():
         try:
             output = json.loads(content)
         except json.JSONDecodeError:
+            if output_schema:
+                result = {"status": "failed", "output": None,
+                          "error": f"LLM returned non-JSON response but output_schema was requested: {content[:200]}",
+                          "transcript": [], "input_tokens": usage.get("prompt_tokens", 0),
+                          "output_tokens": usage.get("completion_tokens", 0)}
+                print(json.dumps(result))
+                return
             output = {"response": content}
 
         result = {
@@ -242,6 +262,15 @@ class SubprocessExecutor(StepExecutor):
             StepResult with status, output, transcript, and metrics.
         """
         start_ms = time.monotonic_ns() // 1_000_000
+
+        if step_input.tools:
+            logger.warning(
+                "SubprocessExecutor does not yet support tools; "
+                "tools %s for step '%s' will be ignored. "
+                "Use spawn: ephemeral for tool support.",
+                step_input.tools,
+                step_input.step_name,
+            )
 
         try:
             step_dict = _step_input_to_dict(step_input)

@@ -155,8 +155,8 @@ class TestDirectExecutorRun:
         assert "rate limit" in result.error.lower()
 
     @pytest.mark.asyncio
-    async def test_invalid_json_response_returns_raw(self, mocker: MockerFixture) -> None:
-        """DirectExecutor handles non-JSON LLM response gracefully."""
+    async def test_invalid_json_response_with_schema_fails(self, mocker: MockerFixture) -> None:
+        """DirectExecutor fails when output_schema is set but LLM returns non-JSON."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
@@ -176,8 +176,8 @@ class TestDirectExecutorRun:
             output_schema={"type": "object"},
         ))
 
-        assert result.status == "completed"
-        assert result.output == {"response": "Not valid JSON"}
+        assert result.status == "failed"
+        assert "non-json" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_transcript_records_llm_call(self, mocker: MockerFixture) -> None:
@@ -388,12 +388,12 @@ class TestParseOutput:
         result = _parse_output('{"severity": "high"}', {"type": "object"})
         assert result == {"severity": "high"}
 
-    def test_invalid_json_wrapped(self) -> None:
-        """Invalid JSON falls back to response wrapper."""
+    def test_invalid_json_with_schema_raises(self) -> None:
+        """Invalid JSON raises ValueError when output_schema is set."""
         from cloud_agents.workflow.executor.step.direct import _parse_output
 
-        result = _parse_output("Not JSON", {"type": "object"})
-        assert result == {"response": "Not JSON"}
+        with pytest.raises(ValueError, match="non-JSON"):
+            _parse_output("Not JSON", {"type": "object"})
 
     def test_no_schema_parses_json(self) -> None:
         """Without schema, still attempts JSON parse."""
@@ -408,3 +408,95 @@ class TestParseOutput:
 
         result = _parse_output("Just text", None)
         assert result == {"response": "Just text"}
+
+
+class TestAntropicProviderRejection:
+    """Tests for native Anthropic provider rejection."""
+
+    @pytest.mark.asyncio
+    async def test_anthropic_without_base_url_fails(self, mocker: MockerFixture) -> None:
+        """DirectExecutor rejects native Anthropic provider without base_url."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=False)
+
+        executor = DirectExecutor()
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "anthropic", "model": "claude-sonnet-5", "credentials_secret": "anthropic-api-key"},
+        ))
+
+        assert result.status == "failed"
+        assert "non-openai-compatible" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_with_base_url_allowed(self, mocker: MockerFixture) -> None:
+        """Anthropic provider with explicit base_url (proxy) is allowed."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct._call_llm",
+            return_value={
+                "content": '{"ok": true}',
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={
+                "name": "anthropic",
+                "model": "claude-sonnet-5",
+                "credentials_secret": "k",
+                "base_url": "https://my-proxy.example.com/v1",
+            },
+        ))
+
+        assert result.status == "completed"
+
+
+class TestFalsyOutputPreservation:
+    """Tests for preserving falsy prior-step outputs."""
+
+    def test_empty_list_output_included(self) -> None:
+        """Prior step output of [] is included in context."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import _build_messages
+
+        messages = _build_messages(StepInput(
+            prompt="Check results",
+            provider={"name": "openai", "model": "gpt-4o"},
+            context={
+                "scan": {
+                    "status": "completed",
+                    "output": [],
+                },
+            },
+        ))
+
+        user_content = messages[-1]["content"]
+        assert "Prior step" in user_content
+        assert "[]" in user_content
+
+    def test_zero_output_included(self) -> None:
+        """Prior step output of 0 is included in context."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import _build_messages
+
+        messages = _build_messages(StepInput(
+            prompt="Check count",
+            provider={"name": "openai", "model": "gpt-4o"},
+            context={
+                "count": {
+                    "status": "completed",
+                    "output": 0,
+                },
+            },
+        ))
+
+        user_content = messages[-1]["content"]
+        assert "Prior step" in user_content
