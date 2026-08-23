@@ -135,7 +135,7 @@ async def _call_llm(
 
 
 class DirectExecutor(StepExecutor):
-    """Execute steps as direct LLM calls with no tools or agent loop.
+    """Execute steps in-process via pydantic-ai.
 
     This is the spawn: none implementation. It sends a single chat
     completion request and returns the result. Supports structured
@@ -206,7 +206,10 @@ class DirectExecutor(StepExecutor):
             tools=tools,
         )
 
-        result = await agent.run(user_prompt)
+        result = await agent.run(
+            user_prompt,
+            model_settings={"timeout": step_input.timeout_seconds},
+        )
 
         content = result.output
         usage = result.usage

@@ -81,8 +81,8 @@ class StepExecutor(ABC):
     """Abstract interface for step execution backends.
 
     Each spawn mode implements this interface:
-    - DirectExecutor (spawn: none) — LLM call, no tools
-    - SubprocessExecutor (spawn: local) — pydantic-ai in subprocess
+    - DirectExecutor (spawn: none) — in-process LLM call or Agent with tools
+    - SubprocessExecutor (spawn: local) — LLM call or Agent in subprocess
     - SandboxExecutor (spawn: ephemeral) — OpenShell container
     """
 

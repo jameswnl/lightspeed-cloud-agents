@@ -369,8 +369,7 @@ class TestSubprocessChildWithTools:
         )
         mock_agent_instance = mocker.MagicMock()
 
-        # asyncio.run will call the coroutine, so we need a real async mock
-        async def fake_run(prompt: str) -> object:
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
             return mock_result
 
         mock_agent_instance.run = fake_run
@@ -500,7 +499,7 @@ class TestSubprocessChildWithTools:
         )
         mock_agent_instance = mocker.MagicMock()
 
-        async def fake_run(prompt: str) -> object:
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
             return mock_result
 
         mock_agent_instance.run = fake_run

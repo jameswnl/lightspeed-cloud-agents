@@ -167,7 +167,11 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
         tools=tools,
     )
 
-    result = await agent.run(user_content)
+    timeout_seconds = input_data.get("timeout_seconds", 600)
+    result = await agent.run(
+        user_content,
+        model_settings={"timeout": timeout_seconds},
+    )
 
     content = result.output
     usage = result.usage
