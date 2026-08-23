@@ -41,6 +41,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _run_migrations():
+    """Run Alembic migrations before any store tests in this module."""
+    import subprocess
+
+    subprocess.run(
+        ["uv", "run", "alembic", "upgrade", "head"],
+        env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
+        timeout=30,
+        check=True,
+    )
+
+
 class TestRunStateStorePostgres:
     """RunStateStore with real PostgreSQL."""
 
