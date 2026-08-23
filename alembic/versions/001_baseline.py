@@ -63,6 +63,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop baseline tables."""
-    op.execute("DROP TABLE IF EXISTS step_transcripts;")
-    op.execute("DROP TABLE IF EXISTS workflow_run_state;")
+    """No-op — preserve pre-Alembic data."""
+    pass

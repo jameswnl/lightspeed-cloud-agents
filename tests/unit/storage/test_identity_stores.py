@@ -212,26 +212,23 @@ class TestRunStateStoreGetIncludesIdentity:
         assert result["parent_workflow_id"] == "wf-parent"
 
 
-class TestRunStateStoreSchemaIncludesIdentity:
-    """Tests that _SCHEMA_SQL includes new columns."""
+class TestRunStateStoreSchemaIdentity:
+    """Tests that identity columns are in the Alembic migration."""
 
-    def test_schema_includes_user_id(self) -> None:
-        """_SCHEMA_SQL includes user_id column."""
-        from cloud_agents.storage.run_state_store import _SCHEMA_SQL
+    def test_migration_includes_user_id(self) -> None:
+        """Migration 002 adds user_id column."""
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "user_id" in source
 
-        assert "user_id" in _SCHEMA_SQL
+    def test_migration_includes_session_id(self) -> None:
+        """Migration 002 adds session_id column."""
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "session_id" in source
 
-    def test_schema_includes_session_id(self) -> None:
-        """_SCHEMA_SQL includes session_id column."""
-        from cloud_agents.storage.run_state_store import _SCHEMA_SQL
-
-        assert "session_id" in _SCHEMA_SQL
-
-    def test_schema_includes_parent_workflow_id(self) -> None:
-        """_SCHEMA_SQL includes parent_workflow_id column."""
-        from cloud_agents.storage.run_state_store import _SCHEMA_SQL
-
-        assert "parent_workflow_id" in _SCHEMA_SQL
+    def test_migration_includes_parent_workflow_id(self) -> None:
+        """Migration 002 adds parent_workflow_id column."""
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "parent_workflow_id" in source
 
 
 # ── TranscriptStore identity tests ────────────────────────
@@ -378,16 +375,14 @@ class TestTranscriptStoreLoadRecentTurns:
 
 
 class TestTranscriptStoreSchemaIncludesIdentity:
-    """Tests that _SCHEMA_SQL includes new columns."""
+    """Tests that identity columns are in the Alembic migration."""
 
-    def test_schema_includes_trace_id(self) -> None:
-        """_SCHEMA_SQL includes trace_id column."""
-        from cloud_agents.storage.transcript_store import _SCHEMA_SQL
+    def test_migration_includes_trace_id(self) -> None:
+        """Migration 002 adds trace_id column."""
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "trace_id" in source
 
-        assert "trace_id" in _SCHEMA_SQL
-
-    def test_schema_includes_messages(self) -> None:
-        """_SCHEMA_SQL includes messages column."""
-        from cloud_agents.storage.transcript_store import _SCHEMA_SQL
-
-        assert "messages" in _SCHEMA_SQL
+    def test_migration_includes_messages(self) -> None:
+        """Migration 002 adds messages column."""
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "messages" in source

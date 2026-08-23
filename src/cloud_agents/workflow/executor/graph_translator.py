@@ -79,6 +79,8 @@ def build_graph(
     spawner: Any = None,
     transcript_store: Any = None,
     approval_policy: Optional[dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[Any, WorkflowGraphState]:
     """Translate a workflow definition dict into a pydantic-graph Graph.
 
@@ -124,6 +126,8 @@ def build_graph(
         spawner=spawner,
         transcript_store=transcript_store,
         approval_policy=approval_policy,
+        user_id=user_id,
+        session_id=session_id,
     )
 
     builder = GraphBuilder(

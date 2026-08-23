@@ -32,9 +32,6 @@ CREATE TABLE IF NOT EXISTS workflow_run_state (
     provider JSONB NOT NULL DEFAULT '{}',
     authz_context JSONB NOT NULL DEFAULT '{}',
     workflow_context JSONB NOT NULL DEFAULT '{}',
-    user_id TEXT,
-    session_id TEXT,
-    parent_workflow_id TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -43,9 +40,6 @@ CREATE TABLE IF NOT EXISTS workflow_run_state (
 _INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_workflow_run_state_status
     ON workflow_run_state(status);
-CREATE INDEX IF NOT EXISTS idx_wrs_user ON workflow_run_state(user_id);
-CREATE INDEX IF NOT EXISTS idx_wrs_session ON workflow_run_state(session_id);
-CREATE INDEX IF NOT EXISTS idx_wrs_parent ON workflow_run_state(parent_workflow_id);
 """
 
 _INSERT_SQL = """
@@ -76,7 +70,7 @@ _LIST_BY_SESSION_SQL = """
 SELECT workflow_id
 FROM workflow_run_state
 WHERE session_id = $1
-ORDER BY created_at;
+ORDER BY created_at DESC;
 """
 
 _UPDATE_STEP_SQL = """

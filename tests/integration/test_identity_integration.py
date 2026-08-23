@@ -250,19 +250,18 @@ class TestAlembicMigrationFiles:
         assert hasattr(mod, "upgrade")
         assert hasattr(mod, "downgrade")
 
-    def test_schema_sql_includes_identity_columns(self) -> None:
-        """RunStateStore _SCHEMA_SQL includes new identity columns."""
-        from cloud_agents.storage import run_state_store
+    def test_migration_002_includes_identity_columns(self) -> None:
+        """Migration 002 adds identity columns to workflow_run_state."""
+        import importlib.util
 
-        schema = run_state_store._SCHEMA_SQL
-        assert "user_id" in schema
-        assert "session_id" in schema
-        assert "parent_workflow_id" in schema
-
-    def test_transcript_schema_includes_new_columns(self) -> None:
-        """TranscriptStore _SCHEMA_SQL includes trace_id and messages."""
-        from cloud_agents.storage import transcript_store
-
-        schema = transcript_store._SCHEMA_SQL
-        assert "trace_id" in schema
-        assert "messages" in schema
+        spec = importlib.util.spec_from_file_location(
+            "identity", "alembic/versions/002_identity_model.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        source = open("alembic/versions/002_identity_model.py").read()
+        assert "user_id" in source
+        assert "session_id" in source
+        assert "parent_workflow_id" in source
+        assert "trace_id" in source
+        assert "messages" in source

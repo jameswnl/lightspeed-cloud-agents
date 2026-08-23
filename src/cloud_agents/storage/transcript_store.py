@@ -31,8 +31,6 @@ CREATE TABLE IF NOT EXISTS step_transcripts (
     input_tokens INTEGER,
     output_tokens INTEGER,
     duration_ms INTEGER,
-    trace_id TEXT,
-    messages JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(workflow_id, step_name)
 );
@@ -55,8 +53,8 @@ DO UPDATE SET
     input_tokens = EXCLUDED.input_tokens,
     output_tokens = EXCLUDED.output_tokens,
     duration_ms = EXCLUDED.duration_ms,
-    trace_id = EXCLUDED.trace_id,
-    messages = EXCLUDED.messages,
+    trace_id = COALESCE(EXCLUDED.trace_id, step_transcripts.trace_id),
+    messages = COALESCE(EXCLUDED.messages, step_transcripts.messages),
     created_at = NOW();
 """
 

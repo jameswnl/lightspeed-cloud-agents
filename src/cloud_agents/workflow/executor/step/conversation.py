@@ -7,7 +7,7 @@ to/from framework types (pydantic-ai ModelMessage, etc.) at runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 
@@ -24,7 +24,7 @@ class ConversationMessage:
 
     role: Literal["user", "assistant", "tool_call", "tool_result"]
     content: str
-    timestamp: datetime = field(default_factory=lambda: datetime.now())
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
