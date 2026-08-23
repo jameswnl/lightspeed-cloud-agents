@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -214,3 +216,187 @@ class TestDirectExecutorGraphIntegration:
         assert state.step_results["triage_result"]["status"] == "completed"
         assert state.step_results["escalation"]["status"] == "skipped"
         assert call_count == 1
+
+
+class TestDirectExecutorToolsGraphIntegration:
+    """Verify spawn: none with tools works end-to-end through graph_translator.
+
+    These tests exercise the full chain: build_graph → StepInput → DirectExecutor
+    → _run_with_agent, catching wiring gaps that unit tests with mocked executors miss.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self) -> Any:
+        """Clear tool registry before and after each test."""
+        from cloud_agents.workflow.executor.step.tools import clear_tools
+
+        clear_tools()
+        yield
+        clear_tools()
+
+    @pytest.mark.asyncio
+    async def test_spawn_none_with_tools_via_graph(self, mocker: MockerFixture) -> None:
+        """spawn: none step with tools runs Agent through the full graph chain."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        def echo_tool(message: str) -> str:
+            """Echo back."""
+            return f"echo: {message}"
+
+        register_tool("echo_tool", echo_tool)
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"action": "restart"}'
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+        mock_result.usage = mock_usage
+
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run = AsyncMock(return_value=mock_result)
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+            return_value=mock_agent_instance,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "tools-test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "investigate",
+                        "type": "agent",
+                        "spawn": "none",
+                        "prompt": "Investigate the alert",
+                        "output_key": "investigation",
+                        "tools": ["echo_tool"],
+                    },
+                ],
+            },
+        }
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-tools-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
+        )
+
+        await graph.run(state=state)
+        assert state.step_results["investigation"]["status"] == "completed"
+        assert state.step_results["investigation"]["output"]["action"] == "restart"
+        mock_agent_instance.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_spawn_none_unknown_tool_fails_via_graph(self, mocker: MockerFixture) -> None:
+        """spawn: none step with unknown tool fails through the full graph chain."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "bad-tool-test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "investigate",
+                        "type": "agent",
+                        "spawn": "none",
+                        "prompt": "Investigate",
+                        "output_key": "result",
+                        "tools": ["nonexistent_tool"],
+                    },
+                ],
+            },
+        }
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-bad-tool-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
+        )
+
+        await graph.run(state=state)
+        assert state.step_results["result"]["status"] == "failed"
+        assert "Unknown tool" in state.step_results["result"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_tools_and_no_tools_via_graph(self, mocker: MockerFixture) -> None:
+        """Workflow with both tool and no-tool steps works end-to-end."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        def my_tool(query: str) -> str:
+            """Query something."""
+            return "result"
+
+        register_tool("my_tool", my_tool)
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"found": true}'
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 30
+        mock_usage.output_tokens = 10
+        mock_result.usage = mock_usage
+
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run = AsyncMock(return_value=mock_result)
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+            return_value=mock_agent_instance,
+        )
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct._call_llm",
+            return_value={
+                "content": '{"severity": "high"}',
+                "input_tokens": 50,
+                "output_tokens": 20,
+            },
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "mixed-test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "triage",
+                        "type": "agent",
+                        "spawn": "none",
+                        "prompt": "Classify",
+                        "output_key": "triage_result",
+                    },
+                    {
+                        "name": "investigate",
+                        "type": "agent",
+                        "spawn": "none",
+                        "prompt": "Investigate",
+                        "output_key": "investigation",
+                        "tools": ["my_tool"],
+                    },
+                ],
+            },
+        }
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-mixed-tools-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
+        )
+
+        await graph.run(state=state)
+        assert state.step_results["triage_result"]["status"] == "completed"
+        assert state.step_results["investigation"]["status"] == "completed"
+        assert state.step_results["investigation"]["output"]["found"] is True
