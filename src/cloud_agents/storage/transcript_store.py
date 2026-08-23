@@ -54,8 +54,7 @@ DO UPDATE SET
     output_tokens = EXCLUDED.output_tokens,
     duration_ms = EXCLUDED.duration_ms,
     trace_id = COALESCE(EXCLUDED.trace_id, step_transcripts.trace_id),
-    messages = COALESCE(EXCLUDED.messages, step_transcripts.messages),
-    created_at = NOW();
+    messages = COALESCE(EXCLUDED.messages, step_transcripts.messages);
 """
 
 _SELECT_SQL = """

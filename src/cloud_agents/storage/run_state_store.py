@@ -151,11 +151,29 @@ class RunStateStore:
         return cls(db_url=db_url)
 
     async def connect(self) -> None:
-        """Connect to PostgreSQL and run schema migration."""
+        """Connect to PostgreSQL and run schema migration.
+
+        Runs Alembic migrations if available, then falls back to
+        CREATE TABLE IF NOT EXISTS for the base schema.
+        """
+        self._run_alembic()
         self._pool = await asyncpg.create_pool(self._db_url)
         await self._pool.execute(_SCHEMA_SQL)
         await self._pool.execute(_INDEX_SQL)
         logger.info("RunStateStore connected to PostgreSQL")
+
+    def _run_alembic(self) -> None:
+        """Run Alembic migrations if the alembic package is available."""
+        try:
+            from alembic import command
+            from alembic.config import Config
+
+            cfg = Config("alembic.ini")
+            cfg.set_main_option("sqlalchemy.url", self._db_url)
+            command.upgrade(cfg, "head")
+            logger.info("Alembic migrations applied")
+        except Exception as exc:
+            logger.debug("Alembic migration skipped: %s", exc)
 
     async def close(self) -> None:
         """Close the connection pool."""
