@@ -46,6 +46,7 @@ class WorkflowStepSpec(BaseModel):
     role: Optional[Literal["analysis", "execution", "verification"]] = None
     instructions: Optional[str] = None
     output_schema: Optional[dict[str, Any]] = None
+    tools: list[str] = Field(default_factory=list)
     service_account: Optional[str] = None
     target_namespaces: Optional[list[str]] = None
 

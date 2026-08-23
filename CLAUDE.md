@@ -44,7 +44,11 @@ The `spawn` field controls step execution isolation:
 - `local` — LLM call via pydantic-ai in a forked subprocess, process-level isolation
 - `ephemeral` — full OpenShell sandbox container (default)
 
-Tool support for `none` and `local` is planned (#131 PR B).
+When steps declare `tools: [name, ...]`, pydantic-ai Agent runs the LLM→tool→LLM loop. Without tools, a single `model_request()` call is made.
+
+### Tool registration
+
+Tools are Python functions registered via `@step_tool` or `register_tool()` from `cloud_agents.workflow.executor.step.tools`. For `spawn: local`, the child subprocess needs to reconstruct the registry — set `CLOUD_AGENTS_TOOLS_MODULE` to the dotted import path of the module containing tool registrations (e.g. `myapp.tools`). The module is imported at child startup, triggering `@step_tool` decorators. Without this env var, `spawn: local` steps with `tools:` will fail with "Unknown tool".
 
 ## Schema Validation
 
@@ -122,7 +126,8 @@ When updating documentation:
 ## Common Mistakes
 
 - Using `agent: some-agent` in YAML examples — this field is dead (spawn is now active with values none/local/ephemeral)
-- Claiming spawn: none/local support tools — tool support via pydantic-ai Agent is planned (#131 PR B); currently both modes do single LLM calls only
+- Claiming tools work without registration — tools must be registered via `register_tool()` or `@step_tool` before they can be used in workflow steps
+- Using `spawn: local` + `tools:` without setting `CLOUD_AGENTS_TOOLS_MODULE` — the child process has an empty registry; set the env var to the module containing `@step_tool` registrations
 - Claiming `PermissionScope` (allowed_tools/denied_tools) is fully enforced — the runner forwards `allowedTools`/`deniedTools` in the sandbox POST body, but sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox)
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`

@@ -370,6 +370,13 @@
           "default": null,
           "title": "Output Schema"
         },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
         "service_account": {
           "anyOf": [
             {
