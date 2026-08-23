@@ -44,7 +44,7 @@ The `spawn` field controls step execution isolation:
 - `local` — LLM call via pydantic-ai in a forked subprocess, process-level isolation
 - `ephemeral` — full OpenShell sandbox container (default)
 
-When steps declare `tools: [name, ...]`, pydantic-ai Agent runs the LLM→tool→LLM loop. Without tools, a single `model_request()` call is made.
+The Agent path (`Agent.run()`) is used when any of: `tools`, `mcp_servers`, or `CLOUD_AGENTS_SKILLS_PATHS` are present. Without any of these, a single `model_request()` call is made.
 
 ### Tool registration
 
@@ -52,7 +52,9 @@ Tools are Python functions registered via `@step_tool` or `register_tool()` from
 
 ### Skills
 
-Skills extend agent capabilities via the `pydantic-ai-skills` package (`SkillsCapability`). Set `CLOUD_AGENTS_SKILLS_PATHS` to a colon-separated list of directories containing `SKILL.md` files. The capability is automatically passed to the pydantic-ai Agent for `spawn: none` and `spawn: local` steps. If the env var is unset or the package is not installed, skills are silently skipped.
+Skills extend agent capabilities via the `pydantic-ai-skills` package (`SkillsCapability`). Set `CLOUD_AGENTS_SKILLS_PATHS` to a colon-separated list of directories containing skill subdirectories, each with a `SKILL.md` file (YAML frontmatter + instructions). The capability is automatically passed to the pydantic-ai Agent for **every** `spawn: none` and `spawn: local` step — there is no per-step allowlist (unlike `tools:`). If the env var is unset or the package is not installed, skills are silently skipped.
+
+**Trust model:** `SkillsCapability` registers `run_skill_script` which can execute arbitrary Python from skill directories. Only configure `CLOUD_AGENTS_SKILLS_PATHS` to directories owned by trusted users. Do not point at world-writable or user-uploaded paths.
 
 ## Schema Validation
 

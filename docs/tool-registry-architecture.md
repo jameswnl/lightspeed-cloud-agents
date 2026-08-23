@@ -26,9 +26,9 @@ flowchart TD
 | **Isolation** | None (in-process) | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
 | **Tool support** | `@step_tool` registered functions | `@step_tool` registered functions | MCP + Shell + Filesystem + Skills |
 | **MCP servers** | Remote (HTTP/SSE) | Remote (HTTP/SSE) | Local + remote (inside container) |
-| **Skills** | pip packages or skills_dir | pip packages or skills_dir | OCI image via init container |
-| **Tool source** | ToolRegistry + MCP + skills | ToolRegistry + MCP + skills | Sandbox image + MCP servers |
-| **Agent loop** | Single call; `Agent.run` if tools | Single call; `Agent.run` if tools | Yes (agent SDK in container) |
+| **Skills** | `CLOUD_AGENTS_SKILLS_PATHS` directories with `SKILL.md` | `CLOUD_AGENTS_SKILLS_PATHS` directories with `SKILL.md` | OCI image via init container |
+| **Tool source** | ToolRegistry + MCP + SkillsCapability | ToolRegistry + MCP + SkillsCapability | Sandbox image + MCP servers |
+| **Agent loop** | `Agent.run` if tools, MCP, or skills; `model_request` otherwise | `Agent.run` if tools, MCP, or skills; `model_request` otherwise | Yes (agent SDK in container) |
 | **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `model_request` or `Agent.run` (in subprocess) | Agent SDK in sandbox |
 | **Timeout enforcement** | pydantic-ai `model_settings.timeout` | Hard kill (`proc.kill()`) | Container terminate |
 | **Providers** | All (via pydantic-ai) | All (via pydantic-ai) | Configured in sandbox env vars |
@@ -39,54 +39,28 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    subgraph sources["Tool Sources"]
-        decorators["@step_tool decorated<br/>functions (code)"]
-        packages["pip-installed skill<br/>packages (import-time)"]
-        scan["skills_dir scan<br/>(startup discovery)"]
-        mcp["MCP servers<br/>(HTTP/SSE remote)"]
+    subgraph sources["Three Tool Sources"]
+        decorators["@step_tool decorated<br/>functions via ToolRegistry"]
+        skills["CLOUD_AGENTS_SKILLS_PATHS<br/>directories with SKILL.md<br/>→ SkillsCapability"]
+        mcp["MCP servers<br/>(HTTP/SSE remote)<br/>→ MCPToolset"]
     end
 
-    subgraph registry["ToolRegistry — tools.py"]
-        store["_REGISTRY: dict[str, pydantic_ai.Tool]"]
-        api["register_tool(name, func)<br/>get_tools(names) → list of Tool<br/>list_tools() → list of str"]
+    subgraph agent_construction["Agent Construction"]
+        tools_param["tools=get_tools(step.tools)"]
+        toolsets_param["toolsets=[MCPToolset(...)]"]
+        caps_param["capabilities=[SkillsCapability(...)]"]
     end
 
-    decorators --> store
-    packages --> store
-    scan --> store
-    store --- api
+    decorators --> tools_param
+    mcp --> toolsets_param
+    skills --> caps_param
 
-    step_tools["step.tools: ['kubectl_get', 'read_logs']"]
-    api -->|"get_tools()"| resolved["Returns: [Tool(kubectl_get), Tool(read_logs)]<br/>Raises ValueError for unknown names"]
+    tools_param --> agent["Agent(<br/>model,<br/>tools=...,<br/>toolsets=...,<br/>capabilities=...<br/>)"]
+    toolsets_param --> agent
+    caps_param --> agent
 
-    step_tools --> resolved
-
-    resolved --> direct_exec["spawn: none → DirectExecutor<br/>Agent runs in-process<br/>No isolation"]
-    resolved --> subprocess_exec["spawn: local → SubprocessExecutor<br/>Tool names serialized via stdin"]
-
-    subgraph direct_agent["In-Process (DirectExecutor)"]
-        direction TB
-        d_agent["agent = Agent(model, tools=tools)"]
-        d_run["result = await agent.run(prompt)"]
-        d_loop["Agent loop in runner process"]
-        d_agent --> d_run --> d_loop
-    end
-
-    subgraph child["Child Process (SubprocessExecutor)"]
-        direction TB
-        c_load["tools = get_tools(input['tools'])"]
-        c_agent["agent = Agent(model, tools=tools)"]
-        c_run["result = agent.run(prompt)"]
-        c_loop["Agent loop in subprocess<br/>Hard kill on timeout"]
-        c_load --> c_agent --> c_run --> c_loop
-    end
-
-    direct_exec --> direct_agent
-    subprocess_exec -->|"subprocess<br/>boundary"| child
-
-    mcp --> mcp_toolset["MCPServerHTTP toolset<br/>passed to Agent"]
-    mcp_toolset --> direct_agent
-    mcp_toolset --> child
+    agent --> direct_exec["spawn: none<br/>Agent runs in-process"]
+    agent --> subprocess_exec["spawn: local<br/>Agent runs in subprocess"]
 ```
 
 ## Data Flow: Step Execution Across Spawn Modes
