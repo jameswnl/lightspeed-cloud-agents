@@ -85,7 +85,15 @@ def get_tools(names: list[str]) -> list[Any]:
     for name in names:
         if name not in _REGISTRY:
             available = ", ".join(sorted(_REGISTRY)) or "(none)"
-            raise ValueError(f"Unknown tool '{name}'. Registered tools: {available}.")
+            hint = (
+                " Set CLOUD_AGENTS_TOOLS_MODULE to the dotted import path of "
+                "your tools module (e.g. myapp.tools)."
+                if available == "(none)"
+                else ""
+            )
+            raise ValueError(
+                f"Unknown tool '{name}'. Registered tools: {available}.{hint}"
+            )
         defn = _REGISTRY[name]
         tools.append(Tool(defn.func, name=defn.name, description=defn.description))
     return tools

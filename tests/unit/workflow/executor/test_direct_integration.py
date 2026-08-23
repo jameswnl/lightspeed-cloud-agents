@@ -400,3 +400,101 @@ class TestDirectExecutorToolsGraphIntegration:
         assert state.step_results["triage_result"]["status"] == "completed"
         assert state.step_results["investigation"]["status"] == "completed"
         assert state.step_results["investigation"]["output"]["found"] is True
+
+    @pytest.mark.asyncio
+    async def test_tools_module_env_flows_through_graph(self, mocker: MockerFixture) -> None:
+        """CLOUD_AGENTS_TOOLS_MODULE env var is set on StepInput by graph_translator."""
+        mocker.patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "sk-test", "CLOUD_AGENTS_TOOLS_MODULE": "myapp.tools"},
+            clear=False,
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = mocker.MagicMock(
+            status="completed", output={"ok": True}, error=None,
+            transcript=[], input_tokens=0, output_tokens=0, duration_ms=0,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "env-test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "s1",
+                        "type": "agent",
+                        "spawn": "local",
+                        "prompt": "test",
+                        "output_key": "r1",
+                        "tools": ["some_tool"],
+                    },
+                ],
+            },
+        }
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-env-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+
+        call_args = mock_executor.run.call_args[0][0]
+        assert call_args.tools_module == "myapp.tools"
+        assert call_args.tools == ["some_tool"]
+
+    @pytest.mark.asyncio
+    async def test_tools_module_absent_when_env_unset(self, mocker: MockerFixture) -> None:
+        """Without CLOUD_AGENTS_TOOLS_MODULE, tools_module is None."""
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLOUD_AGENTS_TOOLS_MODULE"}
+        env_copy["OPENAI_API_KEY"] = "sk-test"
+        mocker.patch.dict(os.environ, env_copy, clear=True)
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = mocker.MagicMock(
+            status="completed", output={"ok": True}, error=None,
+            transcript=[], input_tokens=0, output_tokens=0, duration_ms=0,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "no-env-test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "s1",
+                        "type": "agent",
+                        "spawn": "none",
+                        "prompt": "test",
+                        "output_key": "r1",
+                    },
+                ],
+            },
+        }
+
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-no-env-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+
+        call_args = mock_executor.run.call_args[0][0]
+        assert call_args.tools_module is None
