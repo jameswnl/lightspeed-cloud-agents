@@ -1315,6 +1315,51 @@ class TestDirectExecutorWithSkills:
         assert call_kwargs["capabilities"] == [mock_cap]
 
     @pytest.mark.asyncio
+    async def test_skills_only_uses_agent_path(self, mocker: MockerFixture) -> None:
+        """Skills-only step (no tools, no MCP) routes to Agent path."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 40
+        mock_usage.output_tokens = 15
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"answer": "42"}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_cap = mocker.MagicMock()
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=mock_cap,
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Use a skill to answer",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        assert result.status == "completed"
+        mock_agent_cls.assert_called_once()
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "capabilities" in call_kwargs
+        assert call_kwargs["capabilities"] == [mock_cap]
+
+    @pytest.mark.asyncio
     async def test_agent_no_capabilities_when_skills_path_unset(
         self, mocker: MockerFixture
     ) -> None:

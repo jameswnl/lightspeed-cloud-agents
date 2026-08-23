@@ -162,7 +162,8 @@ class DirectExecutor(StepExecutor):
         start_ms = time.monotonic_ns() // 1_000_000
 
         try:
-            if step_input.tools or step_input.mcp_servers:
+            skills_cap = get_skills_capability()
+            if step_input.tools or step_input.mcp_servers or skills_cap:
                 return await self._run_with_agent(step_input, start_ms)
             return await self._run_model_request(step_input, start_ms)
 

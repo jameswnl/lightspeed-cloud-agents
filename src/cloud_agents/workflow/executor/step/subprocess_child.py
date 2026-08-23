@@ -73,7 +73,8 @@ async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
     tool_names = input_data.get("tools", [])
     mcp_servers = input_data.get("mcp_servers") or []
 
-    if tool_names or mcp_servers:
+    skills_cap = get_skills_capability()
+    if tool_names or mcp_servers or skills_cap:
         return await _run_with_agent(input_data, tool_names)
     return await _run_model_request(input_data)
 
