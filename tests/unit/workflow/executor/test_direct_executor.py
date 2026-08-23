@@ -1095,9 +1095,7 @@ class TestDirectExecutorWithMCPServers:
         assert len(call_kwargs["toolsets"]) == 2
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_no_tools_uses_model_request(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_mcp_servers_no_tools_uses_model_request(self, mocker: MockerFixture) -> None:
         """Without MCP servers or tools, model_request path is used."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -1130,9 +1128,7 @@ class TestDirectExecutorWithMCPServers:
         mock_agent_cls.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_mcp_servers_list_uses_model_request(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_empty_mcp_servers_list_uses_model_request(self, mocker: MockerFixture) -> None:
         """Empty mcp_servers list should use model_request path."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -1217,6 +1213,265 @@ class TestDirectExecutorWithMCPServers:
         transcript_entry = result.transcript[0]
         assert "mcp_servers" in transcript_entry
         assert transcript_entry["mcp_servers"] == ["kubectl"]
+
+
+async def _async_iter(items: list[str]):
+    """Async iterator helper for mocking stream_text.
+
+    Parameters:
+        items: List of string items to yield.
+
+    Yields:
+        Each item from the list.
+    """
+    for item in items:
+        yield item
+
+
+class TestDirectExecutorStreaming:
+    """Tests for DirectExecutor.run_stream() — streaming token output."""
+
+    @pytest.mark.asyncio
+    async def test_run_stream_with_tools_yields_tokens_then_complete(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_stream() with tools yields token events then complete event."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool, description="Get K8s resources")
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 80
+        mock_usage.output_tokens = 30
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["Hello", " world"]))
+        mock_streamed.get_output = mocker.AsyncMock(return_value="Hello world")
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="Get pods",
+                provider={
+                    "name": "openai",
+                    "model": "gpt-4o",
+                    "credentials_secret": "openai-api-key",
+                },
+                tools=["kubectl_get"],
+                workflow_id="wf-1",
+                step_name="get-pods",
+                output_key="pods",
+            )
+        ):
+            events.append(event)
+
+        # Should have token events for each delta, then a complete event
+        token_events = [e for e in events if e.type == "token"]
+        complete_events = [e for e in events if e.type == "complete"]
+
+        assert len(token_events) == 2
+        assert token_events[0].data == {"delta": "Hello"}
+        assert token_events[1].data == {"delta": " world"}
+        assert len(complete_events) == 1
+        assert complete_events[0].result is not None
+        assert complete_events[0].result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_run_stream_without_tools_yields_single_complete(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_stream() without tools falls back to default (single complete event)."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        ):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0].type == "complete"
+        assert events[0].result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_run_stream_with_mcp_servers_yields_tokens(self, mocker: MockerFixture) -> None:
+        """run_stream() with MCP servers uses Agent streaming path."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["chunk1", "chunk2"]))
+        mock_streamed.get_output = mocker.AsyncMock(return_value="chunk1chunk2")
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="Query cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+            )
+        ):
+            events.append(event)
+
+        token_events = [e for e in events if e.type == "token"]
+        complete_events = [e for e in events if e.type == "complete"]
+
+        assert len(token_events) == 2
+        assert len(complete_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_stream_error_yields_error_event(self, mocker: MockerFixture) -> None:
+        """run_stream() error yields an error event with failed StepResult."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(side_effect=RuntimeError("API timeout"))
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        ):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0].type == "error"
+        assert "API timeout" in events[0].data["error"]
+        assert events[0].result is not None
+        assert events[0].result.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_run_stream_complete_has_tokens_and_output(self, mocker: MockerFixture) -> None:
+        """Complete event has StepResult with output, input_tokens, output_tokens."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 120
+        mock_usage.output_tokens = 45
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["result"]))
+        mock_streamed.get_output = mocker.AsyncMock(return_value='{"severity": "high"}')
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="Check",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+                output_schema={"type": "object", "properties": {"severity": {"type": "string"}}},
+            )
+        ):
+            events.append(event)
+
+        complete_events = [e for e in events if e.type == "complete"]
+        assert len(complete_events) == 1
+        result = complete_events[0].result
+        assert result.status == "completed"
+        assert result.output == {"severity": "high"}
+        assert result.input_tokens == 120
+        assert result.output_tokens == 45
+        assert result.duration_ms >= 0
 
 
 class TestFalsyOutputPreservation:
