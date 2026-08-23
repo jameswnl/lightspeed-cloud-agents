@@ -194,6 +194,10 @@ class DirectExecutor(StepExecutor):
         Returns:
             StepResult with agent output, token counts, and transcript.
         """
+        if step_input.tools_module:
+            from cloud_agents.workflow.executor.step.tools import load_tools_module
+            load_tools_module(step_input.tools_module)
+
         ensure_credentials_env(step_input.provider)
         model_string = to_model_string(step_input.provider)
         tools = get_tools(step_input.tools)

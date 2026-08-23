@@ -12,6 +12,7 @@ No temporalio imports. Used by the LocalExecutor.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -216,6 +217,7 @@ def _build_agent_step(
             system_prompt=step_def.get("instructions"),
             output_schema=step_def.get("output_schema"),
             tools=step_def.get("tools", []),
+            tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
             context=state.step_results,
             timeout_seconds=step_def.get("timeout_seconds", 600),
             sandbox_image=state.sandbox_image,

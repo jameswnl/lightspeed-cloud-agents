@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -25,10 +26,17 @@ from cloud_agents.workflow.executor.step.provider import (
 from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
 
 
+_TOOLS_MODULE_ENV = "CLOUD_AGENTS_TOOLS_MODULE"
+
+
 def main() -> None:
     """Entry point for subprocess child."""
     raw = sys.stdin.read()
     input_data = json.loads(raw)
+
+    tools_module = input_data.get("tools_module") or os.environ.get(_TOOLS_MODULE_ENV)
+    if tools_module:
+        input_data["tools_module"] = tools_module
 
     start = time.monotonic()
     try:
@@ -98,11 +106,11 @@ def _build_user_content(input_data: dict[str, Any]) -> str:
     return user_content
 
 
-def _parse_content(content: str | None, output_schema: dict[str, Any] | None) -> dict[str, Any]:
+def _parse_content(content: Any, output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Parse agent/LLM response content into a result dict.
 
     Parameters:
-        content: Raw response string (may be None).
+        content: Response from LLM or Agent (str, dict, or None).
         output_schema: Expected JSON Schema, if any.
 
     Returns:
@@ -119,6 +127,12 @@ def _parse_content(content: str | None, output_schema: dict[str, Any] | None) ->
             "status": "completed",
             "output": {"response": None},
         }
+
+    if isinstance(content, dict):
+        return {"status": "completed", "output": content}
+
+    if not isinstance(content, str):
+        return {"status": "completed", "output": {"response": str(content)}}
 
     output: dict[str, Any] | None
     try:
