@@ -170,7 +170,7 @@ class DirectExecutor(StepExecutor):
         try:
             skills_cap = get_skills_capability()
             if step_input.tools or step_input.mcp_servers or skills_cap:
-                return await self._run_with_agent(step_input, start_ms)
+                return await self._run_with_agent(step_input, start_ms, skills_cap=skills_cap)
             return await self._run_model_request(step_input, start_ms)
 
         except ValueError as exc:
@@ -301,7 +301,9 @@ class DirectExecutor(StepExecutor):
                 result=StepResult(status="failed", error=str(exc), duration_ms=duration_ms),
             )
 
-    async def _run_with_agent(self, step_input: StepInput, start_ms: int) -> StepResult:
+    async def _run_with_agent(
+        self, step_input: StepInput, start_ms: int, skills_cap: Any = None
+    ) -> StepResult:
         """Execute using pydantic-ai Agent with tools and/or MCP servers.
 
         When MCP servers are configured, creates MCPToolset instances using
@@ -343,7 +345,8 @@ class DirectExecutor(StepExecutor):
 
             # Build capabilities
             capabilities = []
-            skills_cap = get_skills_capability()
+            if skills_cap is None:
+                skills_cap = get_skills_capability()
             if skills_cap:
                 capabilities.append(skills_cap)
 
