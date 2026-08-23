@@ -1,20 +1,45 @@
-"""Tool registry for spawn: none and spawn: local step execution.
+"""Tool registry for step execution across all spawn modes.
 
-Maps tool name strings to pydantic-ai Tool instances. Tools are registered
-at startup and filtered per step based on the step's tools list.
+Product teams register Python functions as tools via register_tool() or
+the @step_tool decorator. The workflow engine resolves tool names at
+runtime based on the step's spawn mode.
+
+Public API (for product teams):
+    register_tool(name, func) — register a callable as a named tool
+    step_tool(name) — decorator form of register_tool
+    list_tools() — list registered tool names
+    clear_tools() — remove all (testing only)
+
+Internal API (for executors):
+    get_tools(names) — resolve names to pydantic-ai Tool objects
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
-
-from pydantic_ai import Tool
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY: dict[str, Tool] = {}
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """Internal representation of a registered tool.
+
+    Attributes:
+        name: Tool name used in workflow step definitions.
+        func: The tool function.
+        description: Human-readable description for the LLM.
+    """
+
+    name: str
+    func: Callable[..., Any]
+    description: str | None = None
+
+
+_REGISTRY: dict[str, ToolDefinition] = {}
 
 
 def register_tool(
@@ -35,28 +60,34 @@ def register_tool(
     """
     if name in _REGISTRY:
         raise ValueError(f"Tool '{name}' is already registered.")
-    _REGISTRY[name] = Tool(func, name=name, description=description)
+    _REGISTRY[name] = ToolDefinition(name=name, func=func, description=description)
     logger.info("Registered tool '%s'", name)
 
 
-def get_tools(names: list[str]) -> list[Tool]:
-    """Return pydantic-ai Tool instances for the given names.
+def get_tools(names: list[str]) -> list[Any]:
+    """Resolve tool names to pydantic-ai Tool instances.
+
+    This is an internal API used by DirectExecutor and subprocess_child.
+    Product teams should not call this directly.
 
     Parameters:
         names: List of tool name strings.
 
     Returns:
-        List of Tool instances.
+        List of pydantic-ai Tool instances.
 
     Raises:
         ValueError: If any name is not registered.
     """
+    from pydantic_ai import Tool
+
     tools = []
     for name in names:
         if name not in _REGISTRY:
             available = ", ".join(sorted(_REGISTRY)) or "(none)"
             raise ValueError(f"Unknown tool '{name}'. Registered tools: {available}.")
-        tools.append(_REGISTRY[name])
+        defn = _REGISTRY[name]
+        tools.append(Tool(defn.func, name=defn.name, description=defn.description))
     return tools
 
 
