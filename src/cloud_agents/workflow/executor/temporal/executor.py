@@ -1,6 +1,6 @@
-"""Temporal-backed workflow executor.
+"""Temporal-backed workflow runner.
 
-Wraps the Temporal Client behind the WorkflowExecutor interface.
+Wraps the Temporal Client behind the WorkflowRunner interface.
 All Temporal-specific calls (start_workflow, signal, query, cancel,
 describe) are isolated here.
 """
@@ -16,7 +16,7 @@ from temporalio.service import RPCError
 
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
-    WorkflowExecutor,
+    WorkflowRunner,
     WorkflowStatus,
 )
 from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
@@ -41,10 +41,10 @@ def _to_dict(result: Any) -> dict[str, Any]:
     return {}
 
 
-class TemporalExecutor(WorkflowExecutor):
-    """Workflow executor backed by Temporal.
+class TemporalWorkflowRunner(WorkflowRunner):
+    """Workflow runner backed by Temporal.
 
-    Wraps Temporal Client calls behind the WorkflowExecutor interface
+    Wraps Temporal Client calls behind the WorkflowRunner interface
     so the API layer doesn't depend on Temporal directly.
     """
 

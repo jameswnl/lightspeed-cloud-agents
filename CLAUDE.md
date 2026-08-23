@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Cloud Agents uses **Temporal** or **pydantic-graph** (local executor) for workflow execution, **pydantic-ai** for LLM calls in spawn: none/local steps, and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (WorkflowExecutor, StepDispatcher, RecoveryPoller, PostgreSQL persistence) — it was deleted in PoC2.
+Cloud Agents uses **Temporal** or **pydantic-graph** (local runner) for workflow execution, **pydantic-ai** for LLM calls in spawn: none/local steps, and **lightspeed-agentic-sandbox** for ephemeral agent execution. Do NOT reference the old architecture (StepDispatcher, RecoveryPoller, PostgreSQL persistence) — it was deleted in PoC2. The workflow runner interface is `WorkflowRunner` (ABC) with `LocalWorkflowRunner` (pydantic-graph) and `TemporalWorkflowRunner` (Temporal SDK) implementations.
 
 ### Key components
 

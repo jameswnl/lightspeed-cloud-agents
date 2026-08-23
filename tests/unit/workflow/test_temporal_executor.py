@@ -1,4 +1,4 @@
-"""Tests for TemporalExecutor wrapping Temporal Client behind WorkflowExecutor."""
+"""Tests for TemporalWorkflowRunner wrapping Temporal Client behind WorkflowRunner."""
 
 from __future__ import annotations
 
@@ -30,13 +30,13 @@ def mock_client_fixture(mocker: MockerFixture) -> AsyncMock:
 
 @pytest.fixture(name="executor")
 def executor_fixture(mock_client: AsyncMock) -> Any:
-    """Create a TemporalExecutor with mocked client."""
-    from cloud_agents.workflow.executor.temporal.executor import TemporalExecutor
+    """Create a TemporalWorkflowRunner with mocked client."""
+    from cloud_agents.workflow.executor.temporal.executor import TemporalWorkflowRunner
 
-    return TemporalExecutor(client=mock_client)
+    return TemporalWorkflowRunner(client=mock_client)
 
 
-class TestTemporalExecutorStart:
+class TestTemporalWorkflowRunnerStart:
     """Tests for starting workflows via Temporal."""
 
     @pytest.mark.asyncio
@@ -73,7 +73,7 @@ class TestTemporalExecutorStart:
             await executor.start({"definition": {}, "provider": {}})
 
 
-class TestTemporalExecutorApprove:
+class TestTemporalWorkflowRunnerApprove:
     """Tests for approval signals."""
 
     @pytest.mark.asyncio
@@ -120,7 +120,7 @@ class TestTemporalExecutorApprove:
             )
 
 
-class TestTemporalExecutorCancel:
+class TestTemporalWorkflowRunnerCancel:
     """Tests for cancellation."""
 
     @pytest.mark.asyncio
@@ -147,7 +147,7 @@ class TestTemporalExecutorCancel:
             await executor.cancel("wf-missing")
 
 
-class TestTemporalExecutorStatus:
+class TestTemporalWorkflowRunnerStatus:
     """Tests for status queries."""
 
     @pytest.mark.asyncio
@@ -234,18 +234,18 @@ class TestTemporalExecutorStatus:
         assert await executor.is_terminal("wf-1") is False
 
 
-class TestTemporalExecutorInterface:
+class TestTemporalWorkflowRunnerInterface:
     """Verify interface compliance."""
 
     def test_implements_all_methods(self) -> None:
-        """TemporalExecutor implements WorkflowExecutor ABC."""
-        from cloud_agents.workflow.executor.base import WorkflowExecutor
-        from cloud_agents.workflow.executor.temporal.executor import TemporalExecutor
+        """TemporalWorkflowRunner implements WorkflowRunner ABC."""
+        from cloud_agents.workflow.executor.base import WorkflowRunner
+        from cloud_agents.workflow.executor.temporal.executor import TemporalWorkflowRunner
 
-        assert issubclass(TemporalExecutor, WorkflowExecutor)
+        assert issubclass(TemporalWorkflowRunner, WorkflowRunner)
 
     def test_has_temporalio_imports(self) -> None:
-        """TemporalExecutor SHOULD have temporalio imports."""
+        """TemporalWorkflowRunner SHOULD have temporalio imports."""
         from cloud_agents.workflow.executor.temporal import executor as mod
 
         source = open(mod.__file__).read()

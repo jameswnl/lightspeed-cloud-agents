@@ -1,6 +1,6 @@
 """Local workflow runner entrypoint.
 
-Builds a FastAPI app with the LocalExecutor — no Temporal dependency.
+Builds a FastAPI app with the LocalWorkflowRunner — no Temporal dependency.
 Uses pydantic-graph for workflow orchestration and PostgreSQL for
 run-state persistence.
 
@@ -20,7 +20,7 @@ from cloud_agents.runtime.logging import configure_logging
 from cloud_agents.runtime.tracing import init_tracing
 from cloud_agents.storage.run_state_store import RunStateStore
 from cloud_agents.storage.transcript_store import TranscriptStore
-from cloud_agents.workflow.executor.local.executor import LocalExecutor
+from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 from cloud_agents.workflow.executor.temporal.entrypoint import (
     AUTH_REQUIRED,
     CONTENT_POLICY_PATH,
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_local_app() -> FastAPI:
-    """Build FastAPI app with LocalExecutor — no Temporal required.
+    """Build FastAPI app with LocalWorkflowRunner — no Temporal required.
 
     Returns:
         FastAPI application with lifespan-managed stores and spawner.
@@ -52,11 +52,11 @@ def build_local_app() -> FastAPI:
         logger.info("Run-state store configured (RUN_STATE_DB_URL set)")
     else:
         logger.warning(
-            "RUN_STATE_DB_URL not set — LocalExecutor will run without persistence. "
+            "RUN_STATE_DB_URL not set — LocalWorkflowRunner will run without persistence. "
             "Approval gates and status queries will not survive process restarts."
         )
 
-    executor = LocalExecutor(
+    executor = LocalWorkflowRunner(
         spawner=spawner,
         run_state_store=run_state_store,
         transcript_store=transcript_store,

@@ -1,4 +1,4 @@
-"""Tests for the LocalExecutor implementing WorkflowExecutor interface."""
+"""Tests for the LocalWorkflowRunner implementing WorkflowRunner interface."""
 
 from __future__ import annotations
 
@@ -54,13 +54,13 @@ def mock_store_fixture(mocker: MockerFixture) -> AsyncMock:
 
 @pytest.fixture(name="executor")
 def executor_fixture(mock_spawner: AsyncMock, mock_store: AsyncMock) -> Any:
-    """Create a LocalExecutor with mocked dependencies."""
-    from cloud_agents.workflow.executor.local.executor import LocalExecutor
+    """Create a LocalWorkflowRunner with mocked dependencies."""
+    from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-    return LocalExecutor(spawner=mock_spawner, run_state_store=mock_store)
+    return LocalWorkflowRunner(spawner=mock_spawner, run_state_store=mock_store)
 
 
-class TestLocalExecutorStart:
+class TestLocalWorkflowRunnerStart:
     """Tests for starting workflows."""
 
     @pytest.mark.asyncio
@@ -106,7 +106,7 @@ class TestLocalExecutorStart:
             await executor.start(input_data)
 
 
-class TestLocalExecutorStatus:
+class TestLocalWorkflowRunnerStatus:
     """Tests for querying workflow status."""
 
     @pytest.mark.asyncio
@@ -141,7 +141,7 @@ class TestLocalExecutorStatus:
         assert status.is_terminal is True
 
 
-class TestLocalExecutorApproval:
+class TestLocalWorkflowRunnerApproval:
     """Tests for approval signal handling."""
 
     @pytest.mark.asyncio
@@ -220,7 +220,7 @@ class TestLocalExecutorApproval:
             )
 
 
-class TestLocalExecutorCancel:
+class TestLocalWorkflowRunnerCancel:
     """Tests for workflow cancellation."""
 
     @pytest.mark.asyncio
@@ -247,7 +247,7 @@ class TestLocalExecutorCancel:
             await executor.cancel("wf-missing")
 
 
-class TestLocalExecutorIsTerminal:
+class TestLocalWorkflowRunnerIsTerminal:
     """Tests for terminal state check."""
 
     @pytest.mark.asyncio
@@ -267,11 +267,32 @@ class TestLocalExecutorIsTerminal:
         assert await executor.is_terminal("wf-1") is False
 
 
-class TestLocalExecutorNoTemporal:
+class TestLocalWorkflowRunnerSendMessage:
+    """Tests for send_message/send_message_stream defaults."""
+
+    @pytest.mark.asyncio
+    async def test_send_message_raises_not_implemented(
+        self, executor: Any
+    ) -> None:
+        """send_message() raises NotImplementedError on predefined runners."""
+        with pytest.raises(NotImplementedError, match="does not support interactive messages"):
+            await executor.send_message("wf-1", "hello")
+
+    @pytest.mark.asyncio
+    async def test_send_message_stream_raises_not_implemented(
+        self, executor: Any
+    ) -> None:
+        """send_message_stream() raises NotImplementedError on predefined runners."""
+        with pytest.raises(NotImplementedError, match="does not support interactive streaming"):
+            async for _ in executor.send_message_stream("wf-1", "hello"):
+                pass
+
+
+class TestLocalWorkflowRunnerNoTemporal:
     """Verify no Temporal imports."""
 
     def test_no_temporal_imports(self) -> None:
-        """local_executor module has zero temporalio imports."""
+        """LocalWorkflowRunner module has zero temporalio imports."""
         from cloud_agents.workflow.executor.local import executor as mod
 
         source = open(mod.__file__).read()

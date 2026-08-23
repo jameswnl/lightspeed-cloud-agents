@@ -11,30 +11,30 @@ from pytest_mock import MockerFixture
 class TestWorkflowEngineSwitch:
     """Tests for WORKFLOW_ENGINE env var routing."""
 
-    def test_local_engine_creates_local_executor(
+    def test_local_engine_creates_local_runner(
         self, mocker: MockerFixture
     ) -> None:
-        """WORKFLOW_ENGINE=local creates a LocalExecutor."""
+        """WORKFLOW_ENGINE=local creates a LocalWorkflowRunner."""
         mocker.patch.dict(os.environ, {"WORKFLOW_ENGINE": "local"}, clear=False)
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
-        executor = create_executor()
-        from cloud_agents.workflow.executor.local.executor import LocalExecutor
+        runner = create_runner()
+        from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-        assert isinstance(executor, LocalExecutor)
+        assert isinstance(runner, LocalWorkflowRunner)
 
     def test_default_engine_is_local(self, mocker: MockerFixture) -> None:
         """Default WORKFLOW_ENGINE is local."""
         mocker.patch.dict(os.environ, {}, clear=False)
         os.environ.pop("WORKFLOW_ENGINE", None)
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
-        executor = create_executor()
-        from cloud_agents.workflow.executor.local.executor import LocalExecutor
+        runner = create_runner()
+        from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-        assert isinstance(executor, LocalExecutor)
+        assert isinstance(runner, LocalWorkflowRunner)
 
     def test_temporal_without_url_raises(self, mocker: MockerFixture) -> None:
         """WORKFLOW_ENGINE=temporal without TEMPORAL_URL raises."""
@@ -44,10 +44,10 @@ class TestWorkflowEngineSwitch:
             clear=False,
         )
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
         with pytest.raises(ValueError, match="TEMPORAL_URL"):
-            create_executor()
+            create_runner()
 
     def test_alert_trigger_under_local_raises(
         self, mocker: MockerFixture
@@ -59,10 +59,10 @@ class TestWorkflowEngineSwitch:
             clear=False,
         )
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
         with pytest.raises(ValueError, match="ALERT_TRIGGER"):
-            create_executor()
+            create_runner()
 
     def test_schedule_under_local_raises(
         self, mocker: MockerFixture
@@ -74,10 +74,10 @@ class TestWorkflowEngineSwitch:
             clear=False,
         )
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
         with pytest.raises(ValueError, match="SCHEDULE"):
-            create_executor()
+            create_runner()
 
     def test_unknown_engine_raises(self, mocker: MockerFixture) -> None:
         """Unknown WORKFLOW_ENGINE value raises."""
@@ -85,10 +85,10 @@ class TestWorkflowEngineSwitch:
             os.environ, {"WORKFLOW_ENGINE": "unknown"}, clear=False
         )
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
         with pytest.raises(ValueError, match="unknown"):
-            create_executor()
+            create_runner()
 
     def test_no_temporal_imports_in_factory(self) -> None:
         """Factory module has zero temporalio imports."""

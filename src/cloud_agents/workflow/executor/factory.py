@@ -1,4 +1,4 @@
-"""Executor factory — creates the right WorkflowExecutor based on config.
+"""Runner factory — creates the right WorkflowRunner based on config.
 
 Reads WORKFLOW_ENGINE env var to select between local (pydantic-graph)
 and temporal backends. Fail-fast validation for incompatible configs.
@@ -12,18 +12,18 @@ import logging
 import os
 from typing import Any
 
-from cloud_agents.workflow.executor.base import WorkflowExecutor
+from cloud_agents.workflow.executor.base import WorkflowRunner
 
 logger = logging.getLogger(__name__)
 
 
-def create_executor(
+def create_runner(
     *,
     spawner: Any = None,
     run_state_store: Any = None,
     transcript_store: Any = None,
-) -> WorkflowExecutor:
-    """Create a WorkflowExecutor based on WORKFLOW_ENGINE env var.
+) -> WorkflowRunner:
+    """Create a WorkflowRunner based on WORKFLOW_ENGINE env var.
 
     Parameters:
         spawner: AgentSpawner instance for sandbox lifecycle.
@@ -31,7 +31,7 @@ def create_executor(
         transcript_store: Optional TranscriptStore.
 
     Returns:
-        WorkflowExecutor instance (LocalExecutor or TemporalExecutor).
+        WorkflowRunner instance (LocalWorkflowRunner or TemporalWorkflowRunner).
 
     Raises:
         ValueError: If config is invalid or incompatible.
@@ -57,8 +57,8 @@ def _create_local(
     spawner: Any = None,
     run_state_store: Any = None,
     transcript_store: Any = None,
-) -> WorkflowExecutor:
-    """Create a LocalExecutor with fail-fast validation."""
+) -> WorkflowRunner:
+    """Create a LocalWorkflowRunner with fail-fast validation."""
     # Fail fast: alert/schedule triggers require Temporal
     if os.environ.get("ALERT_TRIGGER_ENABLED", "").lower() == "true":
         raise ValueError(
@@ -71,18 +71,18 @@ def _create_local(
             "Schedule triggers are not supported with the local executor."
         )
 
-    from cloud_agents.workflow.executor.local.executor import LocalExecutor
+    from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-    logger.info("Using LocalExecutor (WORKFLOW_ENGINE=local)")
-    return LocalExecutor(
+    logger.info("Using LocalWorkflowRunner (WORKFLOW_ENGINE=local)")
+    return LocalWorkflowRunner(
         spawner=spawner,
         run_state_store=run_state_store,
         transcript_store=transcript_store,
     )
 
 
-def _create_temporal() -> WorkflowExecutor:
-    """Create a TemporalExecutor with fail-fast validation.
+def _create_temporal() -> WorkflowRunner:
+    """Create a TemporalWorkflowRunner with fail-fast validation.
 
     Note: The actual Temporal Client connection happens in the entrypoint
     lifespan, not here. This factory validates config and returns a
@@ -96,15 +96,15 @@ def _create_temporal() -> WorkflowExecutor:
             "(e.g. 'localhost:7233')."
         )
 
-    # TemporalExecutor needs a connected Client, which is created
+    # TemporalWorkflowRunner needs a connected Client, which is created
     # during the FastAPI lifespan. Return a lazy wrapper that raises
     # if used before connection.
     logger.info(
-        "Using TemporalExecutor (WORKFLOW_ENGINE=temporal, url=%s)",
+        "Using TemporalWorkflowRunner (WORKFLOW_ENGINE=temporal, url=%s)",
         temporal_url,
     )
 
-    from cloud_agents.workflow.executor.temporal.executor import TemporalExecutor
+    from cloud_agents.workflow.executor.temporal.executor import TemporalWorkflowRunner
 
     # Return with None client — the entrypoint will set it after connecting
-    return TemporalExecutor(client=None)  # type: ignore[arg-type]
+    return TemporalWorkflowRunner(client=None)  # type: ignore[arg-type]

@@ -6,7 +6,7 @@ can be executed in-process. Each step type maps to a graph node:
 - type: agent → dispatches to StepExecutor based on spawn mode
 - type: human-approval → signals pause for approval
 
-No temporalio imports. Used by the LocalExecutor.
+No temporalio imports. Used by the LocalWorkflowRunner.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ def _build_approval_step(
             }
             return {"status": "completed", "output": result}
 
-        # Signal pause — the LocalExecutor checks paused_at_step
+        # Signal pause — the LocalWorkflowRunner checks paused_at_step
         # after each graph.iter().next() and breaks the loop.
         state.paused_at_step = step_name
         state.step_results[output_key] = {
