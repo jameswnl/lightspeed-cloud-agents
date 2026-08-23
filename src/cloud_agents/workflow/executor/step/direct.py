@@ -1,13 +1,15 @@
-"""DirectExecutor — spawn: none step executor.
+"""DirectExecutor -- spawn: none step executor.
 
 Executes a single LLM call (no tools) or a pydantic-ai Agent loop
-(with tools) depending on the step's tools list.
+(with tools/MCP servers) depending on the step's tools list and
+mcp_servers configuration.
 
 No temporalio imports.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -15,6 +17,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
+from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
 
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
@@ -145,9 +148,9 @@ class DirectExecutor(StepExecutor):
     async def run(self, step_input: StepInput) -> StepResult:
         """Execute a step as a single LLM call or pydantic-ai Agent loop.
 
-        When the step has tools, creates a pydantic-ai Agent with tools
-        from the registry and runs the agent loop. Otherwise falls back
-        to the simpler model_request path.
+        When the step has tools or MCP servers, creates a pydantic-ai Agent
+        with tools from the registry and/or MCPToolsets and runs the agent
+        loop. Otherwise falls back to the simpler model_request path.
 
         Parameters:
             step_input: Step execution input.
@@ -158,7 +161,7 @@ class DirectExecutor(StepExecutor):
         start_ms = time.monotonic_ns() // 1_000_000
 
         try:
-            if step_input.tools:
+            if step_input.tools or step_input.mcp_servers:
                 return await self._run_with_agent(step_input, start_ms)
             return await self._run_model_request(step_input, start_ms)
 
@@ -185,7 +188,11 @@ class DirectExecutor(StepExecutor):
             )
 
     async def _run_with_agent(self, step_input: StepInput, start_ms: int) -> StepResult:
-        """Execute using pydantic-ai Agent with tools.
+        """Execute using pydantic-ai Agent with tools and/or MCP servers.
+
+        When MCP servers are configured, creates MCPToolset instances using
+        AsyncExitStack for proper lifecycle management. Each server gets its
+        own StreamableHttpTransport with optional auth headers.
 
         Parameters:
             step_input: Step execution input.
@@ -196,24 +203,41 @@ class DirectExecutor(StepExecutor):
         """
         if step_input.tools_module:
             from cloud_agents.workflow.executor.step.tools import load_tools_module
+
             load_tools_module(step_input.tools_module)
 
         ensure_credentials_env(step_input.provider)
         model_string = to_model_string(step_input.provider)
-        tools = get_tools(step_input.tools)
+        tools = get_tools(step_input.tools) if step_input.tools else []
+
+        # Build MCP toolsets
+        mcp_toolsets: list[MCPToolset] = []
+        for server in step_input.mcp_servers or []:
+            url = server.get("url", "")
+            headers = server.get("headers")
+            transport = StreamableHttpTransport(url=url, headers=headers)
+            mcp_toolsets.append(MCPToolset(transport))
 
         user_prompt = _build_user_prompt(step_input)
 
-        agent = Agent(
-            model_string,
-            instructions=step_input.system_prompt,
-            tools=tools,
-        )
+        # Use AsyncExitStack for proper MCPToolset lifecycle management
+        async with contextlib.AsyncExitStack() as stack:
+            active_toolsets = []
+            for ts in mcp_toolsets:
+                active_ts = await stack.enter_async_context(ts)
+                active_toolsets.append(active_ts)
 
-        result = await agent.run(
-            user_prompt,
-            model_settings={"timeout": step_input.timeout_seconds},
-        )
+            agent = Agent(
+                model_string,
+                instructions=step_input.system_prompt,
+                tools=tools,
+                toolsets=active_toolsets if active_toolsets else None,
+            )
+
+            result = await agent.run(
+                user_prompt,
+                model_settings={"timeout": step_input.timeout_seconds},
+            )
 
         content = result.output
         usage = result.usage
@@ -224,6 +248,8 @@ class DirectExecutor(StepExecutor):
 
         duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
+        mcp_server_names = [s.get("name", "") for s in (step_input.mcp_servers or [])]
+
         transcript = [
             {
                 "type": "agent.run",
@@ -232,17 +258,19 @@ class DirectExecutor(StepExecutor):
                 "output_tokens": output_tokens,
                 "step_name": step_input.step_name,
                 "tools": step_input.tools,
+                "mcp_servers": mcp_server_names,
             },
         ]
 
         logger.info(
             "DirectExecutor (agent) completed step '%s' "
-            "(%d input, %d output tokens, %dms, tools=%s)",
+            "(%d input, %d output tokens, %dms, tools=%s, mcp_servers=%s)",
             step_input.step_name,
             input_tokens,
             output_tokens,
             duration_ms,
             step_input.tools,
+            mcp_server_names,
         )
 
         return StepResult(

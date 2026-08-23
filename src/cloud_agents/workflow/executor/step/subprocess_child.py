@@ -9,6 +9,7 @@ Reads StepInput JSON from stdin, executes LLM call via pydantic-ai
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -17,6 +18,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
+from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
 
 from cloud_agents.workflow.executor.step.provider import (
@@ -24,7 +26,6 @@ from cloud_agents.workflow.executor.step.provider import (
     to_model_string,
 )
 from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
-
 
 _TOOLS_MODULE_ENV = "CLOUD_AGENTS_TOOLS_MODULE"
 
@@ -57,10 +58,10 @@ def main() -> None:
 
 
 async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
-    """Execute the LLM call, with or without tools.
+    """Execute the LLM call, with or without tools/MCP servers.
 
-    When tools are present, creates a pydantic-ai Agent with tools from
-    the registry. Otherwise uses the simpler model_request path.
+    When tools or MCP servers are present, creates a pydantic-ai Agent.
+    Otherwise uses the simpler model_request path.
 
     Parameters:
         input_data: Deserialized step input dict from stdin.
@@ -69,8 +70,9 @@ async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
         Result dict with status, output, transcript, and token counts.
     """
     tool_names = input_data.get("tools", [])
+    mcp_servers = input_data.get("mcp_servers") or []
 
-    if tool_names:
+    if tool_names or mcp_servers:
         return await _run_with_agent(input_data, tool_names)
     return await _run_model_request(input_data)
 
@@ -156,7 +158,10 @@ def _parse_content(content: Any, output_schema: dict[str, Any] | None) -> dict[s
 
 
 async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> dict[str, Any]:
-    """Execute using pydantic-ai Agent with tools.
+    """Execute using pydantic-ai Agent with tools and/or MCP servers.
+
+    When MCP servers are configured, creates MCPToolset instances using
+    AsyncExitStack for proper lifecycle management.
 
     Parameters:
         input_data: Deserialized step input dict.
@@ -175,21 +180,38 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
 
     system_prompt = input_data.get("system_prompt")
     output_schema = input_data.get("output_schema")
-    tools = get_tools(tool_names)
+    tools = get_tools(tool_names) if tool_names else []
+
+    # Build MCP toolsets
+    mcp_servers = input_data.get("mcp_servers") or []
+    mcp_toolsets: list[MCPToolset] = []
+    for server in mcp_servers:
+        url = server.get("url", "")
+        headers = server.get("headers")
+        transport = StreamableHttpTransport(url=url, headers=headers)
+        mcp_toolsets.append(MCPToolset(transport))
 
     user_content = _build_user_content(input_data)
 
-    agent = Agent(
-        model_string,
-        instructions=system_prompt,
-        tools=tools,
-    )
+    # Use AsyncExitStack for proper MCPToolset lifecycle management
+    async with contextlib.AsyncExitStack() as stack:
+        active_toolsets = []
+        for ts in mcp_toolsets:
+            active_ts = await stack.enter_async_context(ts)
+            active_toolsets.append(active_ts)
 
-    timeout_seconds = input_data.get("timeout_seconds", 600)
-    result = await agent.run(
-        user_content,
-        model_settings={"timeout": timeout_seconds},
-    )
+        agent = Agent(
+            model_string,
+            instructions=system_prompt,
+            tools=tools,
+            toolsets=active_toolsets if active_toolsets else None,
+        )
+
+        timeout_seconds = input_data.get("timeout_seconds", 600)
+        result = await agent.run(
+            user_content,
+            model_settings={"timeout": timeout_seconds},
+        )
 
     content = result.output
     usage = result.usage

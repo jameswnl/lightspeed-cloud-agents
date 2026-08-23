@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -320,6 +321,219 @@ class TestSubprocessChildMain:
 
         mock_fn.assert_called_once()
         assert mock_fn.call_args[0][0] == "anthropic:claude-sonnet-5"
+
+
+class TestSubprocessChildWithMCPServers:
+    """Tests for subprocess_child when MCP servers are configured."""
+
+    def test_mcp_servers_only_dispatches_to_agent(self, mocker: MockerFixture) -> None:
+        """main() uses Agent path when mcp_servers present but no tools."""
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"status": "ok"}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.StreamableHttpTransport",
+        )
+
+        # Ensure model_request is NOT called
+        mock_model_req = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+        )
+
+        input_data = {
+            "prompt": "Query the cluster",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "mcp_servers": [
+                {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+            ],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "completed"
+        mock_agent_cls.assert_called_once()
+        mock_model_req.assert_not_called()
+
+    def test_mcp_servers_with_tools(self, mocker: MockerFixture) -> None:
+        """main() uses Agent path with both tools and MCP servers."""
+        from cloud_agents.workflow.executor.step.tools import clear_tools, register_tool
+
+        clear_tools()
+        register_tool("kubectl_get", lambda q: f"result: {q}")
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 60
+        mock_usage.output_tokens = 25
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.StreamableHttpTransport",
+        )
+
+        input_data = {
+            "prompt": "Query the cluster",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "tools": ["kubectl_get"],
+            "mcp_servers": [
+                {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+            ],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "completed"
+        mock_agent_cls.assert_called_once()
+
+        # Agent should get both tools and toolsets
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "tools" in call_kwargs
+        assert "toolsets" in call_kwargs
+
+        clear_tools()
+
+    def test_mcp_servers_with_auth_headers(self, mocker: MockerFixture) -> None:
+        """MCP server auth headers are passed to StreamableHttpTransport."""
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mock_transport_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.StreamableHttpTransport",
+        )
+
+        input_data = {
+            "prompt": "Query",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "mcp_servers": [
+                {
+                    "name": "kubectl",
+                    "url": "http://mcp-kubectl:8080/sse",
+                    "headers": {"Authorization": "Bearer secret-token"},
+                },
+            ],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        mock_transport_cls.assert_called_once_with(
+            url="http://mcp-kubectl:8080/sse",
+            headers={"Authorization": "Bearer secret-token"},
+        )
 
 
 def _dummy_tool(query: str) -> str:
