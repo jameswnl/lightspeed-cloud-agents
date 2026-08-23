@@ -1292,6 +1292,10 @@ class TestDirectExecutorStreaming:
         assert len(complete_events) == 1
         assert complete_events[0].result is not None
         assert complete_events[0].result.status == "completed"
+        assert len(complete_events[0].result.transcript) >= 1
+        assert complete_events[0].result.transcript[0]["type"] == "agent.stream"
+        assert complete_events[0].result.input_tokens == 80
+        assert complete_events[0].result.output_tokens == 30
 
     @pytest.mark.asyncio
     async def test_run_stream_without_tools_yields_single_complete(

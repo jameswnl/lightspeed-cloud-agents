@@ -52,25 +52,11 @@ class TestStreamEventConstruction:
         assert event.data["error"] == "boom"
         assert event.result.status == "failed"
 
-    def test_tool_call_event(self) -> None:
-        """StreamEvent type='tool_call' is a valid event type."""
-        from cloud_agents.workflow.executor.step.base import StreamEvent
-
-        event = StreamEvent(type="tool_call", data={"name": "kubectl_get"})
-        assert event.type == "tool_call"
-
-    def test_tool_result_event(self) -> None:
-        """StreamEvent type='tool_result' is a valid event type."""
-        from cloud_agents.workflow.executor.step.base import StreamEvent
-
-        event = StreamEvent(type="tool_result", data={"output": "3 pods running"})
-        assert event.type == "tool_result"
-
     def test_all_event_types(self) -> None:
-        """All five event types can be constructed."""
+        """All three event types can be constructed."""
         from cloud_agents.workflow.executor.step.base import StreamEvent
 
-        types = ["token", "tool_call", "tool_result", "complete", "error"]
+        types = ["token", "complete", "error"]
         for t in types:
             event = StreamEvent(type=t)
             assert event.type == t

@@ -262,9 +262,24 @@ class DirectExecutor(StepExecutor):
             output = _parse_output(output_text, step_input.output_schema)
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
+            transcript = [
+                {
+                    "type": "agent.stream",
+                    "model": step_input.provider.get("model", "unknown"),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "step_name": step_input.step_name,
+                    "tools": step_input.tools,
+                    "mcp_servers": [
+                        s.get("name", "") for s in (step_input.mcp_servers or [])
+                    ],
+                },
+            ]
+
             step_result = StepResult(
                 status="completed",
                 output=output,
+                transcript=transcript,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 duration_ms=duration_ms,

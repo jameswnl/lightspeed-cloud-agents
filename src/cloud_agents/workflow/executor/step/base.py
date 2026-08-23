@@ -85,12 +85,14 @@ class StreamEvent:
     """A streaming event from step execution.
 
     Attributes:
-        type: Event type.
+        type: Event type — token (text delta), complete (final result),
+            or error (step failed). tool_call/tool_result are reserved
+            for future use when pydantic-ai tool call events are mapped.
         data: Event payload.
         result: Complete StepResult (only set for type='complete' or 'error').
     """
 
-    type: Literal["token", "tool_call", "tool_result", "complete", "error"]
+    type: Literal["token", "complete", "error"]
     data: dict[str, Any] = field(default_factory=dict)
     result: Optional[StepResult] = None
 
@@ -125,7 +127,15 @@ class StepExecutor(ABC):
             step_input: Step execution input.
 
         Yields:
-            StreamEvent instances.
+            StreamEvent instances. On error, yields an error event with
+            a failed StepResult (does not raise).
         """
-        result = await self.run(step_input)
-        yield StreamEvent(type="complete", result=result)
+        try:
+            result = await self.run(step_input)
+            yield StreamEvent(type="complete", result=result)
+        except Exception as exc:
+            yield StreamEvent(
+                type="error",
+                data={"error": str(exc)},
+                result=StepResult(status="failed", error=str(exc)),
+            )
