@@ -1,8 +1,8 @@
-"""SubprocessExecutor — spawn: local LLM execution in a child process.
+"""SubprocessExecutor — spawn: local step execution in a child process.
 
-Runs an LLM call in a forked subprocess for process-level isolation.
-The child process dies on crash/timeout/memory leak without affecting
-the workflow runner. Tool support is planned for PR B of #131.
+Runs an LLM call or pydantic-ai Agent (with tools) in a forked subprocess
+for process-level isolation. The child process dies on crash/timeout/memory
+leak without affecting the workflow runner.
 
 Uses asyncio.create_subprocess_exec to spawn a child that runs the
 agent logic and returns results via stdout (JSON serialized).
@@ -108,9 +108,7 @@ async def _run_in_subprocess(
     try:
         return json.loads(stdout.decode())
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Child process returned invalid JSON: {stdout.decode()[:500]}"
-        ) from exc
+        raise RuntimeError(f"Child process returned invalid JSON: {stdout.decode()[:500]}") from exc
 
 
 class SubprocessExecutor(StepExecutor):
@@ -131,15 +129,6 @@ class SubprocessExecutor(StepExecutor):
             StepResult with status, output, transcript, and metrics.
         """
         start_ms = time.monotonic_ns() // 1_000_000
-
-        if step_input.tools:
-            logger.warning(
-                "SubprocessExecutor does not yet support tools; "
-                "tools %s for step '%s' will be ignored. "
-                "Use spawn: ephemeral for tool support.",
-                step_input.tools,
-                step_input.step_name,
-            )
 
         try:
             step_dict = _step_input_to_dict(step_input)

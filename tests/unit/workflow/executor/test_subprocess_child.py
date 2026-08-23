@@ -6,6 +6,7 @@ import json
 from io import StringIO
 from unittest.mock import AsyncMock
 
+import pytest
 from pytest_mock import MockerFixture
 
 
@@ -319,3 +320,209 @@ class TestSubprocessChildMain:
 
         mock_fn.assert_called_once()
         assert mock_fn.call_args[0][0] == "anthropic:claude-sonnet-5"
+
+
+def _dummy_tool(query: str) -> str:
+    """A dummy tool for testing.
+
+    Parameters:
+        query: Input query.
+
+    Returns:
+        Fixed string result.
+    """
+    return f"result: {query}"
+
+
+class TestSubprocessChildWithTools:
+    """Tests for subprocess_child.main() when tools are present."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self) -> None:
+        """Clear tool registry before each test."""
+        from cloud_agents.workflow.executor.step.tools import clear_tools
+
+        clear_tools()
+        yield  # type: ignore[misc]
+        clear_tools()
+
+    def test_uses_agent_when_tools_present(self, mocker: MockerFixture) -> None:
+        """main() uses pydantic-ai Agent when tools are provided."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 80
+        mock_usage.output_tokens = 30
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"severity": "high"}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        # asyncio.run will call the coroutine, so we need a real async mock
+        async def fake_run(prompt: str) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        input_data = {
+            "prompt": "Get pods",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "tools": ["kubectl_get"],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "completed"
+        assert result["output"] == {"severity": "high"}
+        assert result["input_tokens"] == 80
+        assert result["output_tokens"] == 30
+        mock_agent_cls.assert_called_once()
+
+    def test_no_tools_uses_model_request(self, mocker: MockerFixture) -> None:
+        """main() uses model_request when no tools provided."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=10, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o"},
+            "context": {},
+            "tools": [],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "completed"
+        mock_fn.assert_called_once()
+        mock_agent_cls.assert_not_called()
+
+    def test_unknown_tool_returns_failed(self, mocker: MockerFixture) -> None:
+        """main() returns failed when a tool name is unknown."""
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o"},
+            "context": {},
+            "tools": ["nonexistent_tool"],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        stdout_mock.seek(0)
+        result = json.loads(stdout_mock.read())
+
+        assert result["status"] == "failed"
+        assert "Unknown tool" in result["error"]
+
+    def test_agent_with_system_prompt(self, mocker: MockerFixture) -> None:
+        """main() passes system_prompt as instructions to Agent."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        input_data = {
+            "prompt": "Check pods",
+            "system_prompt": "You are a K8s expert.",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "tools": ["kubectl_get"],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert call_kwargs["instructions"] == "You are a K8s expert."

@@ -506,6 +506,304 @@ class TestParseOutput:
             _parse_output(None, {"type": "object"})
 
 
+@pytest.fixture(autouse=True)
+def _clean_tool_registry() -> None:
+    """Clear tool registry before each test."""
+    from cloud_agents.workflow.executor.step.tools import clear_tools
+
+    clear_tools()
+    yield  # type: ignore[misc]
+    clear_tools()
+
+
+def _dummy_tool(query: str) -> str:
+    """A dummy tool for testing.
+
+    Parameters:
+        query: Input query.
+
+    Returns:
+        Fixed string result.
+    """
+    return f"result: {query}"
+
+
+class TestDirectExecutorWithTools:
+    """Tests for DirectExecutor.run() when tools are present."""
+
+    @pytest.mark.asyncio
+    async def test_uses_agent_when_tools_present(self, mocker: MockerFixture) -> None:
+        """DirectExecutor uses pydantic-ai Agent when step has tools."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool, description="Get K8s resources")
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 80
+        mock_usage.output_tokens = 30
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"severity": "high"}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Get pods in default namespace",
+                provider={
+                    "name": "openai",
+                    "model": "gpt-4o",
+                    "credentials_secret": "openai-api-key",
+                },
+                tools=["kubectl_get"],
+                workflow_id="wf-1",
+                step_name="get-pods",
+                output_key="pods",
+            )
+        )
+
+        assert result.status == "completed"
+        mock_agent_cls.assert_called_once()
+        mock_agent_instance.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_created_with_correct_tools(self, mocker: MockerFixture) -> None:
+        """Agent is created with tools from the registry."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        # Check Agent was constructed with tools kwarg
+        call_kwargs = mock_agent_cls.call_args
+        assert "tools" in call_kwargs.kwargs
+        assert len(call_kwargs.kwargs["tools"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_agent_uses_correct_model_string(self, mocker: MockerFixture) -> None:
+        """Agent is created with correct pydantic-ai model string."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={
+                    "name": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "credentials_secret": "k",
+                },
+                tools=["kubectl_get"],
+            )
+        )
+
+        # First positional arg to Agent() is the model string
+        call_args = mock_agent_cls.call_args
+        assert call_args[0][0] == "anthropic:claude-sonnet-5"
+
+    @pytest.mark.asyncio
+    async def test_no_tools_uses_model_request(self, mocker: MockerFixture) -> None:
+        """Without tools, DirectExecutor still uses model_request (existing path)."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mock_fn = _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        # Ensure Agent is NOT called
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=[],
+            )
+        )
+
+        assert result.status == "completed"
+        mock_fn.assert_called_once()
+        mock_agent_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_returns_failed(self, mocker: MockerFixture) -> None:
+        """DirectExecutor returns failed status when a tool name is unknown."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["nonexistent_tool"],
+            )
+        )
+
+        assert result.status == "failed"
+        assert "Unknown tool" in result.error
+
+    @pytest.mark.asyncio
+    async def test_agent_tracks_token_usage(self, mocker: MockerFixture) -> None:
+        """DirectExecutor extracts token usage from Agent result."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 120
+        mock_usage.output_tokens = 45
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = "The pods are running fine."
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Check pods",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        assert result.input_tokens == 120
+        assert result.output_tokens == 45
+
+    @pytest.mark.asyncio
+    async def test_agent_includes_system_prompt(self, mocker: MockerFixture) -> None:
+        """Agent is created with instructions from system_prompt."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Check pods",
+                system_prompt="You are a K8s expert.",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert call_kwargs["instructions"] == "You are a K8s expert."
+
+
 class TestFalsyOutputPreservation:
     """Tests for preserving falsy prior-step outputs."""
 

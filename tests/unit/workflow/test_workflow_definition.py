@@ -125,3 +125,35 @@ class TestWorkflowDefinitionValidation:
         del data["spec"]["steps"][0]["output_key"]
         with pytest.raises(ValidationError):
             WorkflowDefinition.model_validate(data)
+
+
+class TestWorkflowStepSpecTools:
+    """Tests for WorkflowStepSpec.tools field."""
+
+    def test_tools_field_defaults_to_empty(self) -> None:
+        """Tools field defaults to empty list when not specified."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].tools == []
+
+    def test_tools_field_accepted(self) -> None:
+        """Tools field is accepted and preserved."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        data["spec"]["steps"][0]["tools"] = ["kubectl_get", "kubectl_describe"]
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].tools == ["kubectl_get", "kubectl_describe"]
+
+    def test_tools_field_empty_list(self) -> None:
+        """Explicit empty list is accepted."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        data["spec"]["steps"][0]["tools"] = []
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].tools == []
+
+    def test_tools_field_round_trip(self) -> None:
+        """Tools field survives JSON serialization round-trip."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        data["spec"]["steps"][0]["tools"] = ["kubectl_get"]
+        defn = WorkflowDefinition.model_validate(data)
+        restored = WorkflowDefinition.model_validate_json(defn.model_dump_json())
+        assert restored.spec.steps[0].tools == ["kubectl_get"]
