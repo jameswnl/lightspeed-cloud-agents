@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic_ai import Agent
@@ -20,7 +21,12 @@ from pydantic_ai.direct import model_request
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
 
-from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
+from cloud_agents.workflow.executor.step.base import (
+    StepExecutor,
+    StepInput,
+    StepResult,
+    StreamEvent,
+)
 from cloud_agents.workflow.executor.step.provider import ensure_credentials_env, to_model_string
 from cloud_agents.workflow.executor.step.tools import get_tools
 
@@ -185,6 +191,112 @@ class DirectExecutor(StepExecutor):
                 status="failed",
                 error=str(exc),
                 duration_ms=duration_ms,
+            )
+
+    async def run_stream(self, step_input: StepInput) -> AsyncIterator[StreamEvent]:
+        """Stream step execution events with real token deltas.
+
+        When the step has tools or MCP servers, uses Agent.run_stream()
+        for true token-by-token streaming. Otherwise falls back to the
+        default implementation which calls run() and yields a single
+        complete event.
+
+        Parameters:
+            step_input: Step execution input.
+
+        Yields:
+            StreamEvent instances (token deltas followed by complete/error).
+        """
+        if not (step_input.tools or step_input.mcp_servers):
+            async for event in super().run_stream(step_input):
+                yield event
+            return
+
+        start_ms = time.monotonic_ns() // 1_000_000
+
+        try:
+            if step_input.tools_module:
+                from cloud_agents.workflow.executor.step.tools import load_tools_module
+
+                load_tools_module(step_input.tools_module)
+
+            ensure_credentials_env(step_input.provider)
+            model_string = to_model_string(step_input.provider)
+            tools = get_tools(step_input.tools) if step_input.tools else []
+
+            # Build MCP toolsets
+            mcp_toolsets: list[MCPToolset] = []
+            for server in step_input.mcp_servers or []:
+                url = server.get("url", "")
+                headers = server.get("headers")
+                transport = StreamableHttpTransport(url=url, headers=headers)
+                mcp_toolsets.append(MCPToolset(transport))
+
+            user_prompt = _build_user_prompt(step_input)
+
+            async with contextlib.AsyncExitStack() as stack:
+                active_toolsets = []
+                for ts in mcp_toolsets:
+                    active_ts = await stack.enter_async_context(ts)
+                    active_toolsets.append(active_ts)
+
+                agent = Agent(
+                    model_string,
+                    instructions=step_input.system_prompt,
+                    tools=tools,
+                    toolsets=active_toolsets if active_toolsets else None,
+                )
+
+                async with agent.run_stream(
+                    user_prompt,
+                    model_settings={"timeout": step_input.timeout_seconds},
+                ) as streamed:
+                    async for delta in streamed.stream_text(delta=True):
+                        yield StreamEvent(type="token", data={"delta": delta})
+
+                    output_text = await streamed.get_output()
+                    usage = streamed.usage
+
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+            output = _parse_output(output_text, step_input.output_schema)
+            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
+
+            transcript = [
+                {
+                    "type": "agent.stream",
+                    "model": step_input.provider.get("model", "unknown"),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "step_name": step_input.step_name,
+                    "tools": step_input.tools,
+                    "mcp_servers": [
+                        s.get("name", "") for s in (step_input.mcp_servers or [])
+                    ],
+                },
+            ]
+
+            step_result = StepResult(
+                status="completed",
+                output=output,
+                transcript=transcript,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration_ms=duration_ms,
+            )
+            yield StreamEvent(type="complete", result=step_result)
+
+        except Exception as exc:
+            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
+            logger.error(
+                "DirectExecutor streaming failed for step '%s': %s",
+                step_input.step_name,
+                exc,
+            )
+            yield StreamEvent(
+                type="error",
+                data={"error": str(exc)},
+                result=StepResult(status="failed", error=str(exc), duration_ms=duration_ms),
             )
 
     async def _run_with_agent(self, step_input: StepInput, start_ms: int) -> StepResult:
