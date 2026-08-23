@@ -24,18 +24,18 @@ flowchart TD
 | | spawn: none | spawn: local | spawn: ephemeral |
 |---|---|---|---|
 | **Isolation** | None (in-process) | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
-| **Tool support** | pydantic-ai `@tool` *(planned)* | pydantic-ai `@tool` *(planned)* | MCP + Shell + Filesystem + Skills |
+| **Tool support** | `@step_tool` registered functions | `@step_tool` registered functions | MCP + Shell + Filesystem + Skills |
 | **MCP servers** | Remote (HTTP/SSE) *(planned)* | Remote (HTTP/SSE) *(planned)* | Local + remote (inside container) |
 | **Skills** | pip packages or skills_dir *(planned)* | pip packages or skills_dir *(planned)* | OCI image via init container |
 | **Tool source** | ToolRegistry + MCP + skills *(planned)* | ToolRegistry + MCP + skills *(planned)* | Sandbox image + MCP servers |
-| **Agent loop** | Single call; `Agent.run` if tools *(planned)* | Single call; `Agent.run` if tools *(planned)* | Yes (agent SDK in container) |
-| **LLM transport** | pydantic-ai `model_request` | pydantic-ai `model_request` (in subprocess) | Agent SDK in sandbox |
+| **Agent loop** | Single call; `Agent.run` if tools | Single call; `Agent.run` if tools | Yes (agent SDK in container) |
+| **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `model_request` or `Agent.run` (in subprocess) | Agent SDK in sandbox |
 | **Timeout enforcement** | pydantic-ai `model_settings.timeout` | Hard kill (`proc.kill()`) | Container terminate |
 | **Providers** | All (via pydantic-ai) | All (via pydantic-ai) | Configured in sandbox env vars |
 | **Infrastructure needed** | Nothing (just PostgreSQL) | Nothing (just PostgreSQL) | OpenShell gateway + sandbox image |
 | **Best for** | Trusted tools, low latency | Semi-trusted tools, crash safety | Untrusted code, shell access |
 
-## Tool Registry Architecture (spawn: none + local) — *Planned (#131 PR B)*
+## Tool Registry Architecture (spawn: none + local)
 
 ```mermaid
 flowchart TD

@@ -41,6 +41,7 @@ def _step_input_to_dict(step_input: StepInput) -> dict[str, Any]:
         "system_prompt": step_input.system_prompt,
         "output_schema": step_input.output_schema,
         "tools": step_input.tools,
+        "tools_module": step_input.tools_module,
         "context": step_input.context,
         "provider": step_input.provider,
         "timeout_seconds": step_input.timeout_seconds,

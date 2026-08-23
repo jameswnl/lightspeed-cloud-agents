@@ -122,6 +122,22 @@ def list_tools() -> list[str]:
     return sorted(_REGISTRY)
 
 
+def load_tools_module(module_path: str) -> None:
+    """Import a module to trigger @step_tool registrations.
+
+    Used by subprocess_child to reconstruct the tool registry in the
+    child process. The module is imported via importlib, which runs
+    any @step_tool decorators at module scope.
+
+    Parameters:
+        module_path: Dotted Python import path (e.g. 'myapp.tools').
+    """
+    import importlib
+
+    importlib.import_module(module_path)
+    logger.debug("Loaded tools module '%s'", module_path)
+
+
 def clear_tools() -> None:
     """Remove all registered tools. For testing only."""
     _REGISTRY.clear()

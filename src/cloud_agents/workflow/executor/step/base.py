@@ -24,6 +24,7 @@ class StepInput:
         system_prompt: Optional system/instruction prompt.
         output_schema: Optional JSON Schema for structured output.
         tools: Tool names this step is allowed to use.
+        tools_module: Dotted import path for module containing tool registrations.
         context: Prior step outputs keyed by output_key.
         timeout_seconds: Max execution time.
         sandbox_image: Container image for ephemeral mode.
@@ -40,6 +41,7 @@ class StepInput:
     system_prompt: Optional[str] = None
     output_schema: Optional[dict[str, Any]] = None
     tools: list[str] = field(default_factory=list)
+    tools_module: Optional[str] = None
     context: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: int = 600
     sandbox_image: str = "sandbox:latest"

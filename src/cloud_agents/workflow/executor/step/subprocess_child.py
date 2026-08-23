@@ -22,7 +22,7 @@ from cloud_agents.workflow.executor.step.provider import (
     ensure_credentials_env,
     to_model_string,
 )
-from cloud_agents.workflow.executor.step.tools import get_tools
+from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
 
 
 def main() -> None:
@@ -151,6 +151,10 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
     Returns:
         Result dict with status, output, transcript, and token counts.
     """
+    tools_module = input_data.get("tools_module")
+    if tools_module:
+        load_tools_module(tools_module)
+
     provider = input_data["provider"]
     ensure_credentials_env(provider)
     model_string = to_model_string(provider)
