@@ -40,6 +40,7 @@ dev = [
     "cryptography>=44.0",
     "black",
     "ruff",
+    "psycopg2-binary>=2.9",
 ]
 load = [
     "pytest>=9.0",
