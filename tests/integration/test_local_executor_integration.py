@@ -1,6 +1,6 @@
-"""Integration tests for LocalExecutor — full workflow execution.
+"""Integration tests for LocalWorkflowRunner — full workflow execution.
 
-Tests the complete flow: factory → LocalExecutor → pydantic-graph → step_runner.
+Tests the complete flow: factory → LocalWorkflowRunner → pydantic-graph → step_runner.
 Uses mock spawner and mock RunStateStore (no real PostgreSQL or containers).
 """
 
@@ -70,10 +70,10 @@ def mock_store_fixture(mocker: MockerFixture) -> AsyncMock:
 
 @pytest.fixture(name="executor")
 def executor_fixture(mock_spawner: AsyncMock, mock_store: AsyncMock) -> Any:
-    """Create a LocalExecutor with mocked dependencies."""
-    from cloud_agents.workflow.executor.local.executor import LocalExecutor
+    """Create a LocalWorkflowRunner with mocked dependencies."""
+    from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-    return LocalExecutor(
+    return LocalWorkflowRunner(
         spawner=mock_spawner,
         run_state_store=mock_store,
     )
@@ -306,17 +306,17 @@ class TestDuplicateWorkflowId:
 class TestFactoryIntegration:
     """Integration: factory creates correct executor."""
 
-    def test_factory_local_creates_executor(
+    def test_factory_local_creates_runner(
         self, mocker: MockerFixture
     ) -> None:
-        """Factory with WORKFLOW_ENGINE=local creates LocalExecutor."""
+        """Factory with WORKFLOW_ENGINE=local creates LocalWorkflowRunner."""
         mocker.patch.dict(os.environ, {"WORKFLOW_ENGINE": "local"}, clear=False)
 
-        from cloud_agents.workflow.executor.factory import create_executor
-        from cloud_agents.workflow.executor.local.executor import LocalExecutor
+        from cloud_agents.workflow.executor.factory import create_runner
+        from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
-        executor = create_executor()
-        assert isinstance(executor, LocalExecutor)
+        runner = create_runner()
+        assert isinstance(runner, LocalWorkflowRunner)
 
     def test_factory_temporal_requires_url(
         self, mocker: MockerFixture
@@ -328,10 +328,10 @@ class TestFactoryIntegration:
             clear=False,
         )
 
-        from cloud_agents.workflow.executor.factory import create_executor
+        from cloud_agents.workflow.executor.factory import create_runner
 
         with pytest.raises(ValueError, match="TEMPORAL_URL"):
-            create_executor()
+            create_runner()
 
 
 class TestParallelWorkflows:

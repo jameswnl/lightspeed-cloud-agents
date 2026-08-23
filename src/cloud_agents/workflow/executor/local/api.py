@@ -1,7 +1,7 @@
-"""FastAPI router for the local workflow executor.
+"""FastAPI router for the local workflow runner.
 
 Provides the same /run, /approve, /cancel, /{id} endpoints as the
-Temporal API but dispatches to LocalExecutor instead.
+Temporal API but dispatches to LocalWorkflowRunner instead.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from cloud_agents.workflow.executor.base import ApprovalDecision
-from cloud_agents.workflow.executor.local.executor import LocalExecutor
+from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,14 @@ class ApproveRequest(BaseModel):
 
 
 def build_local_router(
-    executor: LocalExecutor,
+    executor: LocalWorkflowRunner,
     get_caller_identity: Any = None,
     content_policy: Any = None,
 ) -> APIRouter:
-    """Build FastAPI router for the local executor.
+    """Build FastAPI router for the local workflow runner.
 
     Parameters:
-        executor: LocalExecutor instance.
+        executor: LocalWorkflowRunner instance.
         get_caller_identity: Optional auth dependency.
         content_policy: Optional content policy.
 

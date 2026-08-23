@@ -1,12 +1,13 @@
-"""Workflow executor interface.
+"""Workflow runner interface.
 
 Defines the contract between the API layer and workflow execution backends.
-Implementations: TemporalExecutor (Tier 2), LocalExecutor (Tier 1).
+Implementations: TemporalWorkflowRunner (Tier 2), LocalWorkflowRunner (Tier 1).
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -47,7 +48,7 @@ class ApprovalDecision:
     selected_option_id: Optional[str] = None
 
 
-class WorkflowExecutor(ABC):
+class WorkflowRunner(ABC):
     """Abstract interface for workflow execution backends.
 
     The API layer dispatches to this interface. Implementations handle
@@ -167,3 +168,45 @@ class WorkflowExecutor(ABC):
         Raises:
             KeyError: If the workflow does not exist.
         """
+
+    async def send_message(self, workflow_id: str, prompt: str) -> Any:
+        """Append and execute a step interactively.
+
+        Override for interactive runners (ChatWorkflowRunner).
+        Predefined workflow runners raise NotImplementedError.
+
+        Parameters:
+            workflow_id: Target workflow/conversation ID.
+            prompt: User message.
+
+        Returns:
+            Step execution result.
+
+        Raises:
+            NotImplementedError: If this runner does not support interactive messages.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support interactive messages"
+        )
+
+    async def send_message_stream(
+        self, workflow_id: str, prompt: str
+    ) -> AsyncIterator:
+        """Append and execute a step interactively with streaming.
+
+        Override for interactive runners (ChatWorkflowRunner).
+
+        Parameters:
+            workflow_id: Target workflow/conversation ID.
+            prompt: User message.
+
+        Yields:
+            Streaming events.
+
+        Raises:
+            NotImplementedError: If this runner does not support interactive streaming.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support interactive streaming"
+        )
+        yield  # make it a generator

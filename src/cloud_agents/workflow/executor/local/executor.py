@@ -1,6 +1,6 @@
-"""In-process workflow executor using pydantic-graph.
+"""In-process workflow runner using pydantic-graph.
 
-Implements WorkflowExecutor without Temporal. Uses:
+Implements WorkflowRunner without Temporal. Uses:
 - graph_translator to build executable graphs from YAML
 - RunStateStore for persistence (approval pause/resume, status queries)
 - step_runner for sandbox execution
@@ -19,7 +19,7 @@ from pydantic_graph import EndMarker
 
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
-    WorkflowExecutor,
+    WorkflowRunner,
     WorkflowStatus,
 )
 from cloud_agents.workflow.executor.graph_translator import (
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
-class LocalExecutor(WorkflowExecutor):
-    """In-process workflow executor backed by pydantic-graph + PostgreSQL.
+class LocalWorkflowRunner(WorkflowRunner):
+    """In-process workflow runner backed by pydantic-graph + PostgreSQL.
 
     Attributes:
         _spawner: Spawner for sandbox lifecycle.
@@ -48,7 +48,7 @@ class LocalExecutor(WorkflowExecutor):
         run_state_store: Any = None,
         transcript_store: Any = None,
     ) -> None:
-        """Initialize the local executor.
+        """Initialize the local workflow runner.
 
         Parameters:
             spawner: AgentSpawner instance.
