@@ -275,6 +275,52 @@ class TestChildProcessPayload:
         assert isinstance(roundtrip, str)
 
 
+class TestChildProcessPayloadMCPServers:
+    """Tests for mcp_servers serialization in child process payload."""
+
+    def test_step_input_to_dict_includes_mcp_servers(self) -> None:
+        """_step_input_to_dict serializes mcp_servers for subprocess transfer."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import _step_input_to_dict
+
+        step_input = StepInput(
+            prompt="Query the cluster",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            mcp_servers=[
+                {
+                    "name": "kubectl",
+                    "url": "http://mcp-kubectl:8080/sse",
+                    "headers": {"Authorization": "Bearer token"},
+                },
+            ],
+        )
+
+        payload = _step_input_to_dict(step_input)
+        assert "mcp_servers" in payload
+        assert len(payload["mcp_servers"]) == 1
+        assert payload["mcp_servers"][0]["name"] == "kubectl"
+        assert payload["mcp_servers"][0]["url"] == "http://mcp-kubectl:8080/sse"
+        assert payload["mcp_servers"][0]["headers"]["Authorization"] == "Bearer token"
+
+        # Verify round-trip JSON serialization works
+        roundtrip = json.dumps(payload)
+        assert isinstance(roundtrip, str)
+
+    def test_step_input_to_dict_none_mcp_servers(self) -> None:
+        """_step_input_to_dict serializes None mcp_servers."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import _step_input_to_dict
+
+        step_input = StepInput(
+            prompt="test",
+            provider={"name": "openai", "model": "gpt-4o"},
+        )
+
+        payload = _step_input_to_dict(step_input)
+        assert "mcp_servers" in payload
+        assert payload["mcp_servers"] is None
+
+
 class TestSubprocessCancellation:
     """Tests for cancellation handling."""
 

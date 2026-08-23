@@ -804,6 +804,421 @@ class TestDirectExecutorWithTools:
         assert call_kwargs["instructions"] == "You are a K8s expert."
 
 
+class TestDirectExecutorWithMCPServers:
+    """Tests for DirectExecutor.run() when MCP servers are configured."""
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_only_dispatches_to_agent(self, mocker: MockerFixture) -> None:
+        """Step with mcp_servers but no tools should use Agent path."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"status": "ok"}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        # Ensure model_request is NOT called (Agent path is used)
+        mock_model_req = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Query the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+            )
+        )
+
+        assert result.status == "completed"
+        mock_agent_cls.assert_called_once()
+        mock_model_req.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_with_tools(self, mocker: MockerFixture) -> None:
+        """Step with both tools and mcp_servers uses Agent path with both."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool, description="Get K8s resources")
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 60
+        mock_usage.output_tokens = 25
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Query the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+            )
+        )
+
+        assert result.status == "completed"
+
+        # Agent should be created with both tools and toolsets
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "tools" in call_kwargs
+        assert len(call_kwargs["tools"]) == 1
+        assert "toolsets" in call_kwargs
+        assert len(call_kwargs["toolsets"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_with_auth_headers(self, mocker: MockerFixture) -> None:
+        """MCP server auth headers are passed to StreamableHttpTransport."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mock_transport_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Query the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {
+                        "name": "kubectl",
+                        "url": "http://mcp-kubectl:8080/sse",
+                        "headers": {"Authorization": "Bearer secret-token"},
+                    },
+                ],
+            )
+        )
+
+        # Verify StreamableHttpTransport was called with correct URL and headers
+        mock_transport_cls.assert_called_once_with(
+            url="http://mcp-kubectl:8080/sse",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_mcp_toolset_context_manager_lifecycle(self, mocker: MockerFixture) -> None:
+        """MCPToolset context manager is properly entered and exited."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Query",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+            )
+        )
+
+        # Verify the context manager was entered and exited
+        mock_toolset.__aenter__.assert_called_once()
+        mock_toolset.__aexit__.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multiple_mcp_servers(self, mocker: MockerFixture) -> None:
+        """Multiple MCP servers each get their own MCPToolset."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset_1 = mocker.MagicMock()
+        mock_toolset_1.__aenter__ = mocker.AsyncMock(return_value=mock_toolset_1)
+        mock_toolset_1.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_toolset_2 = mocker.MagicMock()
+        mock_toolset_2.__aenter__ = mocker.AsyncMock(return_value=mock_toolset_2)
+        mock_toolset_2.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            side_effect=[mock_toolset_1, mock_toolset_2],
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Query",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                    {"name": "rhdh", "url": "http://mcp-rhdh:8080/sse"},
+                ],
+            )
+        )
+
+        # Agent should receive both toolsets
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "toolsets" in call_kwargs
+        assert len(call_kwargs["toolsets"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_mcp_servers_no_tools_uses_model_request(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Without MCP servers or tools, model_request path is used."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mock_fn = _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=None,
+            )
+        )
+
+        assert result.status == "completed"
+        mock_fn.assert_called_once()
+        mock_agent_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_mcp_servers_list_uses_model_request(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Empty mcp_servers list should use model_request path."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mock_fn = _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[],
+            )
+        )
+
+        assert result.status == "completed"
+        mock_fn.assert_called_once()
+        mock_agent_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_servers_recorded_in_transcript(self, mocker: MockerFixture) -> None:
+        """MCP server names are recorded in the transcript."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Query",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+                step_name="query-step",
+            )
+        )
+
+        assert len(result.transcript) >= 1
+        transcript_entry = result.transcript[0]
+        assert "mcp_servers" in transcript_entry
+        assert transcript_entry["mcp_servers"] == ["kubectl"]
+
+
 class TestFalsyOutputPreservation:
     """Tests for preserving falsy prior-step outputs."""
 
