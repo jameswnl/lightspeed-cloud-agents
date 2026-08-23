@@ -28,6 +28,7 @@ from cloud_agents.workflow.executor.step.base import (
     StreamEvent,
 )
 from cloud_agents.workflow.executor.step.provider import ensure_credentials_env, to_model_string
+from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,8 @@ class DirectExecutor(StepExecutor):
         start_ms = time.monotonic_ns() // 1_000_000
 
         try:
-            if step_input.tools or step_input.mcp_servers:
+            skills_cap = get_skills_capability()
+            if step_input.tools or step_input.mcp_servers or skills_cap:
                 return await self._run_with_agent(step_input, start_ms)
             return await self._run_model_request(step_input, start_ms)
 
@@ -339,11 +341,18 @@ class DirectExecutor(StepExecutor):
                 active_ts = await stack.enter_async_context(ts)
                 active_toolsets.append(active_ts)
 
+            # Build capabilities
+            capabilities = []
+            skills_cap = get_skills_capability()
+            if skills_cap:
+                capabilities.append(skills_cap)
+
             agent = Agent(
                 model_string,
                 instructions=step_input.system_prompt,
                 tools=tools,
                 toolsets=active_toolsets if active_toolsets else None,
+                capabilities=capabilities if capabilities else None,
             )
 
             result = await agent.run(

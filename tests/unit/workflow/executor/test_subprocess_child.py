@@ -739,3 +739,126 @@ class TestSubprocessChildWithTools:
 
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert call_kwargs["instructions"] == "You are a K8s expert."
+
+
+class TestSubprocessChildWithSkills:
+    """Tests for subprocess_child skills capability integration."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self) -> None:
+        """Clear tool registry before each test."""
+        from cloud_agents.workflow.executor.step.tools import clear_tools
+
+        clear_tools()
+        yield  # type: ignore[misc]
+        clear_tools()
+
+    def test_child_agent_receives_capabilities_when_env_set(self, mocker: MockerFixture) -> None:
+        """Child Agent gets capabilities when CLOUD_AGENTS_SKILLS_PATHS is set."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_cap = mocker.MagicMock()
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.get_skills_capability",
+            return_value=mock_cap,
+        )
+
+        input_data = {
+            "prompt": "Check pods",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "tools": ["kubectl_get"],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "capabilities" in call_kwargs
+        assert call_kwargs["capabilities"] == [mock_cap]
+
+    def test_child_agent_no_capabilities_when_env_unset(self, mocker: MockerFixture) -> None:
+        """Child Agent has no capabilities when CLOUD_AGENTS_SKILLS_PATHS is unset."""
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+
+        async def fake_run(prompt: str, **kwargs: Any) -> object:
+            return mock_result
+
+        mock_agent_instance.run = fake_run
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.get_skills_capability",
+            return_value=None,
+        )
+
+        input_data = {
+            "prompt": "Check pods",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+            "tools": ["kubectl_get"],
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert call_kwargs.get("capabilities") is None

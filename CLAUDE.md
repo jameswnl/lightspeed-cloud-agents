@@ -50,6 +50,10 @@ When steps declare `tools: [name, ...]`, pydantic-ai Agent runs the LLM→tool�
 
 Tools are Python functions registered via `@step_tool` or `register_tool()` from `cloud_agents.workflow.executor.step.tools`. For `spawn: local`, the child subprocess needs to reconstruct the registry — set `CLOUD_AGENTS_TOOLS_MODULE` to the dotted import path of the module containing tool registrations (e.g. `myapp.tools`). The module is imported at child startup, triggering `@step_tool` decorators. Without this env var, `spawn: local` steps with `tools:` will fail with "Unknown tool".
 
+### Skills
+
+Skills extend agent capabilities via the `pydantic-ai-skills` package (`SkillsCapability`). Set `CLOUD_AGENTS_SKILLS_PATHS` to a colon-separated list of directories containing `SKILL.md` files. The capability is automatically passed to the pydantic-ai Agent for `spawn: none` and `spawn: local` steps. If the env var is unset or the package is not installed, skills are silently skipped.
+
 ## Schema Validation
 
 - **At API submission**: `/run` endpoint validates definitions via `temporal_validation.py` (duplicate names, undefined step refs, missing fields). Returns 422 for invalid definitions.
