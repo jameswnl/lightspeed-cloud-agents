@@ -72,6 +72,7 @@ class TestRunStateStorePostgres:
                 workflow_name="test-identity",
                 definition={"apiVersion": "v1"},
                 provider={"name": "openai"},
+                authz_context={},
                 user_id="jwong",
                 session_id="ses-abc",
             )
@@ -96,6 +97,7 @@ class TestRunStateStorePostgres:
                 workflow_name="parent",
                 definition={},
                 provider={},
+                authz_context={},
                 user_id="user-a",
             )
             await store.create(
@@ -103,6 +105,7 @@ class TestRunStateStorePostgres:
                 workflow_name="child",
                 definition={},
                 provider={},
+                authz_context={},
                 user_id="user-b",
                 parent_workflow_id=parent_id,
             )
@@ -121,9 +124,9 @@ class TestRunStateStorePostgres:
         wf2 = f"wf-{uuid.uuid4().hex[:8]}"
         wf_other = f"wf-{uuid.uuid4().hex[:8]}"
         try:
-            await store.create(wf1, "w1", {}, {}, user_id=user)
-            await store.create(wf2, "w2", {}, {}, user_id=user)
-            await store.create(wf_other, "w3", {}, {}, user_id="other-user")
+            await store.create(wf1, "w1", {}, {}, {}, user_id=user)
+            await store.create(wf2, "w2", {}, {}, {}, user_id=user)
+            await store.create(wf_other, "w3", {}, {}, {}, user_id="other-user")
 
             results = await store.list_by_user(user)
             result_ids = [r["workflow_id"] for r in results]
@@ -142,8 +145,8 @@ class TestRunStateStorePostgres:
         wf1 = f"wf-{uuid.uuid4().hex[:8]}"
         wf2 = f"wf-{uuid.uuid4().hex[:8]}"
         try:
-            await store.create(wf1, "w1", {}, {}, session_id=session)
-            await store.create(wf2, "w2", {}, {}, session_id=session)
+            await store.create(wf1, "w1", {}, {}, {}, session_id=session)
+            await store.create(wf2, "w2", {}, {}, {}, session_id=session)
 
             results = await store.list_by_session(session)
             result_ids = [r["workflow_id"] for r in results]
@@ -170,15 +173,21 @@ class TestTranscriptStorePostgres:
     @pytest.mark.asyncio
     async def test_save_and_get_with_trace_id(self, store) -> None:
         """Save a transcript with trace_id and retrieve it."""
+        from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
+
         wf_id = f"wf-{uuid.uuid4().hex[:8]}"
+        transcript = StepTranscript(
+            step_name="turn-1",
+            events=[TranscriptEvent(ts=0.0, type="llm.call", data={"model": "gpt-4o"})],
+            input_tokens=50,
+            output_tokens=20,
+            duration_ms=500,
+        )
         try:
             await store.save(
                 workflow_id=wf_id,
                 step_name="turn-1",
-                events=[{"type": "llm.call", "model": "gpt-4o"}],
-                input_tokens=50,
-                output_tokens=20,
-                duration_ms=500,
+                transcript=transcript,
                 trace_id="tr-abc123",
             )
 
@@ -191,6 +200,7 @@ class TestTranscriptStorePostgres:
     @pytest.mark.asyncio
     async def test_save_and_get_with_messages(self, store) -> None:
         """Save conversation messages and retrieve them."""
+        from cloud_agents.workflow.core.models import StepTranscript
         from cloud_agents.workflow.executor.step.conversation import (
             ConversationMessage,
         )
@@ -200,13 +210,17 @@ class TestTranscriptStorePostgres:
             ConversationMessage(role="user", content="What pods?").to_dict(),
             ConversationMessage(role="assistant", content="8 pods.").to_dict(),
         ]
+        transcript = StepTranscript(
+            step_name="turn-1",
+            events=[],
+            input_tokens=30,
+            output_tokens=10,
+        )
         try:
             await store.save(
                 workflow_id=wf_id,
                 step_name="turn-1",
-                events=[],
-                input_tokens=30,
-                output_tokens=10,
+                transcript=transcript,
                 messages=messages,
             )
 
@@ -221,15 +235,21 @@ class TestTranscriptStorePostgres:
     @pytest.mark.asyncio
     async def test_load_recent_turns(self, store) -> None:
         """load_recent_turns returns turns in order with limit."""
+        from cloud_agents.workflow.core.models import StepTranscript
+
         wf_id = f"wf-{uuid.uuid4().hex[:8]}"
         try:
             for i in range(5):
-                await store.save(
-                    workflow_id=wf_id,
+                transcript = StepTranscript(
                     step_name=f"turn-{i}",
                     events=[],
                     input_tokens=10,
                     output_tokens=5,
+                )
+                await store.save(
+                    workflow_id=wf_id,
+                    step_name=f"turn-{i}",
+                    transcript=transcript,
                     messages=[{"role": "user", "content": f"msg-{i}"}],
                 )
 
