@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from unittest.mock import patch
-
 
 
 class TestGetSkillsCapability:
@@ -49,20 +49,20 @@ class TestGetSkillsCapability:
         assert result is None
 
     def test_returns_skills_capability_with_single_path(self) -> None:
-        """Returns SkillsCapability when a single path is configured."""
+        """Returns SkillsCapability when a single valid path is configured."""
         from cloud_agents.workflow.executor.step.skills import (
             SKILLS_PATHS_ENV,
             get_skills_capability,
         )
 
-        with patch.dict(os.environ, {SKILLS_PATHS_ENV: "/tmp/skills"}, clear=False):
-            result = get_skills_capability()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {SKILLS_PATHS_ENV: tmpdir}, clear=False):
+                result = get_skills_capability()
 
-        assert result is not None
-        # SkillsCapability should have been created with the path
-        from pydantic_ai_skills import SkillsCapability
+            assert result is not None
+            from pydantic_ai_skills import SkillsCapability
 
-        assert isinstance(result, SkillsCapability)
+            assert isinstance(result, SkillsCapability)
 
     def test_handles_colon_separated_paths(self) -> None:
         """Correctly splits colon-separated paths."""
@@ -71,17 +71,21 @@ class TestGetSkillsCapability:
             get_skills_capability,
         )
 
-        with patch.dict(
-            os.environ,
-            {SKILLS_PATHS_ENV: "/tmp/skills1:/tmp/skills2:/tmp/skills3"},
-            clear=False,
+        with (
+            tempfile.TemporaryDirectory() as d1,
+            tempfile.TemporaryDirectory() as d2,
         ):
-            result = get_skills_capability()
+            with patch.dict(
+                os.environ,
+                {SKILLS_PATHS_ENV: f"{d1}:{d2}"},
+                clear=False,
+            ):
+                result = get_skills_capability()
 
-        assert result is not None
-        from pydantic_ai_skills import SkillsCapability
+            assert result is not None
+            from pydantic_ai_skills import SkillsCapability
 
-        assert isinstance(result, SkillsCapability)
+            assert isinstance(result, SkillsCapability)
 
     def test_strips_whitespace_from_paths(self) -> None:
         """Strips whitespace from individual paths."""
@@ -90,14 +94,31 @@ class TestGetSkillsCapability:
             get_skills_capability,
         )
 
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {SKILLS_PATHS_ENV: f" {tmpdir} "},
+                clear=False,
+            ):
+                result = get_skills_capability()
+
+            assert result is not None
+
+    def test_skips_nonexistent_paths(self) -> None:
+        """Skips non-existent directories with warning, returns None if all invalid."""
+        from cloud_agents.workflow.executor.step.skills import (
+            SKILLS_PATHS_ENV,
+            get_skills_capability,
+        )
+
         with patch.dict(
             os.environ,
-            {SKILLS_PATHS_ENV: " /tmp/skills1 : /tmp/skills2 "},
+            {SKILLS_PATHS_ENV: "/nonexistent/path1:/nonexistent/path2"},
             clear=False,
         ):
             result = get_skills_capability()
 
-        assert result is not None
+        assert result is None
 
     def test_graceful_when_pydantic_ai_skills_not_installed(self) -> None:
         """Returns None and logs warning when pydantic-ai-skills is not importable."""
@@ -106,14 +127,15 @@ class TestGetSkillsCapability:
             get_skills_capability,
         )
 
-        with (
-            patch.dict(os.environ, {SKILLS_PATHS_ENV: "/tmp/skills"}, clear=False),
-            patch(
-                "cloud_agents.workflow.executor.step.skills._import_skills_capability",
-                side_effect=ImportError("No module named 'pydantic_ai_skills'"),
-            ),
-        ):
-            result = get_skills_capability()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(os.environ, {SKILLS_PATHS_ENV: tmpdir}, clear=False),
+                patch(
+                    "cloud_agents.workflow.executor.step.skills._import_skills_capability",
+                    side_effect=ImportError("No module named 'pydantic_ai_skills'"),
+                ),
+            ):
+                result = get_skills_capability()
 
         assert result is None
 
