@@ -25,6 +25,7 @@ from cloud_agents.workflow.executor.step.provider import (
     ensure_credentials_env,
     to_model_string,
 )
+from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
 
 _TOOLS_MODULE_ENV = "CLOUD_AGENTS_TOOLS_MODULE"
@@ -200,11 +201,18 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
             active_ts = await stack.enter_async_context(ts)
             active_toolsets.append(active_ts)
 
+        # Build capabilities
+        capabilities = []
+        skills_cap = get_skills_capability()
+        if skills_cap:
+            capabilities.append(skills_cap)
+
         agent = Agent(
             model_string,
             instructions=system_prompt,
             tools=tools,
             toolsets=active_toolsets if active_toolsets else None,
+            capabilities=capabilities if capabilities else None,
         )
 
         timeout_seconds = input_data.get("timeout_seconds", 600)

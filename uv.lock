@@ -1229,6 +1229,7 @@ kubernetes = [
 ]
 local = [
     { name = "pydantic-ai" },
+    { name = "pydantic-ai-skills" },
     { name = "pydantic-graph" },
 ]
 openshell = [
@@ -1250,6 +1251,7 @@ dev = [
     { name = "cryptography" },
     { name = "kubernetes" },
     { name = "pydantic-ai" },
+    { name = "pydantic-ai-skills" },
     { name = "pydantic-graph" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1278,6 +1280,7 @@ requires-dist = [
     { name = "prometheus-client", specifier = ">=0.21.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-ai", marker = "extra == 'local'", specifier = ">=2.27" },
+    { name = "pydantic-ai-skills", marker = "extra == 'local'", specifier = ">=0.11.0" },
     { name = "pydantic-graph", marker = "extra == 'local'", specifier = ">=2.28.0" },
     { name = "python-json-logger", specifier = ">=4.1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1293,6 +1296,7 @@ dev = [
     { name = "cryptography", specifier = ">=44.0" },
     { name = "kubernetes", specifier = ">=30.1.0" },
     { name = "pydantic-ai", specifier = ">=2.27" },
+    { name = "pydantic-ai-skills", specifier = ">=0.11.0" },
     { name = "pydantic-graph", specifier = ">=2.28.0" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-asyncio", specifier = ">=1.4" },
@@ -2038,6 +2042,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/ba/6ed94144305c2472336871c2e13d7fedb4d6fca3867f0cf337d8f1c9647a/pydantic_ai-2.28.0.tar.gz", hash = "sha256:0e9da7f8b7b3fb428307e1927efb156b7863b0c10e55e2b4ab0ab1de19a56e86", size = 19898, upload-time = "2026-08-12T02:16:46.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/08/b7327a694d19252dee2ed08e94cccb194fb5ece63bb5d8ed1fe1f2e724a5/pydantic_ai-2.28.0-py3-none-any.whl", hash = "sha256:5c04779d59e9dae77a7ee837891a611fe9363e870fb4af6f270a3b1d2879ad2c", size = 7916, upload-time = "2026-08-12T02:16:38.334Z" },
+]
+
+[[package]]
+name = "pydantic-ai-skills"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "pydantic-ai-slim" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0f/59/65d312c625c546b4754022d0e3e20921f9637f1e87225c0fbcbce09ddb82/pydantic_ai_skills-1.4.0.tar.gz", hash = "sha256:7303e0738a837218415f8b2e7bd5b5cbc0ceeb74850b1902c2d079550e0b9b83", size = 9095029, upload-time = "2026-08-16T13:01:26.999Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/eb/a4bea0c2c97f2351938e0ae2200fb197e4953928337198a17d89f0d0bbbb/pydantic_ai_skills-1.4.0-py3-none-any.whl", hash = "sha256:bce8731a042f50c45965acc520dc883163e511c34b208f720eb62067ef5be686", size = 75744, upload-time = "2026-08-16T13:01:25.501Z" },
 ]
 
 [[package]]

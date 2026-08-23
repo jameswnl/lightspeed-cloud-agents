@@ -1095,9 +1095,7 @@ class TestDirectExecutorWithMCPServers:
         assert len(call_kwargs["toolsets"]) == 2
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_no_tools_uses_model_request(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_mcp_servers_no_tools_uses_model_request(self, mocker: MockerFixture) -> None:
         """Without MCP servers or tools, model_request path is used."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -1130,9 +1128,7 @@ class TestDirectExecutorWithMCPServers:
         mock_agent_cls.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_mcp_servers_list_uses_model_request(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_empty_mcp_servers_list_uses_model_request(self, mocker: MockerFixture) -> None:
         """Empty mcp_servers list should use model_request path."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -1264,3 +1260,170 @@ class TestFalsyOutputPreservation:
 
         user_content = messages[-1]["content"]
         assert "Prior step" in user_content
+
+
+class TestDirectExecutorWithSkills:
+    """Tests for DirectExecutor skills capability integration."""
+
+    @pytest.mark.asyncio
+    async def test_agent_receives_capabilities_when_skills_path_set(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Agent is created with capabilities when CLOUD_AGENTS_SKILLS_PATHS is set."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_cap = mocker.MagicMock()
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=mock_cap,
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert "capabilities" in call_kwargs
+        assert call_kwargs["capabilities"] == [mock_cap]
+
+    @pytest.mark.asyncio
+    async def test_agent_no_capabilities_when_skills_path_unset(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Agent has no capabilities when CLOUD_AGENTS_SKILLS_PATHS is unset."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=None,
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert call_kwargs.get("capabilities") is None
+
+    @pytest.mark.asyncio
+    async def test_skills_capability_alongside_tools_and_mcp(self, mocker: MockerFixture) -> None:
+        """Skills capability passed alongside tools and MCP toolsets."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool, description="Get K8s resources")
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 60
+        mock_usage.output_tokens = 25
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_toolset = mocker.MagicMock()
+        mock_toolset.__aenter__ = mocker.AsyncMock(return_value=mock_toolset)
+        mock_toolset.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.MCPToolset",
+            return_value=mock_toolset,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.StreamableHttpTransport",
+        )
+
+        mock_cap = mocker.MagicMock()
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=mock_cap,
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Query the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+                mcp_servers=[
+                    {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
+                ],
+            )
+        )
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        # All three: tools, toolsets, and capabilities
+        assert "tools" in call_kwargs
+        assert len(call_kwargs["tools"]) == 1
+        assert "toolsets" in call_kwargs
+        assert len(call_kwargs["toolsets"]) == 1
+        assert "capabilities" in call_kwargs
+        assert call_kwargs["capabilities"] == [mock_cap]

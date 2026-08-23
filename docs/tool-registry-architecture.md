@@ -26,8 +26,8 @@ flowchart TD
 | **Isolation** | None (in-process) | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
 | **Tool support** | `@step_tool` registered functions | `@step_tool` registered functions | MCP + Shell + Filesystem + Skills |
 | **MCP servers** | Remote (HTTP/SSE) | Remote (HTTP/SSE) | Local + remote (inside container) |
-| **Skills** | pip packages or skills_dir *(planned)* | pip packages or skills_dir *(planned)* | OCI image via init container |
-| **Tool source** | ToolRegistry + MCP + skills *(skills planned)* | ToolRegistry + MCP + skills *(skills planned)* | Sandbox image + MCP servers |
+| **Skills** | pip packages or skills_dir | pip packages or skills_dir | OCI image via init container |
+| **Tool source** | ToolRegistry + MCP + skills | ToolRegistry + MCP + skills | Sandbox image + MCP servers |
 | **Agent loop** | Single call; `Agent.run` if tools | Single call; `Agent.run` if tools | Yes (agent SDK in container) |
 | **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `model_request` or `Agent.run` (in subprocess) | Agent SDK in sandbox |
 | **Timeout enforcement** | pydantic-ai `model_settings.timeout` | Hard kill (`proc.kill()`) | Container terminate |
