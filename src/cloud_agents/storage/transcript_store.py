@@ -158,8 +158,8 @@ class TranscriptStore:
 
         try:
             sync_url = self._db_url.replace("+asyncpg", "") if "+asyncpg" in self._db_url else self._db_url
+            os.environ["RUN_STATE_DB_URL"] = sync_url
             cfg = Config(str(ini_path))
-            cfg.set_main_option("sqlalchemy.url", sync_url)
             command.upgrade(cfg, "head")
             logger.info("Alembic migrations applied (TranscriptStore)")
         except Exception as exc:
