@@ -37,9 +37,7 @@ class TestRunStateStoreCreate:
     """Tests for creating workflow state."""
 
     @pytest.mark.asyncio
-    async def test_create_stores_initial_state(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_create_stores_initial_state(self, store: Any, mock_pool: Any) -> None:
         """create() persists workflow state to the database."""
         await store.create(
             workflow_id="wf-1",
@@ -83,9 +81,7 @@ class TestRunStateStoreGet:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_returns_state(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_get_returns_state(self, store: Any, mock_pool: Any) -> None:
         """get() returns deserialized WorkflowState."""
         mock_pool.fetchrow.return_value = {
             "workflow_id": "wf-1",
@@ -98,6 +94,9 @@ class TestRunStateStoreGet:
             "provider": '{"name": "openai"}',
             "authz_context": '{"caller": "user:james"}',
             "workflow_context": "{}",
+            "user_id": None,
+            "session_id": None,
+            "parent_workflow_id": None,
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
         }
@@ -112,9 +111,7 @@ class TestRunStateStoreUpdate:
     """Tests for updating step results and events."""
 
     @pytest.mark.asyncio
-    async def test_update_step_persists(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_update_step_persists(self, store: Any, mock_pool: Any) -> None:
         """update_step() writes step result to database."""
         await store.update_step(
             workflow_id="wf-1",
@@ -126,9 +123,7 @@ class TestRunStateStoreUpdate:
         mock_pool.execute.assert_called()
 
     @pytest.mark.asyncio
-    async def test_append_event(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_append_event(self, store: Any, mock_pool: Any) -> None:
         """append_event() adds an event to the events array."""
         await store.append_event(
             workflow_id="wf-1",
@@ -175,9 +170,7 @@ class TestRunStateStoreKeyErrors:
     """Tests for KeyError on missing workflows."""
 
     @pytest.mark.asyncio
-    async def test_update_step_missing_raises(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_update_step_missing_raises(self, store: Any, mock_pool: Any) -> None:
         """update_step() raises KeyError for nonexistent workflow."""
         mock_pool.execute.return_value = "UPDATE 0"
 
@@ -185,9 +178,7 @@ class TestRunStateStoreKeyErrors:
             await store.update_step("wf-missing", "s1", "completed")
 
     @pytest.mark.asyncio
-    async def test_append_event_missing_raises(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_append_event_missing_raises(self, store: Any, mock_pool: Any) -> None:
         """append_event() raises KeyError for nonexistent workflow."""
         mock_pool.execute.return_value = "UPDATE 0"
 
@@ -195,9 +186,7 @@ class TestRunStateStoreKeyErrors:
             await store.append_event("wf-missing", {"type": "test"})
 
     @pytest.mark.asyncio
-    async def test_set_paused_missing_raises(
-        self, store: Any, mock_pool: Any
-    ) -> None:
+    async def test_set_paused_missing_raises(self, store: Any, mock_pool: Any) -> None:
         """set_paused() raises KeyError for nonexistent workflow."""
         mock_pool.execute.return_value = "UPDATE 0"
 
@@ -219,9 +208,7 @@ class TestRunStateStoreTerminal:
         mock_pool.execute.assert_called()
 
     @pytest.mark.asyncio
-    async def test_mark_terminal_invalid_status(
-        self, store: Any
-    ) -> None:
+    async def test_mark_terminal_invalid_status(self, store: Any) -> None:
         """mark_terminal() rejects non-terminal status."""
         with pytest.raises(ValueError, match="not a terminal status"):
             await store.mark_terminal("wf-1", "running")
@@ -230,9 +217,7 @@ class TestRunStateStoreTerminal:
 class TestRunStateStoreFromEnv:
     """Tests for environment-based construction."""
 
-    def test_from_env_returns_none_without_url(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_from_env_returns_none_without_url(self, mocker: MockerFixture) -> None:
         """Returns None when RUN_STATE_DB_URL is not set."""
         mocker.patch.dict(os.environ, {}, clear=True)
 
@@ -241,9 +226,7 @@ class TestRunStateStoreFromEnv:
         result = RunStateStore.from_env()
         assert result is None
 
-    def test_from_env_returns_store_with_url(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_from_env_returns_store_with_url(self, mocker: MockerFixture) -> None:
         """Returns RunStateStore when RUN_STATE_DB_URL is set."""
         mocker.patch.dict(
             os.environ,

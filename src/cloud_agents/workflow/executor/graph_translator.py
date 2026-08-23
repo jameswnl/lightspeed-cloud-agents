@@ -20,7 +20,7 @@ from pydantic_graph import GraphBuilder, StepContext
 
 from cloud_agents.workflow.core.conditions import evaluate_condition
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
-from cloud_agents.workflow.executor.step.base import StepInput
+from cloud_agents.workflow.executor.step.base import StepInput, StepMetadata
 from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,8 @@ class WorkflowGraphState:
     spawner: Any = None
     transcript_store: Any = None
     approval_policy: Optional[dict[str, Any]] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
     paused_at_step: Optional[str] = None
     approval_result: Optional[dict[str, Any]] = None
 
@@ -228,6 +230,10 @@ def _build_agent_step(
             raw_step=step_def,
             step_name=step_name,
             output_key=output_key,
+            metadata=StepMetadata(
+                user_id=state.user_id,
+                session_id=state.session_id,
+            ),
         )
 
         exec_result = await executor.run(step_input)

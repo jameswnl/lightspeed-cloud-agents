@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import asyncpg
 
@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS step_transcripts (
     input_tokens INTEGER,
     output_tokens INTEGER,
     duration_ms INTEGER,
+    trace_id TEXT,
+    messages JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(workflow_id, step_name)
 );
@@ -43,8 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_step_transcripts_workflow
 
 _UPSERT_SQL = """
 INSERT INTO step_transcripts
-    (workflow_id, step_name, events, cost_usd, input_tokens, output_tokens, duration_ms)
-VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+    (workflow_id, step_name, events, cost_usd, input_tokens, output_tokens, duration_ms,
+     trace_id, messages)
+VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9::jsonb)
 ON CONFLICT (workflow_id, step_name)
 DO UPDATE SET
     events = EXCLUDED.events,
@@ -52,6 +55,8 @@ DO UPDATE SET
     input_tokens = EXCLUDED.input_tokens,
     output_tokens = EXCLUDED.output_tokens,
     duration_ms = EXCLUDED.duration_ms,
+    trace_id = EXCLUDED.trace_id,
+    messages = EXCLUDED.messages,
     created_at = NOW();
 """
 
@@ -69,6 +74,14 @@ ORDER BY created_at;
 
 _DELETE_WORKFLOW_SQL = """
 DELETE FROM step_transcripts WHERE workflow_id = $1;
+"""
+
+_LOAD_RECENT_TURNS_SQL = """
+SELECT step_name, messages
+FROM step_transcripts
+WHERE workflow_id = $1 AND messages IS NOT NULL
+ORDER BY created_at DESC
+LIMIT $2;
 """
 
 _CLEANUP_SQL = """
@@ -153,6 +166,8 @@ class TranscriptStore:
         workflow_id: str,
         step_name: str,
         transcript: StepTranscript,
+        trace_id: Optional[str] = None,
+        messages: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         """Save or update a step transcript.
 
@@ -162,12 +177,15 @@ class TranscriptStore:
             workflow_id: Workflow execution ID.
             step_name: Step output key.
             transcript: Full step transcript to persist.
+            trace_id: OTEL trace ID for correlation.
+            messages: Conversation messages in ConversationMessage format.
 
         Raises:
             RuntimeError: If not connected.
         """
         pool = self._ensure_connected()
         events_json = json.dumps([e.model_dump() for e in transcript.events])
+        messages_json = json.dumps(messages) if messages is not None else None
         await pool.execute(
             _UPSERT_SQL,
             workflow_id,
@@ -177,6 +195,8 @@ class TranscriptStore:
             transcript.input_tokens,
             transcript.output_tokens,
             transcript.duration_ms,
+            trace_id,
+            messages_json,
         )
         logger.debug(
             "Saved transcript for workflow=%s step=%s (%d events)",
@@ -244,6 +264,38 @@ class TranscriptStore:
         pool = self._ensure_connected()
         rows = await pool.fetch(_LIST_STEPS_SQL, workflow_id)
         return [row["step_name"] for row in rows]
+
+    async def load_recent_turns(
+        self,
+        workflow_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Load recent conversation turns for a workflow.
+
+        Parameters:
+            workflow_id: Workflow execution ID.
+            limit: Maximum number of steps to return.
+
+        Returns:
+            List of dicts with step_name and deserialized messages.
+
+        Raises:
+            RuntimeError: If not connected.
+        """
+        pool = self._ensure_connected()
+        rows = await pool.fetch(_LOAD_RECENT_TURNS_SQL, workflow_id, limit)
+        result = []
+        for row in rows:
+            messages_data = row["messages"]
+            if isinstance(messages_data, str):
+                messages_data = json.loads(messages_data)
+            result.append(
+                {
+                    "step_name": row["step_name"],
+                    "messages": messages_data,
+                }
+            )
+        return result
 
     async def delete_workflow(self, workflow_id: str) -> None:
         """Delete all transcripts for a workflow.

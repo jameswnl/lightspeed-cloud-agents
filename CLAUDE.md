@@ -93,6 +93,40 @@ All implemented guardrails have corresponding tests. When adding a new guardrail
 - `list_active()` filter format: Podman needs `filters={"label": "key=value"}` (string), NOT `["key=value"]` (list). The list format silently returns empty results.
 - Podman tests can take ~10 minutes due to socket initialization. This is normal.
 
+## Database Migrations (Alembic)
+
+Schema changes to PostgreSQL tables (`workflow_run_state`, `step_transcripts`) are managed via Alembic with raw SQL migrations (not SQLAlchemy ORM). The stores use asyncpg directly; Alembic uses synchronous psycopg2 for migrations only.
+
+```bash
+# Apply all pending migrations
+RUN_STATE_DB_URL=postgresql://user:pass@localhost/cloud_agents uv run alembic upgrade head
+
+# Show current migration revision
+uv run alembic current
+
+# Show migration history
+uv run alembic history
+```
+
+The `CREATE TABLE IF NOT EXISTS` in each store's `connect()` is kept for backward compatibility during migration rollout.
+
+### Identity model (StepMetadata)
+
+`StepMetadata` on `StepInput` carries cross-cutting identity fields:
+- `user_id` — who initiated the workflow
+- `session_id` — groups related workflows (caller-provided)
+- `trace_id` — OTEL trace ID for correlation
+- `conversation_id` — conversation/workflow ID for chat mode
+- `extra` — extension dict for consumer-specific data
+
+`ConversationMessage` (`step/conversation.py`) is our framework-agnostic message format, stored in the `messages` JSONB column on `step_transcripts`.
+
+### Store methods for identity queries
+
+- `RunStateStore.list_by_user(user_id)` — all workflows for a user
+- `RunStateStore.list_by_session(session_id)` — all workflows in a session
+- `TranscriptStore.load_recent_turns(workflow_id, limit)` — recent conversation turns
+
 ## Testing
 
 ```bash

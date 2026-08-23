@@ -16,6 +16,25 @@ from typing import Any, Literal, Optional
 
 
 @dataclass
+class StepMetadata:
+    """Typed metadata for cross-cutting concerns.
+
+    Attributes:
+        user_id: Identity of the user who initiated this workflow.
+        session_id: Groups related workflows (caller-provided).
+        trace_id: OTEL trace ID for correlation with collector.
+        conversation_id: Conversation/workflow ID for chat mode.
+        extra: Extension point for consumer-specific data.
+    """
+
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class StepInput:
     """Input for a step execution.
 
@@ -35,6 +54,7 @@ class StepInput:
         workflow_id: Workflow execution ID.
         step_name: Step name within the workflow.
         output_key: Key for this step's result in workflow state.
+        metadata: Typed identity and cross-cutting metadata.
     """
 
     prompt: str
@@ -53,6 +73,7 @@ class StepInput:
     step_name: str = ""
     output_key: str = ""
     raw_step: Optional[dict[str, Any]] = None
+    metadata: Optional[StepMetadata] = None
 
 
 @dataclass
