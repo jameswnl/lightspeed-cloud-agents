@@ -16,11 +16,16 @@ from alembic import context
 # Alembic Config object — provides access to .ini values.
 config = context.config
 
-# Override sqlalchemy.url from environment variable.
-db_url = os.environ.get(
-    "RUN_STATE_DB_URL",
-    "postgresql://localhost/cloud_agents",
+# Prefer URL already set on config (from programmatic callers),
+# then environment variable, then default.
+db_url = (
+    config.get_main_option("sqlalchemy.url")
+    or os.environ.get("RUN_STATE_DB_URL")
+    or "postgresql://localhost/cloud_agents"
 )
+# Ensure sync driver (alembic uses psycopg2, not asyncpg)
+if "+asyncpg" in db_url:
+    db_url = db_url.replace("+asyncpg", "")
 config.set_main_option("sqlalchemy.url", db_url)
 
 # Set up loggers from the config file.

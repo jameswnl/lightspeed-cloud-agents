@@ -163,17 +163,33 @@ class RunStateStore:
         logger.info("RunStateStore connected to PostgreSQL")
 
     def _run_alembic(self) -> None:
-        """Run Alembic migrations if the alembic package is available."""
+        """Run Alembic migrations if available.
+
+        Resolves alembic.ini from the package root. Translates asyncpg
+        URLs to sync psycopg2 URLs for the migration driver.
+        """
         try:
             from alembic import command
             from alembic.config import Config
+        except ImportError:
+            logger.debug("Alembic not installed, skipping migrations")
+            return
 
-            cfg = Config("alembic.ini")
-            cfg.set_main_option("sqlalchemy.url", self._db_url)
+        from pathlib import Path
+
+        ini_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+        if not ini_path.exists():
+            logger.debug("alembic.ini not found at %s, skipping migrations", ini_path)
+            return
+
+        try:
+            sync_url = self._db_url.replace("+asyncpg", "") if "+asyncpg" in self._db_url else self._db_url
+            cfg = Config(str(ini_path))
+            cfg.set_main_option("sqlalchemy.url", sync_url)
             command.upgrade(cfg, "head")
             logger.info("Alembic migrations applied")
         except Exception as exc:
-            logger.debug("Alembic migration skipped: %s", exc)
+            logger.warning("Alembic migration failed: %s", exc)
 
     async def close(self) -> None:
         """Close the connection pool."""

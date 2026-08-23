@@ -131,13 +131,39 @@ class TranscriptStore:
     async def connect(self) -> None:
         """Connect to PostgreSQL and run schema migration.
 
-        Creates the connection pool and ensures the step_transcripts
-        table exists via CREATE TABLE IF NOT EXISTS.
+        Runs Alembic migrations if available, then creates the
+        connection pool and ensures the base table exists.
         """
+        self._run_alembic()
         self._pool = await asyncpg.create_pool(self._db_url)
         await self._pool.execute(_SCHEMA_SQL)
         await self._pool.execute(_INDEX_SQL)
         logger.info("TranscriptStore connected to PostgreSQL")
+
+    def _run_alembic(self) -> None:
+        """Run Alembic migrations if available."""
+        try:
+            from alembic import command
+            from alembic.config import Config
+        except ImportError:
+            logger.debug("Alembic not installed, skipping migrations")
+            return
+
+        from pathlib import Path
+
+        ini_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+        if not ini_path.exists():
+            logger.debug("alembic.ini not found at %s, skipping", ini_path)
+            return
+
+        try:
+            sync_url = self._db_url.replace("+asyncpg", "") if "+asyncpg" in self._db_url else self._db_url
+            cfg = Config(str(ini_path))
+            cfg.set_main_option("sqlalchemy.url", sync_url)
+            command.upgrade(cfg, "head")
+            logger.info("Alembic migrations applied (TranscriptStore)")
+        except Exception as exc:
+            logger.warning("Alembic migration failed: %s", exc)
 
     async def close(self) -> None:
         """Close the connection pool."""
