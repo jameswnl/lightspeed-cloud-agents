@@ -1,8 +1,10 @@
 # OpenShell Standalone Podman Gateway Setup
 
+> **Superseded** by [docs/architecture-with-openshell.md](../architecture-with-openshell.md). This spike contains outdated workarounds (Podman secret mount hack, manual token injection) that are no longer needed with gateway v0.0.80+.
+
 **Date**: 2026-07-08
 **Issue**: [#74](https://github.com/jameswnl/lightspeed-cloud-agents/issues/74)
-**Status**: Working end-to-end (with workaround)
+**Status**: Archived — see [architecture-with-openshell.md](../architecture-with-openshell.md)
 
 ## Overview
 
