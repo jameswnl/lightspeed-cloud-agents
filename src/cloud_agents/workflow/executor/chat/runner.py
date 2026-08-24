@@ -467,9 +467,16 @@ class ChatWorkflowRunner(WorkflowRunner):
             return ""
         if isinstance(output, dict):
             if "response" in output:
-                return str(output["response"])
+                val = output["response"]
+                if val is None:
+                    return ""
+                if isinstance(val, str):
+                    return val
+                return json.dumps(val)
             return json.dumps(output)
-        return str(output)
+        if isinstance(output, str):
+            return output
+        return json.dumps(output)
 
     async def _check_not_terminal(self, workflow_id: str) -> None:
         """Raise if conversation is in a terminal state."""

@@ -324,11 +324,17 @@ class DirectExecutor(StepExecutor):
                     active_ts = await stack.enter_async_context(ts)
                     active_toolsets.append(active_ts)
 
+                capabilities = []
+                skills_cap = get_skills_capability()
+                if skills_cap:
+                    capabilities.append(skills_cap)
+
                 agent = Agent(
                     model_string,
                     instructions=step_input.system_prompt,
                     tools=tools,
                     toolsets=active_toolsets if active_toolsets else None,
+                    capabilities=capabilities if capabilities else None,
                 )
 
                 async with agent.run_stream(
