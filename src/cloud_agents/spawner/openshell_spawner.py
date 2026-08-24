@@ -234,7 +234,19 @@ class OpenShellSpawner(AgentSpawner):
 
             parsed = urlparse(resp.url)
             virtual_host = parsed.hostname or ""
-            endpoint_url = (self._http_endpoint or resp.url).rstrip("/")
+
+            if self._http_endpoint:
+                endpoint_url = self._http_endpoint.rstrip("/")
+            else:
+                # Default to the gRPC endpoint for HTTP proxy access.
+                # The gateway multiplexes gRPC and HTTP on the same port;
+                # virtual-host routing uses the Host header (set by caller).
+                # resp.url contains a *.openshell.localhost hostname that
+                # only resolves in environments with wildcard DNS.
+                target = self._resolve_grpc_target()
+                scheme = "https" if self._tls_ca else "http"
+                endpoint_url = f"{scheme}://{target}"
+
             return endpoint_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
