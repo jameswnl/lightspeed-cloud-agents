@@ -234,7 +234,7 @@ class OpenShellSpawner(AgentSpawner):
 
             parsed = urlparse(resp.url)
             virtual_host = parsed.hostname or ""
-            endpoint_url = self._http_endpoint or resp.url
+            endpoint_url = (self._http_endpoint or resp.url).rstrip("/")
             return endpoint_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
