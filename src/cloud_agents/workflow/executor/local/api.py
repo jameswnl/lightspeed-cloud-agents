@@ -62,14 +62,9 @@ def build_local_router(
     @router.get("/tools")
     async def list_available_tools() -> dict[str, list[dict[str, str | None]]]:
         """List all registered tools with names and descriptions."""
-        from cloud_agents.workflow.executor.step.tools import _REGISTRY
+        from cloud_agents.workflow.executor.step.tools import list_tool_definitions
 
-        return {
-            "tools": [
-                {"name": defn.name, "description": defn.description}
-                for defn in sorted(_REGISTRY.values(), key=lambda d: d.name)
-            ]
-        }
+        return {"tools": list_tool_definitions()}
 
     @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
     async def run_workflow(request: RunWorkflowRequest) -> dict[str, str]:
@@ -87,21 +82,14 @@ def build_local_router(
             )
 
         # Validate tool names against the registry before starting
-        from cloud_agents.workflow.executor.step.tools import list_tools as _list_tools
+        from cloud_agents.workflow.core.tool_validation import validate_workflow_tools
 
-        registered = set(_list_tools())
-        for step in request.definition.get("spec", {}).get("steps", []):
-            step_tools = step.get("tools", [])
-            if step_tools:
-                unknown = [t for t in step_tools if t not in registered]
-                if unknown:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=(
-                            f"Unknown tools in step '{step.get('name', '?')}': {unknown}. "
-                            f"Registered: {sorted(registered) or '(none)'}"
-                        ),
-                    )
+        tool_errors = validate_workflow_tools(request.definition)
+        if tool_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=tool_errors[0],
+            )
 
         if content_policy:
             from cloud_agents.workflow.core.validation import validate_definition

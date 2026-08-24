@@ -137,18 +137,37 @@ def load_tools_module(module_path: str) -> None:
     child process. The module is imported via importlib, which runs
     any @step_tool decorators at module scope.
 
-    If the module has a load_builtin_tools() function (e.g. cloud_agents.tools),
-    it is called to register built-in tools.
+    Built-in tools are always loaded first, regardless of whether the
+    product module defines its own load_builtin_tools(). This ensures
+    built-in tools (kubectl, http_request, read_file) are available
+    even when the product module is a custom third-party package.
 
     Parameters:
         module_path: Dotted Python import path (e.g. 'myapp.tools').
     """
     import importlib
 
-    mod = importlib.import_module(module_path)
-    if hasattr(mod, "load_builtin_tools"):
-        mod.load_builtin_tools()
+    from cloud_agents.tools import load_builtin_tools
+
+    load_builtin_tools()
+    importlib.import_module(module_path)
     logger.debug("Loaded tools module '%s'", module_path)
+
+
+def list_tool_definitions() -> list[dict[str, str | None]]:
+    """List all registered tools with names and descriptions.
+
+    Returns a sorted list of dictionaries, each containing 'name' and
+    'description' keys. This is the public API for listing tool metadata
+    and should be preferred over accessing _REGISTRY directly.
+
+    Returns:
+        Sorted list of tool info dicts.
+    """
+    return [
+        {"name": defn.name, "description": defn.description}
+        for defn in sorted(_REGISTRY.values(), key=lambda d: d.name)
+    ]
 
 
 def clear_tools() -> None:
