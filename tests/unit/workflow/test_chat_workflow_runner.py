@@ -1083,3 +1083,288 @@ class TestGetHistoryUnknownConversation:
 
         with pytest.raises(KeyError, match="not found"):
             await runner.get_history("unknown-conv-id")
+
+
+class TestCustomMiddleware:
+    """Tests for custom middleware support in ChatWorkflowRunner (#160)."""
+
+    @pytest.mark.asyncio
+    async def test_custom_middleware_before_called(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Custom middleware before() is called during send_message."""
+        before_called: list[str] = []
+
+        class _TrackingMiddleware:
+            async def before(self, step_input: Any) -> Any:
+                before_called.append(step_input.prompt)
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                return result
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+            middlewares=[_TrackingMiddleware()],
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"response": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        assert before_called == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_custom_middleware_after_called_with_result(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Custom middleware after() is called with the step result."""
+        after_results: list[Any] = []
+
+        class _TrackingMiddleware:
+            async def before(self, step_input: Any) -> Any:
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                after_results.append(result.status)
+                return result
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+            middlewares=[_TrackingMiddleware()],
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"response": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        assert after_results == ["completed"]
+
+    @pytest.mark.asyncio
+    async def test_tracing_middleware_still_runs_with_custom(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """TracingMiddleware still runs when custom middleware is added."""
+        call_order: list[str] = []
+
+        class _TrackingMiddleware:
+            async def before(self, step_input: Any) -> Any:
+                call_order.append("custom:before")
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                call_order.append("custom:after")
+                return result
+
+        class _SpyTracingMiddleware:
+            """Wraps TracingMiddleware to record calls."""
+
+            async def before(self, step_input: Any) -> Any:
+                call_order.append("tracing:before")
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                call_order.append("tracing:after")
+                return result
+
+        # Replace TracingMiddleware class with our spy version
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.TracingMiddleware",
+            _SpyTracingMiddleware,
+        )
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+            middlewares=[_TrackingMiddleware()],
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"response": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        # Both custom and tracing middleware should have been called
+        assert "custom:before" in call_order
+        assert "tracing:before" in call_order
+        assert "custom:after" in call_order
+        assert "tracing:after" in call_order
+
+    @pytest.mark.asyncio
+    async def test_default_no_middleware_still_works(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Default (no custom middleware) still works as before."""
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"response": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        result = await runner.send_message("chat-123", "hello")
+
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_middleware_ordering_custom_before_tracing(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Custom middleware before() runs first, TracingMiddleware before() runs last."""
+        call_order: list[str] = []
+
+        class _OrderTrackingMiddleware:
+            async def before(self, step_input: Any) -> Any:
+                call_order.append("custom:before")
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                call_order.append("custom:after")
+                return result
+
+        class _SpyTracingMiddleware:
+            """Spy replacement for TracingMiddleware to record call order."""
+
+            async def before(self, step_input: Any) -> Any:
+                call_order.append("tracing:before")
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                call_order.append("tracing:after")
+                return result
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.TracingMiddleware",
+            _SpyTracingMiddleware,
+        )
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+            middlewares=[_OrderTrackingMiddleware()],
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"response": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        # Custom before runs first (outermost), tracing before runs last (innermost)
+        before_calls = [c for c in call_order if "before" in c]
+        assert before_calls == ["custom:before", "tracing:before"]
+
+        # After hooks run in reverse: tracing after first, custom after last
+        after_calls = [c for c in call_order if "after" in c]
+        assert after_calls == ["tracing:after", "custom:after"]
+
+    @pytest.mark.asyncio
+    async def test_custom_middleware_in_stream_mode(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Custom middleware also applies in send_message_stream."""
+        before_called: list[str] = []
+
+        class _TrackingMiddleware:
+            async def before(self, step_input: Any) -> Any:
+                before_called.append(step_input.prompt)
+                return step_input
+
+            async def after(self, step_input: Any, result: Any) -> Any:
+                return result
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+            middlewares=[_TrackingMiddleware()],
+        )
+
+        step_result = StepResult(
+            status="completed",
+            output={"response": "streamed"},
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+
+        async def mock_run_stream(step_input: Any) -> Any:
+            yield StreamEvent(type="token", data={"delta": "streamed"})
+            yield StreamEvent(type="complete", result=step_result)
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run_stream = mock_run_stream
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        events = []
+        async for event in runner.send_message_stream("chat-123", "stream test"):
+            events.append(event)
+
+        assert before_called == ["stream test"]
+        assert len(events) == 2

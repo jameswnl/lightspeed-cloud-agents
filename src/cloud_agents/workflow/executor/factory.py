@@ -22,6 +22,7 @@ def create_runner(
     spawner: Any = None,
     run_state_store: Any = None,
     transcript_store: Any = None,
+    middlewares: Any = None,
 ) -> WorkflowRunner:
     """Create a WorkflowRunner based on WORKFLOW_ENGINE env var.
 
@@ -29,6 +30,7 @@ def create_runner(
         spawner: AgentSpawner instance for sandbox lifecycle.
         run_state_store: PostgreSQL RunStateStore (required for local).
         transcript_store: Optional TranscriptStore.
+        middlewares: Optional list of StepMiddleware instances for chat runner.
 
     Returns:
         WorkflowRunner instance (LocalWorkflowRunner or TemporalWorkflowRunner).
@@ -51,6 +53,7 @@ def create_runner(
             spawner=spawner,
             run_state_store=run_state_store,
             transcript_store=transcript_store,
+            middlewares=middlewares,
         )
     else:
         raise ValueError(
@@ -121,6 +124,7 @@ def _create_chat(
     spawner: Any = None,
     run_state_store: Any = None,
     transcript_store: Any = None,
+    middlewares: Any = None,
 ) -> WorkflowRunner:
     """Create a ChatWorkflowRunner with configuration from env vars.
 
@@ -128,6 +132,7 @@ def _create_chat(
         spawner: AgentSpawner instance for sandbox lifecycle.
         run_state_store: PostgreSQL RunStateStore.
         transcript_store: Optional TranscriptStore.
+        middlewares: Optional list of StepMiddleware instances.
 
     Returns:
         ChatWorkflowRunner instance.
@@ -176,4 +181,5 @@ def _create_chat(
         transcript_store=transcript_store,
         config=config,
         spawner=spawner,
+        middlewares=middlewares,
     )
