@@ -259,42 +259,51 @@ def _build_agent_step(
             if span_context and span_context.trace_id:
                 step_input.metadata.trace_id = format(span_context.trace_id, "032x")
 
-            exec_result = await executor.run(step_input)
+            try:
+                exec_result = await executor.run(step_input)
+                span.set_attribute("step.status", exec_result.status)
+                span.set_attribute("step.input_tokens", exec_result.input_tokens)
+                span.set_attribute("step.output_tokens", exec_result.output_tokens)
+            except Exception as exc:
+                from cloud_agents.runtime.tracing import set_span_error
 
-            span.set_attribute("step.status", exec_result.status)
-            span.set_attribute("step.input_tokens", exec_result.input_tokens)
-            span.set_attribute("step.output_tokens", exec_result.output_tokens)
+                set_span_error(span, exc)
+                raise
 
         # Persist conversation messages to transcript store
         if state.transcript_store:
-            messages = [
-                ConversationMessage(
-                    role="user", content=step_input.prompt
-                ).to_dict(),
-                ConversationMessage(
-                    role="assistant",
-                    content=json.dumps(exec_result.output) if exec_result.output else "",
-                    metadata={
-                        "input_tokens": exec_result.input_tokens,
-                        "output_tokens": exec_result.output_tokens,
-                    },
-                ).to_dict(),
-            ]
+            try:
+                messages = [
+                    ConversationMessage(
+                        role="user", content=step_input.prompt
+                    ).to_dict(),
+                    ConversationMessage(
+                        role="assistant",
+                        content=json.dumps(exec_result.output) if exec_result.output else "",
+                        metadata={
+                            "input_tokens": exec_result.input_tokens,
+                            "output_tokens": exec_result.output_tokens,
+                        },
+                    ).to_dict(),
+                ]
 
-            from cloud_agents.workflow.core.models import StepTranscript
+                from cloud_agents.workflow.core.models import StepTranscript
 
-            await state.transcript_store.save(
-                workflow_id=state.workflow_id,
-                step_name=output_key,
-                transcript=StepTranscript(
+                await state.transcript_store.save(
+                    workflow_id=state.workflow_id,
                     step_name=output_key,
-                    input_tokens=exec_result.input_tokens,
-                    output_tokens=exec_result.output_tokens,
-                    duration_ms=exec_result.duration_ms,
-                ),
-                trace_id=step_input.metadata.trace_id if step_input.metadata else None,
-                messages=messages,
-            )
+                    transcript=StepTranscript(
+                        step_name=output_key,
+                        events=exec_result.transcript,
+                        input_tokens=exec_result.input_tokens,
+                        output_tokens=exec_result.output_tokens,
+                        duration_ms=exec_result.duration_ms,
+                    ),
+                    trace_id=step_input.metadata.trace_id if step_input.metadata else None,
+                    messages=messages,
+                )
+            except Exception:
+                logger.warning("Failed to save transcript for step '%s'", output_key, exc_info=True)
 
         state.step_results[output_key] = {
             "status": exec_result.status,
