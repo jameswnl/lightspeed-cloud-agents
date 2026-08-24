@@ -347,6 +347,114 @@ class TestSubprocessCancellation:
             )
 
 
+class TestSubprocessTraceparentPropagation:
+    """Tests for TRACEPARENT env var injection into child process."""
+
+    @pytest.mark.asyncio
+    async def test_traceparent_injected_when_tracing_active(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TRACEPARENT env var is set when OTEL tracing produces a traceparent."""
+        captured_env: dict[str, Any] = {}
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> Any:
+            captured_env.update(kwargs.get("env", {}))
+            proc = mocker.AsyncMock()
+            proc.communicate = mocker.AsyncMock(
+                return_value=(
+                    json.dumps({
+                        "status": "completed",
+                        "output": {"ok": True},
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                    }).encode(),
+                    b"",
+                )
+            )
+            proc.returncode = 0
+            return proc
+
+        mocker.patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+
+        # Mock inject_traceparent to simulate active tracing
+        def mock_inject(headers: dict[str, str]) -> dict[str, str]:
+            headers["traceparent"] = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+            return headers
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_exec.inject_traceparent",
+            side_effect=mock_inject,
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        executor = SubprocessExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        assert "TRACEPARENT" in captured_env
+        assert captured_env["TRACEPARENT"] == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+    @pytest.mark.asyncio
+    async def test_no_traceparent_when_tracing_inactive(
+        self, mocker: MockerFixture
+    ) -> None:
+        """TRACEPARENT env var is not set when OTEL tracing is not active."""
+        captured_env: dict[str, Any] = {}
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> Any:
+            captured_env.update(kwargs.get("env", {}))
+            proc = mocker.AsyncMock()
+            proc.communicate = mocker.AsyncMock(
+                return_value=(
+                    json.dumps({
+                        "status": "completed",
+                        "output": {"ok": True},
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                    }).encode(),
+                    b"",
+                )
+            )
+            proc.returncode = 0
+            return proc
+
+        mocker.patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=mock_create_subprocess,
+        )
+
+        # Mock inject_traceparent to simulate NO active tracing (NoOp)
+        def mock_inject(headers: dict[str, str]) -> dict[str, str]:
+            return headers  # No traceparent injected
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_exec.inject_traceparent",
+            side_effect=mock_inject,
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        executor = SubprocessExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        assert "TRACEPARENT" not in captured_env
+
+
 class TestSubprocessChildModuleInvocation:
     """Tests verifying subprocess uses module invocation."""
 
