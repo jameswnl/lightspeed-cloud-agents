@@ -184,6 +184,8 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
         List of ModelMessage objects for pydantic-ai message_history.
     """
     history: list[ModelMessage] = []
+    tool_call_counter = 0
+
     def _turn_sort_key(k: str) -> int:
         if k.startswith("turn-"):
             try:
@@ -211,10 +213,12 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 metadata = msg.get("metadata", {})
                 tool_name = metadata.get("tool_name", "")
                 args = metadata.get("args", {})
+                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
+                tool_call_counter += 1
                 tool_call_part = ToolCallPart(
                     tool_name=tool_name,
                     args=args,
-                    tool_call_id=f"call_{tool_name}",
+                    tool_call_id=tool_call_id,
                 )
                 # Consecutive tool_calls are parts of the same ModelResponse
                 if history and isinstance(history[-1], ModelResponse) and any(
@@ -226,11 +230,20 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
             elif role == "tool_result":
                 metadata = msg.get("metadata", {})
                 tool_name = metadata.get("tool_name", "")
-                history.append(ModelRequest(parts=[ToolReturnPart(
+                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
+                tool_call_counter += 1
+                return_part = ToolReturnPart(
                     tool_name=tool_name,
-                    content=content,
-                    tool_call_id=f"call_{tool_name}",
-                )]))
+                    content=content if isinstance(content, str) else json.dumps(content),
+                    tool_call_id=tool_call_id,
+                )
+                # Consecutive tool_results grouped in same ModelRequest
+                if history and isinstance(history[-1], ModelRequest) and any(
+                    isinstance(p, ToolReturnPart) for p in history[-1].parts
+                ):
+                    history[-1].parts.append(return_part)
+                else:
+                    history.append(ModelRequest(parts=[return_part]))
     return history
 
 

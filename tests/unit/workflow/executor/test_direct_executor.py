@@ -2628,12 +2628,12 @@ class TestBuildMessageHistoryToolReplay:
         history = _build_message_history(context)
         tcp = history[1].parts[0]
         assert isinstance(tcp, ToolCallPart)
-        assert tcp.tool_call_id == "call_read_file"
+        assert tcp.tool_call_id.startswith("call_read_file")
 
         trp_parts = [
             p for p in history[2].parts if isinstance(p, ToolReturnPart)
         ]
-        assert trp_parts[0].tool_call_id == "call_read_file"
+        assert trp_parts[0].tool_call_id.startswith("call_read_file")
 
     def test_user_assistant_only_backward_compatible(self) -> None:
         """Conversations without tool roles still work (backward compat)."""

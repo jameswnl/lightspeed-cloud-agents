@@ -612,14 +612,17 @@ class ChatWorkflowRunner(WorkflowRunner):
                     metadata={
                         "tool_name": event.get("tool_name", ""),
                         "args": event.get("args", {}),
+                        "tool_call_id": event.get("tool_call_id", ""),
                     },
                 ).to_dict())
             elif event_type == "tool_result":
+                output = event.get("output", "")
                 messages.append(ConversationMessage(
                     role="tool_result",
-                    content=str(event.get("output", "")),
+                    content=json.dumps(output) if isinstance(output, (dict, list)) else str(output),
                     metadata={
                         "tool_name": event.get("tool_name", ""),
+                        "tool_call_id": event.get("tool_call_id", ""),
                     },
                 ).to_dict())
 
