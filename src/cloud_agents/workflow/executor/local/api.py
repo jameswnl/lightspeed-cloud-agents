@@ -59,6 +59,18 @@ def build_local_router(
     deps = [Depends(get_caller_identity)] if get_caller_identity else []
     router = APIRouter(tags=["workflows"], dependencies=deps)
 
+    @router.get("/tools")
+    async def list_available_tools() -> dict[str, list[dict[str, str | None]]]:
+        """List all registered tools with names and descriptions."""
+        from cloud_agents.workflow.executor.step.tools import _REGISTRY
+
+        return {
+            "tools": [
+                {"name": defn.name, "description": defn.description}
+                for defn in sorted(_REGISTRY.values(), key=lambda d: d.name)
+            ]
+        }
+
     @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
     async def run_workflow(request: RunWorkflowRequest) -> dict[str, str]:
         """Start a new workflow execution."""
@@ -73,6 +85,23 @@ def build_local_router(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
             )
+
+        # Validate tool names against the registry before starting
+        from cloud_agents.workflow.executor.step.tools import list_tools as _list_tools
+
+        registered = set(_list_tools())
+        for step in request.definition.get("spec", {}).get("steps", []):
+            step_tools = step.get("tools", [])
+            if step_tools:
+                unknown = [t for t in step_tools if t not in registered]
+                if unknown:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            f"Unknown tools in step '{step.get('name', '?')}': {unknown}. "
+                            f"Registered: {sorted(registered) or '(none)'}"
+                        ),
+                    )
 
         if content_policy:
             from cloud_agents.workflow.core.validation import validate_definition
