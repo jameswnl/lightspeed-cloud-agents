@@ -12,6 +12,17 @@ import pytest
 from cloud_agents.runtime.logging import configure_logging
 
 
+@pytest.fixture(autouse=True)
+def _restore_root_logger():
+    """Save and restore root logger state to prevent cross-test pollution."""
+    root = logging.getLogger()
+    original_handlers = root.handlers[:]
+    original_level = root.level
+    yield
+    root.handlers = original_handlers
+    root.setLevel(original_level)
+
+
 class TestStructuredLogging:
     """Tests for LOG_FORMAT-based logging configuration."""
 
