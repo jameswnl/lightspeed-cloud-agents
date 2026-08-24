@@ -86,6 +86,7 @@ class ChatWorkflowRunner(WorkflowRunner):
         transcript_store: Any,
         config: ChatWorkflowConfig,
         spawner: Any = None,
+        middlewares: Optional[list[Any]] = None,
     ) -> None:
         """Initialize the chat workflow runner.
 
@@ -94,11 +95,16 @@ class ChatWorkflowRunner(WorkflowRunner):
             transcript_store: TranscriptStore instance for turn content.
             config: Chat-specific configuration.
             spawner: Optional AgentSpawner for sandbox execution.
+            middlewares: Optional list of StepMiddleware instances to apply
+                before TracingMiddleware on every turn. Custom middleware
+                runs outermost (first in before, last in after);
+                TracingMiddleware stays innermost so it always executes.
         """
         self._run_store = run_store
         self._transcript_store = transcript_store
         self._config = config
         self._spawner = spawner
+        self._extra_middlewares: list[Any] = middlewares or []
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self, input: dict[str, Any]) -> str:
@@ -203,9 +209,13 @@ class ChatWorkflowRunner(WorkflowRunner):
         # chat turns have conversation-specific save logic (_save_turn handles
         # ConversationMessage assembly, TranscriptEvent type mapping, and
         # RunStateStore updates that TranscriptMiddleware doesn't cover).
+        # Custom middleware runs outermost (before TracingMiddleware) so it
+        # executes first in before() and last in after().
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
-        wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
+        wrapped = MiddlewareExecutor(
+            executor, [*self._extra_middlewares, TracingMiddleware()]
+        )
 
         # 7. Execute
         result = await wrapped.run(step_input)
@@ -280,7 +290,9 @@ class ChatWorkflowRunner(WorkflowRunner):
         # 6. Get step executor wrapped with middleware
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
-        wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
+        wrapped = MiddlewareExecutor(
+            executor, [*self._extra_middlewares, TracingMiddleware()]
+        )
 
         # 7. Stream and capture the final result
         final_result: Optional[StepResult] = None
