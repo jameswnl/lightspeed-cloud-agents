@@ -285,7 +285,9 @@ class TranscriptStore:
         pool = self._ensure_connected()
         rows = await pool.fetch(_LOAD_RECENT_TURNS_SQL, workflow_id, limit)
         result = []
-        for row in rows:
+        # SQL returns newest-first (ORDER BY created_at DESC); reverse to
+        # chronological order so context flows oldest-to-newest.
+        for row in reversed(rows):
             messages_data = row["messages"]
             if isinstance(messages_data, str):
                 messages_data = json.loads(messages_data)

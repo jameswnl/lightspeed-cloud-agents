@@ -684,3 +684,226 @@ class TestGetStepTranscripts:
 
         transcripts = await runner.get_step_transcripts("chat-123")
         assert "turn-0" in transcripts
+
+
+class TestConcurrentTurnProtection:
+    """Tests for Fix 3: per-workflow asyncio lock."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sends_are_serialized(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Concurrent send_message calls for the same workflow are serialized."""
+        import asyncio
+
+        execution_order: list[str] = []
+
+        def make_mock_executor() -> Any:
+            mock_exec = mocker.AsyncMock()
+
+            async def run_side_effect(step_input: Any) -> StepResult:
+                turn = step_input.step_name
+                execution_order.append(f"start-{turn}")
+                await asyncio.sleep(0.05)
+                execution_order.append(f"end-{turn}")
+                return StepResult(
+                    status="completed",
+                    output={"response": f"reply-{turn}"},
+                )
+
+            mock_exec.run.side_effect = run_side_effect
+            return mock_exec
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            side_effect=lambda step_def, spawner: make_mock_executor(),
+        )
+
+        # Launch two concurrent sends
+        t1 = asyncio.create_task(runner.send_message("chat-lock-1", "first"))
+        t2 = asyncio.create_task(runner.send_message("chat-lock-1", "second"))
+
+        r1, r2 = await asyncio.gather(t1, t2)
+
+        assert r1.status == "completed"
+        assert r2.status == "completed"
+
+        # Verify serialization: no interleaving. The pattern must be
+        # [start-X, end-X, start-Y, end-Y] — never [start-X, start-Y, ...].
+        assert len(execution_order) == 4
+        assert execution_order[0].startswith("start-")
+        assert execution_order[1].startswith("end-")
+        assert execution_order[2].startswith("start-")
+        assert execution_order[3].startswith("end-")
+        # First turn completes (end) before second starts
+        first_turn = execution_order[0].replace("start-", "")
+        assert execution_order[1] == f"end-{first_turn}"
+
+    @pytest.mark.asyncio
+    async def test_different_workflows_not_blocked(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+        mocker: MockerFixture,
+    ) -> None:
+        """Different workflows can run concurrently (separate locks)."""
+        import asyncio
+
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+        )
+
+        active_count = 0
+        max_concurrent = 0
+
+        def make_mock_executor() -> Any:
+            mock_exec = mocker.AsyncMock()
+
+            async def run_side_effect(step_input: Any) -> StepResult:
+                nonlocal active_count, max_concurrent
+                active_count += 1
+                max_concurrent = max(max_concurrent, active_count)
+                await asyncio.sleep(0.01)
+                active_count -= 1
+                return StepResult(
+                    status="completed",
+                    output={"response": "ok"},
+                )
+
+            mock_exec.run.side_effect = run_side_effect
+            return mock_exec
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            side_effect=lambda step_def, spawner: make_mock_executor(),
+        )
+
+        t1 = asyncio.create_task(runner.send_message("chat-A", "msg"))
+        t2 = asyncio.create_task(runner.send_message("chat-B", "msg"))
+
+        await asyncio.gather(t1, t2)
+
+        # Both should have run concurrently
+        assert max_concurrent == 2
+
+
+class TestIdentityPropagation:
+    """Tests for Fix 4: user_id/session_id on StepMetadata."""
+
+    @pytest.mark.asyncio
+    async def test_identity_from_run_store(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_run_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """send_message loads identity from RunStateStore and sets on StepMetadata."""
+        mock_run_store.get.return_value = {
+            "status": "running",
+            "user_id": "alice",
+            "session_id": "sess-42",
+        }
+
+        captured_input: list[Any] = []
+
+        mock_executor = mocker.AsyncMock()
+
+        async def run_side_effect(step_input: Any) -> StepResult:
+            captured_input.append(step_input)
+            return StepResult(status="completed", output={"response": "ok"})
+
+        mock_executor.run.side_effect = run_side_effect
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        si = captured_input[0]
+        assert si.metadata is not None
+        assert si.metadata.user_id == "alice"
+        assert si.metadata.session_id == "sess-42"
+        assert si.metadata.conversation_id == "chat-123"
+
+    @pytest.mark.asyncio
+    async def test_identity_none_when_not_in_store(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_run_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """StepMetadata has None identity when store has no user_id/session_id."""
+        mock_run_store.get.return_value = {"status": "running"}
+
+        captured_input: list[Any] = []
+
+        mock_executor = mocker.AsyncMock()
+
+        async def run_side_effect(step_input: Any) -> StepResult:
+            captured_input.append(step_input)
+            return StepResult(status="completed", output={"response": "ok"})
+
+        mock_executor.run.side_effect = run_side_effect
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "hello")
+
+        si = captured_input[0]
+        assert si.metadata is not None
+        assert si.metadata.user_id is None
+        assert si.metadata.session_id is None
+
+
+class TestTranscriptEvents:
+    """Tests for Fix 5: result.transcript passed to StepTranscript.events."""
+
+    @pytest.mark.asyncio
+    async def test_save_turn_passes_transcript_events(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """_save_turn passes result.transcript to StepTranscript.events."""
+        transcript_data = [
+            {
+                "type": "agent.run",
+                "model": "gpt-4o",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "step_name": "turn-0",
+                "tools": [],
+                "mcp_servers": [],
+            }
+        ]
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Hello!"},
+            transcript=transcript_data,
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=200,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_call = mock_transcript_store.save.call_args
+        saved_transcript = save_call.kwargs["transcript"]
+        # The StepTranscript should have events from result.transcript
+        assert len(saved_transcript.events) == len(transcript_data)

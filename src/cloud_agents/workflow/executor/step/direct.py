@@ -19,7 +19,7 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
-from pydantic_ai.messages import ModelRequest
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
 
 from cloud_agents.workflow.executor.step.base import (
     StepExecutor,
@@ -144,6 +144,57 @@ async def _call_llm(
     }
 
 
+def _has_conversation_context(context: dict[str, Any]) -> bool:
+    """Detect whether context contains conversation messages.
+
+    Conversation context entries have output.messages as a list of dicts.
+
+    Parameters:
+        context: Step context dict.
+
+    Returns:
+        True if any context entry has conversation message structure.
+    """
+    for value in context.values():
+        if not isinstance(value, dict):
+            continue
+        output = value.get("output")
+        if isinstance(output, dict) and isinstance(output.get("messages"), list):
+            return True
+    return False
+
+
+def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
+    """Convert prior turn messages in context to pydantic-ai message_history.
+
+    Iterates context keys in sorted order (turn-0, turn-1, ...) and converts
+    each conversation message to the appropriate ModelRequest or ModelResponse.
+
+    Parameters:
+        context: Step context dict with conversation turn entries.
+
+    Returns:
+        List of ModelMessage objects for pydantic-ai message_history.
+    """
+    history: list[ModelMessage] = []
+    for key in sorted(context.keys()):
+        turn = context[key]
+        if not isinstance(turn, dict):
+            continue
+        output = turn.get("output", {})
+        messages = output.get("messages") if isinstance(output, dict) else None
+        if not messages:
+            continue
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                history.append(ModelRequest.user_text_prompt(content))
+            elif role == "assistant":
+                history.append(ModelResponse(parts=[TextPart(content=content)]))
+    return history
+
+
 class DirectExecutor(StepExecutor):
     """Execute steps in-process via pydantic-ai.
 
@@ -155,9 +206,9 @@ class DirectExecutor(StepExecutor):
     async def run(self, step_input: StepInput) -> StepResult:
         """Execute a step as a single LLM call or pydantic-ai Agent loop.
 
-        When the step has tools or MCP servers, creates a pydantic-ai Agent
-        with tools from the registry and/or MCPToolsets and runs the agent
-        loop. Otherwise falls back to the simpler model_request path.
+        When the step has tools, MCP servers, skills, or conversation
+        context, creates a pydantic-ai Agent with tools and message_history.
+        Otherwise falls back to the simpler model_request path.
 
         Parameters:
             step_input: Step execution input.
@@ -169,7 +220,8 @@ class DirectExecutor(StepExecutor):
 
         try:
             skills_cap = get_skills_capability()
-            if step_input.tools or step_input.mcp_servers or skills_cap:
+            has_conversation = _has_conversation_context(step_input.context)
+            if step_input.tools or step_input.mcp_servers or skills_cap or has_conversation:
                 return await self._run_with_agent(step_input, start_ms, skills_cap=skills_cap)
             return await self._run_model_request(step_input, start_ms)
 
@@ -358,8 +410,12 @@ class DirectExecutor(StepExecutor):
                 capabilities=capabilities if capabilities else None,
             )
 
+            # Build message_history from conversation context
+            message_history = _build_message_history(step_input.context)
+
             result = await agent.run(
                 user_prompt,
+                message_history=message_history if message_history else None,
                 model_settings={"timeout": step_input.timeout_seconds},
             )
 
