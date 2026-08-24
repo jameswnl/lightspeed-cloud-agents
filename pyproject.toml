@@ -17,7 +17,6 @@ dependencies = [
     "asyncpg>=0.29.0",
     "alembic>=1.19.1",
     "psycopg2-binary>=2.9",
-    "openshell[openshell]>=0.0.111",
 ]
 
 [project.optional-dependencies]
