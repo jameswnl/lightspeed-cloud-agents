@@ -1519,8 +1519,8 @@ class TestExposeServiceEndpoint:
     """Tests for _expose_service() endpoint routing (#175)."""
 
     @pytest.mark.asyncio
-    async def test_uses_resp_url_by_default(self, mocker: MockerFixture) -> None:
-        """ExposeService uses the gateway-returned URL when no override."""
+    async def test_defaults_to_grpc_endpoint(self, mocker: MockerFixture) -> None:
+        """Without override, uses gRPC endpoint as HTTP base URL."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
@@ -1530,7 +1530,7 @@ class TestExposeServiceEndpoint:
         )
 
         mock_resp = mocker.Mock()
-        mock_resp.url = "http://gw-proxy.example.com:8080"
+        mock_resp.url = "http://sandbox.openshell.localhost:8080"
 
         mock_stub_cls = mocker.patch(
             "openshell._proto.openshell_pb2_grpc.OpenShellStub",
@@ -1542,8 +1542,35 @@ class TestExposeServiceEndpoint:
 
         endpoint_url, virtual_host = await spawner._expose_service("sb-1", 8080)
 
-        assert endpoint_url == "http://gw-proxy.example.com:8080"
-        assert virtual_host == "gw-proxy.example.com"
+        assert endpoint_url == "http://gw:17670"
+        assert virtual_host == "sandbox.openshell.localhost"
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_https_with_tls(self, mocker: MockerFixture) -> None:
+        """With TLS configured, default endpoint uses https scheme."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="gw:17670",
+            tls_ca="/tmp/ca.pem",
+        )
+
+        mock_resp = mocker.Mock()
+        mock_resp.url = "https://sandbox.openshell.localhost:8080"
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub = mock_stub_cls.return_value
+        mock_stub.ExposeService.return_value = mock_resp
+
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        endpoint_url, virtual_host = await spawner._expose_service("sb-1", 8080)
+
+        assert endpoint_url == "https://gw:17670"
 
     @pytest.mark.asyncio
     async def test_http_endpoint_override(self, mocker: MockerFixture) -> None:
