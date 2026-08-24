@@ -67,6 +67,7 @@ class OpenShellSpawner(AgentSpawner):
         self,
         openshell_client: Any = None,
         driver: str = "podman",
+        workspace: str = "default",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -98,6 +99,7 @@ class OpenShellSpawner(AgentSpawner):
         super().__init__(**kwargs)
         self._client = openshell_client
         self._driver = driver
+        self._workspace = workspace
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
@@ -383,7 +385,9 @@ class OpenShellSpawner(AgentSpawner):
             spec.template.driver_config.MergeFrom(mount_config)
             skills_via_driver_config = True
 
-        sandbox_ref = await asyncio.to_thread(self._client.create, spec=spec)
+        sandbox_ref = await asyncio.to_thread(
+            self._client.create, workspace=self._workspace, spec=spec,
+        )
         sandbox_name = sandbox_ref.name
         sandbox_id = sandbox_ref.id
         self._sandbox_names[agent_name] = sandbox_name
@@ -393,6 +397,7 @@ class OpenShellSpawner(AgentSpawner):
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
+                workspace=self._workspace,
                 timeout_seconds=300,
             )
 
@@ -456,7 +461,7 @@ class OpenShellSpawner(AgentSpawner):
                     provider_id, exc_info=True,
                 )
         try:
-            await asyncio.to_thread(self._client.delete, sandbox_name)
+            await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
         except Exception:
             logger.warning(
                 "Failed to delete orphaned sandbox '%s' during cleanup",
@@ -1062,7 +1067,7 @@ class OpenShellSpawner(AgentSpawner):
                 )
 
         try:
-            await asyncio.to_thread(self._client.delete, sandbox_name)
+            await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
             logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
         except Exception:
             logger.warning(

@@ -434,7 +434,7 @@ class TestOpenShellSpawnerDestroy:
 
         await spawner.destroy("agent-1")
 
-        mock_client.delete.assert_called_once_with("sb-123")
+        mock_client.delete.assert_called_once_with("sb-123", workspace="default")
 
     @pytest.mark.asyncio
     async def test_destroy_cancels_server_task(self, mocker: MockerFixture) -> None:
@@ -725,7 +725,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
         # Sandbox must be cleaned up
-        mock_client.delete.assert_called_once_with("ca-agent-agent-1")
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
 
         # Tracking must not retain the orphaned entry
         assert "agent-1" not in spawner._sandbox_names
@@ -797,7 +797,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         with pytest.raises(RuntimeError, match="sandbox failed to start"):
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        mock_client.delete.assert_called_once_with("ca-agent-agent-1")
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
         assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
@@ -1146,7 +1146,7 @@ class TestDestroyWithProviderCleanup:
 
         await spawner._do_destroy("agent-1")
 
-        mock_client.delete.assert_called_once_with("sb-1")
+        mock_client.delete.assert_called_once_with("sb-1", workspace="default")
 
 
 class TestBuildNetworkPolicy:
