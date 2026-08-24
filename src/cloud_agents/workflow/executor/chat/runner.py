@@ -24,6 +24,10 @@ from cloud_agents.workflow.executor.base import (
     WorkflowRunner,
     WorkflowStatus,
 )
+from cloud_agents.workflow.executor.middleware import (
+    MiddlewareExecutor,
+    TracingMiddleware,
+)
 from cloud_agents.workflow.executor.step.base import (
     StepInput,
     StepMetadata,
@@ -194,12 +198,13 @@ class ChatWorkflowRunner(WorkflowRunner):
             session_id=state.get("session_id") if state else None,
         )
 
-        # 6. Get step executor
+        # 6. Get step executor wrapped with middleware
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
+        wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
 
         # 7. Execute
-        result = await executor.run(step_input)
+        result = await wrapped.run(step_input)
 
         # 8. Save turn to transcript store and update run state
         await self._save_turn(workflow_id, turn_name, prompt, result)
@@ -268,15 +273,16 @@ class ChatWorkflowRunner(WorkflowRunner):
             session_id=state.get("session_id") if state else None,
         )
 
-        # 6. Get step executor
+        # 6. Get step executor wrapped with middleware
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
+        wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
 
         # 7. Stream and capture the final result
         final_result: Optional[StepResult] = None
 
         try:
-            async for event in executor.run_stream(step_input):
+            async for event in wrapped.run_stream(step_input):
                 yield event
                 if event.type in ("complete", "error") and event.result:
                     final_result = event.result
