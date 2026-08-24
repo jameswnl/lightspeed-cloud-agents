@@ -301,6 +301,16 @@ def build_temporal_router(
                 detail="Provider configuration is required",
             )
 
+        # Validate tool names against the registry
+        from cloud_agents.workflow.core.tool_validation import validate_workflow_tools
+
+        tool_errors = validate_workflow_tools(definition)
+        if tool_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=tool_errors[0],
+            )
+
         from cloud_agents.workflow.core.validation import validate_definition
 
         validation_errors = validate_definition(definition, content_policy=content_policy)
