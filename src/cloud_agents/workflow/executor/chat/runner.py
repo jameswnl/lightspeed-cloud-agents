@@ -57,6 +57,7 @@ class ChatWorkflowConfig:
     tools_module: Optional[str] = None
     mcp_servers: Optional[list[dict[str, Any]]] = None
     max_context_turns: int = 20
+    timeout_seconds: int = 600
     spawn: str = "none"
 
 
@@ -133,7 +134,12 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         Returns:
             StepResult with the assistant's response and metrics.
+
+        Raises:
+            RuntimeError: If the conversation is in a terminal state.
         """
+        await self._check_not_terminal(workflow_id)
+
         # 1. Load prior turns from transcript store
         prior_turns = await self._transcript_store.load_recent_turns(
             workflow_id, limit=self._config.max_context_turns
@@ -142,8 +148,8 @@ class ChatWorkflowRunner(WorkflowRunner):
         # 2. Build context from prior turns
         context = self._build_context(prior_turns)
 
-        # 3. Determine turn name
-        turn_number = len(prior_turns)
+        # 3. Determine turn name from highest existing turn
+        turn_number = self._next_turn_number(prior_turns)
         turn_name = f"turn-{turn_number}"
 
         # 4. Build StepInput
@@ -181,7 +187,12 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         Yields:
             StreamEvent instances (token deltas, then complete or error).
+
+        Raises:
+            RuntimeError: If the conversation is in a terminal state.
         """
+        await self._check_not_terminal(workflow_id)
+
         # 1. Load prior turns from transcript store
         prior_turns = await self._transcript_store.load_recent_turns(
             workflow_id, limit=self._config.max_context_turns
@@ -190,8 +201,8 @@ class ChatWorkflowRunner(WorkflowRunner):
         # 2. Build context from prior turns
         context = self._build_context(prior_turns)
 
-        # 3. Determine turn name
-        turn_number = len(prior_turns)
+        # 3. Determine turn name from highest existing turn
+        turn_number = self._next_turn_number(prior_turns)
         turn_name = f"turn-{turn_number}"
 
         # 4. Build StepInput
@@ -361,6 +372,33 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         return state.get("status", "") in _TERMINAL_STATUSES
 
+    async def _check_not_terminal(self, workflow_id: str) -> None:
+        """Raise if conversation is in a terminal state."""
+        state = await self._run_store.get(workflow_id)
+        if state and state.get("status") in _TERMINAL_STATUSES:
+            raise RuntimeError(
+                f"Conversation '{workflow_id}' is {state['status']} — cannot send messages"
+            )
+
+    @staticmethod
+    def _next_turn_number(prior_turns: list[dict[str, Any]]) -> int:
+        """Derive next turn number from existing turns.
+
+        Uses the highest turn-N number found, not the count of loaded turns.
+        This prevents collisions when max_context_turns < total turns.
+        """
+        max_num = -1
+        for turn in prior_turns:
+            name = turn.get("step_name", "")
+            if name.startswith("turn-"):
+                try:
+                    num = int(name.split("-", 1)[1])
+                    if num > max_num:
+                        max_num = num
+                except (ValueError, IndexError):
+                    pass
+        return max_num + 1
+
     def _build_context(self, prior_turns: list[dict[str, Any]]) -> dict[str, Any]:
         """Build step context from prior conversation turns.
 
@@ -406,7 +444,7 @@ class ChatWorkflowRunner(WorkflowRunner):
             tools_module=self._config.tools_module,
             mcp_servers=self._config.mcp_servers,
             context=context,
-            timeout_seconds=600,
+            timeout_seconds=self._config.timeout_seconds,
             workflow_id=workflow_id,
             step_name=turn_name,
             output_key=turn_name,
@@ -434,7 +472,7 @@ class ChatWorkflowRunner(WorkflowRunner):
         messages: list[dict[str, Any]] = [
             ConversationMessage(role="user", content=prompt).to_dict(),
         ]
-        if result.output:
+        if result.output is not None:
             content = (
                 json.dumps(result.output) if isinstance(result.output, dict) else str(result.output)
             )
