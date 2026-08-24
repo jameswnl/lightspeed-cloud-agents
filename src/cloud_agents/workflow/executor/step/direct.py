@@ -177,7 +177,15 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
         List of ModelMessage objects for pydantic-ai message_history.
     """
     history: list[ModelMessage] = []
-    for key in sorted(context.keys()):
+    def _turn_sort_key(k: str) -> int:
+        if k.startswith("turn-"):
+            try:
+                return int(k.split("-", 1)[1])
+            except (ValueError, IndexError):
+                pass
+        return float("inf")
+
+    for key in sorted(context.keys(), key=_turn_sort_key):
         turn = context[key]
         if not isinstance(turn, dict):
             continue

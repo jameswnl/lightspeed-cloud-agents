@@ -275,14 +275,18 @@ class ChatWorkflowRunner(WorkflowRunner):
         # 7. Stream and capture the final result
         final_result: Optional[StepResult] = None
 
-        async for event in executor.run_stream(step_input):
-            yield event
-            if event.type in ("complete", "error") and event.result:
-                final_result = event.result
-
-        # 8. Save turn to transcript store and update run state
-        if final_result:
-            await self._save_turn(workflow_id, turn_name, prompt, final_result)
+        try:
+            async for event in executor.run_stream(step_input):
+                yield event
+                if event.type in ("complete", "error") and event.result:
+                    final_result = event.result
+        except Exception as exc:
+            final_result = StepResult(status="failed", error=str(exc))
+            yield StreamEvent(type="error", data={"error": str(exc)}, result=final_result)
+        finally:
+            # 8. Save turn to transcript store and update run state
+            if final_result:
+                await self._save_turn(workflow_id, turn_name, prompt, final_result)
 
     async def get_history(self, workflow_id: str, limit: int = 20) -> list[ConversationMessage]:
         """Load conversation messages from the transcript store.
