@@ -29,8 +29,11 @@ if "+asyncpg" in db_url:
 config.set_main_option("sqlalchemy.url", db_url)
 
 # Set up loggers from the config file.
+# Pass disable_existing_loggers=False to allow pytest's caplog to capture
+# logs from app loggers (cloud_agents.runtime.audit, etc.) after fileConfig runs.
+# This is the standard fix for Alembic + pytest integration.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No SQLAlchemy ORM models — we use raw SQL migrations.
 target_metadata = None
