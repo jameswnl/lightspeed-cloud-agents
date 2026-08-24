@@ -48,6 +48,36 @@ _DEFAULT_SERVER_COMMAND = [
 _EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
+class _BearerAuthInterceptor:
+    """gRPC interceptor that attaches a bearer token to every call."""
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+        self._metadata = (("authorization", f"Bearer {token}"),)
+
+    def _intercept(self, continuation, client_call_details, request_or_iterator):
+        """Attach bearer token metadata to the call."""
+        metadata = list(client_call_details.metadata or [])
+        metadata.extend(self._metadata)
+        new_details = client_call_details.__class__(
+            client_call_details.method,
+            client_call_details.timeout,
+            metadata,
+            client_call_details.credentials,
+            client_call_details.wait_for_ready,
+            client_call_details.compression,
+        )
+        return continuation(new_details, request_or_iterator)
+
+    def intercept_unary_unary(self, continuation, client_call_details, request):
+        """Intercept unary-unary calls."""
+        return self._intercept(continuation, client_call_details, request)
+
+    def intercept_unary_stream(self, continuation, client_call_details, request):
+        """Intercept unary-stream calls."""
+        return self._intercept(continuation, client_call_details, request)
+
+
 class OpenShellSpawner(AgentSpawner):
     """Spawns sandboxes via OpenShell exec-based communication.
 
@@ -72,6 +102,7 @@ class OpenShellSpawner(AgentSpawner):
         tls_ca: str = "",
         tls_cert: str = "",
         tls_key: str = "",
+        bearer_token: str = "",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -97,6 +128,8 @@ class OpenShellSpawner(AgentSpawner):
             tls_ca: Path to CA certificate for gRPC TLS channels.
             tls_cert: Path to client certificate for mTLS.
             tls_key: Path to client key for mTLS.
+            bearer_token: OIDC bearer token for gRPC auth. Applied to
+                raw gRPC channels via call credentials interceptor.
         """
         super().__init__(**kwargs)
         self._client = openshell_client
@@ -107,6 +140,7 @@ class OpenShellSpawner(AgentSpawner):
         self._tls_ca = tls_ca
         self._tls_cert = tls_cert
         self._tls_key = tls_key
+        self._bearer_token = bearer_token
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
@@ -119,27 +153,39 @@ class OpenShellSpawner(AgentSpawner):
         target = self._endpoint or getattr(self._client, "_endpoint", "")
         return target.replace("http://", "").replace("https://", "")
 
-    def _create_grpc_channel(self) -> Any:
-        """Create a gRPC channel with appropriate TLS configuration.
+    @staticmethod
+    def _read_file(path: str) -> bytes:
+        """Read a file and return its contents as bytes."""
+        with open(path, "rb") as f:
+            return f.read()
 
-        Returns an insecure channel when no TLS is configured, or a
-        secure channel with optional client certificates for mTLS.
+    def _create_grpc_channel(self) -> Any:
+        """Create a gRPC channel with TLS and bearer token auth.
+
+        Returns an insecure or secure channel depending on TLS config.
+        When a bearer token is set, wraps the channel with a metadata
+        interceptor that attaches 'authorization: Bearer <token>'.
         """
         import grpc
 
         target = self._resolve_grpc_target()
         if not self._tls_ca:
-            return grpc.insecure_channel(target)
+            channel = grpc.insecure_channel(target)
+        else:
+            root_certs = self._read_file(self._tls_ca)
+            private_key = self._read_file(self._tls_key) if self._tls_key else None
+            cert_chain = self._read_file(self._tls_cert) if self._tls_cert else None
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=root_certs,
+                private_key=private_key,
+                certificate_chain=cert_chain,
+            )
+            channel = grpc.secure_channel(target, credentials)
 
-        root_certs = open(self._tls_ca, "rb").read()
-        private_key = open(self._tls_key, "rb").read() if self._tls_key else None
-        cert_chain = open(self._tls_cert, "rb").read() if self._tls_cert else None
-        credentials = grpc.ssl_channel_credentials(
-            root_certificates=root_certs,
-            private_key=private_key,
-            certificate_chain=cert_chain,
-        )
-        return grpc.secure_channel(target, credentials)
+        if self._bearer_token:
+            channel = grpc.intercept_channel(channel, _BearerAuthInterceptor(self._bearer_token))
+
+        return channel
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox ID (UUID) for an agent, or None if not tracked.

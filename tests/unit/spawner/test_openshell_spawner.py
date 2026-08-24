@@ -1471,6 +1471,42 @@ class TestCreateGrpcChannel:
             certificate_chain=b"fake-cert",
         )
 
+    def test_bearer_token_wraps_channel(self, mocker: MockerFixture) -> None:
+        """Bearer token wraps channel with intercept_channel."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            bearer_token="my-token",
+        )
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.insecure_channel.assert_called_once_with("host:17670")
+        mock_grpc.intercept_channel.assert_called_once()
+        interceptor = mock_grpc.intercept_channel.call_args[0][1]
+        assert interceptor._token == "my-token"
+
+    def test_no_bearer_token_no_interceptor(self, mocker: MockerFixture) -> None:
+        """Without bearer token, no interceptor is added."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+        )
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.intercept_channel.assert_not_called()
+
 
 class TestExposeServiceEndpoint:
     """Tests for _expose_service() endpoint routing (#175)."""
@@ -1610,10 +1646,11 @@ class TestEntrypointSpawnerFactory:
 
         from cloud_agents.workflow.executor.temporal.entrypoint import _create_spawner
 
-        _create_spawner()
+        spawner = _create_spawner()
 
         call_kwargs = mock_sandbox_client.call_args.kwargs
         assert call_kwargs["bearer_token"] == "my-oidc-token"
+        assert spawner._bearer_token == "my-oidc-token"
 
     def test_openshell_http_endpoint_override(self, mocker: MockerFixture) -> None:
         """OPENSHELL_HTTP_ENDPOINT is passed through to spawner."""

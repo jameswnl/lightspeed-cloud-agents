@@ -137,6 +137,7 @@ def _create_spawner():
             tls_ca=tls_ca,
             tls_cert=tls_cert,
             tls_key=tls_key,
+            bearer_token=bearer_token,
         )
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
