@@ -394,7 +394,18 @@ class DirectExecutor(StepExecutor):
             transport = StreamableHttpTransport(url=url, headers=headers)
             mcp_toolsets.append(MCPToolset(transport))
 
-        user_prompt = _build_user_prompt(step_input)
+        # Build message_history from conversation context
+        message_history = _build_message_history(step_input.context)
+
+        # When using message_history, don't flatten context into the prompt —
+        # the prior turns are already structured messages in message_history.
+        if message_history:
+            user_prompt = step_input.prompt
+            if step_input.output_schema:
+                schema_str = json.dumps(step_input.output_schema, indent=2)
+                user_prompt += f"\n\nRespond with JSON matching this schema:\n{schema_str}"
+        else:
+            user_prompt = _build_user_prompt(step_input)
 
         # Use AsyncExitStack for proper MCPToolset lifecycle management
         async with contextlib.AsyncExitStack() as stack:
@@ -417,9 +428,6 @@ class DirectExecutor(StepExecutor):
                 toolsets=active_toolsets if active_toolsets else None,
                 capabilities=capabilities if capabilities else None,
             )
-
-            # Build message_history from conversation context
-            message_history = _build_message_history(step_input.context)
 
             result = await agent.run(
                 user_prompt,

@@ -24,6 +24,10 @@ from cloud_agents.workflow.executor.base import (
     WorkflowRunner,
     WorkflowStatus,
 )
+from cloud_agents.workflow.executor.middleware import (
+    MiddlewareExecutor,
+    TracingMiddleware,
+)
 from cloud_agents.workflow.executor.step.base import (
     StepInput,
     StepMetadata,
@@ -432,9 +436,11 @@ class ChatWorkflowRunner(WorkflowRunner):
         return state.get("status", "") in _TERMINAL_STATUSES
 
     async def _check_not_terminal(self, workflow_id: str) -> None:
-        """Raise if conversation is in a terminal state."""
+        """Raise if conversation doesn't exist or is in a terminal state."""
         state = await self._run_store.get(workflow_id)
-        if state and state.get("status") in _TERMINAL_STATUSES:
+        if state is None:
+            raise KeyError(f"Conversation '{workflow_id}' not found")
+        if state.get("status") in _TERMINAL_STATUSES:
             raise RuntimeError(
                 f"Conversation '{workflow_id}' is {state['status']} — cannot send messages"
             )

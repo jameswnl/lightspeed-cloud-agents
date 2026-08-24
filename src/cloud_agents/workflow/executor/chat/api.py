@@ -69,6 +69,11 @@ def build_chat_router(runner: Any, get_caller_identity: Any = None) -> APIRouter
 
         try:
             result = await runner.send_message(conversation_id, prompt)
+        except KeyError as exc:
+            return JSONResponse(
+                status_code=404,
+                content={"error": str(exc)},
+            )
         except RuntimeError as exc:
             return JSONResponse(
                 status_code=409,

@@ -133,6 +133,32 @@ def build_local_app() -> FastAPI:
     )
     app.include_router(router, prefix="/v1/workflows")
 
+    # Mount chat router if stores are available
+    if run_state_store and transcript_store:
+        from cloud_agents.workflow.executor.chat.api import build_chat_router
+        from cloud_agents.workflow.executor.chat.runner import (
+            ChatWorkflowConfig,
+            ChatWorkflowRunner,
+        )
+
+        chat_config = ChatWorkflowConfig(
+            provider={
+                "name": os.environ.get("CHAT_PROVIDER", "openai"),
+                "model": os.environ.get("CHAT_MODEL", "gpt-4o"),
+                "credentials_secret": os.environ.get("CHAT_CREDENTIALS_SECRET", "openai-api-key"),
+            },
+            system_prompt=os.environ.get("CHAT_SYSTEM_PROMPT"),
+        )
+        chat_runner = ChatWorkflowRunner(
+            run_store=run_state_store,
+            transcript_store=transcript_store,
+            config=chat_config,
+            spawner=spawner,
+        )
+        chat_router = build_chat_router(chat_runner)
+        app.include_router(chat_router, prefix="/v1")
+        logger.info("Chat router mounted at /v1/chat")
+
     @app.get("/healthz")
     async def healthz():
         return {"status": "ok"}
