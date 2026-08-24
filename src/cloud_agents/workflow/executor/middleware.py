@@ -299,10 +299,10 @@ class MiddlewareExecutor:
             return result
 
     async def run_stream(self, step_input: StepInput) -> AsyncIterator[StreamEvent]:
-        """Stream with middleware stack.
+        """Stream with middleware stack inside an OTEL span.
 
-        Applies before hooks, streams from executor, then applies
-        after hooks on the final result (complete or error event).
+        Applies before hooks, streams from executor within a tracing span,
+        then applies after hooks on the final result (complete or error event).
 
         Parameters:
             step_input: Step execution input.
@@ -310,21 +310,51 @@ class MiddlewareExecutor:
         Yields:
             StreamEvent instances from the executor.
         """
-        # Before hooks
+        if self._tracer:
+            async for event in self._run_stream_with_span(step_input):
+                yield event
+        else:
+            async for event in self._run_stream_no_span(step_input):
+                yield event
+
+    async def _run_stream_no_span(self, step_input: StepInput) -> AsyncIterator[StreamEvent]:
+        """Stream without OTEL span."""
         for mw in self._middlewares:
             step_input = await mw.before(step_input)
 
-        # Stream from executor
         final_result: Optional[StepResult] = None
         async for event in self._executor.run_stream(step_input):
             yield event
             if event.type in ("complete", "error") and event.result:
                 final_result = event.result
 
-        # After hooks on the final result
         if final_result:
             for mw in reversed(self._middlewares):
                 await mw.after(step_input, final_result)
+
+    async def _run_stream_with_span(self, step_input: StepInput) -> AsyncIterator[StreamEvent]:
+        """Stream inside an OTEL span."""
+        assert self._tracer is not None
+
+        with self._tracer.start_as_current_span(
+            "step.execute.stream",
+            attributes={
+                "step.name": step_input.step_name,
+                "workflow.id": step_input.workflow_id,
+            },
+        ) as span:
+            for mw in self._middlewares:
+                step_input = await mw.before(step_input)
+
+            final_result: Optional[StepResult] = None
+            async for event in self._executor.run_stream(step_input):
+                yield event
+                if event.type in ("complete", "error") and event.result:
+                    final_result = event.result
+
+            if final_result:
+                for mw in reversed(self._middlewares):
+                    await mw.after(step_input, final_result)
 
 
 def apply_middleware(

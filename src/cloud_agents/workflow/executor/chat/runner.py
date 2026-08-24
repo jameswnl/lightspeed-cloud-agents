@@ -199,6 +199,10 @@ class ChatWorkflowRunner(WorkflowRunner):
         )
 
         # 6. Get step executor wrapped with middleware
+        # TracingMiddleware only — TranscriptMiddleware is not used here because
+        # chat turns have conversation-specific save logic (_save_turn handles
+        # ConversationMessage assembly, TranscriptEvent type mapping, and
+        # RunStateStore updates that TranscriptMiddleware doesn't cover).
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
         wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
@@ -438,11 +442,9 @@ class ChatWorkflowRunner(WorkflowRunner):
         return state.get("status", "") in _TERMINAL_STATUSES
 
     async def _check_not_terminal(self, workflow_id: str) -> None:
-        """Raise if conversation doesn't exist or is in a terminal state."""
+        """Raise if conversation is in a terminal state."""
         state = await self._run_store.get(workflow_id)
-        if state is None:
-            raise KeyError(f"Conversation '{workflow_id}' not found")
-        if state.get("status") in _TERMINAL_STATUSES:
+        if state and state.get("status") in _TERMINAL_STATUSES:
             raise RuntimeError(
                 f"Conversation '{workflow_id}' is {state['status']} — cannot send messages"
             )
