@@ -27,7 +27,13 @@ def mock_run_store_fixture(mocker: MockerFixture) -> AsyncMock:
     """Mock RunStateStore."""
     store = mocker.AsyncMock()
     store.create = mocker.AsyncMock()
-    store.get = mocker.AsyncMock(return_value=None)
+    store.get = mocker.AsyncMock(return_value={
+        "workflow_id": "chat-123",
+        "workflow_name": "chat",
+        "status": "running",
+        "user_id": None,
+        "session_id": None,
+    })
     store.update_step = mocker.AsyncMock()
     store.append_event = mocker.AsyncMock()
     store.mark_terminal = mocker.AsyncMock()

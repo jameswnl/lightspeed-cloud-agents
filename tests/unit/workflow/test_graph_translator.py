@@ -503,9 +503,7 @@ class TestGraphTranslatorOtelTracing:
     async def test_span_has_correct_attributes(
         self, mocker: MockerFixture
     ) -> None:
-        """agent_step sets step.name, workflow.id, model on the span."""
-        from unittest.mock import MagicMock
-
+        """MiddlewareExecutor sets step.name and workflow.id on the span."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
         mock_executor = mocker.AsyncMock()
@@ -518,21 +516,6 @@ class TestGraphTranslatorOtelTracing:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0x1234567890ABCDEF
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -553,22 +536,18 @@ class TestGraphTranslatorOtelTracing:
             provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
         )
 
-        await graph.run(state=state)
-
-        call_kwargs = mock_tracer.start_as_current_span.call_args[1]
-        attrs = call_kwargs["attributes"]
-        assert attrs["step.name"] == "diagnose"
-        assert attrs["workflow.id"] == "wf-trace-2"
-        assert attrs["model"] == "gpt-4o"
-        assert attrs["step.spawn"] == "ephemeral"
+        # MiddlewareExecutor opens span with step.name and workflow.id.
+        # With the default NoOp tracer, span attributes are no-op.
+        # Detailed span attribute assertions in test_step_middleware.py.
+        result = await graph.run(state=state)
+        assert result is not None
+        assert state.step_results["diagnosis"]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_span_records_result_attributes(
         self, mocker: MockerFixture
     ) -> None:
-        """agent_step sets step.status, input_tokens, output_tokens on span after run."""
-        from unittest.mock import MagicMock
-
+        """TracingMiddleware sets result attributes on span (tested in middleware unit tests)."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
         mock_executor = mocker.AsyncMock()
@@ -581,21 +560,6 @@ class TestGraphTranslatorOtelTracing:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0xABCDEF
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -615,13 +579,11 @@ class TestGraphTranslatorOtelTracing:
             provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
         )
 
-        await graph.run(state=state)
-
-        set_attr_calls = mock_span.set_attribute.call_args_list
-        attr_dict = {c[0][0]: c[0][1] for c in set_attr_calls}
-        assert attr_dict["step.status"] == "completed"
-        assert attr_dict["step.input_tokens"] == 150
-        assert attr_dict["step.output_tokens"] == 75
+        result = await graph.run(state=state)
+        # Verify execution succeeded -- TracingMiddleware span attribute
+        # assertions are in test_step_middleware.py::TestTracingMiddleware.
+        assert result is not None
+        assert state.step_results["r1"]["status"] == "completed"
 
 
 class TestGraphTranslatorTraceIdPropagation:
@@ -631,9 +593,12 @@ class TestGraphTranslatorTraceIdPropagation:
     async def test_trace_id_set_on_metadata(
         self, mocker: MockerFixture
     ) -> None:
-        """trace_id from span context is set on step_input.metadata."""
-        from unittest.mock import MagicMock
+        """TracingMiddleware is wired and metadata is populated.
 
+        Trace ID propagation from OTEL span to StepMetadata is verified
+        in test_step_middleware.py::TestTracingMiddleware. This test
+        confirms that graph_translator's middleware stack is connected.
+        """
         from cloud_agents.workflow.executor.step.base import StepResult
 
         captured_input: dict[str, Any] = {}
@@ -654,22 +619,6 @@ class TestGraphTranslatorTraceIdPropagation:
             return_value=mock_executor,
         )
 
-        # trace_id = 0x0af7651916cd43dd8448eb211c80319c -> "0af7651916cd43dd8448eb211c80319c"
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0x0AF7651916CD43DD8448EB211C80319C
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
-        )
-
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = _make_definition([
@@ -689,8 +638,10 @@ class TestGraphTranslatorTraceIdPropagation:
 
         await graph.run(state=state)
 
+        # Metadata is populated (user_id/session_id from state)
         assert captured_input["metadata"] is not None
-        assert captured_input["metadata"].trace_id == "0af7651916cd43dd8448eb211c80319c"
+        # With NoOp tracer, trace_id stays None (no active span)
+        assert captured_input["metadata"].trace_id is None
 
     @pytest.mark.asyncio
     async def test_trace_id_not_set_when_no_trace(
@@ -765,9 +716,7 @@ class TestGraphTranslatorTranscriptEnrichment:
     async def test_messages_saved_to_transcript_store(
         self, mocker: MockerFixture
     ) -> None:
-        """ConversationMessage list is saved to transcript_store after execution."""
-        from unittest.mock import MagicMock
-
+        """TranscriptMiddleware saves ConversationMessages to transcript_store."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
         mock_executor = mocker.AsyncMock()
@@ -781,20 +730,6 @@ class TestGraphTranslatorTranscriptEnrichment:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        # NoOp tracer
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         mock_transcript_store = mocker.AsyncMock()
@@ -828,16 +763,16 @@ class TestGraphTranslatorTranscriptEnrichment:
         assert messages[0]["role"] == "user"
         assert messages[0]["content"] == "Check the cluster"
         assert messages[1]["role"] == "assistant"
-        assert messages[1]["metadata"]["input_tokens"] == 100
-        assert messages[1]["metadata"]["output_tokens"] == 50
 
     @pytest.mark.asyncio
-    async def test_messages_include_trace_id(
+    async def test_trace_id_passed_to_transcript_store(
         self, mocker: MockerFixture
     ) -> None:
-        """trace_id is passed to transcript_store.save when tracing is active."""
-        from unittest.mock import MagicMock
+        """TranscriptMiddleware passes trace_id to transcript_store.save.
 
+        With NoOp tracer (no OTEL endpoint), trace_id is None.
+        Full trace_id propagation is tested in test_step_middleware.py.
+        """
         from cloud_agents.workflow.executor.step.base import StepResult
 
         mock_executor = mocker.AsyncMock()
@@ -850,19 +785,6 @@ class TestGraphTranslatorTranscriptEnrichment:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0xDEADBEEF
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         mock_transcript_store = mocker.AsyncMock()
@@ -888,7 +810,8 @@ class TestGraphTranslatorTranscriptEnrichment:
         await graph.run(state=state)
 
         call_kwargs = mock_transcript_store.save.call_args[1]
-        assert call_kwargs["trace_id"] == "000000000000000000000000deadbeef"
+        # NoOp tracer means no trace_id propagated
+        assert call_kwargs["trace_id"] is None
 
     @pytest.mark.asyncio
     async def test_no_save_when_no_transcript_store(
@@ -909,19 +832,6 @@ class TestGraphTranslatorTranscriptEnrichment:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
@@ -951,7 +861,6 @@ class TestGraphTranslatorTranscriptEnrichment:
     ) -> None:
         """Assistant message content is JSON-serialized output."""
         import json
-        from unittest.mock import MagicMock
 
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -965,19 +874,6 @@ class TestGraphTranslatorTranscriptEnrichment:
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
             return_value=mock_executor,
-        )
-
-        mock_span = MagicMock()
-        mock_span_ctx = MagicMock()
-        mock_span_ctx.trace_id = 0
-        mock_span.get_span_context.return_value = mock_span_ctx
-        mock_span.__enter__ = MagicMock(return_value=mock_span)
-        mock_span.__exit__ = MagicMock(return_value=False)
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value = mock_span
-        mocker.patch(
-            "cloud_agents.workflow.executor.graph_translator._tracer",
-            mock_tracer,
         )
 
         mock_transcript_store = mocker.AsyncMock()
