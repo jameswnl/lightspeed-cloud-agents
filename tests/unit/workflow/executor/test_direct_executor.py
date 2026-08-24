@@ -2060,3 +2060,273 @@ class TestMessageHistory:
         history = run_kwargs["message_history"]
         # Only the conversation messages, not the diagnosis
         assert len(history) == 2
+
+
+class TestRunStreamWithMessageHistory:
+    """Tests for Fix 1: run_stream() needs message_history for conversation context."""
+
+    @pytest.mark.asyncio
+    async def test_run_stream_with_conversation_context_uses_agent_path(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_stream() uses Agent path when conversation context is present."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(
+            return_value=_async_iter(["Hello", " there"])
+        )
+        mock_streamed.get_output = mocker.AsyncMock(return_value="Hello there")
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi there!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        events: list[StreamEvent] = []
+        async for event in executor.run_stream(
+            StepInput(
+                prompt="Follow up question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+                tools=[],
+            )
+        ):
+            events.append(event)
+
+        # Should have used Agent streaming, not super().run_stream fallback
+        token_events = [e for e in events if e.type == "token"]
+        complete_events = [e for e in events if e.type == "complete"]
+        assert len(token_events) == 2
+        assert len(complete_events) == 1
+        mock_agent_cls.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_stream_passes_message_history_to_agent(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_stream() passes message_history to agent.run_stream()."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["ok"]))
+        mock_streamed.get_output = mocker.AsyncMock(return_value="ok")
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        async for _ in executor.run_stream(
+            StepInput(
+                prompt="Follow up",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        ):
+            pass
+
+        # Verify message_history was passed to agent.run_stream()
+        run_stream_kwargs = mock_agent_instance.run_stream.call_args.kwargs
+        assert "message_history" in run_stream_kwargs
+        assert run_stream_kwargs["message_history"] is not None
+        assert len(run_stream_kwargs["message_history"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_run_stream_conversation_prompt_no_prior_step_outputs(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_stream() with conversation context does not flatten context into prompt."""
+        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 50
+        mock_usage.output_tokens = 20
+
+        mock_streamed = mocker.MagicMock()
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["ok"]))
+        mock_streamed.get_output = mocker.AsyncMock(return_value="ok")
+        mock_streamed.usage = mock_usage
+        mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
+        mock_streamed.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.MagicMock()
+        mock_agent_instance.run_stream = mocker.MagicMock(return_value=mock_streamed)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        async for _ in executor.run_stream(
+            StepInput(
+                prompt="Follow up question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        ):
+            pass
+
+        # The user prompt passed to agent.run_stream() should NOT contain
+        # "Prior step outputs" -- context is in message_history
+        run_stream_args = mock_agent_instance.run_stream.call_args
+        user_prompt = run_stream_args[0][0]
+        assert "Prior step outputs" not in user_prompt
+        assert user_prompt == "Follow up question"
+
+
+class TestBuildMessageHistoryToolRoles:
+    """Tests for Fix 2: _build_message_history skips tool_call/tool_result roles."""
+
+    def test_tool_call_role_skipped(self) -> None:
+        """tool_call messages are silently skipped in message_history."""
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Run kubectl get pods"},
+                        {"role": "tool_call", "content": "kubectl_get(namespace='default')"},
+                        {"role": "tool_result", "content": "pod-1 Running"},
+                        {"role": "assistant", "content": "The pods are running."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        # Only user and assistant messages should be included
+        assert len(history) == 2
+
+    def test_tool_result_role_skipped(self) -> None:
+        """tool_result messages are silently skipped in message_history."""
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "tool_result", "content": "some result"},
+                        {"role": "assistant", "content": "Got it."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        assert len(history) == 2
+
+    def test_tool_roles_no_crash(self) -> None:
+        """Messages with only tool roles produce empty history without crashing."""
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "tool_call", "content": "some_tool()"},
+                        {"role": "tool_result", "content": "result"},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        assert history == []
+
+    def test_unknown_role_skipped(self) -> None:
+        """Unknown roles are skipped without crashing."""
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "system", "content": "System message"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        # Only user and assistant
+        assert len(history) == 2

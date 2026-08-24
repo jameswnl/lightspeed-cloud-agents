@@ -200,6 +200,16 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 history.append(ModelRequest.user_text_prompt(content))
             elif role == "assistant":
                 history.append(ModelResponse(parts=[TextPart(content=content)]))
+            else:
+                # Skip tool_call, tool_result, and other non-standard roles.
+                # Tool calls are internal to the pydantic-ai Agent loop —
+                # replaying them as message_history would confuse the LLM
+                # since ModelMessage has no tool role equivalent.
+                logger.debug(
+                    "Skipping message with role '%s' in conversation history "
+                    "(tool roles are internal to the agent loop)",
+                    role,
+                )
     return history
 
 
@@ -258,10 +268,10 @@ class DirectExecutor(StepExecutor):
     async def run_stream(self, step_input: StepInput) -> AsyncIterator[StreamEvent]:
         """Stream step execution events with real token deltas.
 
-        When the step has tools or MCP servers, uses Agent.run_stream()
-        for true token-by-token streaming. Otherwise falls back to the
-        default implementation which calls run() and yields a single
-        complete event.
+        When the step has tools, MCP servers, or conversation context,
+        uses Agent.run_stream() for true token-by-token streaming.
+        Otherwise falls back to the default implementation which calls
+        run() and yields a single complete event.
 
         Parameters:
             step_input: Step execution input.
@@ -269,7 +279,8 @@ class DirectExecutor(StepExecutor):
         Yields:
             StreamEvent instances (token deltas followed by complete/error).
         """
-        if not (step_input.tools or step_input.mcp_servers):
+        has_conversation = _has_conversation_context(step_input.context)
+        if not (step_input.tools or step_input.mcp_servers or has_conversation):
             async for event in super().run_stream(step_input):
                 yield event
             return
@@ -294,7 +305,18 @@ class DirectExecutor(StepExecutor):
                 transport = StreamableHttpTransport(url=url, headers=headers)
                 mcp_toolsets.append(MCPToolset(transport))
 
-            user_prompt = _build_user_prompt(step_input)
+            # Build message_history from conversation context
+            message_history = _build_message_history(step_input.context)
+
+            # When using message_history, don't flatten context into the prompt —
+            # the prior turns are already structured messages in message_history.
+            if message_history:
+                user_prompt = step_input.prompt
+                if step_input.output_schema:
+                    schema_str = json.dumps(step_input.output_schema, indent=2)
+                    user_prompt += f"\n\nRespond with JSON matching this schema:\n{schema_str}"
+            else:
+                user_prompt = _build_user_prompt(step_input)
 
             async with contextlib.AsyncExitStack() as stack:
                 active_toolsets = []
@@ -302,15 +324,22 @@ class DirectExecutor(StepExecutor):
                     active_ts = await stack.enter_async_context(ts)
                     active_toolsets.append(active_ts)
 
+                capabilities = []
+                skills_cap = get_skills_capability()
+                if skills_cap:
+                    capabilities.append(skills_cap)
+
                 agent = Agent(
                     model_string,
                     instructions=step_input.system_prompt,
                     tools=tools,
                     toolsets=active_toolsets if active_toolsets else None,
+                    capabilities=capabilities if capabilities else None,
                 )
 
                 async with agent.run_stream(
                     user_prompt,
+                    message_history=message_history if message_history else None,
                     model_settings={"timeout": step_input.timeout_seconds},
                 ) as streamed:
                     async for delta in streamed.stream_text(delta=True):

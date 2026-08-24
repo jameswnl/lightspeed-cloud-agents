@@ -307,7 +307,14 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         Returns:
             Ordered list of ConversationMessage objects.
+
+        Raises:
+            KeyError: If the conversation does not exist.
         """
+        state = await self._run_store.get(workflow_id)
+        if state is None:
+            raise KeyError(f"Conversation '{workflow_id}' not found")
+
         turns = await self._transcript_store.load_recent_turns(workflow_id, limit=limit)
         messages: list[ConversationMessage] = []
         for turn in turns:
@@ -441,6 +448,36 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         return state.get("status", "") in _TERMINAL_STATUSES
 
+    @staticmethod
+    def _extract_assistant_text(output: Any) -> str:
+        """Extract clean text from step output for assistant message storage.
+
+        Prefers the 'response' key for plain-text output so the conversation
+        history contains readable text rather than JSON blobs like
+        '{"response": "Hello"}'. Falls back to JSON dump for structured
+        output without a 'response' key.
+
+        Parameters:
+            output: Step result output (dict, str, or other).
+
+        Returns:
+            Clean text content for the assistant message.
+        """
+        if output is None:
+            return ""
+        if isinstance(output, dict):
+            if "response" in output:
+                val = output["response"]
+                if val is None:
+                    return ""
+                if isinstance(val, str):
+                    return val
+                return json.dumps(val)
+            return json.dumps(output)
+        if isinstance(output, str):
+            return output
+        return json.dumps(output)
+
     async def _check_not_terminal(self, workflow_id: str) -> None:
         """Raise if conversation is in a terminal state."""
         state = await self._run_store.get(workflow_id)
@@ -548,9 +585,7 @@ class ChatWorkflowRunner(WorkflowRunner):
             ConversationMessage(role="user", content=prompt).to_dict(),
         ]
         if result.output is not None:
-            content = (
-                json.dumps(result.output) if isinstance(result.output, dict) else str(result.output)
-            )
+            content = self._extract_assistant_text(result.output)
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
         # Convert result.transcript dicts to TranscriptEvent objects.
