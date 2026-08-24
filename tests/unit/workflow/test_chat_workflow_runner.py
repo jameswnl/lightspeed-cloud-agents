@@ -1085,6 +1085,48 @@ class TestGetHistoryUnknownConversation:
             await runner.get_history("unknown-conv-id")
 
 
+    @pytest.mark.asyncio
+    async def test_get_history_missing_run_state_with_transcripts_returns_history(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+    ) -> None:
+        """get_history() returns messages when run-state is missing but transcripts exist."""
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+        )
+        mock_run_store.get.return_value = None
+        mock_transcript_store.load_recent_turns.return_value = [
+            {
+                "step_name": "turn-0",
+                "messages": [
+                    {"role": "user", "content": "Hello", "timestamp": "2026-08-24T00:00:00"},
+                    {"role": "assistant", "content": "Hi there", "timestamp": "2026-08-24T00:00:01"},
+                ],
+            }
+        ]
+
+        messages = await runner.get_history("orphan-conv")
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[1].content == "Hi there"
+
+    @pytest.mark.asyncio
+    async def test_get_history_known_conversation_no_turns_returns_empty(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+    ) -> None:
+        """Known conversation with no turns returns empty list, not 404."""
+        mock_transcript_store.load_recent_turns.return_value = []
+
+        messages = await runner.get_history("chat-123")
+        assert messages == []
+
+
 class TestCustomMiddleware:
     """Tests for custom middleware support in ChatWorkflowRunner (#160)."""
 
