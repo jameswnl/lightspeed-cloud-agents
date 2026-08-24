@@ -10,6 +10,7 @@ No temporalio imports.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -17,7 +18,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from cloud_agents.workflow.core.models import StepTranscript
+from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
     WorkflowRunner,
@@ -94,6 +95,7 @@ class ChatWorkflowRunner(WorkflowRunner):
         self._transcript_store = transcript_store
         self._config = config
         self._spawner = spawner
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self, input: dict[str, Any]) -> str:
         """Create a new conversation workflow.
@@ -121,10 +123,24 @@ class ChatWorkflowRunner(WorkflowRunner):
         logger.info("Created chat conversation workflow_id=%s", workflow_id)
         return workflow_id
 
+    def _get_lock(self, workflow_id: str) -> asyncio.Lock:
+        """Get or create the per-workflow asyncio lock.
+
+        Parameters:
+            workflow_id: Conversation workflow ID.
+
+        Returns:
+            asyncio.Lock for the given workflow.
+        """
+        if workflow_id not in self._locks:
+            self._locks[workflow_id] = asyncio.Lock()
+        return self._locks[workflow_id]
+
     async def send_message(self, workflow_id: str, prompt: str) -> StepResult:
         """Execute one conversation turn with prior turns as context.
 
-        Loads prior turns from the transcript store, builds context,
+        Acquires a per-workflow lock to serialize concurrent turns,
+        loads prior turns from the transcript store, builds context,
         executes the step via StepExecutor, saves the turn transcript,
         and updates the run state.
 
@@ -138,58 +154,18 @@ class ChatWorkflowRunner(WorkflowRunner):
         Raises:
             RuntimeError: If the conversation is in a terminal state.
         """
-        await self._check_not_terminal(workflow_id)
+        async with self._get_lock(workflow_id):
+            return await self._send_message_unlocked(workflow_id, prompt)
 
-        # 1. Load prior turns from transcript store
-        prior_turns = await self._transcript_store.load_recent_turns(
-            workflow_id, limit=self._config.max_context_turns
-        )
-
-        # 2. Build context from prior turns
-        context = self._build_context(prior_turns)
-
-        # 3. Determine turn name from highest existing turn
-        turn_number = self._next_turn_number(prior_turns)
-        turn_name = f"turn-{turn_number}"
-
-        # 4. Build StepInput
-        step_input = self._build_step_input(
-            prompt=prompt,
-            workflow_id=workflow_id,
-            turn_name=turn_name,
-            context=context,
-        )
-
-        # 5. Get step executor
-        step_def = {"spawn": self._config.spawn, "name": turn_name}
-        executor = get_step_executor(step_def, self._spawner)
-
-        # 6. Execute
-        result = await executor.run(step_input)
-
-        # 7. Save turn to transcript store and update run state
-        await self._save_turn(workflow_id, turn_name, prompt, result)
-
-        return result
-
-    async def send_message_stream(
-        self, workflow_id: str, prompt: str
-    ) -> AsyncIterator[StreamEvent]:
-        """Execute one conversation turn with streaming.
-
-        Same as send_message but uses the executor's streaming interface.
-        Yields StreamEvent instances as they arrive, then saves the turn
-        transcript after the complete/error event.
+    async def _send_message_unlocked(self, workflow_id: str, prompt: str) -> StepResult:
+        """Execute one conversation turn (internal, caller holds lock).
 
         Parameters:
             workflow_id: Target conversation/workflow ID.
             prompt: User message text.
 
-        Yields:
-            StreamEvent instances (token deltas, then complete or error).
-
-        Raises:
-            RuntimeError: If the conversation is in a terminal state.
+        Returns:
+            StepResult with the assistant's response and metrics.
         """
         await self._check_not_terminal(workflow_id)
 
@@ -205,29 +181,112 @@ class ChatWorkflowRunner(WorkflowRunner):
         turn_number = self._next_turn_number(prior_turns)
         turn_name = f"turn-{turn_number}"
 
-        # 4. Build StepInput
+        # 4. Load identity from run state store
+        state = await self._run_store.get(workflow_id)
+
+        # 5. Build StepInput
         step_input = self._build_step_input(
             prompt=prompt,
             workflow_id=workflow_id,
             turn_name=turn_name,
             context=context,
+            user_id=state.get("user_id") if state else None,
+            session_id=state.get("session_id") if state else None,
         )
 
-        # 5. Get step executor
+        # 6. Get step executor
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
 
-        # 6. Stream and capture the final result
+        # 7. Execute
+        result = await executor.run(step_input)
+
+        # 8. Save turn to transcript store and update run state
+        await self._save_turn(workflow_id, turn_name, prompt, result)
+
+        return result
+
+    async def send_message_stream(
+        self, workflow_id: str, prompt: str
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute one conversation turn with streaming.
+
+        Acquires a per-workflow lock, then uses the executor's streaming
+        interface. Yields StreamEvent instances as they arrive, then saves
+        the turn transcript after the complete/error event.
+
+        Parameters:
+            workflow_id: Target conversation/workflow ID.
+            prompt: User message text.
+
+        Yields:
+            StreamEvent instances (token deltas, then complete or error).
+
+        Raises:
+            RuntimeError: If the conversation is in a terminal state.
+        """
+        async with self._get_lock(workflow_id):
+            async for event in self._send_message_stream_unlocked(workflow_id, prompt):
+                yield event
+
+    async def _send_message_stream_unlocked(
+        self, workflow_id: str, prompt: str
+    ) -> AsyncIterator[StreamEvent]:
+        """Execute one streaming turn (internal, caller holds lock).
+
+        Parameters:
+            workflow_id: Target conversation/workflow ID.
+            prompt: User message text.
+
+        Yields:
+            StreamEvent instances (token deltas, then complete or error).
+        """
+        await self._check_not_terminal(workflow_id)
+
+        # 1. Load prior turns from transcript store
+        prior_turns = await self._transcript_store.load_recent_turns(
+            workflow_id, limit=self._config.max_context_turns
+        )
+
+        # 2. Build context from prior turns
+        context = self._build_context(prior_turns)
+
+        # 3. Determine turn name from highest existing turn
+        turn_number = self._next_turn_number(prior_turns)
+        turn_name = f"turn-{turn_number}"
+
+        # 4. Load identity from run state store
+        state = await self._run_store.get(workflow_id)
+
+        # 5. Build StepInput
+        step_input = self._build_step_input(
+            prompt=prompt,
+            workflow_id=workflow_id,
+            turn_name=turn_name,
+            context=context,
+            user_id=state.get("user_id") if state else None,
+            session_id=state.get("session_id") if state else None,
+        )
+
+        # 6. Get step executor
+        step_def = {"spawn": self._config.spawn, "name": turn_name}
+        executor = get_step_executor(step_def, self._spawner)
+
+        # 7. Stream and capture the final result
         final_result: Optional[StepResult] = None
 
-        async for event in executor.run_stream(step_input):
-            yield event
-            if event.type in ("complete", "error") and event.result:
-                final_result = event.result
-
-        # 7. Save turn to transcript store and update run state
-        if final_result:
-            await self._save_turn(workflow_id, turn_name, prompt, final_result)
+        try:
+            async for event in executor.run_stream(step_input):
+                yield event
+                if event.type in ("complete", "error") and event.result:
+                    final_result = event.result
+        except Exception as exc:
+            final_result = StepResult(status="failed", error=str(exc))
+            yield StreamEvent(type="error", data={"error": str(exc)}, result=final_result)
+        finally:
+            # 8. Save turn to transcript store and update run state
+            if final_result:
+                await self._save_turn(workflow_id, turn_name, prompt, final_result)
 
     async def get_history(self, workflow_id: str, limit: int = 20) -> list[ConversationMessage]:
         """Load conversation messages from the transcript store.
@@ -424,6 +483,8 @@ class ChatWorkflowRunner(WorkflowRunner):
         workflow_id: str,
         turn_name: str,
         context: dict[str, Any],
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> StepInput:
         """Build a StepInput for a conversation turn.
 
@@ -432,6 +493,8 @@ class ChatWorkflowRunner(WorkflowRunner):
             workflow_id: Conversation workflow ID.
             turn_name: Name for this turn (e.g. turn-0).
             context: Prior turn outputs.
+            user_id: User identity from run state store.
+            session_id: Session identity from run state store.
 
         Returns:
             StepInput configured for this conversation turn.
@@ -449,6 +512,8 @@ class ChatWorkflowRunner(WorkflowRunner):
             step_name=turn_name,
             output_key=turn_name,
             metadata=StepMetadata(
+                user_id=user_id,
+                session_id=session_id,
                 conversation_id=workflow_id,
             ),
         )
@@ -478,10 +543,22 @@ class ChatWorkflowRunner(WorkflowRunner):
             )
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
+        # Convert result.transcript dicts to TranscriptEvent objects.
+        # Map non-standard types (agent.run, agent.stream, llm.call) to "result".
+        _VALID_TYPES = frozenset({"tool_call", "tool_result", "thinking", "result", "error"})
+        events = [
+            TranscriptEvent(
+                ts=e.get("ts", ""),
+                type=e.get("type") if e.get("type") in _VALID_TYPES else "result",
+                data={k: v for k, v in e.items() if k not in ("ts", "type")},
+            )
+            for e in (result.transcript or [])
+        ]
+
         # Save to transcript store
         transcript = StepTranscript(
             step_name=turn_name,
-            events=[],
+            events=events,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             duration_ms=result.duration_ms,

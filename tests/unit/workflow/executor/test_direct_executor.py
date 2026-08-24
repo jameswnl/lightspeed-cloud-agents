@@ -1735,3 +1735,328 @@ class TestDirectExecutorWithSkills:
         assert len(call_kwargs["toolsets"]) == 1
         assert "capabilities" in call_kwargs
         assert call_kwargs["capabilities"] == [mock_cap]
+
+
+class TestMessageHistory:
+    """Tests for Fix 2: message_history from conversation context."""
+
+    @pytest.mark.asyncio
+    async def test_conversation_context_routes_to_agent(self, mocker: MockerFixture) -> None:
+        """Context with conversation messages routes to Agent path even without tools."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        # Context with conversation messages (output.messages structure)
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi there!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Follow up question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+                tools=[],
+            )
+        )
+
+        assert result.status == "completed"
+        # Agent should have been used (not model_request)
+        mock_agent_cls.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_message_history_passed_to_agent(self, mocker: MockerFixture) -> None:
+        """Agent.run() receives message_history from conversation context."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi there!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Follow up question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        )
+
+        # Verify message_history was passed to agent.run()
+        run_kwargs = mock_agent_instance.run.call_args.kwargs
+        assert "message_history" in run_kwargs
+        assert run_kwargs["message_history"] is not None
+        assert len(run_kwargs["message_history"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_message_history_correct_roles(self, mocker: MockerFixture) -> None:
+        """message_history has correct ModelRequest/ModelResponse types."""
+        from pydantic_ai.messages import ModelRequest, ModelResponse
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Next question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        )
+
+        run_kwargs = mock_agent_instance.run.call_args.kwargs
+        history = run_kwargs["message_history"]
+        assert isinstance(history[0], ModelRequest)
+        assert isinstance(history[1], ModelResponse)
+
+    @pytest.mark.asyncio
+    async def test_no_conversation_context_no_message_history(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Without conversation context, no message_history is passed."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+        mock_fn = _mock_model_response(
+            mocker,
+            text='{"ok": true}',
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        # Non-conversation context (regular step outputs)
+        context = {
+            "diagnosis": {
+                "status": "completed",
+                "output": {"severity": "high", "issue": "OOM"},
+            },
+        }
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="Fix the issue",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        )
+
+        assert result.status == "completed"
+        # Should have used model_request, not Agent
+        mock_fn.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_message_history_ordering(self, mocker: MockerFixture) -> None:
+        """message_history from multiple turns is in chronological order."""
+        from pydantic_ai.messages import ModelRequest, ModelResponse
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "First"},
+                        {"role": "assistant", "content": "Reply 1"},
+                    ]
+                },
+            },
+            "turn-1": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Second"},
+                        {"role": "assistant", "content": "Reply 2"},
+                    ]
+                },
+            },
+        }
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Third question",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        )
+
+        run_kwargs = mock_agent_instance.run.call_args.kwargs
+        history = run_kwargs["message_history"]
+        assert len(history) == 4
+
+        # Verify order: turn-0 messages before turn-1 messages
+        assert isinstance(history[0], ModelRequest)
+        assert isinstance(history[1], ModelResponse)
+        assert isinstance(history[2], ModelRequest)
+        assert isinstance(history[3], ModelResponse)
+
+    @pytest.mark.asyncio
+    async def test_conversation_context_excludes_non_conversation_from_history(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Non-conversation context entries are not added to message_history."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.ensure_credentials_env",
+        )
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.Agent",
+        )
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        # Mix of conversation and non-conversation context
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+            "diagnosis": {
+                "status": "completed",
+                "output": {"severity": "high"},
+            },
+        }
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="Follow up",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                context=context,
+            )
+        )
+
+        run_kwargs = mock_agent_instance.run.call_args.kwargs
+        history = run_kwargs["message_history"]
+        # Only the conversation messages, not the diagnosis
+        assert len(history) == 2

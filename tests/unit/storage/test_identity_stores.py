@@ -336,12 +336,14 @@ class TestTranscriptStoreLoadRecentTurns:
             {"role": "user", "content": "Fix it"},
             {"role": "assistant", "content": "Applied patch."},
         ]
+        # SQL returns DESC order (newest first): fix, then diagnose
         mock_pool.fetch.return_value = [
-            {"step_name": "diagnose", "messages": json.dumps(messages_1)},
             {"step_name": "fix", "messages": json.dumps(messages_2)},
+            {"step_name": "diagnose", "messages": json.dumps(messages_1)},
         ]
         result = await store.load_recent_turns("wf-1", limit=10)
         assert len(result) == 2
+        # After reversal to chronological order: diagnose first, then fix
         assert result[0]["step_name"] == "diagnose"
         assert result[0]["messages"] == messages_1
         assert result[1]["step_name"] == "fix"

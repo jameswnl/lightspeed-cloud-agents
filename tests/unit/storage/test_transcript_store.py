@@ -425,3 +425,96 @@ class TestTranscriptStoreFromEnv:
         store = TranscriptStore.from_env()
         assert store is not None
         assert store._retention_days == 30
+
+
+class TestLoadRecentTurnsOrdering:
+    """Tests for load_recent_turns() chronological ordering (Fix 1)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_chronological_order(self) -> None:
+        """load_recent_turns() returns turns in chronological order (oldest first).
+
+        SQL fetches newest-first via ORDER BY created_at DESC, but the
+        method must reverse to chronological order for correct context.
+        """
+        import json
+
+        from cloud_agents.storage.transcript_store import TranscriptStore
+
+        store = TranscriptStore(db_url="postgresql://localhost/testdb")
+        mock_pool = AsyncMock()
+        store._pool = mock_pool
+
+        # Simulate SQL returning newest first (DESC order)
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "step_name": "turn-2",
+                    "messages": json.dumps(
+                        [{"role": "user", "content": "Third"}]
+                    ),
+                },
+                {
+                    "step_name": "turn-1",
+                    "messages": json.dumps(
+                        [{"role": "user", "content": "Second"}]
+                    ),
+                },
+                {
+                    "step_name": "turn-0",
+                    "messages": json.dumps(
+                        [{"role": "user", "content": "First"}]
+                    ),
+                },
+            ]
+        )
+
+        result = await store.load_recent_turns("wf-1", limit=10)
+
+        # Must be chronological (oldest first)
+        assert result[0]["step_name"] == "turn-0"
+        assert result[1]["step_name"] == "turn-1"
+        assert result[2]["step_name"] == "turn-2"
+        assert result[0]["messages"][0]["content"] == "First"
+        assert result[2]["messages"][0]["content"] == "Third"
+
+    @pytest.mark.asyncio
+    async def test_single_turn_unchanged(self) -> None:
+        """Single-turn result is unaffected by reversal."""
+        import json
+
+        from cloud_agents.storage.transcript_store import TranscriptStore
+
+        store = TranscriptStore(db_url="postgresql://localhost/testdb")
+        mock_pool = AsyncMock()
+        store._pool = mock_pool
+
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "step_name": "turn-0",
+                    "messages": json.dumps(
+                        [{"role": "user", "content": "Only turn"}]
+                    ),
+                },
+            ]
+        )
+
+        result = await store.load_recent_turns("wf-1", limit=10)
+
+        assert len(result) == 1
+        assert result[0]["step_name"] == "turn-0"
+
+    @pytest.mark.asyncio
+    async def test_empty_result_unchanged(self) -> None:
+        """Empty result returns empty list."""
+        from cloud_agents.storage.transcript_store import TranscriptStore
+
+        store = TranscriptStore(db_url="postgresql://localhost/testdb")
+        mock_pool = AsyncMock()
+        store._pool = mock_pool
+        mock_pool.fetch = AsyncMock(return_value=[])
+
+        result = await store.load_recent_turns("wf-1", limit=10)
+
+        assert result == []
