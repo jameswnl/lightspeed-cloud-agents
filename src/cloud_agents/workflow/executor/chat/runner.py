@@ -313,6 +313,9 @@ class ChatWorkflowRunner(WorkflowRunner):
     async def get_history(self, workflow_id: str, limit: int = 20) -> list[ConversationMessage]:
         """Load conversation messages from the transcript store.
 
+        Checks run state first. If missing, falls back to checking
+        transcripts -- resilient to run state loss after restart.
+
         Parameters:
             workflow_id: Target conversation/workflow ID.
             limit: Maximum number of turns to load.
@@ -321,13 +324,14 @@ class ChatWorkflowRunner(WorkflowRunner):
             Ordered list of ConversationMessage objects.
 
         Raises:
-            KeyError: If the conversation does not exist.
+            KeyError: If the conversation does not exist in either store.
         """
         state = await self._run_store.get(workflow_id)
-        if state is None:
+        turns = await self._transcript_store.load_recent_turns(workflow_id, limit=limit)
+
+        if state is None and not turns:
             raise KeyError(f"Conversation '{workflow_id}' not found")
 
-        turns = await self._transcript_store.load_recent_turns(workflow_id, limit=limit)
         messages: list[ConversationMessage] = []
         for turn in turns:
             for msg_dict in turn.get("messages") or []:
