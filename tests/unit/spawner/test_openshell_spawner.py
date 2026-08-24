@@ -1395,9 +1395,17 @@ class TestResolveGrpcTarget:
 class TestCreateGrpcChannel:
     """Tests for _create_grpc_channel() TLS configuration."""
 
+    def _mock_grpc(self, mocker: MockerFixture) -> MagicMock:
+        """Set up grpc module mock for channel tests."""
+        mock_grpc = MagicMock()
+        mocker.patch.dict("sys.modules", {"grpc": mock_grpc})
+        return mock_grpc
+
     def test_insecure_channel_without_tls(self, mocker: MockerFixture) -> None:
         """Creates insecure channel when no TLS is configured."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
 
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(
@@ -1405,15 +1413,15 @@ class TestCreateGrpcChannel:
             endpoint="host:17670",
         )
 
-        mock_insecure = mocker.patch("grpc.insecure_channel")
-
         spawner._create_grpc_channel()
 
-        mock_insecure.assert_called_once_with("host:17670")
+        mock_grpc.insecure_channel.assert_called_once_with("host:17670")
 
     def test_secure_channel_with_tls_ca(self, mocker: MockerFixture, tmp_path) -> None:
         """Creates secure channel with CA cert."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
 
         ca_file = tmp_path / "ca.pem"
         ca_file.write_bytes(b"fake-ca-cert")
@@ -1425,16 +1433,17 @@ class TestCreateGrpcChannel:
             tls_ca=str(ca_file),
         )
 
-        mock_secure = mocker.patch("grpc.secure_channel")
-        mocker.patch("grpc.ssl_channel_credentials", return_value="creds")
+        mock_grpc.ssl_channel_credentials.return_value = "creds"
 
         spawner._create_grpc_channel()
 
-        mock_secure.assert_called_once_with("host:17670", "creds")
+        mock_grpc.secure_channel.assert_called_once_with("host:17670", "creds")
 
     def test_secure_channel_with_mtls(self, mocker: MockerFixture, tmp_path) -> None:
         """Creates secure channel with client cert and key for mTLS."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
 
         ca_file = tmp_path / "ca.pem"
         ca_file.write_bytes(b"fake-ca")
@@ -1452,12 +1461,11 @@ class TestCreateGrpcChannel:
             tls_key=str(key_file),
         )
 
-        mock_ssl = mocker.patch("grpc.ssl_channel_credentials", return_value="creds")
-        mocker.patch("grpc.secure_channel")
+        mock_grpc.ssl_channel_credentials.return_value = "creds"
 
         spawner._create_grpc_channel()
 
-        mock_ssl.assert_called_once_with(
+        mock_grpc.ssl_channel_credentials.assert_called_once_with(
             root_certificates=b"fake-ca",
             private_key=b"fake-key",
             certificate_chain=b"fake-cert",
@@ -1526,12 +1534,18 @@ class TestExposeServiceEndpoint:
 class TestEntrypointSpawnerFactory:
     """Tests for _create_spawner() auth configuration (#174)."""
 
+    def _patch_spawner_type(self, mocker: MockerFixture) -> None:
+        """Patch the module-level SPAWNER_TYPE constant."""
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep
+
+        mocker.patch.object(ep, "SPAWNER_TYPE", "openshell")
+
     def test_openshell_no_auth(self, mocker: MockerFixture) -> None:
         """Creates OpenShellSpawner without auth by default."""
+        self._patch_spawner_type(mocker)
         mocker.patch.dict(
             os.environ,
             {
-                "WORKFLOW_SPAWNER": "openshell",
                 "OPENSHELL_GATEWAY_URL": "gw:17670",
             },
             clear=False,
@@ -1550,6 +1564,7 @@ class TestEntrypointSpawnerFactory:
 
     def test_openshell_mtls_auth(self, mocker: MockerFixture, tmp_path) -> None:
         """Creates OpenShellSpawner with mTLS when TLS env vars set."""
+        self._patch_spawner_type(mocker)
         ca = tmp_path / "ca.pem"
         ca.write_text("ca")
         cert = tmp_path / "client.pem"
@@ -1560,7 +1575,6 @@ class TestEntrypointSpawnerFactory:
         mocker.patch.dict(
             os.environ,
             {
-                "WORKFLOW_SPAWNER": "openshell",
                 "OPENSHELL_GATEWAY_URL": "gw:17670",
                 "OPENSHELL_TLS_CA": str(ca),
                 "OPENSHELL_TLS_CERT": str(cert),
@@ -1582,10 +1596,10 @@ class TestEntrypointSpawnerFactory:
 
     def test_openshell_bearer_token(self, mocker: MockerFixture) -> None:
         """Creates OpenShellSpawner with bearer token auth."""
+        self._patch_spawner_type(mocker)
         mocker.patch.dict(
             os.environ,
             {
-                "WORKFLOW_SPAWNER": "openshell",
                 "OPENSHELL_GATEWAY_URL": "gw:17670",
                 "OPENSHELL_BEARER_TOKEN": "my-oidc-token",
             },
@@ -1603,10 +1617,10 @@ class TestEntrypointSpawnerFactory:
 
     def test_openshell_http_endpoint_override(self, mocker: MockerFixture) -> None:
         """OPENSHELL_HTTP_ENDPOINT is passed through to spawner."""
+        self._patch_spawner_type(mocker)
         mocker.patch.dict(
             os.environ,
             {
-                "WORKFLOW_SPAWNER": "openshell",
                 "OPENSHELL_GATEWAY_URL": "gw:17670",
                 "OPENSHELL_HTTP_ENDPOINT": "https://proxy.example.com",
             },
