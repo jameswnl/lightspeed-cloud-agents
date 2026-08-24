@@ -3,15 +3,14 @@
 Converts WorkflowDefinition steps into a pydantic-graph Graph that
 can be executed in-process. Each step type maps to a graph node:
 
-- type: agent → dispatches to StepExecutor based on spawn mode
-- type: human-approval → signals pause for approval
+- type: agent -> dispatches to StepExecutor based on spawn mode
+- type: human-approval -> signals pause for approval
 
 No temporalio imports. Used by the LocalWorkflowRunner.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -22,8 +21,12 @@ from pydantic_graph import GraphBuilder, StepContext
 from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.workflow.core.conditions import evaluate_condition
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
+from cloud_agents.workflow.executor.middleware import (
+    MiddlewareExecutor,
+    TracingMiddleware,
+    TranscriptMiddleware,
+)
 from cloud_agents.workflow.executor.step.base import StepInput, StepMetadata
-from cloud_agents.workflow.executor.step.conversation import ConversationMessage
 from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
@@ -114,7 +117,8 @@ def build_graph(
         step_defs[step["name"]] = step
         if step.get("parallel_group"):
             logger.warning(
-                "Step '%s' has parallel_group '%s' — not yet supported in local executor, will run sequentially",
+                "Step '%s' has parallel_group '%s' -- not yet supported in "
+                "local executor, will run sequentially",
                 step["name"],
                 step["parallel_group"],
             )
@@ -152,7 +156,7 @@ def build_graph(
 
         step_nodes.append(node)
 
-    # Wire edges: start → step1 → step2 → ... → end
+    # Wire edges: start -> step1 -> step2 -> ... -> end
     if step_nodes:
         edges = [builder.edge_from(builder.start_node).to(step_nodes[0])]
         for i in range(len(step_nodes) - 1):
@@ -192,7 +196,7 @@ def _build_agent_step(
 
     @builder.step(node_id=step_name)
     async def agent_step(ctx: StepContext[WorkflowGraphState, None, Any]) -> dict:
-        """Execute an agent step in a sandbox container."""
+        """Execute an agent step via StepExecutor with middleware."""
         state = ctx.state
         step_def = state.step_defs[step_name]
 
@@ -201,11 +205,18 @@ def _build_agent_step(
         # Skip if already completed (resume after approval)
         existing = state.step_results.get(output_key, {})
         if existing.get("status") in ("completed", "failed"):
-            logger.info("Step '%s' already %s — skipping on resume", step_name, existing["status"])
+            logger.info(
+                "Step '%s' already %s -- skipping on resume",
+                step_name,
+                existing["status"],
+            )
             return existing
 
         if state.paused_at_step:
-            state.step_results[output_key] = {"status": "skipped", "reason": "workflow_paused"}
+            state.step_results[output_key] = {
+                "status": "skipped",
+                "reason": "workflow_paused",
+            }
             return {"status": "skipped"}
 
         if condition := step_def.get("condition"):
@@ -213,7 +224,7 @@ def _build_agent_step(
             if not evaluate_condition(condition, wf_state):
                 output_key = step_def.get("output_key", step_name)
                 state.step_results[output_key] = {"status": "skipped"}
-                logger.info("Step '%s' skipped — condition not met", step_name)
+                logger.info("Step '%s' skipped -- condition not met", step_name)
                 return {"status": "skipped"}
 
         executor = get_step_executor(
@@ -245,65 +256,13 @@ def _build_agent_step(
             ),
         )
 
-        with _tracer.start_as_current_span(
-            "step.execute",
-            attributes={
-                "step.name": step_name,
-                "step.spawn": step_def.get("spawn", "ephemeral"),
-                "workflow.id": state.workflow_id,
-                "model": state.provider.get("model", "unknown"),
-            },
-        ) as span:
-            # Propagate trace_id to metadata for downstream correlation
-            span_context = span.get_span_context()
-            if span_context and span_context.trace_id:
-                step_input.metadata.trace_id = format(span_context.trace_id, "032x")
-
-            try:
-                exec_result = await executor.run(step_input)
-                span.set_attribute("step.status", exec_result.status)
-                span.set_attribute("step.input_tokens", exec_result.input_tokens)
-                span.set_attribute("step.output_tokens", exec_result.output_tokens)
-            except Exception as exc:
-                from cloud_agents.runtime.tracing import set_span_error
-
-                set_span_error(span, exc)
-                raise
-
-        # Persist conversation messages to transcript store
+        # Build middleware stack: tracing + optional transcript persistence
+        middlewares = [TracingMiddleware()]
         if state.transcript_store:
-            try:
-                messages = [
-                    ConversationMessage(
-                        role="user", content=step_input.prompt
-                    ).to_dict(),
-                    ConversationMessage(
-                        role="assistant",
-                        content=json.dumps(exec_result.output) if exec_result.output else "",
-                        metadata={
-                            "input_tokens": exec_result.input_tokens,
-                            "output_tokens": exec_result.output_tokens,
-                        },
-                    ).to_dict(),
-                ]
+            middlewares.append(TranscriptMiddleware(state.transcript_store))
 
-                from cloud_agents.workflow.core.models import StepTranscript
-
-                await state.transcript_store.save(
-                    workflow_id=state.workflow_id,
-                    step_name=output_key,
-                    transcript=StepTranscript(
-                        step_name=output_key,
-                        events=exec_result.transcript,
-                        input_tokens=exec_result.input_tokens,
-                        output_tokens=exec_result.output_tokens,
-                        duration_ms=exec_result.duration_ms,
-                    ),
-                    trace_id=step_input.metadata.trace_id if step_input.metadata else None,
-                    messages=messages,
-                )
-            except Exception:
-                logger.warning("Failed to save transcript for step '%s'", output_key, exc_info=True)
+        wrapped = MiddlewareExecutor(executor, middlewares, tracer=_tracer)
+        exec_result = await wrapped.run(step_input)
 
         state.step_results[output_key] = {
             "status": exec_result.status,
@@ -328,7 +287,9 @@ def _build_approval_step(
     """Create a human-approval step node that pauses execution."""
 
     @builder.step(node_id=step_name)
-    async def approval_step(ctx: StepContext[WorkflowGraphState, None, Any]) -> dict:
+    async def approval_step(
+        ctx: StepContext[WorkflowGraphState, None, Any],
+    ) -> dict:
         """Pause for human approval."""
         state = ctx.state
         step_def = state.step_defs[step_name]
@@ -351,7 +312,7 @@ def _build_approval_step(
             }
             return {"status": "completed", "output": result}
 
-        # Signal pause — the LocalWorkflowRunner checks paused_at_step
+        # Signal pause -- the LocalWorkflowRunner checks paused_at_step
         # after each graph.iter().next() and breaks the loop.
         state.paused_at_step = step_name
         state.step_results[output_key] = {
