@@ -11,6 +11,7 @@ No temporalio imports. Used by the LocalWorkflowRunner.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -18,12 +19,16 @@ from typing import Any, Optional
 
 from pydantic_graph import GraphBuilder, StepContext
 
+from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.workflow.core.conditions import evaluate_condition
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
 from cloud_agents.workflow.executor.step.base import StepInput, StepMetadata
+from cloud_agents.workflow.executor.step.conversation import ConversationMessage
 from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
+
+_tracer = get_tracer("cloud_agents.workflow.executor.graph_translator")
 
 
 @dataclass
@@ -240,7 +245,56 @@ def _build_agent_step(
             ),
         )
 
-        exec_result = await executor.run(step_input)
+        with _tracer.start_as_current_span(
+            "step.execute",
+            attributes={
+                "step.name": step_name,
+                "step.spawn": step_def.get("spawn", "ephemeral"),
+                "workflow.id": state.workflow_id,
+                "model": state.provider.get("model", "unknown"),
+            },
+        ) as span:
+            # Propagate trace_id to metadata for downstream correlation
+            span_context = span.get_span_context()
+            if span_context and span_context.trace_id:
+                step_input.metadata.trace_id = format(span_context.trace_id, "032x")
+
+            exec_result = await executor.run(step_input)
+
+            span.set_attribute("step.status", exec_result.status)
+            span.set_attribute("step.input_tokens", exec_result.input_tokens)
+            span.set_attribute("step.output_tokens", exec_result.output_tokens)
+
+        # Persist conversation messages to transcript store
+        if state.transcript_store:
+            messages = [
+                ConversationMessage(
+                    role="user", content=step_input.prompt
+                ).to_dict(),
+                ConversationMessage(
+                    role="assistant",
+                    content=json.dumps(exec_result.output) if exec_result.output else "",
+                    metadata={
+                        "input_tokens": exec_result.input_tokens,
+                        "output_tokens": exec_result.output_tokens,
+                    },
+                ).to_dict(),
+            ]
+
+            from cloud_agents.workflow.core.models import StepTranscript
+
+            await state.transcript_store.save(
+                workflow_id=state.workflow_id,
+                step_name=output_key,
+                transcript=StepTranscript(
+                    step_name=output_key,
+                    input_tokens=exec_result.input_tokens,
+                    output_tokens=exec_result.output_tokens,
+                    duration_ms=exec_result.duration_ms,
+                ),
+                trace_id=step_input.metadata.trace_id if step_input.metadata else None,
+                messages=messages,
+            )
 
         state.step_results[output_key] = {
             "status": exec_result.status,

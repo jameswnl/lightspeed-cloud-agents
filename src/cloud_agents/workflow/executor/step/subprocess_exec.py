@@ -20,6 +20,7 @@ import sys
 import time
 from typing import Any
 
+from cloud_agents.runtime.tracing import inject_traceparent
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,12 @@ async def _run_in_subprocess(
         RuntimeError: If child process crashes or returns invalid output.
     """
     env = os.environ.copy()
+
+    # Inject OTEL traceparent for distributed trace propagation
+    trace_headers: dict[str, str] = {}
+    inject_traceparent(trace_headers)
+    if "traceparent" in trace_headers:
+        env["TRACEPARENT"] = trace_headers["traceparent"]
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
