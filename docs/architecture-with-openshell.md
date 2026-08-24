@@ -73,49 +73,80 @@ graph TD
 
 **Podman (RHEL production)**:
 
-```
-RHEL Host
-├── Temporal Server         (container)
-├── PostgreSQL              (container)
-├── Workflow Runner          (container)
-├── OpenShell Gateway        (container, Podman driver)
-│   └── Podman socket mount (DooD)
-├── MCP Servers              (containers)
-└── Sandbox containers       (spawned by Gateway via Podman)
+```mermaid
+graph TD
+    subgraph host["RHEL Host"]
+        TS["Temporal Server<br/><i>container</i>"]
+        PG["PostgreSQL<br/><i>container</i>"]
+        WR["Workflow Runner<br/><i>container</i>"]
+        GW["OpenShell Gateway<br/><i>container, Podman driver</i>"]
+        GW -.- SOCK["Podman socket mount<br/><i>DooD</i>"]
+        MCP["MCP Servers<br/><i>containers</i>"]
+        SB["Sandbox containers<br/><i>spawned by Gateway</i>"]
+    end
+
+    WR --> TS
+    WR --> PG
+    WR --> GW
+    GW --> SB
+    SB --> MCP
+
+    style GW fill:#1c2128,stroke:#a371f7
+    style SB fill:#161b22,stroke:#238636
 ```
 
 **Kubernetes (production)**:
 
-```
-K8s Cluster
-├── Temporal Server          (Deployment)
-├── PostgreSQL               (StatefulSet)
-├── Workflow Runner           (Deployment)
-├── OpenShell Gateway         (Deployment, K8s driver)
-│   └── Sandbox CRD controller
-├── MCP Servers               (Deployments)
-└── Sandbox pods              (created as Sandbox CRs)
+```mermaid
+graph TD
+    subgraph cluster["K8s Cluster"]
+        TS["Temporal Server<br/><i>Deployment</i>"]
+        PG["PostgreSQL<br/><i>StatefulSet</i>"]
+        WR["Workflow Runner<br/><i>Deployment</i>"]
+        GW["OpenShell Gateway<br/><i>Deployment, K8s driver</i>"]
+        GW -.- CRD["Sandbox CRD controller"]
+        MCP["MCP Servers<br/><i>Deployments</i>"]
+        SB["Sandbox pods<br/><i>created as Sandbox CRs</i>"]
+    end
+
+    WR --> TS
+    WR --> PG
+    WR --> GW
+    GW --> SB
+    SB --> MCP
+
+    style GW fill:#1c2128,stroke:#a371f7
+    style SB fill:#161b22,stroke:#238636
 ```
 
 ### Request Lifecycle
 
-```
-Workflow Runner                    OpenShell Gateway               Sandbox Container
-     │                                   │                              │
-     │─── gRPC: CreateSandbox ──────────▶│                              │
-     │                                   │─── Podman/K8s: create ──────▶│
-     │                                   │─── inject supervisor ───────▶│ (PID 1)
-     │                                   │─── mint JWT token ──────────▶│
-     │                                   │                              │
-     │◀── SandboxRef (name, id) ─────────│                              │
-     │                                   │                              │
-     │─── gRPC: ExecSandbox ────────────▶│─── exec into container ─────▶│ uvicorn starts
-     │                                   │                              │
-     │─── gRPC: ExposeService ──────────▶│─── register virtual host ───▶│
-     │                                   │                              │
-     │─── HTTP: POST /v1/agent/run ─────▶│─── reverse proxy (Host hdr) ▶│ agent processes
-     │                                   │                              │
-     │─── gRPC: DeleteSandbox ──────────▶│─── destroy container ───────▶│ ✕
+```mermaid
+sequenceDiagram
+    participant WR as Workflow Runner
+    participant GW as OpenShell Gateway
+    participant SB as Sandbox Container
+
+    WR->>GW: gRPC: CreateSandbox
+    GW->>SB: Podman/K8s: create container
+    GW->>SB: Inject supervisor (PID 1)
+    GW->>SB: Mint & deliver JWT token
+    GW-->>WR: SandboxRef (name, id)
+
+    WR->>GW: gRPC: ExecSandbox (uvicorn)
+    GW->>SB: exec into container
+    Note over SB: uvicorn starts on :8080
+
+    WR->>GW: gRPC: ExposeService
+    GW-->>WR: Virtual host URL
+
+    WR->>GW: HTTP: POST /v1/agent/run
+    GW->>SB: Reverse proxy (Host header)
+    SB-->>GW: Agent response
+    GW-->>WR: Agent response
+
+    WR->>GW: gRPC: DeleteSandbox
+    GW->>SB: Destroy container
 ```
 
 The `OpenShellSpawner` communicates with the gateway via gRPC. The gateway manages the container lifecycle, injects a supervisor binary as PID 1, and mints per-sandbox JWTs for supervisor-to-gateway authentication.
