@@ -40,12 +40,15 @@ def load_builtin_tools() -> None:
     global _BUILTINS_LOADED  # noqa: PLW0603
     if _BUILTINS_LOADED:
         return
+    all_loaded = True
     for _mod in _BUILTIN_MODULES:
         try:
             __import__(_mod)
         except Exception:
             logger.warning("Failed to load built-in tool module '%s'", _mod, exc_info=True)
-    _BUILTINS_LOADED = True
+            all_loaded = False
+    if all_loaded:
+        _BUILTINS_LOADED = True
 
 
 __all__ = [
