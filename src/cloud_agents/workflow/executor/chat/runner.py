@@ -199,6 +199,10 @@ class ChatWorkflowRunner(WorkflowRunner):
         )
 
         # 6. Get step executor wrapped with middleware
+        # TracingMiddleware only — TranscriptMiddleware is not used here because
+        # chat turns have conversation-specific save logic (_save_turn handles
+        # ConversationMessage assembly, TranscriptEvent type mapping, and
+        # RunStateStore updates that TranscriptMiddleware doesn't cover).
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
         wrapped = MiddlewareExecutor(executor, [TracingMiddleware()])
