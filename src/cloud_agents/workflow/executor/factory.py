@@ -46,9 +46,15 @@ def create_runner(
         )
     elif engine == "temporal":
         return _create_temporal()
+    elif engine == "chat":
+        return _create_chat(
+            spawner=spawner,
+            run_state_store=run_state_store,
+            transcript_store=transcript_store,
+        )
     else:
         raise ValueError(
-            f"Unknown WORKFLOW_ENGINE='{engine}'. Valid values: 'local', 'temporal'"
+            f"Unknown WORKFLOW_ENGINE='{engine}'. " "Valid values: 'local', 'temporal', 'chat'"
         )
 
 
@@ -108,3 +114,66 @@ def _create_temporal() -> WorkflowRunner:
 
     # Return with None client — the entrypoint will set it after connecting
     return TemporalWorkflowRunner(client=None)  # type: ignore[arg-type]
+
+
+def _create_chat(
+    *,
+    spawner: Any = None,
+    run_state_store: Any = None,
+    transcript_store: Any = None,
+) -> WorkflowRunner:
+    """Create a ChatWorkflowRunner with configuration from env vars.
+
+    Parameters:
+        spawner: AgentSpawner instance for sandbox lifecycle.
+        run_state_store: PostgreSQL RunStateStore.
+        transcript_store: Optional TranscriptStore.
+
+    Returns:
+        ChatWorkflowRunner instance.
+
+    Raises:
+        ValueError: If required stores are not provided.
+    """
+    if run_state_store is None:
+        raise ValueError(
+            "WORKFLOW_ENGINE=chat requires a RunStateStore. "
+            "Set RUN_STATE_DB_URL to a PostgreSQL connection URL."
+        )
+    if transcript_store is None:
+        raise ValueError(
+            "WORKFLOW_ENGINE=chat requires a TranscriptStore. "
+            "Set TRANSCRIPT_DB_URL to a PostgreSQL connection URL."
+        )
+
+    from cloud_agents.workflow.executor.chat.runner import (
+        ChatWorkflowConfig,
+        ChatWorkflowRunner,
+    )
+
+    # Build config from env vars
+    provider_name = os.environ.get("CHAT_PROVIDER_NAME", "openai")
+    provider_model = os.environ.get("CHAT_PROVIDER_MODEL", "gpt-4o")
+    provider_secret = os.environ.get("CHAT_PROVIDER_SECRET", "openai-api-key")
+    system_prompt = os.environ.get("CHAT_SYSTEM_PROMPT")
+    max_context_turns = int(os.environ.get("CHAT_MAX_CONTEXT_TURNS", "20"))
+    spawn_mode = os.environ.get("CHAT_SPAWN_MODE", "none")
+
+    config = ChatWorkflowConfig(
+        provider={
+            "name": provider_name,
+            "model": provider_model,
+            "credentials_secret": provider_secret,
+        },
+        system_prompt=system_prompt,
+        max_context_turns=max_context_turns,
+        spawn=spawn_mode,
+    )
+
+    logger.info("Using ChatWorkflowRunner (WORKFLOW_ENGINE=chat)")
+    return ChatWorkflowRunner(
+        run_store=run_state_store,
+        transcript_store=transcript_store,
+        config=config,
+        spawner=spawner,
+    )
