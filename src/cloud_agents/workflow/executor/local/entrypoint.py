@@ -115,6 +115,11 @@ def build_local_app() -> FastAPI:
 
         app.add_middleware(RateLimitMiddleware)
 
+    # Register built-in tools before building the API router
+    from cloud_agents.tools import load_builtin_tools
+
+    load_builtin_tools()
+
     # Build the API router using the local executor
     from cloud_agents.workflow.executor.local.api import build_local_router
 

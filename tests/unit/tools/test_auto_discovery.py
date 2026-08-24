@@ -1,20 +1,10 @@
-"""Tests for auto-discovery of built-in tools on package import."""
+"""Tests for tool package exports and re-exports."""
 
 from __future__ import annotations
 
 
-class TestAutoDiscovery:
-    """Tests that importing cloud_agents.tools auto-registers built-in tools."""
-
-    def test_import_registers_all_builtins(self) -> None:
-        """Importing cloud_agents.tools registers all built-in tools."""
-        import cloud_agents.tools  # noqa: F401
-        from cloud_agents.workflow.executor.step.tools import list_tools
-
-        registered = list_tools()
-        assert "kubectl_get" in registered
-        assert "http_request" in registered
-        assert "read_file" in registered
+class TestToolPackageExports:
+    """Tests that cloud_agents.tools re-exports the public API."""
 
     def test_list_tools_reexported(self) -> None:
         """list_tools is accessible from cloud_agents.tools."""
@@ -56,3 +46,9 @@ class TestAutoDiscovery:
         )
 
         assert clear_tools is original_clear_tools
+
+    def test_load_builtin_tools_reexported(self) -> None:
+        """load_builtin_tools is accessible from cloud_agents.tools."""
+        from cloud_agents.tools import load_builtin_tools
+
+        assert callable(load_builtin_tools)

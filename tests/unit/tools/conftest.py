@@ -20,11 +20,15 @@ _TOOL_MODULES = [
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
-    """Clear tool registry and module cache before/after each test."""
+    """Clear tool registry, module cache, and lazy-load flag before/after each test."""
     clear_tools()
     for mod in _TOOL_MODULES:
         sys.modules.pop(mod, None)
     yield
     clear_tools()
+    # Reset the lazy-load flag so subsequent tests start clean
+    import cloud_agents.tools
+
+    cloud_agents.tools._BUILTINS_LOADED = False
     for mod in _TOOL_MODULES:
         sys.modules.pop(mod, None)
