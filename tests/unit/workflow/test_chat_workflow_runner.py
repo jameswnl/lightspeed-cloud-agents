@@ -1004,6 +1004,64 @@ class TestAssistantTextExtraction:
         assert len(messages) == 1  # only user message
 
 
+    @pytest.mark.asyncio
+    async def test_output_response_none_stored_as_empty(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Output {'response': None} stores '' not 'None'."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": None},
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        assistant_msg = messages[1]
+        assert assistant_msg["content"] == ""
+        assert "None" not in assistant_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_output_response_list_stored_as_json(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Output {'response': [1, 2, 3]} stores JSON, not Python repr."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": [1, 2, 3]},
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "List items")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        assistant_msg = messages[1]
+        assert assistant_msg["content"] == "[1, 2, 3]"
+
+
 class TestGetHistoryUnknownConversation:
     """Tests for Fix 4: GET /chat/{id}/history returns 404 for unknown ID."""
 
