@@ -19,7 +19,14 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 
 from cloud_agents.workflow.executor.step.base import (
     StepExecutor,
@@ -200,16 +207,30 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 history.append(ModelRequest.user_text_prompt(content))
             elif role == "assistant":
                 history.append(ModelResponse(parts=[TextPart(content=content)]))
-            else:
-                # Skip tool_call, tool_result, and other non-standard roles.
-                # Tool calls are internal to the pydantic-ai Agent loop —
-                # replaying them as message_history would confuse the LLM
-                # since ModelMessage has no tool role equivalent.
-                logger.debug(
-                    "Skipping message with role '%s' in conversation history "
-                    "(tool roles are internal to the agent loop)",
-                    role,
+            elif role == "tool_call":
+                metadata = msg.get("metadata", {})
+                tool_name = metadata.get("tool_name", "")
+                args = metadata.get("args", {})
+                tool_call_part = ToolCallPart(
+                    tool_name=tool_name,
+                    args=args,
+                    tool_call_id=f"call_{tool_name}",
                 )
+                # Consecutive tool_calls are parts of the same ModelResponse
+                if history and isinstance(history[-1], ModelResponse) and any(
+                    isinstance(p, ToolCallPart) for p in history[-1].parts
+                ):
+                    history[-1].parts.append(tool_call_part)
+                else:
+                    history.append(ModelResponse(parts=[tool_call_part]))
+            elif role == "tool_result":
+                metadata = msg.get("metadata", {})
+                tool_name = metadata.get("tool_name", "")
+                history.append(ModelRequest(parts=[ToolReturnPart(
+                    tool_name=tool_name,
+                    content=content,
+                    tool_call_id=f"call_{tool_name}",
+                )]))
     return history
 
 
