@@ -48,36 +48,6 @@ _DEFAULT_SERVER_COMMAND = [
 _EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
-class _BearerAuthInterceptor:
-    """gRPC interceptor that attaches a bearer token to every call."""
-
-    def __init__(self, token: str) -> None:
-        self._token = token
-        self._metadata = (("authorization", f"Bearer {token}"),)
-
-    def _intercept(self, continuation, client_call_details, request_or_iterator):
-        """Attach bearer token metadata to the call."""
-        metadata = list(client_call_details.metadata or [])
-        metadata.extend(self._metadata)
-        new_details = client_call_details.__class__(
-            client_call_details.method,
-            client_call_details.timeout,
-            metadata,
-            client_call_details.credentials,
-            client_call_details.wait_for_ready,
-            client_call_details.compression,
-        )
-        return continuation(new_details, request_or_iterator)
-
-    def intercept_unary_unary(self, continuation, client_call_details, request):
-        """Intercept unary-unary calls."""
-        return self._intercept(continuation, client_call_details, request)
-
-    def intercept_unary_stream(self, continuation, client_call_details, request):
-        """Intercept unary-stream calls."""
-        return self._intercept(continuation, client_call_details, request)
-
-
 class OpenShellSpawner(AgentSpawner):
     """Spawns sandboxes via OpenShell exec-based communication.
 
@@ -162,30 +132,40 @@ class OpenShellSpawner(AgentSpawner):
     def _create_grpc_channel(self) -> Any:
         """Create a gRPC channel with TLS and bearer token auth.
 
-        Returns an insecure or secure channel depending on TLS config.
-        When a bearer token is set, wraps the channel with a metadata
-        interceptor that attaches 'authorization: Bearer <token>'.
+        Returns an insecure channel when no TLS is configured, or a
+        secure channel with optional mTLS client certs and/or bearer
+        token via composite_channel_credentials.
+
+        Raises ValueError if bearer_token is set without TLS — sending
+        OIDC tokens over plaintext is a credential leak.
         """
         import grpc
 
         target = self._resolve_grpc_target()
-        if not self._tls_ca:
-            channel = grpc.insecure_channel(target)
-        else:
-            root_certs = self._read_file(self._tls_ca)
-            private_key = self._read_file(self._tls_key) if self._tls_key else None
-            cert_chain = self._read_file(self._tls_cert) if self._tls_cert else None
-            credentials = grpc.ssl_channel_credentials(
-                root_certificates=root_certs,
-                private_key=private_key,
-                certificate_chain=cert_chain,
+
+        if self._bearer_token and not self._tls_ca:
+            raise ValueError(
+                "OPENSHELL_BEARER_TOKEN requires TLS (OPENSHELL_TLS_CA). "
+                "Refusing to send credentials over plaintext."
             )
-            channel = grpc.secure_channel(target, credentials)
+
+        if not self._tls_ca:
+            return grpc.insecure_channel(target)
+
+        root_certs = self._read_file(self._tls_ca)
+        private_key = self._read_file(self._tls_key) if self._tls_key else None
+        cert_chain = self._read_file(self._tls_cert) if self._tls_cert else None
+        channel_creds = grpc.ssl_channel_credentials(
+            root_certificates=root_certs,
+            private_key=private_key,
+            certificate_chain=cert_chain,
+        )
 
         if self._bearer_token:
-            channel = grpc.intercept_channel(channel, _BearerAuthInterceptor(self._bearer_token))
+            call_creds = grpc.access_token_call_credentials(self._bearer_token)
+            channel_creds = grpc.composite_channel_credentials(channel_creds, call_creds)
 
-        return channel
+        return grpc.secure_channel(target, channel_creds)
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox ID (UUID) for an agent, or None if not tracked.
@@ -240,13 +220,15 @@ class OpenShellSpawner(AgentSpawner):
 
         def _sync_expose() -> tuple[str, str]:
             channel = self._create_grpc_channel()
-            stub = openshell_pb2_grpc.OpenShellStub(channel)
-            req = openshell_pb2.ExposeServiceRequest(
-                sandbox=sandbox_name,
-                target_port=port,
-            )
-            resp = stub.ExposeService(req)
-            channel.close()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                req = openshell_pb2.ExposeServiceRequest(
+                    sandbox=sandbox_name,
+                    target_port=port,
+                )
+                resp = stub.ExposeService(req)
+            finally:
+                channel.close()
 
             from urllib.parse import urlparse
 
@@ -293,13 +275,21 @@ class OpenShellSpawner(AgentSpawner):
         Returns:
             True if the sandbox became ready, False if timed out.
         """
+        import ssl
         import time
 
         headers = {"Host": virtual_host} if virtual_host else {}
+        verify: bool | ssl.SSLContext = True
+        if self._tls_ca:
+            ssl_ctx = ssl.create_default_context(cafile=self._tls_ca)
+            if self._tls_cert and self._tls_key:
+                ssl_ctx.load_cert_chain(self._tls_cert, self._tls_key)
+            verify = ssl_ctx
+
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
+                async with httpx.AsyncClient(timeout=5.0, verify=verify) as client:
                     resp = await client.get(
                         f"{endpoint}{health_path}",
                         headers=headers,
@@ -662,24 +652,26 @@ class OpenShellSpawner(AgentSpawner):
 
         def _sync_provider() -> str:
             channel = self._create_grpc_channel()
-            stub = openshell_pb2_grpc.OpenShellStub(channel)
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
 
-            create_req = openshell_pb2.CreateProviderRequest(
-                provider=openshell_pb2.Provider(
-                    type="cloud-agents",
-                    credentials=credentials,
-                ),
-            )
-            create_resp = stub.CreateProvider(create_req)
-            provider_id = create_resp.provider.id
+                create_req = openshell_pb2.CreateProviderRequest(
+                    provider=openshell_pb2.Provider(
+                        type="cloud-agents",
+                        credentials=credentials,
+                    ),
+                )
+                create_resp = stub.CreateProvider(create_req)
+                provider_id = create_resp.provider.id
 
-            attach_req = openshell_pb2.AttachSandboxProviderRequest(
-                sandbox=sandbox_name,
-                provider=provider_id,
-            )
-            stub.AttachSandboxProvider(attach_req)
-            channel.close()
-            return provider_id
+                attach_req = openshell_pb2.AttachSandboxProviderRequest(
+                    sandbox=sandbox_name,
+                    provider=provider_id,
+                )
+                stub.AttachSandboxProvider(attach_req)
+                return provider_id
+            finally:
+                channel.close()
 
         return await asyncio.to_thread(_sync_provider)
 
@@ -693,13 +685,15 @@ class OpenShellSpawner(AgentSpawner):
 
         def _sync_detach() -> None:
             channel = self._create_grpc_channel()
-            stub = openshell_pb2_grpc.OpenShellStub(channel)
-            req = openshell_pb2.DetachSandboxProviderRequest(
-                sandbox=sandbox_name,
-                provider=provider_id,
-            )
-            stub.DetachSandboxProvider(req)
-            channel.close()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                req = openshell_pb2.DetachSandboxProviderRequest(
+                    sandbox=sandbox_name,
+                    provider=provider_id,
+                )
+                stub.DetachSandboxProvider(req)
+            finally:
+                channel.close()
 
         await asyncio.to_thread(_sync_detach)
 

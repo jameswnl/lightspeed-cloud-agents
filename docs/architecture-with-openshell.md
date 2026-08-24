@@ -337,8 +337,13 @@ Set the following environment variables on the workflow runner container:
 | `OPENSHELL_GATEWAY_URL` | `localhost:17670` | Gateway gRPC endpoint (no `http://` prefix) |
 | `OPENSHELL_DRIVER` | `podman` | Compute driver: `podman` or `kubernetes` |
 | `OPENSHELL_WORKSPACE` | `default` | OpenShell workspace name |
+| `OPENSHELL_HTTP_ENDPOINT` | *(from gateway)* | Override HTTP proxy endpoint when gateway URL is not routable |
+| `OPENSHELL_TLS_CA` | | CA certificate path for TLS |
+| `OPENSHELL_TLS_CERT` | | Client certificate path for mTLS |
+| `OPENSHELL_TLS_KEY` | | Client key path for mTLS |
+| `OPENSHELL_BEARER_TOKEN` | | OIDC bearer token (requires TLS) |
 
-Example:
+Example (local dev, no auth):
 
 ```bash
 export WORKFLOW_SPAWNER=openshell
@@ -346,6 +351,27 @@ export OPENSHELL_GATEWAY_URL=localhost:17670
 export OPENSHELL_DRIVER=podman
 export OPENSHELL_WORKSPACE=default
 ```
+
+Example (external gateway with mTLS):
+
+```bash
+export WORKFLOW_SPAWNER=openshell
+export OPENSHELL_GATEWAY_URL=gateway.example.com:17670
+export OPENSHELL_TLS_CA=/certs/ca.crt
+export OPENSHELL_TLS_CERT=/certs/client.crt
+export OPENSHELL_TLS_KEY=/certs/client.key
+```
+
+Example (external gateway with OIDC):
+
+```bash
+export WORKFLOW_SPAWNER=openshell
+export OPENSHELL_GATEWAY_URL=gateway.example.com:17670
+export OPENSHELL_TLS_CA=/certs/ca.crt
+export OPENSHELL_BEARER_TOKEN="$(get-oidc-token)"
+```
+
+> **Security**: `OPENSHELL_BEARER_TOKEN` requires `OPENSHELL_TLS_CA` to be set. The spawner refuses to send credentials over plaintext.
 
 ### Workflow Definitions
 

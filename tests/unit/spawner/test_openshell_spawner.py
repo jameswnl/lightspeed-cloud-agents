@@ -1471,11 +1471,38 @@ class TestCreateGrpcChannel:
             certificate_chain=b"fake-cert",
         )
 
-    def test_bearer_token_wraps_channel(self, mocker: MockerFixture) -> None:
-        """Bearer token wraps channel with intercept_channel."""
+    def test_bearer_token_uses_composite_credentials(self, mocker: MockerFixture, tmp_path) -> None:
+        """Bearer token + TLS uses composite_channel_credentials."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_grpc = self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca")
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+            bearer_token="my-token",
+        )
+
+        mock_grpc.ssl_channel_credentials.return_value = "ssl-creds"
+        mock_grpc.access_token_call_credentials.return_value = "call-creds"
+        mock_grpc.composite_channel_credentials.return_value = "composite-creds"
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.access_token_call_credentials.assert_called_once_with("my-token")
+        mock_grpc.composite_channel_credentials.assert_called_once_with("ssl-creds", "call-creds")
+        mock_grpc.secure_channel.assert_called_once_with("host:17670", "composite-creds")
+
+    def test_bearer_token_without_tls_raises(self, mocker: MockerFixture) -> None:
+        """Bearer token without TLS raises ValueError — fail closed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        self._mock_grpc(mocker)
 
         mock_client = mocker.Mock()
         spawner = OpenShellSpawner(
@@ -1484,28 +1511,8 @@ class TestCreateGrpcChannel:
             bearer_token="my-token",
         )
 
-        spawner._create_grpc_channel()
-
-        mock_grpc.insecure_channel.assert_called_once_with("host:17670")
-        mock_grpc.intercept_channel.assert_called_once()
-        interceptor = mock_grpc.intercept_channel.call_args[0][1]
-        assert interceptor._token == "my-token"
-
-    def test_no_bearer_token_no_interceptor(self, mocker: MockerFixture) -> None:
-        """Without bearer token, no interceptor is added."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_grpc = self._mock_grpc(mocker)
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(
-            openshell_client=mock_client,
-            endpoint="host:17670",
-        )
-
-        spawner._create_grpc_channel()
-
-        mock_grpc.intercept_channel.assert_not_called()
+        with pytest.raises(ValueError, match="requires TLS"):
+            spawner._create_grpc_channel()
 
 
 class TestExposeServiceEndpoint:
