@@ -91,11 +91,12 @@ def _create_spawner():
 
         gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670")
         driver = os.environ.get("OPENSHELL_DRIVER", "podman")
+        workspace = os.environ.get("OPENSHELL_WORKSPACE", "default")
         # Strip http:// scheme — SandboxClient uses gRPC, not HTTP
         endpoint = gateway_url.replace("http://", "").replace("https://", "")
         client = SandboxClient(endpoint=endpoint)
-        logger.info("Using OpenShellSpawner (gateway=%s, driver=%s)", gateway_url, driver)
-        return OpenShellSpawner(openshell_client=client, driver=driver)
+        logger.info("Using OpenShellSpawner (gateway=%s, driver=%s, workspace=%s)", gateway_url, driver, workspace)
+        return OpenShellSpawner(openshell_client=client, driver=driver, workspace=workspace)
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
 
