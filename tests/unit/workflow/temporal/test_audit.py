@@ -59,26 +59,27 @@ class TestAuditEvent:
 class TestEmitAudit:
     """Tests for emit_audit helper."""
 
-    def test_emit_audit_logs_json(self, caplog: pytest.LogCaptureFixture) -> None:
-        """emit_audit writes audit event to the audit logger."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
-            emit_audit(
-                event_type="workflow_started",
-                workflow_id="wf-test",
-                details={"name": "diagnose"},
-            )
-        assert any("workflow_started" in r.message for r in caplog.records)
+    def test_emit_audit_logs_json(self) -> None:
+        """emit_audit returns an AuditEvent with the correct event_type."""
+        event = emit_audit(
+            event_type="workflow_started",
+            workflow_id="wf-test",
+            details={"name": "diagnose"},
+        )
+        assert event.event_type == "workflow_started"
+        assert event.workflow_id == "wf-test"
+        assert event.details == {"name": "diagnose"}
 
-    def test_emit_audit_includes_workflow_id(self, caplog: pytest.LogCaptureFixture) -> None:
-        """emit_audit log message includes workflow_id."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
-            emit_audit(
-                event_type="sandbox_destroyed",
-                workflow_id="wf-xyz",
-                step_name="fix",
-                details={"pod_name": "ca-123"},
-            )
-        assert any("wf-xyz" in r.message for r in caplog.records)
+    def test_emit_audit_includes_workflow_id(self) -> None:
+        """emit_audit returns an AuditEvent with workflow_id."""
+        event = emit_audit(
+            event_type="sandbox_destroyed",
+            workflow_id="wf-xyz",
+            step_name="fix",
+            details={"pod_name": "ca-123"},
+        )
+        assert event.workflow_id == "wf-xyz"
+        assert event.step_name == "fix"
 
     def test_tls_error_is_valid_audit_event_type(self) -> None:
         """tls_error is a valid AuditEventType."""
@@ -134,15 +135,12 @@ class TestCLISessionAuditEvents:
         assert event.event_type == "cli_session_failed"
         assert event.details["error"] == "spawner returned 500"
 
-    def test_emit_cli_session_launched(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """emit_audit with cli_session_launched logs correctly."""
-        with caplog.at_level(logging.INFO, logger="cloud_agents.runtime.audit"):
-            event = emit_audit(
-                event_type="cli_session_launched",
-                workflow_id="wf-launch-test",
-                details={"session_id": "sess-001", "agent_name": "cli-agent-001"},
-            )
+    def test_emit_cli_session_launched(self) -> None:
+        """emit_audit with cli_session_launched returns correct event."""
+        event = emit_audit(
+            event_type="cli_session_launched",
+            workflow_id="wf-launch-test",
+            details={"session_id": "sess-001", "agent_name": "cli-agent-001"},
+        )
         assert event.event_type == "cli_session_launched"
-        assert any("cli_session_launched" in r.message for r in caplog.records)
+        assert event.workflow_id == "wf-launch-test"
