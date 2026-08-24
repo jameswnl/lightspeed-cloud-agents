@@ -1,10 +1,103 @@
-# OpenShell Gateway Setup for Cloud Agents
+# OpenShell Integration for Cloud Agents
 
-This guide covers setting up and using the OpenShell gateway with Cloud Agents. OpenShell provides hardened sandbox isolation (Landlock, seccomp, network namespaces) on top of the standard container runtime, replacing direct spawner access with a gateway-mediated architecture.
+This guide covers the architecture, setup, and operation of the OpenShell gateway with Cloud Agents. OpenShell provides hardened sandbox isolation (Landlock, seccomp, network namespaces) on top of the standard container runtime, replacing direct spawner access with a gateway-mediated architecture.
 
-For architecture diagrams, see [architecture-with-openshell.md](architecture-with-openshell.md).
+## Architecture
 
-## How It Works
+### Direct Spawner vs OpenShell
+
+```mermaid
+graph TD
+    subgraph cluster["K8s Cluster / Podman Host"]
+        subgraph platform["Platform Framework"]
+            WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
+            WR --- TW["Temporal Worker"]
+            WR --- OSS["OpenShellSpawner<br/><i>gRPC client</i>"]
+            WR --- DS["Definition Store"]
+            WR --- TS_STORE["Transcript Store<br/><i>PostgreSQL</i>"]
+        end
+
+        subgraph openshell["OpenShell Gateway"]
+            GW["Gateway Service<br/><i>gRPC + REST</i>"]
+            GW --- DRIVER["Compute Driver<br/><i>K8s CRD / Podman / Docker</i>"]
+            GW --- POLICY["Policy Engine<br/><i>OPA-based L4/L7</i>"]
+            GW --- JWT["JWT Issuer<br/><i>per-sandbox tokens</i>"]
+            GW --- CREDS["Credential Providers"]
+        end
+
+        subgraph sandbox["OpenShell Sandbox <i>(per step)</i>"]
+            SUP["Supervisor Binary<br/><i>Landlock + seccomp + netns</i>"]
+            SUP --- RT["POST /v1/agent/run"]
+            SUP --- EV["GET /v1/agent/events"]
+            SUP --- AG["Agent runtime + tools"]
+            SUP --- MCP_C["MCP client connections"]
+        end
+
+        TS["Temporal Server"]
+        PG["PostgreSQL<br/><i>Temporal state + transcripts</i>"]
+        MCP_S["MCP Servers<br/><i>kubectl / RHDH / filesystem</i>"]
+        LLM["LLM Provider<br/><i>OpenAI / Vertex / Anthropic</i>"]
+    end
+
+    WR -- "gRPC: CreateSandbox /<br/>ExecSandbox / DeleteSandbox" --> GW
+    GW -- "spawn + inject supervisor" --> sandbox
+    GW -- "JWT token" --> SUP
+    WR -- "ExposeService → HTTP" --> RT
+    WR -- "ExposeService → HTTP" --> EV
+    WR -- "gRPC" --> TS
+    WR -- "SQL" --> PG
+    TS -- "state" --> PG
+    sandbox -- "MCP tools<br/>(policy filtered)" --> MCP_S
+    sandbox -- "HTTPS<br/>(egress policy)" --> LLM
+
+    style OSS fill:#2d333b,stroke:#a371f7
+    style openshell fill:#1c2128,stroke:#a371f7
+    style SUP fill:#2d333b,stroke:#f85149
+    style sandbox fill:#161b22,stroke:#238636
+```
+
+### What OpenShell Adds
+
+| Aspect | Direct Spawner | OpenShell |
+|--------|---------------|-----------|
+| **Container creation** | K8s API / Podman API directly | Gateway abstracts runtime |
+| **Sandbox isolation** | Container securityContext | Landlock + seccomp + network namespace |
+| **Network policy** | Manual NetworkPolicy YAML | OPA-based L4/L7 with hot-reload |
+| **SSRF protection** | None | Built-in internal IP blocking |
+| **Credentials** | K8s Secrets / env vars | Gateway-managed providers |
+| **Auth per sandbox** | Optional bearer token | Mandatory JWT per sandbox |
+| **Multi-runtime** | Separate spawner per runtime | One spawner, gateway handles runtime |
+| **Agent contract** | POST /v1/agent/run | POST /v1/agent/run (unchanged) |
+
+### Deployment Topologies
+
+**Podman (RHEL production)**:
+
+```
+RHEL Host
+├── Temporal Server         (container)
+├── PostgreSQL              (container)
+├── Workflow Runner          (container)
+├── OpenShell Gateway        (container, Podman driver)
+│   └── Podman socket mount (DooD)
+├── MCP Servers              (containers)
+└── Sandbox containers       (spawned by Gateway via Podman)
+```
+
+**Kubernetes (production)**:
+
+```
+K8s Cluster
+├── Temporal Server          (Deployment)
+├── PostgreSQL               (StatefulSet)
+├── Workflow Runner           (Deployment)
+├── OpenShell Gateway         (Deployment, K8s driver)
+│   └── Sandbox CRD controller
+├── MCP Servers               (Deployments)
+└── Sandbox pods              (created as Sandbox CRs)
+```
+
+### Request Lifecycle
 
 ```
 Workflow Runner                    OpenShell Gateway               Sandbox Container
@@ -25,7 +118,7 @@ Workflow Runner                    OpenShell Gateway               Sandbox Conta
      │─── gRPC: DeleteSandbox ──────────▶│─── destroy container ───────▶│ ✕
 ```
 
-The `OpenShellSpawner` in Cloud Agents communicates with the gateway via gRPC. The gateway manages the container lifecycle, injects a supervisor binary as PID 1, and mints per-sandbox JWTs for supervisor-to-gateway authentication.
+The `OpenShellSpawner` communicates with the gateway via gRPC. The gateway manages the container lifecycle, injects a supervisor binary as PID 1, and mints per-sandbox JWTs for supervisor-to-gateway authentication.
 
 The sandbox container's CMD (from the image) is passed to the supervisor as `OPENSHELL_SANDBOX_COMMAND`. Since the spawner starts the HTTP server via `exec_stream`, the image CMD should be a keep-alive process (`sleep infinity`), not the application server.
 
