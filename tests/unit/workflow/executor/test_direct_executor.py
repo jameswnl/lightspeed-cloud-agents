@@ -2247,10 +2247,16 @@ class TestRunStreamWithMessageHistory:
 
 
 class TestBuildMessageHistoryToolRoles:
-    """Tests for Fix 2: _build_message_history skips tool_call/tool_result roles."""
+    """Tests for _build_message_history tool role handling.
 
-    def test_tool_call_role_skipped(self) -> None:
-        """tool_call messages are silently skipped in message_history."""
+    Updated in #158: tool_call/tool_result are now replayed as proper
+    pydantic-ai ToolCallPart/ToolReturnPart (previously skipped).
+    """
+
+    def test_tool_call_role_replayed(self) -> None:
+        """tool_call messages are replayed as ToolCallPart in ModelResponse."""
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+
         from cloud_agents.workflow.executor.step.direct import _build_message_history
 
         context = {
@@ -2259,7 +2265,7 @@ class TestBuildMessageHistoryToolRoles:
                 "output": {
                     "messages": [
                         {"role": "user", "content": "Run kubectl get pods"},
-                        {"role": "tool_call", "content": "kubectl_get(namespace='default')"},
+                        {"role": "tool_call", "content": ""},
                         {"role": "tool_result", "content": "pod-1 Running"},
                         {"role": "assistant", "content": "The pods are running."},
                     ]
@@ -2268,11 +2274,15 @@ class TestBuildMessageHistoryToolRoles:
         }
 
         history = _build_message_history(context)
-        # Only user and assistant messages should be included
-        assert len(history) == 2
+        # user, tool_call(ModelResponse), tool_result(ModelRequest), assistant
+        assert len(history) == 4
+        assert isinstance(history[1], ModelResponse)
+        assert isinstance(history[1].parts[0], ToolCallPart)
 
-    def test_tool_result_role_skipped(self) -> None:
-        """tool_result messages are silently skipped in message_history."""
+    def test_tool_result_role_replayed(self) -> None:
+        """tool_result messages are replayed as ToolReturnPart in ModelRequest."""
+        from pydantic_ai.messages import ModelRequest, ToolReturnPart
+
         from cloud_agents.workflow.executor.step.direct import _build_message_history
 
         context = {
@@ -2281,6 +2291,7 @@ class TestBuildMessageHistoryToolRoles:
                 "output": {
                     "messages": [
                         {"role": "user", "content": "Hello"},
+                        {"role": "tool_call", "content": ""},
                         {"role": "tool_result", "content": "some result"},
                         {"role": "assistant", "content": "Got it."},
                     ]
@@ -2289,10 +2300,16 @@ class TestBuildMessageHistoryToolRoles:
         }
 
         history = _build_message_history(context)
-        assert len(history) == 2
+        assert len(history) == 4
+        assert isinstance(history[2], ModelRequest)
+        tool_return_parts = [
+            p for p in history[2].parts if isinstance(p, ToolReturnPart)
+        ]
+        assert len(tool_return_parts) == 1
+        assert tool_return_parts[0].content == "some result"
 
-    def test_tool_roles_no_crash(self) -> None:
-        """Messages with only tool roles produce empty history without crashing."""
+    def test_tool_roles_only_no_crash(self) -> None:
+        """Messages with only tool roles produce valid history without crashing."""
         from cloud_agents.workflow.executor.step.direct import _build_message_history
 
         context = {
@@ -2308,7 +2325,8 @@ class TestBuildMessageHistoryToolRoles:
         }
 
         history = _build_message_history(context)
-        assert history == []
+        # Should produce a ModelResponse (tool_call) and ModelRequest (tool_result)
+        assert len(history) == 2
 
     def test_unknown_role_skipped(self) -> None:
         """Unknown roles are skipped without crashing."""
@@ -2328,5 +2346,347 @@ class TestBuildMessageHistoryToolRoles:
         }
 
         history = _build_message_history(context)
-        # Only user and assistant
+        # Only user and assistant (system is unknown, skipped)
         assert len(history) == 2
+
+
+class TestBuildMessageHistoryToolReplay:
+    """Tests for _build_message_history() replaying tool_call/tool_result (#158)."""
+
+    def test_tool_call_creates_tool_call_part_in_model_response(self) -> None:
+        """tool_call role creates ToolCallPart inside a ModelResponse."""
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Get pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"namespace": "default"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Pods are running."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+
+        # Should have: ModelRequest(user), ModelResponse(tool_call),
+        # ModelRequest(tool_return), ModelResponse(assistant)
+        assert len(history) == 4
+
+        # Second entry should be a ModelResponse with ToolCallPart
+        assert isinstance(history[1], ModelResponse)
+        assert len(history[1].parts) == 1
+        assert isinstance(history[1].parts[0], ToolCallPart)
+        assert history[1].parts[0].tool_name == "kubectl_get"
+
+    def test_tool_result_creates_tool_return_part_in_model_request(self) -> None:
+        """tool_result role creates ToolReturnPart inside a ModelRequest."""
+        from pydantic_ai.messages import ModelRequest, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Get pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"namespace": "default"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Pods are running."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+
+        # Third entry should be a ModelRequest with ToolReturnPart
+        assert isinstance(history[2], ModelRequest)
+        tool_return_parts = [
+            p for p in history[2].parts if isinstance(p, ToolReturnPart)
+        ]
+        assert len(tool_return_parts) == 1
+        assert tool_return_parts[0].tool_name == "kubectl_get"
+        assert tool_return_parts[0].content == "pod-1 Running"
+
+    def test_full_conversation_with_tools_ordering(self) -> None:
+        """Full conversation: user -> tool_call -> tool_result -> assistant."""
+        from pydantic_ai.messages import (
+            ModelRequest,
+            ModelResponse,
+            ToolCallPart,
+            ToolReturnPart,
+        )
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "List pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"resource": "pods"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Here are the pods."},
+                    ]
+                },
+            },
+            "turn-1": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Delete pod-1"},
+                        {"role": "assistant", "content": "Deleted pod-1."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+
+        # turn-0: user, tool_call(in ModelResponse), tool_result(in ModelRequest), assistant
+        # turn-1: user, assistant
+        assert len(history) == 6
+
+        assert isinstance(history[0], ModelRequest)  # user
+        assert isinstance(history[1], ModelResponse)  # tool_call
+        assert isinstance(history[1].parts[0], ToolCallPart)
+        assert isinstance(history[2], ModelRequest)  # tool_result
+        tool_return_parts = [
+            p for p in history[2].parts if isinstance(p, ToolReturnPart)
+        ]
+        assert len(tool_return_parts) == 1
+        assert isinstance(history[3], ModelResponse)  # assistant
+        assert isinstance(history[4], ModelRequest)  # user (turn-1)
+        assert isinstance(history[5], ModelResponse)  # assistant (turn-1)
+
+    def test_consecutive_tool_calls_appended_to_same_response(self) -> None:
+        """Multiple consecutive tool_calls are appended to the same ModelResponse."""
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Check cluster"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"resource": "pods"},
+                            },
+                        },
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"resource": "services"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "svc-1 ClusterIP",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Cluster is healthy."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+
+        # user, tool_calls(in one ModelResponse), 2x tool_result(in ModelRequests), assistant
+        # The two consecutive tool_calls should be in a single ModelResponse
+        tool_call_responses = [
+            h
+            for h in history
+            if isinstance(h, ModelResponse)
+            and any(isinstance(p, ToolCallPart) for p in h.parts)
+        ]
+        assert len(tool_call_responses) == 1
+        assert len(tool_call_responses[0].parts) == 2
+
+    def test_tool_call_args_passed_directly(self) -> None:
+        """tool_call args are passed directly to ToolCallPart (dict or str)."""
+        from pydantic_ai.messages import ToolCallPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Get pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "kubectl_get",
+                                "args": {"namespace": "default"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "ok",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Done."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        tcp = history[1].parts[0]
+        assert isinstance(tcp, ToolCallPart)
+        assert tcp.args == {"namespace": "default"}
+
+    def test_tool_call_id_uses_synthetic_id(self) -> None:
+        """Tool call IDs use synthetic 'call_{tool_name}' format."""
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Read file"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {
+                                "tool_name": "read_file",
+                                "args": {"path": "/tmp/test"},
+                            },
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "file contents",
+                            "metadata": {"tool_name": "read_file"},
+                        },
+                        {"role": "assistant", "content": "Here's the file."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        tcp = history[1].parts[0]
+        assert isinstance(tcp, ToolCallPart)
+        assert tcp.tool_call_id.startswith("call_read_file")
+
+        trp_parts = [
+            p for p in history[2].parts if isinstance(p, ToolReturnPart)
+        ]
+        assert trp_parts[0].tool_call_id.startswith("call_read_file")
+
+    def test_user_assistant_only_backward_compatible(self) -> None:
+        """Conversations without tool roles still work (backward compat)."""
+        from pydantic_ai.messages import ModelRequest, ModelResponse
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi!"},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        assert len(history) == 2
+        assert isinstance(history[0], ModelRequest)
+        assert isinstance(history[1], ModelResponse)
+
+    def test_missing_metadata_handled_gracefully(self) -> None:
+        """tool_call with missing metadata does not crash."""
+        from pydantic_ai.messages import ToolCallPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Test"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "result",
+                        },
+                        {"role": "assistant", "content": "Done."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        # Should not crash, should produce entries with defaults
+        assert len(history) == 4
+        tcp = history[1].parts[0]
+        assert isinstance(tcp, ToolCallPart)
+        assert tcp.tool_name == ""

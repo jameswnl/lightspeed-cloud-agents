@@ -381,6 +381,190 @@ class TestFactoryIntegration:
             create_runner(run_state_store=mocker.MagicMock())
 
 
+class TestToolAwareHistory:
+    """Integration tests for tool-aware conversation history (#158).
+
+    Verifies that tool_call/tool_result events in the transcript are
+    persisted as ConversationMessage entries and replayed as proper
+    pydantic-ai ToolCallPart/ToolReturnPart in message_history.
+    """
+
+    @pytest.mark.asyncio
+    async def test_tool_messages_persist_and_replay(
+        self,
+        runner: ChatWorkflowRunner,
+        transcript_store: InMemoryTranscriptStore,
+        mocker: MockerFixture,
+    ) -> None:
+        """Tool call messages survive save/load and replay as pydantic-ai parts."""
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        captured_inputs: list[Any] = []
+        call_count = 0
+
+        def make_mock_executor() -> Any:
+            nonlocal call_count
+            mock_exec = mocker.AsyncMock()
+
+            async def run_side_effect(step_input: Any) -> StepResult:
+                nonlocal call_count
+                captured_inputs.append(step_input)
+                if call_count == 0:
+                    # First turn: agent uses a tool
+                    call_count += 1
+                    return StepResult(
+                        status="completed",
+                        output={"response": "The pods are running."},
+                        transcript=[
+                            {
+                                "type": "tool_call",
+                                "tool_name": "kubectl_get",
+                                "args": {"resource": "pods"},
+                            },
+                            {
+                                "type": "tool_result",
+                                "tool_name": "kubectl_get",
+                                "output": "pod-1 Running\npod-2 Running",
+                            },
+                        ],
+                        input_tokens=80,
+                        output_tokens=30,
+                        duration_ms=200,
+                    )
+                else:
+                    # Second turn: no tools
+                    call_count += 1
+                    return StepResult(
+                        status="completed",
+                        output={"response": "Pod-1 uses 128Mi memory."},
+                        input_tokens=120,
+                        output_tokens=20,
+                        duration_ms=150,
+                    )
+
+            mock_exec.run.side_effect = run_side_effect
+            return mock_exec
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            side_effect=lambda step_def, spawner: make_mock_executor(),
+        )
+
+        # Start conversation
+        wf_id = await runner.start({"workflow_id": "tool-conv", "user_id": "alice"})
+
+        # Turn 1: agent uses kubectl_get tool
+        r1 = await runner.send_message(wf_id, "List the pods")
+        assert r1.status == "completed"
+        assert r1.output == {"response": "The pods are running."}
+
+        # Verify tool messages were saved to transcript store
+        turns = await transcript_store.load_recent_turns(wf_id)
+        assert len(turns) == 1
+        messages = turns[0]["messages"]
+        roles = [m["role"] for m in messages]
+        assert roles == ["user", "tool_call", "tool_result", "assistant"]
+
+        # Turn 2: context should include tool messages from turn 1
+        r2 = await runner.send_message(wf_id, "What resources does pod-1 use?")
+        assert r2.status == "completed"
+
+        # Verify the context passed to turn 2 includes tool messages
+        turn2_input = captured_inputs[1]
+        turn0_context = turn2_input.context["turn-0"]
+        turn0_messages = turn0_context["output"]["messages"]
+        turn0_roles = [m["role"] for m in turn0_messages]
+        assert "tool_call" in turn0_roles
+        assert "tool_result" in turn0_roles
+
+    @pytest.mark.asyncio
+    async def test_get_history_includes_tool_messages(
+        self,
+        runner: ChatWorkflowRunner,
+        mocker: MockerFixture,
+    ) -> None:
+        """get_history() returns tool_call and tool_result messages."""
+        def make_mock_executor() -> Any:
+            mock_exec = mocker.AsyncMock()
+
+            async def run_side_effect(step_input: Any) -> StepResult:
+                return StepResult(
+                    status="completed",
+                    output={"response": "Done."},
+                    transcript=[
+                        {
+                            "type": "tool_call",
+                            "tool_name": "read_file",
+                            "args": {"path": "/tmp/test"},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_name": "read_file",
+                            "output": "file contents here",
+                        },
+                    ],
+                )
+
+            mock_exec.run.side_effect = run_side_effect
+            return mock_exec
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            side_effect=lambda step_def, spawner: make_mock_executor(),
+        )
+
+        wf_id = await runner.start({"workflow_id": "tool-hist"})
+        await runner.send_message(wf_id, "Read the file")
+
+        history = await runner.get_history(wf_id)
+        roles = [m.role for m in history]
+        assert roles == ["user", "tool_call", "tool_result", "assistant"]
+
+        # Check tool_call metadata
+        tool_call_msg = next(m for m in history if m.role == "tool_call")
+        assert tool_call_msg.metadata["tool_name"] == "read_file"
+        assert tool_call_msg.metadata["args"] == {"path": "/tmp/test"}
+
+        # Check tool_result content
+        tool_result_msg = next(m for m in history if m.role == "tool_result")
+        assert tool_result_msg.content == "file contents here"
+        assert tool_result_msg.metadata["tool_name"] == "read_file"
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_no_tools_in_transcript(
+        self,
+        runner: ChatWorkflowRunner,
+        mocker: MockerFixture,
+    ) -> None:
+        """Conversations without tool events still work as before."""
+        def make_mock_executor() -> Any:
+            mock_exec = mocker.AsyncMock()
+
+            async def run_side_effect(step_input: Any) -> StepResult:
+                return StepResult(
+                    status="completed",
+                    output={"response": "Hello!"},
+                    transcript=[
+                        {"type": "agent.run", "model": "gpt-4o"},
+                    ],
+                )
+
+            mock_exec.run.side_effect = run_side_effect
+            return mock_exec
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            side_effect=lambda step_def, spawner: make_mock_executor(),
+        )
+
+        wf_id = await runner.start({"workflow_id": "compat-conv"})
+        await runner.send_message(wf_id, "Hi")
+
+        history = await runner.get_history(wf_id)
+        roles = [m.role for m in history]
+        assert roles == ["user", "assistant"]
+
+
 class TestStreamingConversation:
     """Integration tests for streaming multi-turn conversations."""
 

@@ -600,6 +600,32 @@ class ChatWorkflowRunner(WorkflowRunner):
         messages: list[dict[str, Any]] = [
             ConversationMessage(role="user", content=prompt).to_dict(),
         ]
+
+        # Extract tool_call/tool_result events from transcript into
+        # ConversationMessage entries so they survive across turns.
+        for event in (result.transcript or []):
+            event_type = event.get("type", "")
+            if event_type == "tool_call":
+                messages.append(ConversationMessage(
+                    role="tool_call",
+                    content="",
+                    metadata={
+                        "tool_name": event.get("tool_name", ""),
+                        "args": event.get("args", {}),
+                        "tool_call_id": event.get("tool_call_id", ""),
+                    },
+                ).to_dict())
+            elif event_type == "tool_result":
+                output = event.get("output", "")
+                messages.append(ConversationMessage(
+                    role="tool_result",
+                    content=json.dumps(output) if isinstance(output, (dict, list)) else str(output),
+                    metadata={
+                        "tool_name": event.get("tool_name", ""),
+                        "tool_call_id": event.get("tool_call_id", ""),
+                    },
+                ).to_dict())
+
         if result.output is not None:
             content = self._extract_assistant_text(result.output)
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())

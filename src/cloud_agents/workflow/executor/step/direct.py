@@ -19,7 +19,14 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 
 from cloud_agents.workflow.executor.step.base import (
     StepExecutor,
@@ -177,6 +184,8 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
         List of ModelMessage objects for pydantic-ai message_history.
     """
     history: list[ModelMessage] = []
+    tool_call_counter = 0
+
     def _turn_sort_key(k: str) -> int:
         if k.startswith("turn-"):
             try:
@@ -200,16 +209,41 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 history.append(ModelRequest.user_text_prompt(content))
             elif role == "assistant":
                 history.append(ModelResponse(parts=[TextPart(content=content)]))
-            else:
-                # Skip tool_call, tool_result, and other non-standard roles.
-                # Tool calls are internal to the pydantic-ai Agent loop —
-                # replaying them as message_history would confuse the LLM
-                # since ModelMessage has no tool role equivalent.
-                logger.debug(
-                    "Skipping message with role '%s' in conversation history "
-                    "(tool roles are internal to the agent loop)",
-                    role,
+            elif role == "tool_call":
+                metadata = msg.get("metadata", {})
+                tool_name = metadata.get("tool_name", "")
+                args = metadata.get("args", {})
+                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
+                tool_call_counter += 1
+                tool_call_part = ToolCallPart(
+                    tool_name=tool_name,
+                    args=args,
+                    tool_call_id=tool_call_id,
                 )
+                # Consecutive tool_calls are parts of the same ModelResponse
+                if history and isinstance(history[-1], ModelResponse) and any(
+                    isinstance(p, ToolCallPart) for p in history[-1].parts
+                ):
+                    history[-1].parts.append(tool_call_part)
+                else:
+                    history.append(ModelResponse(parts=[tool_call_part]))
+            elif role == "tool_result":
+                metadata = msg.get("metadata", {})
+                tool_name = metadata.get("tool_name", "")
+                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
+                tool_call_counter += 1
+                return_part = ToolReturnPart(
+                    tool_name=tool_name,
+                    content=content if isinstance(content, str) else json.dumps(content),
+                    tool_call_id=tool_call_id,
+                )
+                # Consecutive tool_results grouped in same ModelRequest
+                if history and isinstance(history[-1], ModelRequest) and any(
+                    isinstance(p, ToolReturnPart) for p in history[-1].parts
+                ):
+                    history[-1].parts.append(return_part)
+                else:
+                    history.append(ModelRequest(parts=[return_part]))
     return history
 
 

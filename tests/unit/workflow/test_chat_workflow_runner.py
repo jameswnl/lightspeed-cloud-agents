@@ -1410,3 +1410,234 @@ class TestCustomMiddleware:
 
         assert before_called == ["stream test"]
         assert len(events) == 2
+
+
+class TestSaveTurnToolMessages:
+    """Tests for _save_turn() persisting tool_call/tool_result from transcript (#158)."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_event_produces_conversation_message(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """tool_call events in transcript produce ConversationMessage with role='tool_call'."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "I ran the tool."},
+            transcript=[
+                {
+                    "type": "tool_call",
+                    "tool_name": "kubectl_get",
+                    "args": {"namespace": "default"},
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Get pods")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        tool_msgs = [m for m in messages if m["role"] == "tool_call"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["metadata"]["tool_name"] == "kubectl_get"
+        assert tool_msgs[0]["metadata"]["args"] == {"namespace": "default"}
+
+    @pytest.mark.asyncio
+    async def test_tool_result_event_produces_conversation_message(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """tool_result events produce ConversationMessage with role='tool_result'."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Pods are running."},
+            transcript=[
+                {
+                    "type": "tool_result",
+                    "tool_name": "kubectl_get",
+                    "output": "pod-1 Running\npod-2 Running",
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Get pods")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        tool_msgs = [m for m in messages if m["role"] == "tool_result"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["content"] == "pod-1 Running\npod-2 Running"
+        assert tool_msgs[0]["metadata"]["tool_name"] == "kubectl_get"
+
+    @pytest.mark.asyncio
+    async def test_tool_metadata_contains_tool_name_and_args(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """tool_call metadata contains tool_name and args."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Done."},
+            transcript=[
+                {
+                    "type": "tool_call",
+                    "tool_name": "read_file",
+                    "args": {"path": "/etc/hosts"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_name": "read_file",
+                    "output": "127.0.0.1 localhost",
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Read the file")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        tool_call_msg = next(m for m in messages if m["role"] == "tool_call")
+        assert tool_call_msg["metadata"]["tool_name"] == "read_file"
+        assert tool_call_msg["metadata"]["args"] == {"path": "/etc/hosts"}
+
+        tool_result_msg = next(m for m in messages if m["role"] == "tool_result")
+        assert tool_result_msg["metadata"]["tool_name"] == "read_file"
+
+    @pytest.mark.asyncio
+    async def test_non_tool_events_not_added_as_messages(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Non-tool transcript events (agent.run, thinking) are not added as messages."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Hello!"},
+            transcript=[
+                {
+                    "type": "agent.run",
+                    "model": "gpt-4o",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                },
+                {
+                    "type": "thinking",
+                    "content": "Let me think...",
+                },
+            ],
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=200,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        # Only user + assistant, no tool messages
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_message_ordering_user_assistant_tools(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Messages are ordered: user, tool_call, tool_result, assistant."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Here are the pods."},
+            transcript=[
+                {
+                    "type": "tool_call",
+                    "tool_name": "kubectl_get",
+                    "args": {"resource": "pods"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_name": "kubectl_get",
+                    "output": "pod-1 Running",
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "List pods")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        roles = [m["role"] for m in messages]
+        assert roles == ["user", "tool_call", "tool_result", "assistant"]
+
+    @pytest.mark.asyncio
+    async def test_no_transcript_no_tool_messages(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """No transcript at all still saves user + assistant only."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Hello!"},
+            transcript=None,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
