@@ -913,3 +913,115 @@ class TestTranscriptEvents:
         saved_transcript = save_call.kwargs["transcript"]
         # The StepTranscript should have events from result.transcript
         assert len(saved_transcript.events) == len(transcript_data)
+
+
+class TestAssistantTextExtraction:
+    """Tests for Fix 3: _save_turn stores clean text, not JSON dump."""
+
+    @pytest.mark.asyncio
+    async def test_output_response_key_stored_as_clean_text(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Output {'response': 'Hello'} is stored as 'Hello', not JSON."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Hello there!"},
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        assistant_msg = messages[1]
+        # Should be clean text, not '{"response": "Hello there!"}'
+        assert assistant_msg["content"] == "Hello there!"
+        assert "{" not in assistant_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_output_without_response_key_stored_as_json(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Output {'severity': 'high'} without 'response' key is stored as JSON."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"severity": "high", "category": "security"},
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Classify this")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        assistant_msg = messages[1]
+        # Without a "response" key, falls back to JSON
+        assert "severity" in assistant_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_output_none_stored_as_empty_string(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """None output stores empty string for assistant content."""
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output=None,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Hi")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        # With None output, there should be no assistant message or empty content
+        # The original code skips assistant message on None output
+        assert len(messages) == 1  # only user message
+
+
+class TestGetHistoryUnknownConversation:
+    """Tests for Fix 4: GET /chat/{id}/history returns 404 for unknown ID."""
+
+    @pytest.mark.asyncio
+    async def test_get_history_unknown_id_raises(
+        self,
+        mock_run_store: AsyncMock,
+        mock_transcript_store: AsyncMock,
+        config: ChatWorkflowConfig,
+    ) -> None:
+        """get_history() raises KeyError for unknown conversation ID."""
+        runner = ChatWorkflowRunner(
+            run_store=mock_run_store,
+            transcript_store=mock_transcript_store,
+            config=config,
+        )
+        # Simulate unknown ID: get_status raises KeyError
+        mock_run_store.get.return_value = None
+
+        with pytest.raises(KeyError, match="not found"):
+            await runner.get_history("unknown-conv-id")

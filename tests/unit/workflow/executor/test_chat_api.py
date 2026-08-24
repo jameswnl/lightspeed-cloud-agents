@@ -201,3 +201,18 @@ class TestGetHistory:
         client.get("/v1/chat/conv-1/history?limit=5")
 
         mock_runner.get_history.assert_called_once_with("conv-1", limit=5)
+
+    def test_get_history_unknown_id_returns_404(self) -> None:
+        """GET /chat/{id}/history returns 404 for unknown conversation ID."""
+        mock_runner = AsyncMock()
+        mock_runner.get_history = AsyncMock(
+            side_effect=KeyError("Conversation 'unknown-id' not found")
+        )
+
+        app = _build_test_app(mock_runner)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.get("/v1/chat/unknown-id/history")
+        assert response.status_code == 404
+        data = response.json()
+        assert "not found" in data["error"]

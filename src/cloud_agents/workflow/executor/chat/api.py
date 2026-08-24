@@ -90,7 +90,7 @@ def build_chat_router(runner: Any, get_caller_identity: Any = None) -> APIRouter
     async def get_history(
         conversation_id: str,
         limit: int = 20,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Get conversation message history.
 
         Parameters:
@@ -98,9 +98,15 @@ def build_chat_router(runner: Any, get_caller_identity: Any = None) -> APIRouter
             limit: Maximum number of turns to load (query param).
 
         Returns:
-            Dict with messages list.
+            Dict with messages list, or 404 if conversation not found.
         """
-        messages = await runner.get_history(conversation_id, limit=limit)
+        try:
+            messages = await runner.get_history(conversation_id, limit=limit)
+        except KeyError as exc:
+            return JSONResponse(
+                status_code=404,
+                content={"error": str(exc)},
+            )
         return {"messages": [m.to_dict() for m in messages]}
 
     return router
