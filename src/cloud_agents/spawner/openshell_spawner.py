@@ -48,7 +48,6 @@ _DEFAULT_SERVER_COMMAND = [
 _EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
-
 class OpenShellSpawner(AgentSpawner):
     """Spawns sandboxes via OpenShell exec-based communication.
 
@@ -68,6 +67,11 @@ class OpenShellSpawner(AgentSpawner):
         openshell_client: Any = None,
         driver: str = "podman",
         workspace: str = "default",
+        endpoint: str = "",
+        http_endpoint: str = "",
+        tls_ca: str = "",
+        tls_cert: str = "",
+        tls_key: str = "",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -83,29 +87,59 @@ class OpenShellSpawner(AgentSpawner):
                   OCI image directly at /app/skills).
                 - "kubernetes": Falls back to tar streaming (extract
                   skills locally, stream into sandbox via exec_stream).
-
-        Requires OpenShell gateway v0.0.79+ with gateway_jwt configured.
-        The gateway mints sandbox JWTs and delivers them via Podman
-        secrets (PR NVIDIA/OpenShell#2156). No client-side JWT workaround
-        is needed — the supervisor authenticates directly via gRPC.
-
-        History (issue #82):
-            Pre-v0.0.79 gateways used host bind-mounted token files which
-            failed on Podman 5.8.x REST API. We had a workaround
-            (_inject_podman_token) that extracted JWTs from Podman secrets
-            and copied them into containers. This was removed because
-            v0.0.79+ fixes the issue upstream and we require v0.0.79+.
+            endpoint: Gateway gRPC endpoint (host:port). Used for raw
+                gRPC calls (ExposeService, Provider API). Falls back to
+                reading client._endpoint if empty.
+            http_endpoint: Override for the HTTP proxy endpoint returned
+                by ExposeService. When set, this URL is used instead of
+                the gateway-returned resp.url. Useful when the gateway's
+                internal URL is not routable from the runner.
+            tls_ca: Path to CA certificate for gRPC TLS channels.
+            tls_cert: Path to client certificate for mTLS.
+            tls_key: Path to client key for mTLS.
         """
         super().__init__(**kwargs)
         self._client = openshell_client
         self._driver = driver
         self._workspace = workspace
+        self._endpoint = endpoint
+        self._http_endpoint = http_endpoint
+        self._tls_ca = tls_ca
+        self._tls_cert = tls_cert
+        self._tls_key = tls_key
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
         self._provider_ids: dict[str, str] = {}
+
+    def _resolve_grpc_target(self) -> str:
+        """Return the bare host:port gRPC target for raw channel creation."""
+        target = self._endpoint or getattr(self._client, "_endpoint", "")
+        return target.replace("http://", "").replace("https://", "")
+
+    def _create_grpc_channel(self) -> Any:
+        """Create a gRPC channel with appropriate TLS configuration.
+
+        Returns an insecure channel when no TLS is configured, or a
+        secure channel with optional client certificates for mTLS.
+        """
+        import grpc
+
+        target = self._resolve_grpc_target()
+        if not self._tls_ca:
+            return grpc.insecure_channel(target)
+
+        root_certs = open(self._tls_ca, "rb").read()
+        private_key = open(self._tls_key, "rb").read() if self._tls_key else None
+        cert_chain = open(self._tls_cert, "rb").read() if self._tls_cert else None
+        credentials = grpc.ssl_channel_credentials(
+            root_certificates=root_certs,
+            private_key=private_key,
+            certificate_chain=cert_chain,
+        )
+        return grpc.secure_channel(target, credentials)
 
     def get_sandbox_id(self, agent_name: str) -> str | None:
         """Return the sandbox ID (UUID) for an agent, or None if not tracked.
@@ -133,9 +167,7 @@ class OpenShellSpawner(AgentSpawner):
         Returns:
             Dict with Host header, or empty dict if not tracked.
         """
-        virtual_host = self._virtual_hosts.get(
-            self._sandbox_names.get(agent_name, ""), ""
-        )
+        virtual_host = self._virtual_hosts.get(self._sandbox_names.get(agent_name, ""), "")
         if virtual_host:
             return {"Host": virtual_host}
         return {}
@@ -158,15 +190,10 @@ class OpenShellSpawner(AgentSpawner):
         Returns:
             Tuple of (gateway_endpoint_url, virtual_hostname).
         """
-        import grpc
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_expose() -> tuple[str, str]:
-            # Strip http:// scheme — gRPC channels use bare host:port
-            grpc_target = self._client._endpoint
-            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
-
-            channel = grpc.insecure_channel(grpc_target)
+            channel = self._create_grpc_channel()
             stub = openshell_pb2_grpc.OpenShellStub(channel)
             req = openshell_pb2.ExposeServiceRequest(
                 sandbox=sandbox_name,
@@ -179,8 +206,8 @@ class OpenShellSpawner(AgentSpawner):
 
             parsed = urlparse(resp.url)
             virtual_host = parsed.hostname or ""
-            rewritten_url = f"http://{grpc_target}"
-            return rewritten_url, virtual_host
+            endpoint_url = self._http_endpoint or resp.url
+            return endpoint_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
 
@@ -237,7 +264,6 @@ class OpenShellSpawner(AgentSpawner):
                 pass
             await asyncio.sleep(2.0)
         return False
-
 
     _PROVIDER_HOSTS: ClassVar[dict[str, str]] = {
         "openai": "api.openai.com",
@@ -372,21 +398,27 @@ class OpenShellSpawner(AgentSpawner):
             from google.protobuf import struct_pb2
 
             mount_config = struct_pb2.Struct()
-            mount_config.update({
-                "podman": {
-                    "mounts": [{
-                        "type": "image",
-                        "source": skills_image,
-                        "target": "/app/skills",
-                        "read_only": True,
-                    }],
-                },
-            })
+            mount_config.update(
+                {
+                    "podman": {
+                        "mounts": [
+                            {
+                                "type": "image",
+                                "source": skills_image,
+                                "target": "/app/skills",
+                                "read_only": True,
+                            }
+                        ],
+                    },
+                }
+            )
             spec.template.driver_config.MergeFrom(mount_config)
             skills_via_driver_config = True
 
         sandbox_ref = await asyncio.to_thread(
-            self._client.create, workspace=self._workspace, spec=spec,
+            self._client.create,
+            workspace=self._workspace,
+            spec=spec,
         )
         sandbox_name = sandbox_ref.name
         sandbox_id = sandbox_ref.id
@@ -403,12 +435,18 @@ class OpenShellSpawner(AgentSpawner):
 
             if credential_secret_name:
                 await self._inject_credentials(
-                    agent_name, sandbox_name, credential_secret_name, env,
+                    agent_name,
+                    sandbox_name,
+                    credential_secret_name,
+                    env,
                 )
 
             if skills_image and not skills_via_driver_config:
                 await self._load_skills(
-                    agent_name, sandbox_id, skills_image, skills_paths,
+                    agent_name,
+                    sandbox_id,
+                    skills_image,
+                    skills_paths,
                 )
 
             if mcp_secret_mounts:
@@ -417,17 +455,18 @@ class OpenShellSpawner(AgentSpawner):
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
 
             endpoint, virtual_host = await self._expose_service(
-                sandbox_name, port=8080,
+                sandbox_name,
+                port=8080,
             )
             self._virtual_hosts[sandbox_name] = virtual_host
 
             ready = await self._wait_ready_with_host(
-                endpoint, virtual_host, timeout=60.0,
+                endpoint,
+                virtual_host,
+                timeout=60.0,
             )
             if not ready:
-                raise RuntimeError(
-                    f"Sandbox '{sandbox_name}' HTTP server did not become ready"
-                )
+                raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
         except Exception:
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
@@ -448,7 +487,9 @@ class OpenShellSpawner(AgentSpawner):
         return endpoint
 
     async def _cleanup_sandbox(
-        self, agent_name: str, sandbox_name: str,
+        self,
+        agent_name: str,
+        sandbox_name: str,
     ) -> None:
         """Clean up a sandbox and all associated resources on failure."""
         provider_id = self._provider_ids.pop(agent_name, None)
@@ -458,14 +499,16 @@ class OpenShellSpawner(AgentSpawner):
             except Exception:
                 logger.warning(
                     "Failed to detach provider '%s' during cleanup",
-                    provider_id, exc_info=True,
+                    provider_id,
+                    exc_info=True,
                 )
         try:
             await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
         except Exception:
             logger.warning(
                 "Failed to delete orphaned sandbox '%s' during cleanup",
-                sandbox_name, exc_info=True,
+                sandbox_name,
+                exc_info=True,
             )
         self._sandbox_names.pop(agent_name, None)
         self._sandbox_ids.pop(agent_name, None)
@@ -523,15 +566,19 @@ class OpenShellSpawner(AgentSpawner):
             self._provider_ids[agent_name] = provider_id
             logger.info(
                 "Attached credential provider '%s' to sandbox '%s'",
-                provider_id, sandbox_name,
+                provider_id,
+                sandbox_name,
             )
         except Exception:
             logger.warning(
                 "Provider API failed for '%s' — falling back to file injection",
-                sandbox_name, exc_info=True,
+                sandbox_name,
+                exc_info=True,
             )
             await self._inject_credentials_via_files(
-                agent_name, credential_secret_name, cred_value,
+                agent_name,
+                credential_secret_name,
+                cred_value,
             )
 
     async def _inject_credentials_via_files(
@@ -552,7 +599,8 @@ class OpenShellSpawner(AgentSpawner):
         await self._do_write_file(agent_name, file_path, cred_value)
         logger.info(
             "Injected credential file '%s' into sandbox for agent '%s'",
-            file_path, agent_name,
+            file_path,
+            agent_name,
         )
 
     async def _create_and_attach_provider(
@@ -564,13 +612,10 @@ class OpenShellSpawner(AgentSpawner):
 
         Returns the provider ID for later cleanup.
         """
-        import grpc
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_provider() -> str:
-            grpc_target = self._client._endpoint
-            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
-            channel = grpc.insecure_channel(grpc_target)
+            channel = self._create_grpc_channel()
             stub = openshell_pb2_grpc.OpenShellStub(channel)
 
             create_req = openshell_pb2.CreateProviderRequest(
@@ -593,16 +638,15 @@ class OpenShellSpawner(AgentSpawner):
         return await asyncio.to_thread(_sync_provider)
 
     async def _detach_provider(
-        self, sandbox_name: str, provider_id: str,
+        self,
+        sandbox_name: str,
+        provider_id: str,
     ) -> None:
         """Detach a provider from a sandbox."""
-        import grpc
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_detach() -> None:
-            grpc_target = self._client._endpoint
-            grpc_target = grpc_target.replace("http://", "").replace("https://", "")
-            channel = grpc.insecure_channel(grpc_target)
+            channel = self._create_grpc_channel()
             stub = openshell_pb2_grpc.OpenShellStub(channel)
             req = openshell_pb2.DetachSandboxProviderRequest(
                 sandbox=sandbox_name,
@@ -640,7 +684,9 @@ class OpenShellSpawner(AgentSpawner):
 
         try:
             await self._extract_skills_image(
-                skills_image, copy_paths, tmp_dir,
+                skills_image,
+                copy_paths,
+                tmp_dir,
             )
 
             tar_buf = BytesIO()
@@ -659,7 +705,8 @@ class OpenShellSpawner(AgentSpawner):
             await asyncio.to_thread(_sync_upload)
             logger.info(
                 "Loaded skills into sandbox for agent '%s' from '%s'",
-                agent_name, skills_image,
+                agent_name,
+                skills_image,
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -688,6 +735,7 @@ class OpenShellSpawner(AgentSpawner):
         crane_bin = shutil.which("crane")
         if crane_bin:
             try:
+
                 def _crane_extract() -> None:
                     result = subprocess.run(
                         [crane_bin, "export", skills_image, "-"],
@@ -695,9 +743,7 @@ class OpenShellSpawner(AgentSpawner):
                         timeout=120,
                     )
                     if result.returncode != 0:
-                        raise RuntimeError(
-                            f"crane export failed: {result.stderr.decode()[:200]}"
-                        )
+                        raise RuntimeError(f"crane export failed: {result.stderr.decode()[:200]}")
                     import tarfile
                     from io import BytesIO
 
@@ -708,7 +754,7 @@ class OpenShellSpawner(AgentSpawner):
                             for skill_path in copy_paths:
                                 prefix = skill_path.lstrip("/") + "/"
                                 if member.name.startswith(prefix):
-                                    member.name = member.name[len(prefix):]
+                                    member.name = member.name[len(prefix) :]
                                     resolved = os.path.normpath(
                                         os.path.join(tmp_dir, member.name),
                                     )
@@ -733,10 +779,7 @@ class OpenShellSpawner(AgentSpawner):
                 pclient = PodmanClient(
                     base_url=f"unix://{os.environ.get('CONTAINER_HOST', '/run/podman/podman.sock').replace('unix://', '')}",
                 )
-                copy_cmd = " && ".join(
-                    f"cp -r {p}/* /out/ 2>/dev/null || true"
-                    for p in copy_paths
-                )
+                copy_cmd = " && ".join(f"cp -r {p}/* /out/ 2>/dev/null || true" for p in copy_paths)
                 pclient.containers.run(
                     skills_image,
                     command=["sh", "-c", copy_cmd],
@@ -763,10 +806,15 @@ class OpenShellSpawner(AgentSpawner):
                 await asyncio.to_thread(
                     subprocess.run,
                     [
-                        self._podman_cli, "run", "--rm",
-                        "-v", f"{tmp_dir}:/out:Z",
+                        self._podman_cli,
+                        "run",
+                        "--rm",
+                        "-v",
+                        f"{tmp_dir}:/out:Z",
                         skills_image,
-                        "sh", "-c", f"cp -r {src_path}/* /out/ 2>/dev/null || true",
+                        "sh",
+                        "-c",
+                        f"cp -r {src_path}/* /out/ 2>/dev/null || true",
                     ],
                     check=True,
                     capture_output=True,
@@ -800,7 +848,8 @@ class OpenShellSpawner(AgentSpawner):
             if not secret_value:
                 logger.warning(
                     "MCP secret '%s' not found in env for agent '%s'",
-                    secret_name, agent_name,
+                    secret_name,
+                    agent_name,
                 )
                 continue
 
@@ -811,14 +860,18 @@ class OpenShellSpawner(AgentSpawner):
             await self._do_write_file(agent_name, file_path, secret_value)
             logger.info(
                 "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
-                mount_path, key, agent_name,
+                mount_path,
+                key,
+                agent_name,
             )
 
     async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
         """Create a directory inside the sandbox."""
+
         def _sync_mkdir() -> None:
             for _ in self._client.exec_stream(
-                sandbox_id, ["mkdir", "-p", path],
+                sandbox_id,
+                ["mkdir", "-p", path],
             ):
                 pass
 
@@ -890,6 +943,7 @@ class OpenShellSpawner(AgentSpawner):
 
         # Use a queue to communicate between thread and async code
         import queue
+
         q: queue.Queue = queue.Queue()
 
         def _sync_stream():
@@ -936,6 +990,7 @@ class OpenShellSpawner(AgentSpawner):
 
         # Start thread to consume sync iterator
         import threading
+
         thread = threading.Thread(target=_sync_stream, daemon=True)
         thread.start()
 
@@ -994,6 +1049,7 @@ class OpenShellSpawner(AgentSpawner):
         encoded = base64.b64encode(content.encode()).decode()
         cmd = ["sh", "-c", f"echo '{encoded}' | base64 -d > {shlex.quote(path)}"]
         try:
+
             def _sync_exec():
                 for _ in self._client.exec_stream(sandbox_id, cmd):
                     pass
@@ -1023,6 +1079,7 @@ class OpenShellSpawner(AgentSpawner):
 
         chunks: list[str] = []
         try:
+
             def _sync_exec():
                 for item in self._client.exec_stream(sandbox_id, ["cat", path]):
                     if hasattr(item, "chunk"):
@@ -1063,7 +1120,9 @@ class OpenShellSpawner(AgentSpawner):
                 logger.warning(
                     "Failed to detach provider '%s' from sandbox '%s' — "
                     "retained for retry on next destroy",
-                    provider_id, sandbox_name, exc_info=True,
+                    provider_id,
+                    sandbox_name,
+                    exc_info=True,
                 )
 
         try:
@@ -1073,7 +1132,9 @@ class OpenShellSpawner(AgentSpawner):
             logger.warning(
                 "Failed to destroy sandbox '%s' (agent=%s) — "
                 "sandbox retained in _sandbox_names for manual cleanup",
-                sandbox_name, agent_name, exc_info=True,
+                sandbox_name,
+                agent_name,
+                exc_info=True,
             )
             return
         sandbox_name = self._sandbox_names.pop(agent_name, None)
@@ -1094,4 +1155,3 @@ class OpenShellSpawner(AgentSpawner):
             List of agent names with active sandboxes.
         """
         return list(self._sandbox_names.keys())
-
