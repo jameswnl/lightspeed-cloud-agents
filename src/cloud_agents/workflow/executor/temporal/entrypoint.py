@@ -92,11 +92,53 @@ def _create_spawner():
         gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670")
         driver = os.environ.get("OPENSHELL_DRIVER", "podman")
         workspace = os.environ.get("OPENSHELL_WORKSPACE", "default")
+        http_endpoint = os.environ.get("OPENSHELL_HTTP_ENDPOINT", "")
+        tls_ca = os.environ.get("OPENSHELL_TLS_CA", "")
+        tls_cert = os.environ.get("OPENSHELL_TLS_CERT", "")
+        tls_key = os.environ.get("OPENSHELL_TLS_KEY", "")
+        bearer_token = os.environ.get("OPENSHELL_BEARER_TOKEN", "")
+
         # Strip http:// scheme — SandboxClient uses gRPC, not HTTP
-        endpoint = gateway_url.replace("http://", "").replace("https://", "")
-        client = SandboxClient(endpoint=endpoint)
-        logger.info("Using OpenShellSpawner (gateway=%s, driver=%s, workspace=%s)", gateway_url, driver, workspace)
-        return OpenShellSpawner(openshell_client=client, driver=driver, workspace=workspace)
+        grpc_endpoint = gateway_url.replace("http://", "").replace("https://", "")
+
+        # Build SandboxClient with auth
+        client_kwargs: dict = {"endpoint": grpc_endpoint}
+        if tls_ca:
+            from pathlib import Path
+
+            from openshell import TlsConfig
+
+            tls_config = TlsConfig(ca_path=Path(tls_ca))
+            if tls_cert and tls_key:
+                tls_config = TlsConfig(
+                    ca_path=Path(tls_ca),
+                    cert_path=Path(tls_cert),
+                    key_path=Path(tls_key),
+                )
+            client_kwargs["tls"] = tls_config
+            logger.info("OpenShell TLS enabled (ca=%s)", tls_ca)
+        if bearer_token:
+            client_kwargs["bearer_token"] = bearer_token
+            logger.info("OpenShell bearer token auth enabled")
+
+        client = SandboxClient(**client_kwargs)
+        logger.info(
+            "Using OpenShellSpawner (gateway=%s, driver=%s, workspace=%s)",
+            gateway_url,
+            driver,
+            workspace,
+        )
+        return OpenShellSpawner(
+            openshell_client=client,
+            driver=driver,
+            workspace=workspace,
+            endpoint=grpc_endpoint,
+            http_endpoint=http_endpoint,
+            tls_ca=tls_ca,
+            tls_cert=tls_cert,
+            tls_key=tls_key,
+            bearer_token=bearer_token,
+        )
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
 
@@ -218,9 +260,7 @@ def build_temporal_app(
         logger.info("Transcript store configured (TRANSCRIPT_DB_URL set)")
     else:
         logger.info("Transcript store disabled (TRANSCRIPT_DB_URL not set)")
-    worker_config = build_worker_config(
-        spawner=spawner, transcript_store=transcript_store
-    )
+    worker_config = build_worker_config(spawner=spawner, transcript_store=transcript_store)
     temporal_client_holder: dict[str, Client] = {}
 
     @asynccontextmanager
@@ -264,9 +304,7 @@ def build_temporal_app(
                 max_concurrent_activities=worker_config.max_concurrent_activities,
                 interceptors=_get_tracing_interceptors(),
             ):
-                logger.info(
-                    "Temporal worker started on queue '%s'", worker_config.task_queue
-                )
+                logger.info("Temporal worker started on queue '%s'", worker_config.task_queue)
                 yield
 
             logger.info("Temporal worker stopped")
@@ -352,9 +390,7 @@ def build_temporal_app(
             ),
             default_workflow=os.environ.get("ALERT_TRIGGER_DEFAULT_WORKFLOW") or None,
             dedup_window_seconds=int(os.environ.get("ALERT_TRIGGER_DEDUP_WINDOW", "300")),
-            fire_on_resolved=os.environ.get(
-                "ALERT_TRIGGER_FIRE_ON_RESOLVED", "false"
-            ).lower()
+            fire_on_resolved=os.environ.get("ALERT_TRIGGER_FIRE_ON_RESOLVED", "false").lower()
             == "true",
         )
         alert_router = build_alert_router(
@@ -368,9 +404,7 @@ def build_temporal_app(
         app.include_router(alert_router)
         logger.info("Alert trigger enabled (label=%s)", alert_config.workflow_name_label)
 
-    schedule_trigger_enabled = (
-        os.environ.get("SCHEDULE_TRIGGER_ENABLED", "false").lower() == "true"
-    )
+    schedule_trigger_enabled = os.environ.get("SCHEDULE_TRIGGER_ENABLED", "false").lower() == "true"
     if schedule_trigger_enabled:
         from cloud_agents.workflow.triggers.schedule_trigger import build_schedule_router
 
@@ -408,9 +442,7 @@ def build_temporal_app(
         from fastapi.responses import PlainTextResponse
         from prometheus_client import generate_latest
 
-        return PlainTextResponse(
-            generate_latest(), media_type="text/plain; charset=utf-8"
-        )
+        return PlainTextResponse(generate_latest(), media_type="text/plain; charset=utf-8")
 
     return app
 

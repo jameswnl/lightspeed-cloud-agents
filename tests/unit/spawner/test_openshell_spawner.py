@@ -19,6 +19,7 @@ if "openshell" not in sys.modules:
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import pytest
@@ -336,6 +337,7 @@ class TestOpenShellSpawnerSpawn:
         # Mock SandboxRef
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -360,6 +362,7 @@ class TestOpenShellSpawnerSpawn:
         # Mock _wait_ready_with_host to return True immediately
         async def mock_ready(*args, **kwargs):
             return True
+
         mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
 
         # Mock _build_network_policy (static method)
@@ -378,6 +381,7 @@ class TestOpenShellSpawnerSpawn:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -402,6 +406,7 @@ class TestOpenShellSpawnerSpawn:
         # Mock _wait_ready_with_host to return True immediately
         async def mock_ready(*args, **kwargs):
             return True
+
         mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
 
         # Mock _build_network_policy (static method)
@@ -672,7 +677,6 @@ class TestOpenShellSpawnerGetSandboxId:
 
         assert spawner.get_sandbox_id("unknown") is None
 
-
     # JWT workaround tests removed — issue #82 workaround dropped.
     # OpenShell v0.0.79+ (PR NVIDIA/OpenShell#2156) delivers sandbox
     # JWTs via Podman secrets natively when gateway_jwt is configured.
@@ -694,6 +698,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -701,7 +706,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, )
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+        )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -739,6 +746,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -746,7 +754,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, )
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+        )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -775,6 +785,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -807,6 +818,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -815,7 +827,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.delete.side_effect = RuntimeError("API unreachable")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, )
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+        )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -850,6 +864,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -857,7 +872,9 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
 
-        spawner = OpenShellSpawner(openshell_client=mock_client, )
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+        )
 
         # Mock _expose_service to return gateway endpoint and virtual host
         mocker.patch.object(
@@ -947,17 +964,21 @@ class TestCredentialInjection:
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
         mock_create = mocker.patch.object(
-            spawner, "_create_and_attach_provider",
+            spawner,
+            "_create_and_attach_provider",
             return_value="provider-123",
         )
 
         await spawner._inject_credentials(
-            "agent-1", "sb-1", "OPENAI_API_KEY",
+            "agent-1",
+            "sb-1",
+            "OPENAI_API_KEY",
             {"OPENAI_API_KEY": "sk-test"},
         )
 
         mock_create.assert_called_once_with(
-            "sb-1", credentials={"OPENAI_API_KEY": "sk-test"},
+            "sb-1",
+            credentials={"OPENAI_API_KEY": "sk-test"},
         )
         assert spawner._provider_ids["agent-1"] == "provider-123"
 
@@ -971,20 +992,26 @@ class TestCredentialInjection:
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
         mocker.patch.object(
-            spawner, "_create_and_attach_provider",
+            spawner,
+            "_create_and_attach_provider",
             side_effect=Exception("gRPC unavailable"),
         )
         mock_file_inject = mocker.patch.object(
-            spawner, "_inject_credentials_via_files",
+            spawner,
+            "_inject_credentials_via_files",
         )
 
         await spawner._inject_credentials(
-            "agent-1", "sb-1", "OPENAI_API_KEY",
+            "agent-1",
+            "sb-1",
+            "OPENAI_API_KEY",
             {"OPENAI_API_KEY": "sk-test"},
         )
 
         mock_file_inject.assert_called_once_with(
-            "agent-1", "OPENAI_API_KEY", "sk-test",
+            "agent-1",
+            "OPENAI_API_KEY",
+            "sk-test",
         )
 
     @pytest.mark.asyncio
@@ -1019,12 +1046,16 @@ class TestMCPSecretInjection:
         mounts = [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")]
 
         await spawner._inject_mcp_secrets(
-            "agent-1", mounts, {"my-secret": "secret-value"},
+            "agent-1",
+            mounts,
+            {"my-secret": "secret-value"},
         )
 
         mock_mkdir.assert_called_once_with("uuid-1", "/var/secrets/mcp/kubectl/")
         mock_write.assert_called_once_with(
-            "agent-1", "/var/secrets/mcp/kubectl/api-key", "secret-value",
+            "agent-1",
+            "/var/secrets/mcp/kubectl/api-key",
+            "secret-value",
         )
 
     @pytest.mark.asyncio
@@ -1068,11 +1099,15 @@ class TestTLSAndServiceAccountSkipped:
         mock_logger = mocker.patch("cloud_agents.spawner.openshell_spawner.logger")
 
         await spawner._do_spawn(
-            "agent-1", "image:latest", env={}, tls_certs=tls,
+            "agent-1",
+            "image:latest",
+            env={},
+            tls_certs=tls,
         )
 
         info_calls = [
-            str(c) for c in mock_logger.info.call_args_list
+            str(c)
+            for c in mock_logger.info.call_args_list
             if "TLS" in str(c) or "transport security" in str(c)
         ]
         assert len(info_calls) >= 1
@@ -1096,11 +1131,15 @@ class TestTLSAndServiceAccountSkipped:
         mock_logger = mocker.patch("cloud_agents.spawner.openshell_spawner.logger")
 
         await spawner._do_spawn(
-            "agent-1", "image:latest", env={}, service_account="my-sa",
+            "agent-1",
+            "image:latest",
+            env={},
+            service_account="my-sa",
         )
 
         info_calls = [
-            str(c) for c in mock_logger.info.call_args_list
+            str(c)
+            for c in mock_logger.info.call_args_list
             if "service_account" in str(c) or "identity" in str(c)
         ]
         assert len(info_calls) >= 1
@@ -1140,7 +1179,9 @@ class TestDestroyWithProviderCleanup:
         spawner._provider_ids["agent-1"] = "provider-123"
 
         mocker.patch.object(
-            spawner, "_detach_provider", side_effect=Exception("detach failed"),
+            spawner,
+            "_detach_provider",
+            side_effect=Exception("detach failed"),
         )
         mock_client.delete = mocker.Mock()
 
@@ -1262,7 +1303,6 @@ class TestBuildNetworkPolicy:
 
     def test_mcp_servers(self, mocker: MockerFixture) -> None:
         """LIGHTSPEED_MCP_SERVERS adds per-server egress rules."""
-        import json
 
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
@@ -1299,3 +1339,342 @@ class TestBuildNetworkPolicy:
         OpenShellSpawner._build_network_policy(spec, {})
 
         assert len(spec.policy.network_policies) == 0
+
+
+class TestResolveGrpcTarget:
+    """Tests for _resolve_grpc_target() endpoint resolution."""
+
+    def test_uses_explicit_endpoint(self, mocker: MockerFixture) -> None:
+        """Explicit endpoint parameter takes precedence over client."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client._endpoint = "client-host:17670"
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="explicit-host:17670",
+        )
+
+        assert spawner._resolve_grpc_target() == "explicit-host:17670"
+
+    def test_falls_back_to_client_endpoint(self, mocker: MockerFixture) -> None:
+        """Falls back to client._endpoint when endpoint is empty."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client._endpoint = "client-host:17670"
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        assert spawner._resolve_grpc_target() == "client-host:17670"
+
+    def test_strips_http_scheme(self, mocker: MockerFixture) -> None:
+        """Strips http:// prefix from endpoint."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="http://host:17670",
+        )
+
+        assert spawner._resolve_grpc_target() == "host:17670"
+
+    def test_strips_https_scheme(self, mocker: MockerFixture) -> None:
+        """Strips https:// prefix from endpoint."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="https://host:17670",
+        )
+
+        assert spawner._resolve_grpc_target() == "host:17670"
+
+
+class TestCreateGrpcChannel:
+    """Tests for _create_grpc_channel() TLS configuration."""
+
+    def _mock_grpc(self, mocker: MockerFixture) -> MagicMock:
+        """Set up grpc module mock for channel tests."""
+        mock_grpc = MagicMock()
+        mocker.patch.dict("sys.modules", {"grpc": mock_grpc})
+        return mock_grpc
+
+    def test_insecure_channel_without_tls(self, mocker: MockerFixture) -> None:
+        """Creates insecure channel when no TLS is configured."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+        )
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.insecure_channel.assert_called_once_with("host:17670")
+
+    def test_secure_channel_with_tls_ca(self, mocker: MockerFixture, tmp_path) -> None:
+        """Creates secure channel with CA cert."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca-cert")
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+        )
+
+        mock_grpc.ssl_channel_credentials.return_value = "creds"
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.secure_channel.assert_called_once_with("host:17670", "creds")
+
+    def test_secure_channel_with_mtls(self, mocker: MockerFixture, tmp_path) -> None:
+        """Creates secure channel with client cert and key for mTLS."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca")
+        cert_file = tmp_path / "client.pem"
+        cert_file.write_bytes(b"fake-cert")
+        key_file = tmp_path / "client.key"
+        key_file.write_bytes(b"fake-key")
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+            tls_cert=str(cert_file),
+            tls_key=str(key_file),
+        )
+
+        mock_grpc.ssl_channel_credentials.return_value = "creds"
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.ssl_channel_credentials.assert_called_once_with(
+            root_certificates=b"fake-ca",
+            private_key=b"fake-key",
+            certificate_chain=b"fake-cert",
+        )
+
+    def test_bearer_token_uses_composite_credentials(self, mocker: MockerFixture, tmp_path) -> None:
+        """Bearer token + TLS uses composite_channel_credentials."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca")
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+            bearer_token="my-token",
+        )
+
+        mock_grpc.ssl_channel_credentials.return_value = "ssl-creds"
+        mock_grpc.access_token_call_credentials.return_value = "call-creds"
+        mock_grpc.composite_channel_credentials.return_value = "composite-creds"
+
+        spawner._create_grpc_channel()
+
+        mock_grpc.access_token_call_credentials.assert_called_once_with("my-token")
+        mock_grpc.composite_channel_credentials.assert_called_once_with("ssl-creds", "call-creds")
+        mock_grpc.secure_channel.assert_called_once_with("host:17670", "composite-creds")
+
+    def test_bearer_token_without_tls_raises(self, mocker: MockerFixture) -> None:
+        """Bearer token without TLS raises ValueError — fail closed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        self._mock_grpc(mocker)
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            bearer_token="my-token",
+        )
+
+        with pytest.raises(ValueError, match="requires TLS"):
+            spawner._create_grpc_channel()
+
+
+class TestExposeServiceEndpoint:
+    """Tests for _expose_service() endpoint routing (#175)."""
+
+    @pytest.mark.asyncio
+    async def test_uses_resp_url_by_default(self, mocker: MockerFixture) -> None:
+        """ExposeService uses the gateway-returned URL when no override."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="gw:17670",
+        )
+
+        mock_resp = mocker.Mock()
+        mock_resp.url = "http://gw-proxy.example.com:8080"
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub = mock_stub_cls.return_value
+        mock_stub.ExposeService.return_value = mock_resp
+
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        endpoint_url, virtual_host = await spawner._expose_service("sb-1", 8080)
+
+        assert endpoint_url == "http://gw-proxy.example.com:8080"
+        assert virtual_host == "gw-proxy.example.com"
+
+    @pytest.mark.asyncio
+    async def test_http_endpoint_override(self, mocker: MockerFixture) -> None:
+        """http_endpoint overrides the gateway-returned URL."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="gw:17670",
+            http_endpoint="https://external-proxy.example.com",
+        )
+
+        mock_resp = mocker.Mock()
+        mock_resp.url = "http://internal-gw:17670"
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub = mock_stub_cls.return_value
+        mock_stub.ExposeService.return_value = mock_resp
+
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        endpoint_url, virtual_host = await spawner._expose_service("sb-1", 8080)
+
+        assert endpoint_url == "https://external-proxy.example.com"
+        assert virtual_host == "internal-gw"
+
+
+class TestEntrypointSpawnerFactory:
+    """Tests for _create_spawner() auth configuration (#174)."""
+
+    def _patch_spawner_type(self, mocker: MockerFixture) -> None:
+        """Patch the module-level SPAWNER_TYPE constant."""
+        import cloud_agents.workflow.executor.temporal.entrypoint as ep
+
+        mocker.patch.object(ep, "SPAWNER_TYPE", "openshell")
+
+    def test_openshell_no_auth(self, mocker: MockerFixture) -> None:
+        """Creates OpenShellSpawner without auth by default."""
+        self._patch_spawner_type(mocker)
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENSHELL_GATEWAY_URL": "gw:17670",
+            },
+            clear=False,
+        )
+
+        mock_sandbox_client = mocker.patch("openshell.SandboxClient")
+
+        from cloud_agents.workflow.executor.temporal.entrypoint import _create_spawner
+
+        spawner = _create_spawner()
+
+        mock_sandbox_client.assert_called_with(endpoint="gw:17670")
+        assert spawner._endpoint == "gw:17670"
+        assert spawner._http_endpoint == ""
+        assert spawner._tls_ca == ""
+
+    def test_openshell_mtls_auth(self, mocker: MockerFixture, tmp_path) -> None:
+        """Creates OpenShellSpawner with mTLS when TLS env vars set."""
+        self._patch_spawner_type(mocker)
+        ca = tmp_path / "ca.pem"
+        ca.write_text("ca")
+        cert = tmp_path / "client.pem"
+        cert.write_text("cert")
+        key = tmp_path / "client.key"
+        key.write_text("key")
+
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENSHELL_GATEWAY_URL": "gw:17670",
+                "OPENSHELL_TLS_CA": str(ca),
+                "OPENSHELL_TLS_CERT": str(cert),
+                "OPENSHELL_TLS_KEY": str(key),
+            },
+            clear=False,
+        )
+
+        mock_sandbox_client = mocker.patch("openshell.SandboxClient")
+        mocker.patch("openshell.TlsConfig")
+
+        from cloud_agents.workflow.executor.temporal.entrypoint import _create_spawner
+
+        spawner = _create_spawner()
+
+        call_kwargs = mock_sandbox_client.call_args.kwargs
+        assert "tls" in call_kwargs
+        assert spawner._tls_ca == str(ca)
+
+    def test_openshell_bearer_token(self, mocker: MockerFixture) -> None:
+        """Creates OpenShellSpawner with bearer token auth."""
+        self._patch_spawner_type(mocker)
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENSHELL_GATEWAY_URL": "gw:17670",
+                "OPENSHELL_BEARER_TOKEN": "my-oidc-token",
+            },
+            clear=False,
+        )
+
+        mock_sandbox_client = mocker.patch("openshell.SandboxClient")
+
+        from cloud_agents.workflow.executor.temporal.entrypoint import _create_spawner
+
+        spawner = _create_spawner()
+
+        call_kwargs = mock_sandbox_client.call_args.kwargs
+        assert call_kwargs["bearer_token"] == "my-oidc-token"
+        assert spawner._bearer_token == "my-oidc-token"
+
+    def test_openshell_http_endpoint_override(self, mocker: MockerFixture) -> None:
+        """OPENSHELL_HTTP_ENDPOINT is passed through to spawner."""
+        self._patch_spawner_type(mocker)
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENSHELL_GATEWAY_URL": "gw:17670",
+                "OPENSHELL_HTTP_ENDPOINT": "https://proxy.example.com",
+            },
+            clear=False,
+        )
+
+        mocker.patch("openshell.SandboxClient")
+
+        from cloud_agents.workflow.executor.temporal.entrypoint import _create_spawner
+
+        spawner = _create_spawner()
+
+        assert spawner._http_endpoint == "https://proxy.example.com"
