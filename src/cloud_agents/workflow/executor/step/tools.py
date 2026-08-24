@@ -137,12 +137,17 @@ def load_tools_module(module_path: str) -> None:
     child process. The module is imported via importlib, which runs
     any @step_tool decorators at module scope.
 
+    If the module has a load_builtin_tools() function (e.g. cloud_agents.tools),
+    it is called to register built-in tools.
+
     Parameters:
         module_path: Dotted Python import path (e.g. 'myapp.tools').
     """
     import importlib
 
-    importlib.import_module(module_path)
+    mod = importlib.import_module(module_path)
+    if hasattr(mod, "load_builtin_tools"):
+        mod.load_builtin_tools()
     logger.debug("Loaded tools module '%s'", module_path)
 
 
