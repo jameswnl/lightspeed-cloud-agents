@@ -62,14 +62,9 @@ def build_local_router(
     @router.get("/tools")
     async def list_available_tools() -> dict[str, list[dict[str, str | None]]]:
         """List all registered tools with names and descriptions."""
-        from cloud_agents.workflow.executor.step.tools import _REGISTRY
+        from cloud_agents.workflow.executor.step.tools import list_tool_definitions
 
-        return {
-            "tools": [
-                {"name": defn.name, "description": defn.description}
-                for defn in sorted(_REGISTRY.values(), key=lambda d: d.name)
-            ]
-        }
+        return {"tools": list_tool_definitions()}
 
     @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
     async def run_workflow(request: RunWorkflowRequest) -> dict[str, str]:

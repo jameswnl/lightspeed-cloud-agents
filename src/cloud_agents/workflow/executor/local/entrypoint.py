@@ -120,6 +120,13 @@ def build_local_app() -> FastAPI:
 
     load_builtin_tools()
 
+    # Load custom tools module if configured
+    tools_module = os.environ.get("CLOUD_AGENTS_TOOLS_MODULE")
+    if tools_module:
+        from cloud_agents.workflow.executor.step.tools import load_tools_module
+
+        load_tools_module(tools_module)
+
     # Build the API router using the local executor
     from cloud_agents.workflow.executor.local.api import build_local_router
 

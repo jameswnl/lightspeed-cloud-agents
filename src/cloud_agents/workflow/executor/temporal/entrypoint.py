@@ -312,6 +312,18 @@ def build_temporal_app(
         app.add_middleware(RateLimitMiddleware, rate=rate, burst=burst)
         logger.info("Rate limiting enabled (rate=%.1f/s, burst=%d)", rate, burst)
 
+    # Register built-in tools before building the API router
+    from cloud_agents.tools import load_builtin_tools
+
+    load_builtin_tools()
+
+    # Load custom tools module if configured
+    tools_module = os.environ.get("CLOUD_AGENTS_TOOLS_MODULE")
+    if tools_module:
+        from cloud_agents.workflow.executor.step.tools import load_tools_module
+
+        load_tools_module(tools_module)
+
     placeholder_client = _DeferredClient(temporal_client_holder)
     definition_store = DefinitionStore()
 
