@@ -44,16 +44,33 @@ CREATE INDEX IF NOT EXISTS idx_workflow_run_state_status
 
 _INSERT_SQL = """
 INSERT INTO workflow_run_state
-    (workflow_id, workflow_name, status, definition, provider, authz_context, created_at, updated_at)
-VALUES ($1, $2, 'running', $3::jsonb, $4::jsonb, $5::jsonb, $6, $6);
+    (workflow_id, workflow_name, status, definition, provider, authz_context,
+     user_id, session_id, parent_workflow_id, created_at, updated_at)
+VALUES ($1, $2, 'running', $3::jsonb, $4::jsonb, $5::jsonb,
+        $6, $7, $8, $9, $9);
 """
 
 _SELECT_SQL = """
 SELECT workflow_id, workflow_name, status, current_step, steps, events,
        definition, provider, authz_context, workflow_context,
+       user_id, session_id, parent_workflow_id,
        created_at, updated_at
 FROM workflow_run_state
 WHERE workflow_id = $1;
+"""
+
+_LIST_BY_USER_SQL = """
+SELECT workflow_id
+FROM workflow_run_state
+WHERE user_id = $1
+ORDER BY created_at DESC;
+"""
+
+_LIST_BY_SESSION_SQL = """
+SELECT workflow_id
+FROM workflow_run_state
+WHERE session_id = $1
+ORDER BY created_at DESC;
 """
 
 _UPDATE_STEP_SQL = """
@@ -134,7 +151,14 @@ class RunStateStore:
         return cls(db_url=db_url)
 
     async def connect(self) -> None:
-        """Connect to PostgreSQL and run schema migration."""
+        """Connect to PostgreSQL and run schema migration.
+
+        Runs Alembic migrations first (adds identity columns), then
+        CREATE TABLE IF NOT EXISTS for the base schema (backward compat).
+        """
+        from cloud_agents.storage.migrate import run_alembic
+
+        run_alembic(self._db_url)
         self._pool = await asyncpg.create_pool(self._db_url)
         await self._pool.execute(_SCHEMA_SQL)
         await self._pool.execute(_INDEX_SQL)
@@ -165,6 +189,9 @@ class RunStateStore:
         definition: dict[str, Any],
         provider: dict[str, Any],
         authz_context: dict[str, Any],
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        parent_workflow_id: Optional[str] = None,
     ) -> None:
         """Create a new workflow run state.
 
@@ -174,6 +201,9 @@ class RunStateStore:
             definition: Full workflow definition snapshot.
             provider: Provider configuration.
             authz_context: Authorization context from caller.
+            user_id: Identity of the user who initiated this workflow.
+            session_id: Groups related workflows (caller-provided).
+            parent_workflow_id: Parent workflow ID for sub-workflows.
 
         Raises:
             ValueError: If workflow_id already exists.
@@ -189,12 +219,13 @@ class RunStateStore:
                 json.dumps(definition),
                 json.dumps(provider),
                 json.dumps(authz_context),
+                user_id,
+                session_id,
+                parent_workflow_id,
                 now,
             )
         except asyncpg.UniqueViolationError:
-            raise ValueError(
-                f"Workflow '{workflow_id}' already exists"
-            ) from None
+            raise ValueError(f"Workflow '{workflow_id}' already exists") from None
 
         logger.debug("Created run state for workflow=%s", workflow_id)
 
@@ -231,6 +262,9 @@ class RunStateStore:
             "provider": _parse_json(row["provider"]),
             "authz_context": _parse_json(row["authz_context"]),
             "workflow_context": _parse_json(row["workflow_context"]),
+            "user_id": row["user_id"],
+            "session_id": row["session_id"],
+            "parent_workflow_id": row["parent_workflow_id"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -399,6 +433,38 @@ class RunStateStore:
         """
         pool = self._ensure_connected()
         rows = await pool.fetch(_LIST_PAUSED_SQL)
+        return [row["workflow_id"] for row in rows]
+
+    async def list_by_user(self, user_id: str) -> list[str]:
+        """List workflow IDs belonging to a user.
+
+        Parameters:
+            user_id: User identity string.
+
+        Returns:
+            List of workflow IDs ordered by creation time (newest first).
+
+        Raises:
+            RuntimeError: If not connected.
+        """
+        pool = self._ensure_connected()
+        rows = await pool.fetch(_LIST_BY_USER_SQL, user_id)
+        return [row["workflow_id"] for row in rows]
+
+    async def list_by_session(self, session_id: str) -> list[str]:
+        """List workflow IDs within a session.
+
+        Parameters:
+            session_id: Session identifier (caller-provided).
+
+        Returns:
+            List of workflow IDs ordered by creation time.
+
+        Raises:
+            RuntimeError: If not connected.
+        """
+        pool = self._ensure_connected()
+        rows = await pool.fetch(_LIST_BY_SESSION_SQL, session_id)
         return [row["workflow_id"] for row in rows]
 
     async def delete(self, workflow_id: str) -> None:

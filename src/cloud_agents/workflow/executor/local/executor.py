@@ -83,6 +83,9 @@ class LocalWorkflowRunner(WorkflowRunner):
                 definition=definition,
                 provider=provider,
                 authz_context=input.get("authz_context", {}),
+                user_id=input.get("user_id"),
+                session_id=input.get("session_id"),
+                parent_workflow_id=input.get("parent_workflow_id"),
             )
             await self._store.update_workflow_context(
                 workflow_id,
@@ -106,6 +109,8 @@ class LocalWorkflowRunner(WorkflowRunner):
             spawner=self._spawner,
             transcript_store=self._transcript_store,
             approval_policy=input.get("approval_policy"),
+            user_id=input.get("user_id"),
+            session_id=input.get("session_id"),
         )
 
         task = asyncio.create_task(
@@ -158,9 +163,7 @@ class LocalWorkflowRunner(WorkflowRunner):
 
                     if state.paused_at_step:
                         if self._store:
-                            await self._store.set_paused(
-                                workflow_id, state.paused_at_step
-                            )
+                            await self._store.set_paused(workflow_id, state.paused_at_step)
                             await self._store.append_event(
                                 workflow_id,
                                 {
@@ -171,9 +174,7 @@ class LocalWorkflowRunner(WorkflowRunner):
                         return
 
             if self._store:
-                await self._store.append_event(
-                    workflow_id, {"type": "workflow.completed"}
-                )
+                await self._store.append_event(workflow_id, {"type": "workflow.completed"})
                 await self._store.mark_terminal(workflow_id, "completed")
 
         except asyncio.CancelledError:

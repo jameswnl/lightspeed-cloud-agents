@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -171,9 +170,7 @@ class TestTranscriptStoreSave:
         assert "DO UPDATE" in sql
 
     @pytest.mark.asyncio
-    async def test_save_passes_correct_parameters(
-        self, sample_transcript: StepTranscript
-    ) -> None:
+    async def test_save_passes_correct_parameters(self, sample_transcript: StepTranscript) -> None:
         """save() passes workflow_id, step_name, and transcript data."""
         from cloud_agents.storage.transcript_store import TranscriptStore
 
@@ -220,9 +217,11 @@ class TestTranscriptStoreGet:
         store._pool = mock_pool
 
         # Mock fetchrow to return a database row
-        events_json = json.dumps([
-            {"ts": "2026-01-01T00:00:00Z", "type": "tool_call", "data": {"name": "kubectl"}},
-        ])
+        events_json = json.dumps(
+            [
+                {"ts": "2026-01-01T00:00:00Z", "type": "tool_call", "data": {"name": "kubectl"}},
+            ]
+        )
         mock_row = {
             "events": events_json,
             "cost_usd": 0.05,
