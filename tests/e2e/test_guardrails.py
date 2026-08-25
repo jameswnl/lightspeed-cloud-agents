@@ -1,4 +1,4 @@
-"""E2E guardrails test for both Podman and Kubernetes.
+"""E2E guardrails test for Podman, Kubernetes, and OpenShell.
 
 Verifies that security guardrails are enforced on real containers:
 - securityContext (non-root, read-only root fs)
@@ -7,16 +7,21 @@ Verifies that security guardrails are enforced on real containers:
 - orphan reconciliation cleans up on startup
 - advisory mode sets read-only filesystem
 - spawned-by label present for crash recovery
+- OpenShell non-advisory spawns can read their own image contents
+  (Landlock filesystem policy -- issue #189)
 
 Prerequisites:
   - podman running with socket accessible
   - lightspeed-agentic-sandbox:temporal image built
   - For Kind tests: Kind cluster running with images loaded
+  - For OpenShell tests: a reachable OpenShell gateway (see
+    OPENSHELL_GATEWAY_URL / OPENSHELL_SANDBOX_IMAGE below)
 
 Usage:
   uv run pytest tests/e2e/test_guardrails.py -v
   uv run pytest tests/e2e/test_guardrails.py -v -k podman
   uv run pytest tests/e2e/test_guardrails.py -v -k kind
+  uv run pytest tests/e2e/test_guardrails.py -v -k openshell
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from typing import Any
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -240,3 +247,163 @@ class TestKindGuardrails:
             assert tmp_vols[0].empty_dir.medium == "Memory"
         finally:
             await spawner.destroy(name)
+
+
+OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080")
+OPENSHELL_SANDBOX_IMAGE = os.environ.get(
+    "OPENSHELL_SANDBOX_IMAGE", "quay.io/jameswong/lightspeed-agentic-sandbox:latest"
+)
+
+
+async def _exec(client: Any, sandbox_id: str, command: list[str]) -> Any:
+    """Run a blocking exec_stream() call off the event loop and return the ExecResult.
+
+    OpenShell's SandboxClient.exec_stream() is a synchronous generator, so
+    it must be driven from a worker thread (same pattern OpenShellSpawner
+    itself uses internally for start_server()/_consume_exec()).
+    """
+
+    def _sync() -> Any:
+        result = None
+        for item in client.exec_stream(sandbox_id, command):
+            if hasattr(item, "exit_code"):
+                result = item
+        return result
+
+    return await asyncio.to_thread(_sync)
+
+
+class TestOpenShellGuardrails:
+    """E2E guardrail test for OpenShellSpawner against a REAL gateway (issue #189).
+
+    Regression coverage for the Landlock filesystem-policy gap: unit tests
+    can only assert the constructed policy's *shape* (see
+    tests/unit/spawner/test_openshell_spawner.py::TestBaselineFilesystemPolicy)
+    -- they cannot catch the actual bug, which is about what OpenShell's
+    real gateway/supervisor does with an empty filesystem-policy field,
+    something no mock reproduces. This class is the real gate.
+
+    A bare `exec(["echo", "hello"])` would pass today without ever
+    touching a Landlock-restricted path, and would not catch this bug --
+    so these tests deliberately probe real filesystem access instead.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_gateway(self) -> None:
+        """Skip (rather than fail) when no real OpenShell gateway is reachable."""
+        pytest.importorskip("openshell")
+        try:
+            httpx.get(f"http://{OPENSHELL_GATEWAY_URL}/", timeout=3.0)
+        except httpx.HTTPError:
+            pytest.skip(f"No accessible OpenShell gateway at {OPENSHELL_GATEWAY_URL}")
+
+    @pytest.fixture
+    def spawner(self):
+        """Build a real OpenShellSpawner against the configured gateway."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        return build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_GATEWAY_URL,
+            driver="podman",
+            workspace="default",
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_advisory_spawn_can_import_its_own_dependencies(self, spawner) -> None:
+        """A normal (non-advisory) ephemeral spawn must be able to read its own image.
+
+        The reference sandbox image installs its Python packages under
+        /usr/local (already in OpenShell's own hardcoded default
+        allowlist), so this test alone does not reproduce the exact
+        /opt/app-root path from issue #189 against the currently
+        published image tag -- see
+        test_extra_readable_paths_widens_landlock_access_on_real_gateway
+        below for the test that exercises the actual policy-composition
+        mechanism the fix depends on. This test is still valuable as a
+        real-world integration check: it proves the new baseline
+        filesystem policy doesn't regress normal, non-advisory server
+        startup. OpenShellSpawner._do_spawn() internally waits for
+        /health to return 200 (_wait_ready_with_host) and raises
+        RuntimeError if it times out -- so spawn() completing without
+        raising is already proof the server started and uvicorn imported
+        cleanly. This test additionally re-confirms /health directly.
+        """
+        name = "landlock-baseline-e2e-test"
+        try:
+            endpoint = await spawner.spawn(
+                name,
+                OPENSHELL_SANDBOX_IMAGE,
+                env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
+                read_only=False,
+            )
+            assert endpoint
+
+            headers = spawner.get_sandbox_headers(name)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{endpoint}/health", headers=headers)
+            assert resp.status_code == 200
+        finally:
+            await spawner.destroy(name)
+
+    @pytest.mark.asyncio
+    async def test_extra_readable_paths_widens_landlock_access_on_real_gateway(self) -> None:
+        """The core regression test for issue #189, against a REAL gateway.
+
+        /home is outside OpenShell's own hardcoded default allowlist
+        (/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log) and
+        outside this reference image's own package layout, so it is a
+        stable stand-in for "a path the caller's image needs that the
+        gateway's default doesn't grant" -- exactly the shape of the
+        original /opt/app-root bug, without depending on where any one
+        image build happens to install its packages.
+
+        Without `/home` in `extra_readable_paths`, a non-advisory spawn
+        must still be denied (`ls /home` -> Permission denied) -- proving
+        Landlock enforcement is genuinely active in this environment, not
+        silently skipped. With `/home` added to `extra_readable_paths`,
+        the same command must succeed -- proving the baseline builder's
+        default-allowlist-union-extras is what actually reaches the real
+        gateway's enforcement, not just a shape asserted against a mock.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        denied_spawner = build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_GATEWAY_URL,
+            driver="podman",
+            workspace="default",
+            extra_readable_paths=[],
+        )
+        allowed_spawner = build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_GATEWAY_URL,
+            driver="podman",
+            workspace="default",
+            extra_readable_paths=["/home"],
+        )
+        env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"}
+
+        denied_name = "landlock-extra-denied-test"
+        try:
+            await denied_spawner.spawn(
+                denied_name, OPENSHELL_SANDBOX_IMAGE, env=env, read_only=False
+            )
+            denied_id = denied_spawner.get_sandbox_id(denied_name)
+            denied_result = await _exec(denied_spawner._client, denied_id, ["ls", "/home"])
+            assert denied_result is not None
+            assert denied_result.exit_code != 0
+        finally:
+            await denied_spawner.destroy(denied_name)
+
+        allowed_name = "landlock-extra-allowed-test"
+        try:
+            await allowed_spawner.spawn(
+                allowed_name, OPENSHELL_SANDBOX_IMAGE, env=env, read_only=False
+            )
+            allowed_id = allowed_spawner.get_sandbox_id(allowed_name)
+            allowed_result = await _exec(allowed_spawner._client, allowed_id, ["ls", "/home"])
+            assert allowed_result is not None
+            assert allowed_result.exit_code == 0
+        finally:
+            await allowed_spawner.destroy(allowed_name)

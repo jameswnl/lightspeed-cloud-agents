@@ -1010,6 +1010,253 @@ class TestFilesystemPolicy:
         assert spec.policy.filesystem.include_workdir is True
 
 
+class TestBaselineFilesystemPolicy:
+    """Tests for _build_baseline_filesystem_policy() (issue #189).
+
+    Runs for every non-advisory spawn. Unlike _build_filesystem_policy()
+    (the advisory/full-lockdown path, read_only=["/"]), this sends
+    OpenShell's own default read_only allowlist UNION extra_readable_paths
+    -- never just the extras alone, since OpenShell replaces (does not
+    merge with) a supplied filesystem policy.
+    """
+
+    _DEFAULT_RO = ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"]
+
+    def _make_spec(self, mocker: MockerFixture):
+        spec = mocker.Mock()
+        spec.policy.filesystem.read_only = []
+        spec.policy.filesystem.read_write = []
+        spec.policy.filesystem.include_workdir = False
+        spec.policy.landlock.compatibility = ""
+        return spec
+
+    def test_includes_full_default_read_only_allowlist(self, mocker: MockerFixture) -> None:
+        """Baseline must include OpenShell's complete default RO list, not just the extras.
+
+        Sending only the extra paths would replace (not merge with)
+        OpenShell's default and drop /usr, /lib, /proc, /etc, breaking
+        things worse than the bug this fixes.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        for path in self._DEFAULT_RO:
+            assert path in spec.policy.filesystem.read_only
+
+    def test_includes_default_extra_readable_paths(self, mocker: MockerFixture) -> None:
+        """Baseline includes the default extra paths (/opt/app-root, /opt/lightspeed)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert "/opt/app-root" in spec.policy.filesystem.read_only
+        assert "/opt/lightspeed" in spec.policy.filesystem.read_only
+
+    def test_includes_custom_extra_readable_paths(self, mocker: MockerFixture) -> None:
+        """A constructor override for extra_readable_paths is honored in the baseline."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/srv/custom"])
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert "/srv/custom" in spec.policy.filesystem.read_only
+        # Default RO allowlist is still present alongside the override.
+        for path in self._DEFAULT_RO:
+            assert path in spec.policy.filesystem.read_only
+
+    def test_sets_default_read_write(self, mocker: MockerFixture) -> None:
+        """Baseline read_write matches OpenShell's own default (/tmp, /dev/null)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert spec.policy.filesystem.read_write == ["/tmp", "/dev/null"]
+
+    def test_includes_workdir(self, mocker: MockerFixture) -> None:
+        """Baseline sets include_workdir."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert spec.policy.filesystem.include_workdir is True
+
+    def test_sets_landlock_best_effort_compatibility(self, mocker: MockerFixture) -> None:
+        """Landlock compatibility is explicitly set to best_effort.
+
+        Matches the live-verified fix YAML in issue #189, even though
+        best_effort is already the proto default -- an explicit setting
+        survives even if the proto default ever changes.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert spec.policy.landlock.compatibility == "best_effort"
+
+    def test_empty_extra_readable_paths_still_sets_defaults(self, mocker: MockerFixture) -> None:
+        """An explicitly empty extra_readable_paths list doesn't drop the OpenShell defaults."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object(), extra_readable_paths=[])
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        for path in self._DEFAULT_RO:
+            assert path in spec.policy.filesystem.read_only
+        assert "/opt/app-root" not in spec.policy.filesystem.read_only
+
+
+class TestFilesystemPolicySelection:
+    """Tests that _do_spawn picks exactly one filesystem policy builder (issue #189).
+
+    Baseline and advisory are mutually exclusive: baseline runs for every
+    non-advisory spawn (read_only=False, the default for normal agent
+    runs), and the existing advisory full-lockdown builder is unchanged
+    and still only runs when read_only=True.
+    """
+
+    def _make_spawner_ready_to_spawn(self, mocker: MockerFixture):
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        return spawner
+
+    @pytest.mark.asyncio
+    async def test_non_advisory_spawn_uses_baseline_not_advisory(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A normal (non-advisory) spawn builds the baseline policy, not the full lockdown."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = self._make_spawner_ready_to_spawn(mocker)
+        baseline_spy = mocker.patch.object(
+            OpenShellSpawner, "_build_baseline_filesystem_policy", autospec=True
+        )
+        advisory_spy = mocker.patch.object(OpenShellSpawner, "_build_filesystem_policy")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={}, read_only=False)
+
+        baseline_spy.assert_called_once()
+        advisory_spy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_advisory_spawn_uses_advisory_not_baseline(self, mocker: MockerFixture) -> None:
+        """An advisory (read_only=True) spawn keeps using the existing full-lockdown builder."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = self._make_spawner_ready_to_spawn(mocker)
+        baseline_spy = mocker.patch.object(
+            OpenShellSpawner, "_build_baseline_filesystem_policy", autospec=True
+        )
+        advisory_spy = mocker.patch.object(OpenShellSpawner, "_build_filesystem_policy")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={}, read_only=True)
+
+        advisory_spy.assert_called_once()
+        baseline_spy.assert_not_called()
+
+
+class TestExtraReadablePathsConstructor:
+    """Tests for the `extra_readable_paths` constructor argument (issue #189).
+
+    These paths let a baseline (non-advisory) filesystem policy include
+    directories beyond OpenShell's own hardcoded default allowlist --
+    e.g. /opt/app-root and /opt/lightspeed, where this sandbox image's
+    Python packages and application code live.
+    """
+
+    def test_defaults_to_opt_app_root_and_opt_lightspeed(self) -> None:
+        """Constructor default matches the reference sandbox image's layout."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+
+        assert spawner._extra_readable_paths == ["/opt/app-root", "/opt/lightspeed"]
+
+    def test_accepts_custom_paths(self) -> None:
+        """Constructor accepts an override for derived images with a different layout."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(
+            openshell_client=object(),
+            extra_readable_paths=["/opt/custom", "/srv/app"],
+        )
+
+        assert spawner._extra_readable_paths == ["/opt/custom", "/srv/app"]
+
+    def test_rejects_relative_path(self) -> None:
+        """A relative path is not a valid Landlock filesystem rule."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="absolute"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["relative/path"])
+
+    def test_rejects_dotdot_segment(self) -> None:
+        """A path containing a `..` segment could escape the intended directory."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match=r"\.\."):
+            OpenShellSpawner(
+                openshell_client=object(), extra_readable_paths=["/opt/app-root/../etc"]
+            )
+
+    def test_rejects_empty_string(self) -> None:
+        """An empty string is not a meaningful filesystem path."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="empty"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/opt/app-root", ""])
+
+    def test_empty_list_is_valid(self) -> None:
+        """An explicit empty list disables the extra-paths feature entirely."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object(), extra_readable_paths=[])
+
+        assert spawner._extra_readable_paths == []
+
+
 class TestCredentialInjection:
     """Tests for _inject_credentials() and Provider API integration."""
 

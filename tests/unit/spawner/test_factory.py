@@ -248,6 +248,43 @@ class TestBuildSpawnerOpenShell:
 
         assert spawner._endpoint == "gw:17670"
 
+    def test_extra_readable_paths_forwarded(self, mocker: MockerFixture) -> None:
+        """extra_readable_paths reaches OpenShellSpawner (issue #189).
+
+        _OPENSHELL_EXTRA_PARAMS previously only allowed `max_pods` through
+        -- an unlisted kwarg like extra_readable_paths would be silently
+        dropped by build_spawner's kwarg filtering, even though
+        OpenShellSpawner's own constructor accepts it.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url="gw:17670",
+            extra_readable_paths=["/opt/custom", "/srv/app"],
+        )
+
+        assert spawner._extra_readable_paths == ["/opt/custom", "/srv/app"]
+
+    def test_extra_readable_paths_none_falls_back_to_spawner_default(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Omitting extra_readable_paths (or passing None) uses OpenShellSpawner's own default.
+
+        None must be dropped rather than forwarded, same as other Optional
+        fields -- forwarding None would override the spawner's own
+        ["/opt/app-root", "/opt/lightspeed"] default with an empty value.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner("openshell", gateway_url="gw:17670", extra_readable_paths=None)
+
+        assert spawner._extra_readable_paths == ["/opt/app-root", "/opt/lightspeed"]
+
 
 class TestBuildSpawnerUnknownType:
     """Tests for the error path on unrecognized spawner types."""

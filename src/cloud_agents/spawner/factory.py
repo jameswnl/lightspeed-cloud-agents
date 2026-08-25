@@ -42,7 +42,7 @@ _KUBERNETES_PARAMS = frozenset(
     }
 )
 _PODMAN_PARAMS = frozenset({"network", "volume_mounts", "max_pods"})
-_OPENSHELL_EXTRA_PARAMS = frozenset({"max_pods"})
+_OPENSHELL_EXTRA_PARAMS = frozenset({"max_pods", "extra_readable_paths"})
 
 
 def _filtered(params: dict[str, Any], known: frozenset[str]) -> dict[str, Any]:
@@ -65,9 +65,10 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
                 tools_configmap, secret_env_vars, projected_sa_token, max_pods.
             For "podman": network, volume_mounts, max_pods.
             For "openshell": gateway_url, driver, workspace, http_endpoint,
-                tls_ca, tls_cert, tls_key, bearer_token, max_pods -- used to
-                build the underlying SandboxClient (with TLS/bearer auth)
-                and then OpenShellSpawner.
+                tls_ca, tls_cert, tls_key, bearer_token, max_pods,
+                extra_readable_paths -- used to build the underlying
+                SandboxClient (with TLS/bearer auth) and then
+                OpenShellSpawner.
             Callers may pass a broader dict (e.g. a Pydantic model_dump())
             containing extra keys -- unrecognized keys and explicit None
             values are dropped rather than forwarded, so passing an unset
