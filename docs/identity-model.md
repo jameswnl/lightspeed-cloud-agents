@@ -45,9 +45,10 @@ either, check which one you actually mean.
 
 Primary key `workflow_id`. Identity columns (`user_id`, `session_id`,
 `parent_workflow_id`) were added by the Alembic migration
-`002_identity_model`, not the original `CREATE TABLE IF NOT EXISTS` in the
-store (that block predates the identity model and is kept only as a legacy
-fallback schema — see the store's module docstring).
+`002_identity_model`, layered on top of the `001_baseline` migration.
+Alembic is the sole schema owner (#169) — the store itself has no
+`CREATE TABLE` fallback; `connect()` fails loudly via `run_alembic()` if
+migrations can't be applied.
 
 ```text
 workflow_id          TEXT PRIMARY KEY
@@ -148,11 +149,11 @@ property — two workflows sharing a `session_id` can have different
 - `session_id` is not enforced or auto-generated anywhere — if a caller
   omits it, workflows just have `session_id = NULL` and won't show up under
   `list_by_session`.
-- The `CREATE TABLE IF NOT EXISTS` blocks in the stores are legacy
-  base-schema fallbacks for pre-Alembic deployments and are missing the
-  identity columns entirely — Alembic (`alembic/versions/`) is the source of
-  truth for the current schema. See "Database Migrations" in the root
-  `CLAUDE.md`.
+- Alembic (`alembic/versions/`) is the sole schema owner for both tables —
+  the stores have no `CREATE TABLE` fallback (removed in #169).
+  `connect()` raises if migrations can't be applied (e.g. missing
+  `alembic.ini`) rather than silently running with a stale/partial schema.
+  See "Database Migrations" in the root `CLAUDE.md`.
 - If you implement escalation, `parent_workflow_id` already has the column
   and index — the missing pieces are: an FK/validity check if you want one,
   application logic to set it meaningfully, and a way to traverse the chain

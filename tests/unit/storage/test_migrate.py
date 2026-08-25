@@ -77,12 +77,19 @@ class TestRunAlembic:
             with pytest.raises(RuntimeError, match="revision conflict"):
                 run_alembic("postgresql://localhost/testdb")
 
-    def test_missing_ini_skips_silently(self) -> None:
-        """Missing alembic.ini logs debug and returns without error."""
+    def test_missing_ini_raises(self) -> None:
+        """Missing alembic.ini raises RuntimeError rather than silently skipping.
+
+        Alembic is the sole schema owner (#169) -- the stores have no
+        CREATE TABLE fallback, so a misconfigured deployment (e.g. missing
+        alembic.ini in a non-source-checkout install) must fail loudly here
+        rather than defer to a confusing "relation does not exist" error
+        on the first query.
+        """
         from cloud_agents.storage.migrate import run_alembic
 
         with patch("cloud_agents.storage.migrate._ALEMBIC_INI") as mock_ini:
             mock_ini.exists.return_value = False
 
-            # Should not raise
-            run_alembic("postgresql://localhost/testdb")
+            with pytest.raises(RuntimeError, match="alembic.ini not found"):
+                run_alembic("postgresql://localhost/testdb")

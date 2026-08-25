@@ -75,29 +75,25 @@ class TestTranscriptStoreConnect:
             assert store._pool is mock_pool
 
     @pytest.mark.asyncio
-    async def test_connect_runs_schema_migration(self) -> None:
-        """connect() executes CREATE TABLE IF NOT EXISTS."""
+    async def test_connect_runs_alembic_migrations(self) -> None:
+        """connect() applies schema via Alembic -- the sole schema owner (#169)."""
         from cloud_agents.storage.transcript_store import TranscriptStore
 
         store = TranscriptStore(db_url="postgresql://localhost/testdb")
 
         mock_pool = AsyncMock()
-        mock_pool.execute = AsyncMock()
-        mock_pool.fetchval = AsyncMock(return_value=None)
 
-        with patch(
-            "cloud_agents.storage.transcript_store.asyncpg.create_pool",
-            new_callable=AsyncMock,
-            return_value=mock_pool,
+        with (
+            patch(
+                "cloud_agents.storage.transcript_store.asyncpg.create_pool",
+                new_callable=AsyncMock,
+                return_value=mock_pool,
+            ),
+            patch("cloud_agents.storage.migrate.run_alembic") as mock_run_alembic,
         ):
             await store.connect()
 
-            # Should have called execute at least once for schema
-            assert mock_pool.execute.call_count >= 1
-            first_call = mock_pool.execute.call_args_list[0]
-            sql = first_call[0][0]
-            assert "CREATE TABLE IF NOT EXISTS" in sql
-            assert "step_transcripts" in sql
+            mock_run_alembic.assert_called_once_with("postgresql://localhost/testdb")
 
     @pytest.mark.asyncio
     async def test_close_closes_pool(self) -> None:

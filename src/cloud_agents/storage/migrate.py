@@ -32,8 +32,19 @@ def run_alembic(db_url: str) -> None:
         return
 
     if not _ALEMBIC_INI.exists():
-        logger.debug("alembic.ini not found at %s, skipping migrations", _ALEMBIC_INI)
-        return
+        # Unlike "alembic not installed" (a base dependency, effectively
+        # dead code) and "DB unreachable" (the next line will fail loudly
+        # anyway), a missing alembic.ini is always a real misconfiguration:
+        # it means this isn't running from a full source checkout (e.g. a
+        # non-editable/wheel install), so Alembic can never apply the
+        # schema. The stores no longer have a CREATE TABLE fallback for
+        # this -- silently skipping here would mean every query fails
+        # later with "relation does not exist" instead of a clear error now.
+        raise RuntimeError(
+            f"alembic.ini not found at {_ALEMBIC_INI} -- cannot apply the "
+            "database schema. cloud_agents must be run from a full source "
+            "checkout with alembic.ini present at the repo root."
+        )
 
     sync_url = db_url.replace("+asyncpg", "") if "+asyncpg" in db_url else db_url
     os.environ["RUN_STATE_DB_URL"] = sync_url

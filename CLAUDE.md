@@ -108,7 +108,7 @@ uv run alembic current
 uv run alembic history
 ```
 
-The `CREATE TABLE IF NOT EXISTS` in each store's `connect()` is kept for backward compatibility during migration rollout.
+Alembic is the sole schema owner (#169) — the stores no longer have a `CREATE TABLE IF NOT EXISTS` fallback. `run_alembic()` (`storage/migrate.py`) raises `RuntimeError` if `alembic.ini` isn't found (e.g. a non-source-checkout install), rather than silently skipping — a missing schema now fails loudly at `connect()` instead of failing later on the first query.
 
 ### Identity model (StepMetadata)
 

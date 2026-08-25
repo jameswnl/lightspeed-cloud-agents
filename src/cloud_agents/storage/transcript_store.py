@@ -3,8 +3,9 @@
 Stores untruncated step transcripts in PostgreSQL so they survive
 sandbox container destruction. Uses asyncpg for async database access.
 
-Schema is auto-migrated on connect() via CREATE TABLE IF NOT EXISTS.
-Retention is enforced by cleanup_expired() using TRANSCRIPT_RETENTION_DAYS.
+Schema is owned entirely by Alembic (see cloud_agents.storage.migrate),
+applied on connect(). Retention is enforced by cleanup_expired() using
+TRANSCRIPT_RETENTION_DAYS.
 """
 
 from __future__ import annotations
@@ -20,26 +21,6 @@ import asyncpg
 from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
 
 logger = logging.getLogger(__name__)
-
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS step_transcripts (
-    id SERIAL PRIMARY KEY,
-    workflow_id TEXT NOT NULL,
-    step_name TEXT NOT NULL,
-    events JSONB NOT NULL,
-    cost_usd DOUBLE PRECISION,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    duration_ms INTEGER,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(workflow_id, step_name)
-);
-"""
-
-_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS idx_step_transcripts_workflow
-    ON step_transcripts(workflow_id);
-"""
 
 _UPSERT_SQL = """
 INSERT INTO step_transcripts
@@ -129,17 +110,11 @@ class TranscriptStore:
         return cls(db_url=db_url, retention_days=retention_days)
 
     async def connect(self) -> None:
-        """Connect to PostgreSQL and run schema migration.
-
-        Runs Alembic migrations first (adds identity columns), then
-        CREATE TABLE IF NOT EXISTS for the base schema (backward compat).
-        """
+        """Connect to PostgreSQL and apply schema via Alembic migrations."""
         from cloud_agents.storage.migrate import run_alembic
 
         run_alembic(self._db_url)
         self._pool = await asyncpg.create_pool(self._db_url)
-        await self._pool.execute(_SCHEMA_SQL)
-        await self._pool.execute(_INDEX_SQL)
         logger.info("TranscriptStore connected to PostgreSQL")
 
     async def close(self) -> None:

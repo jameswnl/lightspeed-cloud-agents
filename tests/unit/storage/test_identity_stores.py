@@ -3,7 +3,7 @@
 Tests cover:
 - RunStateStore: create with identity fields, list_by_user, list_by_session
 - TranscriptStore: save with trace_id/messages, load_recent_turns
-- Updated _SCHEMA_SQL includes new columns
+- Migration 002_identity_model includes the new identity columns
 """
 
 from __future__ import annotations
