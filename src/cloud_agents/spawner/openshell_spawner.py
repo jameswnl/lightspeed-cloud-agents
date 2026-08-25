@@ -34,8 +34,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default command to start the HTTP server inside the sandbox
+# Default command to start the HTTP server inside the sandbox.
+# Invoked as `python3 -m uvicorn` rather than the bare `uvicorn` binary:
+# images that install Python deps with `pip install --target` (a common
+# hermetic-build pattern) copy package files but never generate
+# console-script executables, so a bare "uvicorn" exec fails with
+# "command not found" even though the package is importable.
 _DEFAULT_SERVER_COMMAND = [
+    "python3",
+    "-m",
     "uvicorn",
     "lightspeed_agentic.app:app",
     "--host",

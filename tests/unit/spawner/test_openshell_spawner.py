@@ -20,6 +20,7 @@ if "openshell" not in sys.modules:
 import asyncio
 import json
 import os
+import threading
 from typing import Any
 
 import pytest
@@ -422,6 +423,64 @@ class TestOpenShellSpawnerSpawn:
         # Verify env vars were set on the spec (protobuf map assignment)
         spec.environment.__setitem__.assert_any_call("LIGHTSPEED_PROVIDER", "openai")
         spec.environment.__setitem__.assert_any_call("LIGHTSPEED_MODEL", "gpt-4")
+
+    @pytest.mark.asyncio
+    async def test_spawn_starts_server_via_python_module_invocation(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_do_spawn starts uvicorn via `python3 -m uvicorn`, not a bare binary.
+
+        Images that install Python deps with `pip install --target` (a common
+        hermetic-build pattern) copy package files but never generate
+        console-script executables, so a bare "uvicorn" exec fails with
+        "command not found". Invoking it as a module only requires uvicorn to
+        be importable, which works regardless of how the image installed it.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        exec_called = threading.Event()
+        captured: dict[str, Any] = {}
+
+        def exec_stream_side_effect(_sandbox_id, command, **_kwargs):
+            captured["command"] = command
+            exec_called.set()
+            return iter([])
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.side_effect = exec_stream_side_effect
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
+
+        # start_server() runs exec_stream in a background thread (fire-and-forget);
+        # wait on the event it sets instead of a fixed sleep, so the assertion is
+        # deterministic rather than racing the background task's scheduling. The
+        # wait itself must go through to_thread too — a blocking call here would
+        # starve the event loop and prevent the background task from ever running.
+        called = await asyncio.to_thread(exec_called.wait, 2.0)
+        assert called, "exec_stream was never called"
+        assert captured["command"][:3] == ["python3", "-m", "uvicorn"]
 
 
 class TestOpenShellSpawnerDestroy:
