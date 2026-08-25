@@ -228,7 +228,7 @@ class TestAlembicMigrationFiles:
 
         spec = importlib.util.spec_from_file_location(
             "baseline",
-            "alembic/versions/001_baseline.py",
+            "src/cloud_agents/_alembic/alembic/versions/001_baseline.py",
         )
         assert spec is not None
         mod = importlib.util.module_from_spec(spec)
@@ -242,7 +242,7 @@ class TestAlembicMigrationFiles:
 
         spec = importlib.util.spec_from_file_location(
             "identity",
-            "alembic/versions/002_identity_model.py",
+            "src/cloud_agents/_alembic/alembic/versions/002_identity_model.py",
         )
         assert spec is not None
         mod = importlib.util.module_from_spec(spec)
@@ -255,11 +255,11 @@ class TestAlembicMigrationFiles:
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
-            "identity", "alembic/versions/002_identity_model.py"
+            "identity", "src/cloud_agents/_alembic/alembic/versions/002_identity_model.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "user_id" in source
         assert "session_id" in source
         assert "parent_workflow_id" in source

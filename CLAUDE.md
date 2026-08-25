@@ -97,18 +97,21 @@ All implemented guardrails have corresponding tests. When adding a new guardrail
 
 Schema changes to PostgreSQL tables (`workflow_run_state`, `step_transcripts`) are managed via Alembic with raw SQL migrations (not SQLAlchemy ORM). The stores use asyncpg directly; Alembic uses synchronous psycopg2 for migrations only.
 
+`alembic.ini` and `alembic/versions/` live under `src/cloud_agents/_alembic/`, not the repo root (#188) — this is required for them to ship in the wheel build (`packages = ["src/cloud_agents"]` in `pyproject.toml`) and in Containerfiles that only `COPY src/`. The Alembic CLI doesn't know this by default, so pass `-c` explicitly:
+
 ```bash
 # Apply all pending migrations
-RUN_STATE_DB_URL=postgresql://user:pass@localhost/cloud_agents uv run alembic upgrade head
+RUN_STATE_DB_URL=postgresql://user:pass@localhost/cloud_agents \
+  uv run alembic -c src/cloud_agents/_alembic/alembic.ini upgrade head
 
 # Show current migration revision
-uv run alembic current
+uv run alembic -c src/cloud_agents/_alembic/alembic.ini current
 
 # Show migration history
-uv run alembic history
+uv run alembic -c src/cloud_agents/_alembic/alembic.ini history
 ```
 
-Alembic is the sole schema owner (#169) — the stores no longer have a `CREATE TABLE IF NOT EXISTS` fallback. `run_alembic()` (`storage/migrate.py`) raises `RuntimeError` if `alembic.ini` isn't found (e.g. a non-source-checkout install), rather than silently skipping — a missing schema now fails loudly at `connect()` instead of failing later on the first query.
+Alembic is the sole schema owner (#169) — the stores no longer have a `CREATE TABLE IF NOT EXISTS` fallback. `run_alembic()` (`storage/migrate.py`) resolves `alembic.ini`'s path programmatically (relative to its own module location, so it works the same whether run from a source checkout, an editable install, or a real wheel install) and raises `RuntimeError` if it's not found, rather than silently skipping — a missing schema now fails loudly at `connect()` instead of failing later on the first query.
 
 ### Identity model (StepMetadata)
 

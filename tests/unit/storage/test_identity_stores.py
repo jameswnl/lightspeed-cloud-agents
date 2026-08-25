@@ -217,17 +217,17 @@ class TestRunStateStoreSchemaIdentity:
 
     def test_migration_includes_user_id(self) -> None:
         """Migration 002 adds user_id column."""
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "user_id" in source
 
     def test_migration_includes_session_id(self) -> None:
         """Migration 002 adds session_id column."""
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "session_id" in source
 
     def test_migration_includes_parent_workflow_id(self) -> None:
         """Migration 002 adds parent_workflow_id column."""
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "parent_workflow_id" in source
 
 
@@ -381,10 +381,10 @@ class TestTranscriptStoreSchemaIncludesIdentity:
 
     def test_migration_includes_trace_id(self) -> None:
         """Migration 002 adds trace_id column."""
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "trace_id" in source
 
     def test_migration_includes_messages(self) -> None:
         """Migration 002 adds messages column."""
-        source = open("alembic/versions/002_identity_model.py").read()
+        source = open("src/cloud_agents/_alembic/alembic/versions/002_identity_model.py").read()
         assert "messages" in source

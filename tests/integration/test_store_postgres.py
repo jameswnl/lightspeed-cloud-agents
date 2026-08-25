@@ -47,7 +47,7 @@ def _run_migrations():
     import subprocess
 
     subprocess.run(
-        ["uv", "run", "alembic", "upgrade", "head"],
+        ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
         env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
         timeout=30,
         check=True,
@@ -237,7 +237,7 @@ class TestAlembicMigrations:
         import subprocess
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "upgrade", "head"],
+            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
             capture_output=True, text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
@@ -250,14 +250,14 @@ class TestAlembicMigrations:
         import subprocess
 
         subprocess.run(
-            ["uv", "run", "alembic", "upgrade", "head"],
+            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
             capture_output=True, text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
         )
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "downgrade", "base"],
+            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "downgrade", "base"],
             capture_output=True, text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
@@ -265,7 +265,7 @@ class TestAlembicMigrations:
         assert result.returncode == 0, f"Alembic downgrade failed: {result.stderr}"
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "upgrade", "head"],
+            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
             capture_output=True, text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,

@@ -3,15 +3,16 @@
 Runs Alembic upgrade head from connect() to ensure identity columns
 and other schema changes are applied before the store operates.
 
-Known limitation: _ALEMBIC_INI resolves relative to this file's location
-in a source tree. alembic.ini and alembic/versions/ live at the repo root,
-outside src/cloud_agents/, and the wheel build only packages
-src/cloud_agents (see [tool.hatch.build.targets.wheel] in pyproject.toml).
-This means Alembic can only actually run when cloud_agents is installed
-from a full source checkout (including editable installs, which don't
-relocate files) -- a real (non-editable) wheel install will always hit
-the RuntimeError below. Packaging the Alembic assets so a wheel install
-can run migrations too is tracked as a separate concern from #169.
+alembic.ini and alembic/versions/ live under src/cloud_agents/_alembic/
+(not the repo root) specifically so they're included in the wheel build
+(see [tool.hatch.build.targets.wheel] in pyproject.toml, packages =
+["src/cloud_agents"]) and so Containerfiles that only COPY src/ (this
+repo's deploy/workflow-runner/Containerfile, lightspeed-stack's
+Containerfile.harness) ship them too. Moved here in #188 after a real
+deployment shipped with a stale schema and no way to run migrations
+from inside the container -- see #169 for the prior, incomplete state
+where these files were at the repo root and only worked from a source
+checkout.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_ALEMBIC_INI = Path(__file__).resolve().parents[3] / "alembic.ini"
+_ALEMBIC_INI = Path(__file__).resolve().parent.parent / "_alembic" / "alembic.ini"
 
 
 def run_alembic(db_url: str) -> None:
@@ -52,15 +53,17 @@ def run_alembic(db_url: str) -> None:
         ) from exc
 
     if not _ALEMBIC_INI.exists():
-        # A missing alembic.ini means this isn't running from a full source
-        # checkout (see module docstring) -- Alembic can never apply the
-        # schema. Same reasoning as the ImportError case above: fail loudly
-        # now rather than defer to a confusing failure on the first query.
+        # alembic.ini ships inside the cloud_agents package (see module
+        # docstring) specifically so this should always be found in any
+        # correctly built/installed distribution -- a missing file here
+        # means a broken/incomplete install, not a normal deployment mode.
+        # Same reasoning as the ImportError case above: fail loudly now
+        # rather than defer to a confusing failure on the first query.
         raise RuntimeError(
             f"alembic.ini not found at {_ALEMBIC_INI} -- cannot apply the "
-            "database schema. cloud_agents must be run from a full source "
-            "checkout (including editable installs) with alembic.ini "
-            "present at the repo root."
+            "database schema. This indicates a broken cloud_agents install "
+            "(alembic.ini ships inside the package at "
+            "cloud_agents/_alembic/alembic.ini)."
         )
 
     sync_url = db_url.replace("+asyncpg", "") if "+asyncpg" in db_url else db_url
