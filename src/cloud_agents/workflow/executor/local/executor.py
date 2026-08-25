@@ -122,11 +122,22 @@ class LocalWorkflowRunner(WorkflowRunner):
         return workflow_id
 
     async def _persist_trace_parent(self, workflow_id: str, trace_parent: str) -> None:
-        """Merge trace_parent into workflow_context (which update_workflow_context replaces wholesale)."""
-        existing = await self._store.get(workflow_id)
-        wf_ctx = dict(existing.get("workflow_context") or {}) if existing else {}
-        wf_ctx["trace_parent"] = trace_parent
-        await self._store.update_workflow_context(workflow_id, wf_ctx)
+        """Merge trace_parent into workflow_context (which update_workflow_context replaces wholesale).
+
+        Best-effort: a failure here must not prevent the workflow from
+        pausing -- tracing continuity is not worth failing the run over.
+        """
+        try:
+            existing = await self._store.get(workflow_id)
+            wf_ctx = dict(existing.get("workflow_context") or {}) if existing else {}
+            wf_ctx["trace_parent"] = trace_parent
+            await self._store.update_workflow_context(workflow_id, wf_ctx)
+        except Exception:
+            logger.warning(
+                "Failed to persist trace_parent for workflow '%s'",
+                workflow_id,
+                exc_info=True,
+            )
 
     async def _execute(
         self,

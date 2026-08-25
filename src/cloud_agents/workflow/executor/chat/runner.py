@@ -211,6 +211,10 @@ class ChatWorkflowRunner(WorkflowRunner):
         # RunStateStore updates that TranscriptMiddleware doesn't cover).
         # Custom middleware runs outermost (before TracingMiddleware) so it
         # executes first in before() and last in after().
+        # No tracer is passed, so no span is opened here -- session.id
+        # attribute and trace_parent capture (#179) only apply to
+        # LocalWorkflowRunner's step spans, not chat turns. Out of scope
+        # for #179; revisit if chat turns need span-based tracing.
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
         wrapped = MiddlewareExecutor(
@@ -288,6 +292,8 @@ class ChatWorkflowRunner(WorkflowRunner):
         )
 
         # 6. Get step executor wrapped with middleware
+        # No tracer passed here either -- see the non-streaming send_message()
+        # for why chat turns don't open spans (#179 is LocalWorkflowRunner-only).
         step_def = {"spawn": self._config.spawn, "name": turn_name}
         executor = get_step_executor(step_def, self._spawner)
         wrapped = MiddlewareExecutor(

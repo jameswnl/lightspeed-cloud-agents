@@ -372,6 +372,41 @@ class TestLocalWorkflowRunnerTraceContinuity:
         mock_store.update_workflow_context.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_pause_still_happens_when_trace_parent_persist_fails(
+        self, executor: Any, mock_store: AsyncMock
+    ) -> None:
+        """A failure persisting trace_parent must not fail the whole workflow.
+
+        Pausing for approval is the primary outcome; tracing continuity is
+        best-effort and must not turn a pause into a failure.
+        """
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        mock_store.get.side_effect = RuntimeError("DB connection lost")
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "approve", "type": "human-approval", "output_key": "approval"},
+                ]
+            },
+        }
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+        state.trace_parent = "00-cccc-dddd-01"
+
+        await executor._execute("wf-1", graph, state)
+
+        mock_store.set_paused.assert_called_once_with("wf-1", "approve")
+        mock_store.mark_terminal.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_resume_passes_identity_and_seeds_resume_trace_parent(
         self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
     ) -> None:
