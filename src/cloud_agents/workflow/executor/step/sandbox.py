@@ -7,11 +7,42 @@ This is the spawn: ephemeral implementation.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
 
 logger = logging.getLogger(__name__)
+
+
+def _sum_result_event_usage(events: list[dict[str, Any]]) -> tuple[int, int, float]:
+    """Sum token/cost usage from "result"-type transcript events.
+
+    The sandbox agent (lightspeed_agentic.logging.EventLogger) writes one
+    "result" event per agent turn with data.input_tokens/output_tokens/
+    cost_usd -- these are the real numbers, distinct from the top-level
+    StepTranscript.input_tokens/output_tokens/cost_usd fields, which
+    step_runner._collect_transcript() never populates.
+
+    Parameters:
+        events: Transcript events (dicts with "type" and "data" keys).
+
+    Returns:
+        (input_tokens, output_tokens, cost_usd) totals across all result
+        events -- usually just one, but summed in case a step's agent
+        makes multiple turns/calls.
+    """
+    input_tokens = 0
+    output_tokens = 0
+    cost_usd = 0.0
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "result":
+            continue
+        data = event.get("data") or {}
+        input_tokens += data.get("input_tokens") or 0
+        output_tokens += data.get("output_tokens") or 0
+        cost_usd += data.get("cost_usd") or 0.0
+    return input_tokens, output_tokens, cost_usd
 
 
 class SandboxExecutor(StepExecutor):
@@ -69,25 +100,29 @@ class SandboxExecutor(StepExecutor):
             "context": step_input.context,
         }
 
+        start_ms = time.monotonic_ns() // 1_000_000
         result = await run_step(
             run_step_input,
             spawner=self._spawner,
             transcript_store=self._transcript_store,
             attempt=1,
         )
+        duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
         transcript_data = result.get("transcript", {})
         transcript_events = []
         if isinstance(transcript_data, dict):
             transcript_events = transcript_data.get("events", [])
 
+        input_tokens, output_tokens, cost_usd = _sum_result_event_usage(transcript_events)
+
         return StepResult(
             status=result.get("status", "failed"),
             output=result.get("output"),
             error=result.get("error"),
             transcript=transcript_events,
-            cost_usd=0.0,
-            input_tokens=0,
-            output_tokens=0,
-            duration_ms=0,
+            cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration_ms=duration_ms,
         )
