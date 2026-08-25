@@ -121,6 +121,13 @@ class LocalWorkflowRunner(WorkflowRunner):
 
         return workflow_id
 
+    async def _persist_trace_parent(self, workflow_id: str, trace_parent: str) -> None:
+        """Merge trace_parent into workflow_context (which update_workflow_context replaces wholesale)."""
+        existing = await self._store.get(workflow_id)
+        wf_ctx = dict(existing.get("workflow_context") or {}) if existing else {}
+        wf_ctx["trace_parent"] = trace_parent
+        await self._store.update_workflow_context(workflow_id, wf_ctx)
+
     async def _execute(
         self,
         workflow_id: str,
@@ -163,6 +170,8 @@ class LocalWorkflowRunner(WorkflowRunner):
 
                     if state.paused_at_step:
                         if self._store:
+                            if state.trace_parent:
+                                await self._persist_trace_parent(workflow_id, state.trace_parent)
                             await self._store.set_paused(workflow_id, state.paused_at_step)
                             await self._store.append_event(
                                 workflow_id,
@@ -275,7 +284,12 @@ class LocalWorkflowRunner(WorkflowRunner):
             spawner=self._spawner,
             transcript_store=self._transcript_store,
             approval_policy=wf_ctx.get("approval_policy"),
+            user_id=state.get("user_id"),
+            session_id=state.get("session_id"),
         )
+
+        # Link the first resumed step's span back to the pre-pause trace
+        graph_state.resume_trace_parent = wf_ctx.get("trace_parent")
 
         # Clear pause flag so the graph doesn't skip remaining steps
         graph_state.paused_at_step = None

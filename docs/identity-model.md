@@ -72,6 +72,18 @@ accepted by `RunStateStore.create()` and `LocalWorkflowRunner`, but nothing
 reads or traverses it for escalation logic. Escalation behavior itself was
 explicitly deferred out of #146 to a future issue.
 
+`workflow_context` is a schema-less JSONB column (part of the base schema,
+predating the identity model) used as a grab-bag for orchestration-level
+data — `LocalWorkflowRunner` uses it to carry `sandbox_image`,
+`skills_image`, `mcp_servers`, `approval_policy`, and (since #179)
+`trace_parent`: the W3C traceparent of the last step executed before a
+pause, used to link the first post-resume step's span back to the pre-pause
+trace via an OTEL span Link (not a shared `trace_id` — see
+`workflow/executor/middleware.py::MiddlewareExecutor` and
+`workflow/executor/local/executor.py::_resume_from_store`).
+`update_workflow_context()` replaces the whole column, so callers must read
+before merging in a new key rather than overwriting it.
+
 ### `step_transcripts` (`storage/transcript_store.py`)
 
 Primary key is a `SERIAL id`, with a `UNIQUE(workflow_id, step_name)`

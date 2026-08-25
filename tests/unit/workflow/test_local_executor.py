@@ -298,3 +298,166 @@ class TestLocalWorkflowRunnerNoTemporal:
         source = open(mod.__file__).read()
         assert "from temporalio" not in source
         assert "import temporalio" not in source
+
+
+class TestLocalWorkflowRunnerTraceContinuity:
+    """Tests for trace_parent persistence on pause and resume passthrough (issue #179)."""
+
+    @pytest.mark.asyncio
+    async def test_pause_merges_trace_parent_into_existing_context(
+        self, executor: Any, mock_store: AsyncMock
+    ) -> None:
+        """On pause, trace_parent is merged into workflow_context, not overwritten."""
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        mock_store.get.return_value = {
+            "workflow_context": {"sandbox_image": "custom:latest", "mcp_servers": ["x"]},
+        }
+        mock_store.update_workflow_context = AsyncMock()
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "approve", "type": "human-approval", "output_key": "approval"},
+                ]
+            },
+        }
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+        state.trace_parent = "00-cccc-dddd-01"
+
+        await executor._execute("wf-1", graph, state)
+
+        mock_store.update_workflow_context.assert_called_once()
+        call_args = mock_store.update_workflow_context.call_args[0]
+        assert call_args[0] == "wf-1"
+        merged = call_args[1]
+        assert merged["trace_parent"] == "00-cccc-dddd-01"
+        assert merged["sandbox_image"] == "custom:latest"
+        assert merged["mcp_servers"] == ["x"]
+
+    @pytest.mark.asyncio
+    async def test_pause_without_trace_parent_skips_context_update(
+        self, executor: Any, mock_store: AsyncMock
+    ) -> None:
+        """No trace_parent captured -- no workflow_context write on pause."""
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        mock_store.update_workflow_context = AsyncMock()
+
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "approve", "type": "human-approval", "output_key": "approval"},
+                ]
+            },
+        }
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await executor._execute("wf-1", graph, state)
+
+        mock_store.update_workflow_context.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resume_passes_identity_and_seeds_resume_trace_parent(
+        self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
+    ) -> None:
+        """_resume_from_store forwards user_id/session_id and seeds resume_trace_parent."""
+        from cloud_agents.workflow.executor.graph_translator import WorkflowGraphState
+
+        mock_store.get.return_value = {
+            "definition": {
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "test"},
+                "spec": {
+                    "steps": [
+                        {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                    ]
+                },
+            },
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "workflow_context": {"trace_parent": "00-eeee-ffff-01"},
+            "user_id": "jwong",
+            "session_id": "ses-abc",
+            "steps": {},
+            "status": "paused",
+        }
+
+        captured_kwargs: dict[str, Any] = {}
+        fake_state = WorkflowGraphState()
+
+        def fake_build_graph(definition: Any, **kwargs: Any) -> Any:
+            captured_kwargs.update(kwargs)
+            return mocker.MagicMock(), fake_state
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor.build_graph",
+            side_effect=fake_build_graph,
+        )
+        # Prevent the background _execute() task from actually running --
+        # this test only cares about state passed into build_graph/graph_state.
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor.asyncio.create_task",
+            return_value=mocker.MagicMock(),
+        )
+
+        await executor._resume_from_store("wf-1")
+
+        assert captured_kwargs["user_id"] == "jwong"
+        assert captured_kwargs["session_id"] == "ses-abc"
+        assert fake_state.resume_trace_parent == "00-eeee-ffff-01"
+
+    @pytest.mark.asyncio
+    async def test_resume_without_stored_trace_parent_leaves_it_unset(
+        self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
+    ) -> None:
+        """No trace_parent in workflow_context -> resume_trace_parent stays None."""
+        from cloud_agents.workflow.executor.graph_translator import WorkflowGraphState
+
+        mock_store.get.return_value = {
+            "definition": {
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "test"},
+                "spec": {
+                    "steps": [
+                        {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                    ]
+                },
+            },
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "workflow_context": {},
+            "user_id": None,
+            "session_id": None,
+            "steps": {},
+            "status": "paused",
+        }
+
+        fake_state = WorkflowGraphState()
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor.build_graph",
+            return_value=(mocker.MagicMock(), fake_state),
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor.asyncio.create_task",
+            return_value=mocker.MagicMock(),
+        )
+
+        await executor._resume_from_store("wf-1")
+
+        assert fake_state.resume_trace_parent is None

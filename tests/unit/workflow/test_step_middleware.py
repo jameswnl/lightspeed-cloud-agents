@@ -750,3 +750,186 @@ class TestApplyMiddleware:
         result = apply_middleware(executor, middlewares)
 
         assert isinstance(result, MiddlewareExecutor)
+
+
+# ---------------------------------------------------------------------------
+# session.id span attribute + trace continuity (issue #179)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIdSpanAttribute:
+    """Tests for session.id as a span attribute."""
+
+    @pytest.mark.asyncio
+    async def test_session_id_included_when_present(self) -> None:
+        """session.id is set on the span when metadata carries it."""
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer)
+
+        step_input = _make_step_input(metadata=StepMetadata(session_id="ses-abc"))
+        await wrapped.run(step_input)
+
+        attrs = mock_tracer.start_as_current_span.call_args[1]["attributes"]
+        assert attrs["session.id"] == "ses-abc"
+
+    @pytest.mark.asyncio
+    async def test_session_id_omitted_when_absent(self) -> None:
+        """session.id is not set when metadata has no session_id."""
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer)
+
+        step_input = _make_step_input(metadata=StepMetadata())
+        await wrapped.run(step_input)
+
+        attrs = mock_tracer.start_as_current_span.call_args[1]["attributes"]
+        assert "session.id" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_session_id_included_on_stream_span(self) -> None:
+        """session.id is set on the streaming span too."""
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer)
+
+        step_input = _make_step_input(metadata=StepMetadata(session_id="ses-xyz"))
+        async for _ in wrapped.run_stream(step_input):
+            pass
+
+        attrs = mock_tracer.start_as_current_span.call_args[1]["attributes"]
+        assert attrs["session.id"] == "ses-xyz"
+
+
+class TestTraceParentCapture:
+    """Tests for capturing a step's W3C traceparent for pause/resume continuity."""
+
+    @pytest.mark.asyncio
+    async def test_captures_real_traceparent_into_metadata_extra(self) -> None:
+        """A real (non-NoOp) span's traceparent is captured on metadata.extra."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        tracer = TracerProvider().get_tracer("test")
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=tracer)
+
+        step_input = _make_step_input()
+        await wrapped.run(step_input)
+
+        assert step_input.metadata is not None
+        trace_parent = step_input.metadata.extra.get("trace_parent")
+        assert trace_parent is not None
+        assert trace_parent.startswith("00-")
+
+    @pytest.mark.asyncio
+    async def test_noop_when_metadata_is_none(self) -> None:
+        """No traceparent capture attempted when step_input.metadata is None."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        tracer = TracerProvider().get_tracer("test")
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=tracer)
+
+        step_input = _make_step_input(metadata=None)
+        result = await wrapped.run(step_input)
+
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_capture_failure_does_not_break_step_execution(self) -> None:
+        """A propagation error is swallowed -- tracing must never break steps."""
+        from unittest.mock import patch
+
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer)
+
+        with patch(
+            "cloud_agents.workflow.executor.middleware.inject_traceparent",
+            side_effect=RuntimeError("propagator exploded"),
+        ):
+            result = await wrapped.run(_make_step_input())
+
+        assert result.status == "completed"
+
+
+class TestMiddlewareExecutorLinks:
+    """Tests for passing OTEL span Links through MiddlewareExecutor."""
+
+    @pytest.mark.asyncio
+    async def test_links_passed_to_span(self) -> None:
+        """Configured links are forwarded to start_as_current_span."""
+        from opentelemetry.trace import Link, SpanContext, TraceFlags
+
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        span_context = SpanContext(
+            trace_id=0x0AF7651916CD43DD8448EB211C80319C,
+            span_id=0xB7AD6B7169203331,
+            is_remote=True,
+            trace_flags=TraceFlags(0x01),
+        )
+        links = [Link(span_context)]
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer, links=links)
+        await wrapped.run(_make_step_input())
+
+        call_kwargs = mock_tracer.start_as_current_span.call_args[1]
+        assert call_kwargs["links"] == links
+
+    @pytest.mark.asyncio
+    async def test_no_links_by_default(self) -> None:
+        """links defaults to None when not configured."""
+        from cloud_agents.workflow.executor.middleware import MiddlewareExecutor
+
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracer = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span
+
+        executor = _FakeExecutor()
+        wrapped = MiddlewareExecutor(executor, [], tracer=mock_tracer)
+        await wrapped.run(_make_step_input())
+
+        call_kwargs = mock_tracer.start_as_current_span.call_args[1]
+        assert call_kwargs["links"] is None

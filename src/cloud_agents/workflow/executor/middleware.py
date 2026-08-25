@@ -17,8 +17,9 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, Optional, Protocol
 
-from opentelemetry.trace import StatusCode, Tracer
+from opentelemetry.trace import Link, StatusCode, Tracer
 
+from cloud_agents.runtime.tracing import inject_traceparent
 from cloud_agents.workflow.executor.step.base import (
     StepInput,
     StepMetadata,
@@ -208,6 +209,7 @@ class MiddlewareExecutor:
         _executor: Wrapped StepExecutor.
         _middlewares: Ordered list of middleware to apply.
         _tracer: Optional OTEL tracer for span creation.
+        _links: Optional span links (e.g. to a pre-pause trace on resume).
     """
 
     def __init__(
@@ -215,6 +217,7 @@ class MiddlewareExecutor:
         executor: Any,
         middlewares: list[StepMiddleware],
         tracer: Optional[Tracer] = None,
+        links: Optional[list[Link]] = None,
     ) -> None:
         """Initialize the middleware executor.
 
@@ -222,10 +225,13 @@ class MiddlewareExecutor:
             executor: StepExecutor to wrap.
             middlewares: Ordered list of StepMiddleware implementations.
             tracer: Optional OTEL tracer. If None, uses default tracer.
+            links: Optional OTEL span links to attach to the step's span
+                (e.g. linking a post-resume step back to its pre-pause trace).
         """
         self._executor = executor
         self._middlewares = middlewares
         self._tracer = tracer
+        self._links = links
 
     async def run(self, step_input: StepInput) -> StepResult:
         """Execute with middleware stack and OTEL span.
@@ -265,6 +271,35 @@ class MiddlewareExecutor:
 
         return result
 
+    @staticmethod
+    def _span_attributes(step_input: StepInput) -> dict[str, Any]:
+        """Build span attributes, including session.id when available."""
+        attributes: dict[str, Any] = {
+            "step.name": step_input.step_name,
+            "workflow.id": step_input.workflow_id,
+        }
+        if step_input.metadata and step_input.metadata.session_id:
+            attributes["session.id"] = step_input.metadata.session_id
+        return attributes
+
+    @staticmethod
+    def _capture_trace_parent(step_input: StepInput) -> None:
+        """Stash this step's W3C traceparent on metadata.extra.
+
+        Lets the caller (graph_translator) persist the last executed
+        step's trace context for span-link continuation across pause/resume.
+        Best-effort: propagation failures must never break step execution.
+        """
+        if step_input.metadata is None:
+            return
+        try:
+            trace_parent = inject_traceparent({}).get("traceparent")
+        except Exception:
+            logger.debug("Failed to capture traceparent for step", exc_info=True)
+            return
+        if trace_parent:
+            step_input.metadata.extra["trace_parent"] = trace_parent
+
     async def _run_with_span(self, step_input: StepInput) -> StepResult:
         """Execute with middleware inside an OTEL span.
 
@@ -278,11 +313,11 @@ class MiddlewareExecutor:
 
         with self._tracer.start_as_current_span(
             "step.execute",
-            attributes={
-                "step.name": step_input.step_name,
-                "workflow.id": step_input.workflow_id,
-            },
+            attributes=self._span_attributes(step_input),
+            links=self._links or None,
         ) as span:
+            self._capture_trace_parent(step_input)
+
             for mw in self._middlewares:
                 step_input = await mw.before(step_input)
 
@@ -338,11 +373,11 @@ class MiddlewareExecutor:
 
         with self._tracer.start_as_current_span(
             "step.execute.stream",
-            attributes={
-                "step.name": step_input.step_name,
-                "workflow.id": step_input.workflow_id,
-            },
+            attributes=self._span_attributes(step_input),
+            links=self._links or None,
         ) as span:
+            self._capture_trace_parent(step_input)
+
             for mw in self._middlewares:
                 step_input = await mw.before(step_input)
 

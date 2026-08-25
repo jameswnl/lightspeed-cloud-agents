@@ -904,3 +904,138 @@ class TestGraphTranslatorTranscriptEnrichment:
         parsed = json.loads(assistant_msg["content"])
         assert parsed["severity"] == "high"
         assert parsed["details"] == "OOM on pod-1"
+
+
+class TestGraphTranslatorResumeTraceContinuity:
+    """Tests for span-link trace continuity across pause/resume (issue #179)."""
+
+    @pytest.mark.asyncio
+    async def test_trace_parent_captured_after_step(
+        self, mocker: MockerFixture
+    ) -> None:
+        """state.trace_parent picks up the step's captured traceparent.
+
+        Actual traceparent capture (from a real OTEL span) is verified in
+        test_step_middleware.py. This test confirms graph_translator wires
+        the captured value from step_input.metadata.extra onto state.
+        """
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        async def capture_run(step_input: Any) -> StepResult:
+            step_input.metadata.extra["trace_parent"] = "00-aaaa-bbbb-01"
+            return StepResult(
+                status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+            )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = capture_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+        ])
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+
+        assert state.trace_parent == "00-aaaa-bbbb-01"
+
+    @pytest.mark.asyncio
+    async def test_resume_trace_parent_becomes_link_once(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Only the first step after resume gets a Link; then it's consumed."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mocker.AsyncMock(),
+        )
+
+        step_result = StepResult(
+            status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+        )
+        mock_instance = mocker.MagicMock()
+        mock_instance.run = mocker.AsyncMock(return_value=step_result)
+        mock_me_class = mocker.MagicMock(return_value=mock_instance)
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.MiddlewareExecutor",
+            mock_me_class,
+        )
+
+        fake_traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+        ])
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+        state.resume_trace_parent = fake_traceparent
+
+        await graph.run(state=state)
+
+        assert mock_me_class.call_count == 2
+        first_links = mock_me_class.call_args_list[0].kwargs["links"]
+        second_links = mock_me_class.call_args_list[1].kwargs["links"]
+
+        assert first_links is not None
+        assert len(first_links) == 1
+        assert format(first_links[0].context.trace_id, "032x") == (
+            "0af7651916cd43dd8448eb211c80319c"
+        )
+
+        assert second_links is None
+        assert state.resume_trace_parent is None
+
+    @pytest.mark.asyncio
+    async def test_no_resume_trace_parent_means_no_links(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Normal (non-resumed) execution passes no links."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mocker.AsyncMock(),
+        )
+
+        step_result = StepResult(
+            status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+        )
+        mock_instance = mocker.MagicMock()
+        mock_instance.run = mocker.AsyncMock(return_value=step_result)
+        mock_me_class = mocker.MagicMock(return_value=mock_instance)
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.MiddlewareExecutor",
+            mock_me_class,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+        ])
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+
+        assert mock_me_class.call_args_list[0].kwargs["links"] is None
