@@ -32,6 +32,40 @@ class TestBuildSpawnerKubernetes:
         assert isinstance(spawner, KubernetesSpawner)
         assert spawner._namespace == "cloud-agents"
 
+    def test_explicit_none_falls_back_to_class_default(self) -> None:
+        """namespace=None (e.g. an unset Pydantic Optional field) must not
+        override KubernetesSpawner's own default with a literal None.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
+
+        spawner = build_spawner("kubernetes", namespace=None, service_account=None, max_pods=None)
+
+        assert isinstance(spawner, KubernetesSpawner)
+        assert spawner._namespace == "cloud-agents"
+        assert spawner._service_account == "workflow-runner"
+
+    def test_unknown_keys_are_dropped_not_forwarded(self) -> None:
+        """Passing a broader config dict (extra unrelated keys) doesn't TypeError.
+
+        KubernetesSpawner forwards unrecognized kwargs to
+        AgentSpawner.__init__(max_pods=...), so an unfiltered pass-through
+        of e.g. a Pydantic model_dump() containing `type`/`sandbox_image`
+        would fail several frames away from the real cause.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
+
+        spawner = build_spawner(
+            "kubernetes",
+            namespace="my-ns",
+            type="kubernetes",
+            sandbox_image="sandbox:latest",
+        )
+
+        assert isinstance(spawner, KubernetesSpawner)
+        assert spawner._namespace == "my-ns"
+
 
 class TestBuildSpawnerPodman:
     """Tests for the podman branch."""
@@ -42,6 +76,28 @@ class TestBuildSpawnerPodman:
         from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
         spawner = build_spawner("podman", network="my-net")
+
+        assert isinstance(spawner, PodmanSpawner)
+        assert spawner._network == "my-net"
+
+    def test_explicit_none_falls_back_to_class_default(self) -> None:
+        """network=None must not override PodmanSpawner's own default."""
+        from cloud_agents.spawner.factory import build_spawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
+
+        spawner = build_spawner("podman", network=None)
+
+        assert isinstance(spawner, PodmanSpawner)
+        assert spawner._network == "cloud-agents"
+
+    def test_unknown_keys_are_dropped_not_forwarded(self) -> None:
+        """Extra unrelated keys (e.g. from a broader config dict) don't TypeError."""
+        from cloud_agents.spawner.factory import build_spawner
+        from cloud_agents.spawner.podman_spawner import PodmanSpawner
+
+        spawner = build_spawner(
+            "podman", network="my-net", type="podman", sandbox_image="sandbox:latest"
+        )
 
         assert isinstance(spawner, PodmanSpawner)
         assert spawner._network == "my-net"
@@ -172,6 +228,25 @@ class TestBuildSpawnerOpenShell:
         build_spawner("openshell")
 
         mock_client.assert_called_once_with(endpoint="localhost:17670")
+
+    def test_unknown_extra_keys_are_dropped_not_forwarded(self, mocker: MockerFixture) -> None:
+        """Extra unrelated keys (e.g. from a broader config dict) don't TypeError.
+
+        OpenShellSpawner forwards its own unrecognized kwargs to
+        AgentSpawner.__init__(max_pods=...), same as kubernetes/podman.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url="gw:17670",
+            type="openshell",
+            sandbox_image="sandbox:latest",
+        )
+
+        assert spawner._endpoint == "gw:17670"
 
 
 class TestBuildSpawnerUnknownType:

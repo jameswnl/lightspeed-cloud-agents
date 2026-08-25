@@ -79,6 +79,13 @@ def _create_spawner():
     from cloud_agents.spawner.factory import build_spawner
 
     if SPAWNER_TYPE == "kubernetes":
+        # NOTE: this "default" fallback predates build_spawner()/KubernetesSpawner,
+        # which both default to "cloud-agents" when namespace is omitted entirely.
+        # Preserved as-is to avoid changing behavior for existing deployments
+        # that rely on unset SPAWNER_NAMESPACE meaning the "default" namespace.
+        # Other callers of build_spawner("kubernetes", ...) (e.g. lightspeed-stack)
+        # should not copy "default" as their own implicit namespace fallback --
+        # pick one deliberately, or omit namespace to get "cloud-agents".
         return build_spawner(
             "kubernetes",
             namespace=os.environ.get("SPAWNER_NAMESPACE", "default"),

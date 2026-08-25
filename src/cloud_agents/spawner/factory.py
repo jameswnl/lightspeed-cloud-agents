@@ -23,6 +23,37 @@ logger = logging.getLogger(__name__)
 
 _KNOWN_SPAWNER_TYPES = ("kubernetes", "podman", "openshell")
 
+# Explicit allowlists (not signature introspection): each spawner's __init__
+# forwards unrecognized kwargs to AgentSpawner.__init__(max_pods=...), so an
+# unknown key doesn't fail loudly at the spawner's own constructor -- it
+# fails at the base class instead, several frames away from the real cause.
+# Filtering here lets a caller pass a broader config object (e.g. a
+# lightspeed-stack Pydantic model_dump() with `type`/`sandbox_image`/etc.
+# mixed in) without needing to hand-pick fields first.
+_KUBERNETES_PARAMS = frozenset(
+    {
+        "namespace",
+        "service_account",
+        "config_configmap",
+        "tools_configmap",
+        "secret_env_vars",
+        "projected_sa_token",
+        "max_pods",
+    }
+)
+_PODMAN_PARAMS = frozenset({"network", "volume_mounts", "max_pods"})
+_OPENSHELL_EXTRA_PARAMS = frozenset({"max_pods"})
+
+
+def _filtered(params: dict[str, Any], known: frozenset[str]) -> dict[str, Any]:
+    """Drop keys not in `known` and values that are explicitly None.
+
+    None-dropping matters because Pydantic Optional fields default to None
+    rather than being omitted -- passing namespace=None to KubernetesSpawner
+    would store None instead of falling back to its own class default.
+    """
+    return {k: v for k, v in params.items() if k in known and v is not None}
+
 
 def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
     """Build an AgentSpawner instance for the given type.
@@ -30,14 +61,19 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
     Parameters:
         spawner_type: One of "kubernetes", "podman", "openshell".
         **params: Constructor parameters for the corresponding spawner.
-            For "kubernetes": namespace, service_account, etc. -- forwarded
-                directly to KubernetesSpawner.
-            For "podman": network, volume_mounts, etc. -- forwarded
-                directly to PodmanSpawner.
+            For "kubernetes": namespace, service_account, config_configmap,
+                tools_configmap, secret_env_vars, projected_sa_token, max_pods.
+            For "podman": network, volume_mounts, max_pods.
             For "openshell": gateway_url, driver, workspace, http_endpoint,
-                tls_ca, tls_cert, tls_key, bearer_token -- used to build the
-                underlying SandboxClient (with TLS/bearer auth) and then
-                OpenShellSpawner.
+                tls_ca, tls_cert, tls_key, bearer_token, max_pods -- used to
+                build the underlying SandboxClient (with TLS/bearer auth)
+                and then OpenShellSpawner.
+            Callers may pass a broader dict (e.g. a Pydantic model_dump())
+            containing extra keys -- unrecognized keys and explicit None
+            values are dropped rather than forwarded, so passing an unset
+            Optional field or an unrelated config field (`type`,
+            `sandbox_image`, ...) doesn't crash or override a spawner's own
+            default with None.
 
     Returns:
         A configured AgentSpawner instance.
@@ -52,15 +88,19 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
     if spawner_type == "kubernetes":
         from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
 
+        k8s_params = _filtered(params, _KUBERNETES_PARAMS)
         logger.info(
-            "Using KubernetesSpawner (namespace=%s)", params.get("namespace", "cloud-agents")
+            "Using KubernetesSpawner (namespace=%s)", k8s_params.get("namespace", "cloud-agents")
         )
-        return KubernetesSpawner(**params)
+        return KubernetesSpawner(**k8s_params)
     if spawner_type == "podman":
         from cloud_agents.spawner.podman_spawner import PodmanSpawner
 
-        logger.info("Using PodmanSpawner (network=%s)", params.get("network", "cloud-agents"))
-        return PodmanSpawner(**params)
+        podman_params = _filtered(params, _PODMAN_PARAMS)
+        logger.info(
+            "Using PodmanSpawner (network=%s)", podman_params.get("network", "cloud-agents")
+        )
+        return PodmanSpawner(**podman_params)
     if spawner_type == "openshell":
         return _build_openshell_spawner(**params)
     raise ValueError(
@@ -107,14 +147,11 @@ def _build_openshell_spawner(
 
         from openshell import TlsConfig
 
-        tls_config = TlsConfig(ca_path=Path(tls_ca))
+        tls_kwargs: dict[str, Any] = {"ca_path": Path(tls_ca)}
         if tls_cert and tls_key:
-            tls_config = TlsConfig(
-                ca_path=Path(tls_ca),
-                cert_path=Path(tls_cert),
-                key_path=Path(tls_key),
-            )
-        client_kwargs["tls"] = tls_config
+            tls_kwargs["cert_path"] = Path(tls_cert)
+            tls_kwargs["key_path"] = Path(tls_key)
+        client_kwargs["tls"] = TlsConfig(**tls_kwargs)
         logger.info("OpenShell TLS enabled (ca=%s)", tls_ca)
     if bearer_token:
         client_kwargs["bearer_token"] = bearer_token
@@ -138,5 +175,5 @@ def _build_openshell_spawner(
         tls_cert=tls_cert,
         tls_key=tls_key,
         bearer_token=bearer_token,
-        **kwargs,
+        **_filtered(kwargs, _OPENSHELL_EXTRA_PARAMS),
     )
