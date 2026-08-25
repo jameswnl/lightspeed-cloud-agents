@@ -563,6 +563,11 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
         trace_ids = {s.context.trace_id for s in step_spans}
         assert trace_ids == {workflow_spans[0].context.trace_id}
 
+        # Pin the actual mechanism (nesting under workflow.execute), not just
+        # "same trace_id somehow" -- which could also happen via span Links.
+        wf_span_id = workflow_spans[0].context.span_id
+        assert all(s.parent is not None and s.parent.span_id == wf_span_id for s in step_spans)
+
     @pytest.mark.asyncio
     async def test_workflow_span_has_workflow_id_attribute(
         self,
@@ -679,7 +684,15 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
             "workflow_id": workflow_id,
             "status": "paused",
             "current_step": "approve-fix",
-            "steps": {"r1": {"status": "completed", "output": {"ok": True}}},
+            "steps": {
+                "r1": {"status": "completed", "output": {"ok": True}},
+                # Must be seeded as completed -- _approve_inner's update_step()
+                # call on the mock does not mutate this dict, and
+                # _resume_from_store reloads step_results from it. Without
+                # this, the rebuilt graph re-pauses at approve-fix and s2
+                # never runs, silently defeating this test.
+                "approval": {"status": "completed", "output": {"approved": True}},
+            },
             "definition": definition,
             "provider": provider_cfg,
             "workflow_context": {
@@ -692,11 +705,24 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
         await executor.approve(
             workflow_id, ApprovalDecision(step_name="approve-fix", decision="approved")
         )
-        await executor._running[workflow_id]
+        # The resumed task may already have completed (and popped itself from
+        # _running) by the time approve() returns -- its spans are already in
+        # the exporter either way, so only await it if it's still in flight.
+        resumed_task = executor._running.get(workflow_id)
+        if resumed_task is not None:
+            await resumed_task
 
-        workflow_spans = [
-            s for s in exporter.get_finished_spans() if s.name == "workflow.execute"
-        ]
+        spans = exporter.get_finished_spans()
+        workflow_spans = [s for s in spans if s.name == "workflow.execute"]
+        step_spans = {s.attributes["step.name"]: s for s in spans if s.name == "step.execute"}
+
         assert len(workflow_spans) == 2
-        trace_ids = {s.context.trace_id for s in workflow_spans}
-        assert len(trace_ids) == 2
+        assert set(step_spans) == {"s1", "s2"}
+
+        # The real guard: s1 (pre-pause) and s2 (post-resume) must land on
+        # different trace_ids -- not just "two workflow.execute spans exist".
+        assert step_spans["s1"].context.trace_id != step_spans["s2"].context.trace_id
+        assert {s.context.trace_id for s in workflow_spans} == {
+            step_spans["s1"].context.trace_id,
+            step_spans["s2"].context.trace_id,
+        }

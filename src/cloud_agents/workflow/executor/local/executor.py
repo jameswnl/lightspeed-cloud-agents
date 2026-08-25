@@ -15,10 +15,9 @@ import logging
 import uuid
 from typing import Any
 
-from opentelemetry.trace import StatusCode
 from pydantic_graph import EndMarker
 
-from cloud_agents.runtime.tracing import get_tracer
+from cloud_agents.runtime.tracing import get_tracer, set_span_error
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
     WorkflowRunner,
@@ -226,8 +225,7 @@ class LocalWorkflowRunner(WorkflowRunner):
                     await self._store.mark_terminal(workflow_id, "cancelled")
                 raise
             except Exception as exc:
-                span.set_status(StatusCode.ERROR, str(exc))
-                span.record_exception(exc)
+                set_span_error(span, exc)
                 logger.exception("Workflow '%s' failed", workflow_id)
                 if self._store:
                     await self._store.append_event(
