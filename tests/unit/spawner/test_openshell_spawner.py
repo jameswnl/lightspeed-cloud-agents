@@ -423,6 +423,53 @@ class TestOpenShellSpawnerSpawn:
         spec.environment.__setitem__.assert_any_call("LIGHTSPEED_PROVIDER", "openai")
         spec.environment.__setitem__.assert_any_call("LIGHTSPEED_MODEL", "gpt-4")
 
+    @pytest.mark.asyncio
+    async def test_spawn_starts_server_via_python_module_invocation(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_do_spawn starts uvicorn via `python3 -m uvicorn`, not a bare binary.
+
+        Images that install Python deps with `pip install --target` (a common
+        hermetic-build pattern) copy package files but never generate
+        console-script executables, so a bare "uvicorn" exec fails with
+        "command not found". Invoking it as a module only requires uvicorn to
+        be importable, which works regardless of how the image installed it.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
+
+        await asyncio.sleep(0.05)
+
+        mock_client.exec_stream.assert_called_once()
+        command = mock_client.exec_stream.call_args.args[1]
+        assert command[:3] == ["python3", "-m", "uvicorn"]
+
 
 class TestOpenShellSpawnerDestroy:
     """Tests for _do_destroy cleanup."""
