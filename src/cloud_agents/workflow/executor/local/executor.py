@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic_graph import EndMarker
 
+from cloud_agents.runtime.tracing import get_tracer, set_span_error
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
     WorkflowRunner,
@@ -28,6 +29,8 @@ from cloud_agents.workflow.executor.graph_translator import (
 )
 
 logger = logging.getLogger(__name__)
+
+_tracer = get_tracer("cloud_agents.workflow.executor.local.executor")
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
@@ -145,72 +148,93 @@ class LocalWorkflowRunner(WorkflowRunner):
         graph: Any,
         state: WorkflowGraphState,
     ) -> None:
-        """Execute the workflow graph, persisting state at each step."""
+        """Execute the workflow graph, persisting state at each step.
+
+        Opens a "workflow.execute" span that stays current for the whole
+        method body, so every step's "step.execute" span (opened deeper in
+        the call stack, inside graph.iter()'s node execution) nests under it
+        and shares its trace_id -- without this, each step previously opened
+        as an independent root span with its own trace_id (#183). This span
+        covers one continuous run *segment*: from start() to completion, or
+        to a pause. A resumed segment (a new _execute() call from
+        _resume_from_store) gets its own separate "workflow.execute" span/
+        trace, bridged back to the pre-pause segment via the span Link
+        mechanism in agent_step() (#181) -- two linked traces, not one
+        trace spanning the pause, per #179's design.
+        """
         persisted_keys: set[str] = set(state.step_results.keys())
-        try:
-            async with graph.iter(state=state) as run:
-                while True:
-                    result = await run.next()
+        attributes: dict[str, Any] = {"workflow.id": workflow_id}
+        if state.session_id:
+            attributes["session.id"] = state.session_id
 
-                    if isinstance(result, EndMarker):
-                        break
+        with _tracer.start_as_current_span("workflow.execute", attributes=attributes) as span:
+            try:
+                async with graph.iter(state=state) as run:
+                    while True:
+                        result = await run.next()
 
-                    for task in result:
-                        node_id = task.node_id
-                        if node_id.startswith("__"):
-                            continue
+                        if isinstance(result, EndMarker):
+                            break
+
+                        for task in result:
+                            node_id = task.node_id
+                            if node_id.startswith("__"):
+                                continue
+                            if self._store:
+                                await self._store.append_event(
+                                    workflow_id,
+                                    {"type": "step.started", "step": node_id},
+                                )
+
+                        # Persist only new/changed step results
                         if self._store:
-                            await self._store.append_event(
-                                workflow_id,
-                                {"type": "step.started", "step": node_id},
-                            )
+                            new_keys = set(state.step_results.keys()) - persisted_keys
+                            for key in new_keys:
+                                step_result = state.step_results[key]
+                                await self._store.update_step(
+                                    workflow_id,
+                                    key,
+                                    status=step_result.get("status", "completed"),
+                                    output=step_result.get("output"),
+                                    error=step_result.get("error"),
+                                )
+                            persisted_keys.update(new_keys)
 
-                    # Persist only new/changed step results
-                    if self._store:
-                        new_keys = set(state.step_results.keys()) - persisted_keys
-                        for key in new_keys:
-                            step_result = state.step_results[key]
-                            await self._store.update_step(
-                                workflow_id,
-                                key,
-                                status=step_result.get("status", "completed"),
-                                output=step_result.get("output"),
-                                error=step_result.get("error"),
-                            )
-                        persisted_keys.update(new_keys)
+                        if state.paused_at_step:
+                            if self._store:
+                                if state.trace_parent:
+                                    await self._persist_trace_parent(
+                                        workflow_id, state.trace_parent
+                                    )
+                                await self._store.set_paused(workflow_id, state.paused_at_step)
+                                await self._store.append_event(
+                                    workflow_id,
+                                    {
+                                        "type": "workflow.paused",
+                                        "step": state.paused_at_step,
+                                    },
+                                )
+                            return
 
-                    if state.paused_at_step:
-                        if self._store:
-                            if state.trace_parent:
-                                await self._persist_trace_parent(workflow_id, state.trace_parent)
-                            await self._store.set_paused(workflow_id, state.paused_at_step)
-                            await self._store.append_event(
-                                workflow_id,
-                                {
-                                    "type": "workflow.paused",
-                                    "step": state.paused_at_step,
-                                },
-                            )
-                        return
+                if self._store:
+                    await self._store.append_event(workflow_id, {"type": "workflow.completed"})
+                    await self._store.mark_terminal(workflow_id, "completed")
 
-            if self._store:
-                await self._store.append_event(workflow_id, {"type": "workflow.completed"})
-                await self._store.mark_terminal(workflow_id, "completed")
-
-        except asyncio.CancelledError:
-            if self._store:
-                await self._store.mark_terminal(workflow_id, "cancelled")
-            raise
-        except Exception as exc:
-            logger.exception("Workflow '%s' failed", workflow_id)
-            if self._store:
-                await self._store.append_event(
-                    workflow_id,
-                    {"type": "workflow.failed", "error": str(exc)},
-                )
-                await self._store.mark_terminal(workflow_id, "failed")
-        finally:
-            self._running.pop(workflow_id, None)
+            except asyncio.CancelledError:
+                if self._store:
+                    await self._store.mark_terminal(workflow_id, "cancelled")
+                raise
+            except Exception as exc:
+                set_span_error(span, exc)
+                logger.exception("Workflow '%s' failed", workflow_id)
+                if self._store:
+                    await self._store.append_event(
+                        workflow_id,
+                        {"type": "workflow.failed", "error": str(exc)},
+                    )
+                    await self._store.mark_terminal(workflow_id, "failed")
+            finally:
+                self._running.pop(workflow_id, None)
 
     async def approve(
         self,
