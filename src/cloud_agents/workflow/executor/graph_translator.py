@@ -16,9 +16,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from opentelemetry import trace
+from opentelemetry.trace import Link
 from pydantic_graph import GraphBuilder, StepContext
 
-from cloud_agents.runtime.tracing import get_tracer
+from cloud_agents.runtime.tracing import extract_traceparent, get_tracer
 from cloud_agents.workflow.core.conditions import evaluate_condition
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
 from cloud_agents.workflow.executor.middleware import (
@@ -54,6 +56,12 @@ class WorkflowGraphState:
         approval_policy: Optional approval policy configuration.
         paused_at_step: Set when execution pauses for approval.
         approval_result: Set when approval is received.
+        trace_parent: W3C traceparent of the most recently executed step's
+            span. Updated after every step; the runner persists it when the
+            workflow pauses, for span-link continuation on resume.
+        resume_trace_parent: Traceparent captured before a prior pause, read
+            back by the runner on resume. The first step to execute reads
+            and clears this to link its span back to the pre-pause trace.
     """
 
     workflow_id: str = ""
@@ -70,6 +78,8 @@ class WorkflowGraphState:
     transcript_store: Any = None
     approval_policy: Optional[dict[str, Any]] = None
     user_id: Optional[str] = None
+    trace_parent: Optional[str] = None
+    resume_trace_parent: Optional[str] = None
     session_id: Optional[str] = None
     paused_at_step: Optional[str] = None
     approval_result: Optional[dict[str, Any]] = None
@@ -261,8 +271,27 @@ def _build_agent_step(
         if state.transcript_store:
             middlewares.append(TranscriptMiddleware(state.transcript_store))
 
-        wrapped = MiddlewareExecutor(executor, middlewares, tracer=_tracer)
+        # Link this step's span back to the pre-pause trace, once, on resume
+        links = None
+        if state.resume_trace_parent:
+            span_context = trace.get_current_span(
+                extract_traceparent({"traceparent": state.resume_trace_parent})
+            ).get_span_context()
+            if span_context and span_context.is_valid:
+                links = [Link(span_context)]
+            state.resume_trace_parent = None
+
+        wrapped = MiddlewareExecutor(executor, middlewares, tracer=_tracer, links=links)
         exec_result = await wrapped.run(step_input)
+
+        # Always overwrite (not just when truthy) so a step whose capture
+        # failed doesn't leave a stale, unrelated earlier step's trace_parent
+        # in place -- a pause right after must not link to the wrong span.
+        state.trace_parent = (
+            step_input.metadata.extra.get("trace_parent")
+            if step_input.metadata is not None
+            else None
+        )
 
         state.step_results[output_key] = {
             "status": exec_result.status,
