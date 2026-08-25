@@ -133,11 +133,13 @@ class OpenShellSpawner(AgentSpawner):
                 raise ValueError(
                     f"extra_readable_paths entries must not contain '..' segments: {path!r}"
                 )
-            # strip("/") rather than normpath(): normpath() special-cases
-            # exactly two leading slashes ("//") per POSIX and leaves it
-            # unchanged instead of collapsing it to "/", which would let
-            # "//" slip past a normpath-based check.
-            if path.strip("/") == "":
+            # Both checks are needed, neither alone is sufficient:
+            # - strip("/") == "" catches "/", "//", "///" -- but NOT "/."
+            #   or "/././", since strip() doesn't resolve "." segments.
+            # - normpath() resolves "/." and "/././" to "/" -- but leaves
+            #   "//" as "//" unchanged (POSIX special-cases exactly two
+            #   leading slashes), so it alone would miss "//".
+            if path.strip("/") == "" or os.path.normpath(path) in ("/", "//"):
                 raise ValueError(
                     "extra_readable_paths entries must not be the filesystem root "
                     f"('/') -- this would grant full-filesystem read: {path!r}"

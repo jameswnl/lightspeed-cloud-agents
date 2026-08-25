@@ -1270,12 +1270,30 @@ class TestExtraReadablePathsConstructor:
         with pytest.raises(ValueError, match="root"):
             OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/"])
 
-    def test_rejects_filesystem_root_via_trailing_slash(self) -> None:
-        """"//" and other root-equivalent forms are caught by normpath, not just "/" itself."""
+    def test_rejects_filesystem_root_via_extra_slashes(self) -> None:
+        """"//" and "///" are root-equivalent, caught by the strip("/") check."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         with pytest.raises(ValueError, match="root"):
             OpenShellSpawner(openshell_client=object(), extra_readable_paths=["//"])
+        with pytest.raises(ValueError, match="root"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["///"])
+
+    def test_rejects_filesystem_root_via_dot_segments(self) -> None:
+        """"/." and "/././" are root-equivalent once path-resolved, caught by normpath.
+
+        strip("/") alone is not enough here: "/.".strip("/") == "." (not
+        empty), since strip() only trims leading/trailing "/" characters
+        and doesn't resolve "." segments. Landlock/kernel path resolution
+        treats "/." the same as "/", so this needs the normpath() check
+        combined with the strip() check, not either alone.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="root"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/."])
+        with pytest.raises(ValueError, match="root"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/././"])
 
 
 class TestCredentialInjection:
