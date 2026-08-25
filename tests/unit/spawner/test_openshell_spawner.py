@@ -1256,6 +1256,27 @@ class TestExtraReadablePathsConstructor:
 
         assert spawner._extra_readable_paths == []
 
+    def test_rejects_filesystem_root(self) -> None:
+        """"/" widens the baseline policy to full-filesystem read (issue #189 review).
+
+        The baseline policy's write list stays narrow (/tmp, /dev/null),
+        but "/" in read_only would grant read access to everything --
+        effectively disabling the read restriction this fix exists to
+        preserve, without any of advisory mode's compensating write
+        lockdown.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="root"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/"])
+
+    def test_rejects_filesystem_root_via_trailing_slash(self) -> None:
+        """"//" and other root-equivalent forms are caught by normpath, not just "/" itself."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="root"):
+            OpenShellSpawner(openshell_client=object(), extra_readable_paths=["//"])
+
 
 class TestCredentialInjection:
     """Tests for _inject_credentials() and Provider API integration."""

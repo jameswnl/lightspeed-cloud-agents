@@ -79,11 +79,14 @@ class OpenShellSpawner(AgentSpawner):
     _DEFAULT_EXTRA_READABLE_PATHS: ClassVar[list[str]] = ["/opt/app-root", "/opt/lightspeed"]
 
     # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
-    # crates/openshell-sandbox/src/lib.rs). Mirrored here because OpenShell
-    # does NOT merge a supplied filesystem policy with its own default --
-    # a supplied policy fully *replaces* it. So the baseline builder below
-    # must always send this full list, union'd with the extra paths, never
-    # just the extras alone -- see issue #189.
+    # crates/openshell-policy/src/lib.rs, confirmed against openshell@679fe4c).
+    # Mirrored here because OpenShell does NOT merge a supplied filesystem
+    # policy with its own default -- a supplied policy fully *replaces* it.
+    # So the baseline builder below must always send this full list,
+    # union'd with the extra paths, never just the extras alone -- see
+    # issue #189. If this list ever drifts from OpenShell's own, re-verify
+    # against restrictive_default_policy() directly rather than trusting
+    # this comment.
     _DEFAULT_BASELINE_READ_ONLY: ClassVar[list[str]] = [
         "/usr",
         "/lib",
@@ -103,7 +106,10 @@ class OpenShellSpawner(AgentSpawner):
         malformed input here is a security concern, not just a usability
         one. Rejects relative paths (meaningless to Landlock, which rules
         operate on absolute filesystem paths), ".." segments (could escape
-        the intended directory), and empty strings.
+        the intended directory), empty strings, and "/" itself (would grant
+        full-filesystem read on the baseline policy without advisory
+        mode's write lockdown -- effectively disabling the read
+        restriction this fix exists to preserve).
 
         Args:
             paths: Candidate list of absolute directory paths.
@@ -115,8 +121,8 @@ class OpenShellSpawner(AgentSpawner):
             the spawner's stored policy.
 
         Raises:
-            ValueError: If any path is empty, relative, or contains a
-                ".." segment.
+            ValueError: If any path is empty, relative, "/", or contains
+                a ".." segment.
         """
         for path in paths:
             if not path:
@@ -126,6 +132,15 @@ class OpenShellSpawner(AgentSpawner):
             if ".." in path.split("/"):
                 raise ValueError(
                     f"extra_readable_paths entries must not contain '..' segments: {path!r}"
+                )
+            # strip("/") rather than normpath(): normpath() special-cases
+            # exactly two leading slashes ("//") per POSIX and leaves it
+            # unchanged instead of collapsing it to "/", which would let
+            # "//" slip past a normpath-based check.
+            if path.strip("/") == "":
+                raise ValueError(
+                    "extra_readable_paths entries must not be the filesystem root "
+                    f"('/') -- this would grant full-filesystem read: {path!r}"
                 )
         return list(paths)
 

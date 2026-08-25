@@ -393,6 +393,9 @@ class TestOpenShellGuardrails:
             denied_result = await _exec(denied_spawner._client, denied_id, ["ls", "/home"])
             assert denied_result is not None
             assert denied_result.exit_code != 0
+            # Assert the specific reason, not just a nonzero exit -- ENOENT or a
+            # broken exec would also be nonzero without proving Landlock denial.
+            assert "permission denied" in denied_result.stderr.lower()
         finally:
             await denied_spawner.destroy(denied_name)
 
