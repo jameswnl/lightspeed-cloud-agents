@@ -71,73 +71,35 @@ SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
 
 def _create_spawner():
-    """Create spawner based on environment config."""
+    """Create spawner based on environment config.
+
+    Thin env-var-reading wrapper around cloud_agents.spawner.factory.build_spawner
+    -- see that module for the actual per-type construction logic.
+    """
+    from cloud_agents.spawner.factory import build_spawner
+
     if SPAWNER_TYPE == "kubernetes":
-        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
-
-        namespace = os.environ.get("SPAWNER_NAMESPACE", "default")
-        service_account = os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner")
-        logger.info("Using KubernetesSpawner (namespace=%s)", namespace)
-        return KubernetesSpawner(namespace=namespace, service_account=service_account)
-    if SPAWNER_TYPE == "podman":
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
-
-        network = os.environ.get("SPAWNER_NETWORK", "cloud-agents")
-        logger.info("Using PodmanSpawner (network=%s)", network)
-        return PodmanSpawner(network=network)
-    if SPAWNER_TYPE == "openshell":
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-        from openshell import SandboxClient
-
-        gateway_url = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670")
-        driver = os.environ.get("OPENSHELL_DRIVER", "podman")
-        workspace = os.environ.get("OPENSHELL_WORKSPACE", "default")
-        http_endpoint = os.environ.get("OPENSHELL_HTTP_ENDPOINT", "")
-        tls_ca = os.environ.get("OPENSHELL_TLS_CA", "")
-        tls_cert = os.environ.get("OPENSHELL_TLS_CERT", "")
-        tls_key = os.environ.get("OPENSHELL_TLS_KEY", "")
-        bearer_token = os.environ.get("OPENSHELL_BEARER_TOKEN", "")
-
-        # Strip http:// scheme — SandboxClient uses gRPC, not HTTP
-        grpc_endpoint = gateway_url.replace("http://", "").replace("https://", "")
-
-        # Build SandboxClient with auth
-        client_kwargs: dict = {"endpoint": grpc_endpoint}
-        if tls_ca:
-            from pathlib import Path
-
-            from openshell import TlsConfig
-
-            tls_config = TlsConfig(ca_path=Path(tls_ca))
-            if tls_cert and tls_key:
-                tls_config = TlsConfig(
-                    ca_path=Path(tls_ca),
-                    cert_path=Path(tls_cert),
-                    key_path=Path(tls_key),
-                )
-            client_kwargs["tls"] = tls_config
-            logger.info("OpenShell TLS enabled (ca=%s)", tls_ca)
-        if bearer_token:
-            client_kwargs["bearer_token"] = bearer_token
-            logger.info("OpenShell bearer token auth enabled")
-
-        client = SandboxClient(**client_kwargs)
-        logger.info(
-            "Using OpenShellSpawner (gateway=%s, driver=%s, workspace=%s)",
-            gateway_url,
-            driver,
-            workspace,
+        return build_spawner(
+            "kubernetes",
+            namespace=os.environ.get("SPAWNER_NAMESPACE", "default"),
+            service_account=os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner"),
         )
-        return OpenShellSpawner(
-            openshell_client=client,
-            driver=driver,
-            workspace=workspace,
-            endpoint=grpc_endpoint,
-            http_endpoint=http_endpoint,
-            tls_ca=tls_ca,
-            tls_cert=tls_cert,
-            tls_key=tls_key,
-            bearer_token=bearer_token,
+    if SPAWNER_TYPE == "podman":
+        return build_spawner(
+            "podman",
+            network=os.environ.get("SPAWNER_NETWORK", "cloud-agents"),
+        )
+    if SPAWNER_TYPE == "openshell":
+        return build_spawner(
+            "openshell",
+            gateway_url=os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670"),
+            driver=os.environ.get("OPENSHELL_DRIVER", "podman"),
+            workspace=os.environ.get("OPENSHELL_WORKSPACE", "default"),
+            http_endpoint=os.environ.get("OPENSHELL_HTTP_ENDPOINT", ""),
+            tls_ca=os.environ.get("OPENSHELL_TLS_CA", ""),
+            tls_cert=os.environ.get("OPENSHELL_TLS_CERT", ""),
+            tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
+            bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
         )
     logger.info("No spawner configured — sandbox activity will use stub mode")
     return None
