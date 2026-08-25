@@ -215,6 +215,10 @@ Workflows can be started from multiple entry points:
 - **Structured logging** — JSON-formatted logs via `python-json-logger` with workflow/step correlation; toggled via `LOG_FORMAT` env var
 - **Health probes** — `/healthz`, `/livez`, `/readyz` (readyz returns 503 when Temporal is unreachable)
 
+See [`identity-model.md`](identity-model.md) for how `user_id`, `session_id`,
+`trace_id`, and `conversation_id` relate to each other and to the
+`workflow_run_state`/`step_transcripts` schema.
+
 ## Workflow Definition
 
 > **JSON Schema**: The full machine-readable schema is at [`schema/workflow-definition.schema.json`](../schema/workflow-definition.schema.json), auto-generated from the Pydantic models. Add `# yaml-language-server: $schema=../../schema/workflow-definition.schema.json` to workflow YAML files for IDE validation. Regenerate with `uv run python schema/generate.py`.
