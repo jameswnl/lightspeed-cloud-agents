@@ -69,6 +69,83 @@ class OpenShellSpawner(AgentSpawner):
             for the exec'd server process.
     """
 
+    # Extra read-only paths granted on top of OpenShell's own hardcoded
+    # default allowlist for every non-advisory spawn (see
+    # _build_baseline_filesystem_policy()). These are where the reference
+    # sandbox image (quay.io/jameswong/lightspeed-agentic-sandbox) installs
+    # Python packages and application code -- neither is in OpenShell's
+    # restrictive_default_policy(), so without this every non-advisory
+    # spawn fails with Landlock EACCES on its own dependencies (issue #189).
+    _DEFAULT_EXTRA_READABLE_PATHS: ClassVar[list[str]] = ["/opt/app-root", "/opt/lightspeed"]
+
+    # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
+    # crates/openshell-policy/src/lib.rs, confirmed against openshell@679fe4c).
+    # Mirrored here because OpenShell does NOT merge a supplied filesystem
+    # policy with its own default -- a supplied policy fully *replaces* it.
+    # So the baseline builder below must always send this full list,
+    # union'd with the extra paths, never just the extras alone -- see
+    # issue #189. If this list ever drifts from OpenShell's own, re-verify
+    # against restrictive_default_policy() directly rather than trusting
+    # this comment.
+    _DEFAULT_BASELINE_READ_ONLY: ClassVar[list[str]] = [
+        "/usr",
+        "/lib",
+        "/proc",
+        "/dev/urandom",
+        "/app",
+        "/etc",
+        "/var/log",
+    ]
+    _DEFAULT_BASELINE_READ_WRITE: ClassVar[list[str]] = ["/tmp", "/dev/null"]
+
+    @staticmethod
+    def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
+        """Validate extra_readable_paths before they reach a Landlock policy.
+
+        Extra readable paths *widen* the sandbox's filesystem access, so
+        malformed input here is a security concern, not just a usability
+        one. Rejects relative paths (meaningless to Landlock, which rules
+        operate on absolute filesystem paths), ".." segments (could escape
+        the intended directory), empty strings, and "/" itself (would grant
+        full-filesystem read on the baseline policy without advisory
+        mode's write lockdown -- effectively disabling the read
+        restriction this fix exists to preserve).
+
+        Args:
+            paths: Candidate list of absolute directory paths.
+
+        Returns:
+            A new list with the same entries, if all are valid. A copy is
+            returned (rather than the input list itself) so a caller
+            mutating the list they passed in can't retroactively change
+            the spawner's stored policy.
+
+        Raises:
+            ValueError: If any path is empty, relative, "/", or contains
+                a ".." segment.
+        """
+        for path in paths:
+            if not path:
+                raise ValueError("extra_readable_paths entries must not be empty")
+            if not path.startswith("/"):
+                raise ValueError(f"extra_readable_paths entries must be absolute paths: {path!r}")
+            if ".." in path.split("/"):
+                raise ValueError(
+                    f"extra_readable_paths entries must not contain '..' segments: {path!r}"
+                )
+            # Both checks are needed, neither alone is sufficient:
+            # - strip("/") == "" catches "/", "//", "///" -- but NOT "/."
+            #   or "/././", since strip() doesn't resolve "." segments.
+            # - normpath() resolves "/." and "/././" to "/" -- but leaves
+            #   "//" as "//" unchanged (POSIX special-cases exactly two
+            #   leading slashes), so it alone would miss "//".
+            if path.strip("/") == "" or os.path.normpath(path) in ("/", "//"):
+                raise ValueError(
+                    "extra_readable_paths entries must not be the filesystem root "
+                    f"('/') -- this would grant full-filesystem read: {path!r}"
+                )
+        return list(paths)
+
     def __init__(
         self,
         openshell_client: Any = None,
@@ -80,6 +157,7 @@ class OpenShellSpawner(AgentSpawner):
         tls_cert: str = "",
         tls_key: str = "",
         bearer_token: str = "",
+        extra_readable_paths: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -107,6 +185,14 @@ class OpenShellSpawner(AgentSpawner):
             tls_key: Path to client key for mTLS.
             bearer_token: OIDC bearer token for gRPC auth. Applied to
                 raw gRPC channels via call credentials interceptor.
+            extra_readable_paths: Additional absolute paths to grant
+                read-only Landlock access to, on top of OpenShell's own
+                default allowlist, for every non-advisory spawn. Defaults
+                to ["/opt/app-root", "/opt/lightspeed"] -- where the
+                reference sandbox image installs Python packages and
+                application code. A derived image with a different
+                layout should override this. See
+                _build_baseline_filesystem_policy() and issue #189.
         """
         super().__init__(**kwargs)
         self._client = openshell_client
@@ -118,6 +204,11 @@ class OpenShellSpawner(AgentSpawner):
         self._tls_cert = tls_cert
         self._tls_key = tls_key
         self._bearer_token = bearer_token
+        self._extra_readable_paths = self._validate_extra_readable_paths(
+            extra_readable_paths
+            if extra_readable_paths is not None
+            else list(self._DEFAULT_EXTRA_READABLE_PATHS)
+        )
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
@@ -444,6 +535,8 @@ class OpenShellSpawner(AgentSpawner):
 
         if read_only:
             self._build_filesystem_policy(spec)
+        else:
+            self._build_baseline_filesystem_policy(spec)
 
         # Skills image: Podman driver mounts the OCI image directly
         # via driver_config (no extraction needed). K8s driver falls
@@ -587,6 +680,42 @@ class OpenShellSpawner(AgentSpawner):
         ):
             spec.policy.filesystem.read_write.append(rw_path)
         spec.policy.filesystem.include_workdir = True
+
+    def _build_baseline_filesystem_policy(self, spec: "openshell_pb2.SandboxSpec") -> None:
+        """Set the baseline filesystem policy sent for every non-advisory spawn.
+
+        Without this, a non-advisory spawn sends an empty
+        `spec.policy.filesystem`, and OpenShell's gateway falls back to
+        its own hardcoded `restrictive_default_policy()` -- which never
+        includes /opt/app-root or /opt/lightspeed, where this sandbox
+        image's Python packages and application code live. That causes
+        Landlock to deny the sandbox's own process access to its own
+        dependencies (e.g. uvicorn), failing every non-advisory ephemeral
+        run on real OpenShift clusters (issue #189).
+
+        This is additive, not a replacement for _build_filesystem_policy()
+        (the advisory/full-lockdown path) -- the two are mutually
+        exclusive per spawn and this method must never run alongside it.
+
+        Critically, OpenShell does NOT merge a supplied filesystem policy
+        with its own default -- a supplied policy fully *replaces* it. So
+        this sends the complete default read_only/read_write allowlist
+        (mirrored in _DEFAULT_BASELINE_READ_ONLY/_DEFAULT_BASELINE_READ_WRITE)
+        union'd with self._extra_readable_paths, never just the extra
+        paths alone -- sending only the extras would drop /usr, /lib,
+        /proc, /etc, and /tmp, breaking things worse than the bug this
+        fixes.
+        """
+        for path in self._DEFAULT_BASELINE_READ_ONLY:
+            spec.policy.filesystem.read_only.append(path)
+        for path in self._extra_readable_paths:
+            spec.policy.filesystem.read_only.append(path)
+        for path in self._DEFAULT_BASELINE_READ_WRITE:
+            spec.policy.filesystem.read_write.append(path)
+        spec.policy.filesystem.include_workdir = True
+        # Already the proto default, but set explicitly to match the
+        # live-verified fix YAML in issue #189 exactly.
+        spec.policy.landlock.compatibility = "best_effort"
 
     async def _inject_credentials(
         self,

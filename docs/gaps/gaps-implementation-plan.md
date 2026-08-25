@@ -793,11 +793,11 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 **Spike findings**: OpenShellSpawner prototype implements AgentSpawner ABC via OpenShell gRPC API. Single `_do_spawn` replaces both K8s and Podman paths. Gateway handles sandbox lifecycle, network isolation, and credential management. Service exposure via `ExposeService` RPC preserves the `POST /v1/agent/run` contract. Full findings: `docs/spikes/openshell-spawner-spike.md`.
 
 **What to build** (if spike -> go):
-1. Production-harden the `OpenShellSpawner` prototype — SDK migrated (PRs #97–#100), parallel-safe readiness, auto-cleanup on failure ✅
+1. Production-harden the `OpenShellSpawner` prototype — SDK migrated (PRs #97–#100), parallel-safe readiness, auto-cleanup on failure, non-advisory Landlock baseline filesystem policy so sandboxes can read their own image contents ([issue #189](https://github.com/jameswnl/lightspeed-cloud-agents/issues/189)) ✅
 2. Add skills_image support (init container equivalent via OpenShell exec)
 3. Add credential provider integration (replace K8s Secret env vars)
 4. L7 network policy configuration via SandboxPolicy — auto-derived from provider + MCP config via `_build_network_policy()` (PR #102) ✅
-5. Integration tests with a running OpenShell gateway
+5. Integration tests with a running OpenShell gateway — `tests/e2e/test_guardrails.py::TestOpenShellGuardrails` against a real Kind + podman-driver gateway ([issue #189](https://github.com/jameswnl/lightspeed-cloud-agents/issues/189)) ✅
 6. Deployment guide: gateway setup for K8s and Podman modes
 
 **Effort**: 2-3 weeks (production), 1 week (spike done)
