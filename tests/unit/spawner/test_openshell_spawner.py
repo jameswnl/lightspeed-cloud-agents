@@ -20,6 +20,7 @@ if "openshell" not in sys.modules:
 import asyncio
 import json
 import os
+import threading
 from typing import Any
 
 import pytest
@@ -443,10 +444,18 @@ class TestOpenShellSpawnerSpawn:
             def __init__(self, name):
                 self.name = name
 
+        exec_called = threading.Event()
+        captured: dict[str, Any] = {}
+
+        def exec_stream_side_effect(_sandbox_id, command, **_kwargs):
+            captured["command"] = command
+            exec_called.set()
+            return iter([])
+
         mock_client = mocker.Mock()
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
-        mock_client.exec_stream.return_value = iter([])
+        mock_client.exec_stream.side_effect = exec_stream_side_effect
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
@@ -464,11 +473,14 @@ class TestOpenShellSpawnerSpawn:
 
         await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
 
-        await asyncio.sleep(0.05)
-
-        mock_client.exec_stream.assert_called_once()
-        command = mock_client.exec_stream.call_args.args[1]
-        assert command[:3] == ["python3", "-m", "uvicorn"]
+        # start_server() runs exec_stream in a background thread (fire-and-forget);
+        # wait on the event it sets instead of a fixed sleep, so the assertion is
+        # deterministic rather than racing the background task's scheduling. The
+        # wait itself must go through to_thread too — a blocking call here would
+        # starve the event loop and prevent the background task from ever running.
+        called = await asyncio.to_thread(exec_called.wait, 2.0)
+        assert called, "exec_stream was never called"
+        assert captured["command"][:3] == ["python3", "-m", "uvicorn"]
 
 
 class TestOpenShellSpawnerDestroy:
