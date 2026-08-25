@@ -950,6 +950,47 @@ class TestGraphTranslatorResumeTraceContinuity:
         assert state.trace_parent == "00-aaaa-bbbb-01"
 
     @pytest.mark.asyncio
+    async def test_trace_parent_cleared_when_later_step_capture_fails(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A step with no captured trace_parent must not leave an earlier
+        step's stale trace_parent in place -- a pause right after would
+        otherwise link to the wrong pre-pause span.
+        """
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        async def capture_then_fail(step_input: Any) -> StepResult:
+            if step_input.step_name == "s1":
+                step_input.metadata.extra["trace_parent"] = "00-aaaa-bbbb-01"
+            # s2's capture "fails" (swallowed elsewhere) -- nothing set
+            return StepResult(
+                status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+            )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = capture_then_fail
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+        ])
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+
+        await graph.run(state=state)
+
+        assert state.trace_parent is None
+
+    @pytest.mark.asyncio
     async def test_resume_trace_parent_becomes_link_once(
         self, mocker: MockerFixture
     ) -> None:

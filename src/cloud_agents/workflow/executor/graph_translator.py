@@ -284,10 +284,14 @@ def _build_agent_step(
         wrapped = MiddlewareExecutor(executor, middlewares, tracer=_tracer, links=links)
         exec_result = await wrapped.run(step_input)
 
-        if step_input.metadata is not None:
-            trace_parent = step_input.metadata.extra.get("trace_parent")
-            if trace_parent:
-                state.trace_parent = trace_parent
+        # Always overwrite (not just when truthy) so a step whose capture
+        # failed doesn't leave a stale, unrelated earlier step's trace_parent
+        # in place -- a pause right after must not link to the wrong span.
+        state.trace_parent = (
+            step_input.metadata.extra.get("trace_parent")
+            if step_input.metadata is not None
+            else None
+        )
 
         state.step_results[output_key] = {
             "status": exec_result.status,
