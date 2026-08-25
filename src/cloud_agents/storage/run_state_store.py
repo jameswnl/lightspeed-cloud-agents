@@ -4,8 +4,9 @@ Persists the full workflow state needed for API parity between
 Temporal and local executors: step results, events, authz context,
 workflow context, and approval pause/resume payloads.
 
-Schema is auto-migrated on connect() via CREATE TABLE IF NOT EXISTS.
-Follows the same pattern as TranscriptStore (asyncpg, from_env factory).
+Schema is owned entirely by Alembic (see cloud_agents.storage.migrate),
+applied on connect(). Follows the same pattern as TranscriptStore
+(asyncpg, from_env factory).
 """
 
 from __future__ import annotations
@@ -19,28 +20,6 @@ from typing import Any, Optional
 import asyncpg
 
 logger = logging.getLogger(__name__)
-
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS workflow_run_state (
-    workflow_id TEXT PRIMARY KEY,
-    workflow_name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'running',
-    current_step TEXT,
-    steps JSONB NOT NULL DEFAULT '{}',
-    events JSONB NOT NULL DEFAULT '[]',
-    definition JSONB NOT NULL DEFAULT '{}',
-    provider JSONB NOT NULL DEFAULT '{}',
-    authz_context JSONB NOT NULL DEFAULT '{}',
-    workflow_context JSONB NOT NULL DEFAULT '{}',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-"""
-
-_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS idx_workflow_run_state_status
-    ON workflow_run_state(status);
-"""
 
 _INSERT_SQL = """
 INSERT INTO workflow_run_state
@@ -151,17 +130,11 @@ class RunStateStore:
         return cls(db_url=db_url)
 
     async def connect(self) -> None:
-        """Connect to PostgreSQL and run schema migration.
-
-        Runs Alembic migrations first (adds identity columns), then
-        CREATE TABLE IF NOT EXISTS for the base schema (backward compat).
-        """
+        """Connect to PostgreSQL and apply schema via Alembic migrations."""
         from cloud_agents.storage.migrate import run_alembic
 
         run_alembic(self._db_url)
         self._pool = await asyncpg.create_pool(self._db_url)
-        await self._pool.execute(_SCHEMA_SQL)
-        await self._pool.execute(_INDEX_SQL)
         logger.info("RunStateStore connected to PostgreSQL")
 
     async def close(self) -> None:

@@ -45,9 +45,12 @@ either, check which one you actually mean.
 
 Primary key `workflow_id`. Identity columns (`user_id`, `session_id`,
 `parent_workflow_id`) were added by the Alembic migration
-`002_identity_model`, not the original `CREATE TABLE IF NOT EXISTS` in the
-store (that block predates the identity model and is kept only as a legacy
-fallback schema — see the store's module docstring).
+`002_identity_model`, layered on top of the `001_baseline` migration.
+Alembic is the sole schema owner (#169) — the store itself has no
+`CREATE TABLE` fallback. `run_alembic()` raises for configuration/migration
+problems (missing `alembic.ini`, a revision conflict); an unreachable
+database is not raised there and is instead surfaced by the next line,
+`asyncpg.create_pool()`, which fails on its own if the DB is truly down.
 
 ```text
 workflow_id          TEXT PRIMARY KEY
@@ -148,10 +151,13 @@ property — two workflows sharing a `session_id` can have different
 - `session_id` is not enforced or auto-generated anywhere — if a caller
   omits it, workflows just have `session_id = NULL` and won't show up under
   `list_by_session`.
-- The `CREATE TABLE IF NOT EXISTS` blocks in the stores are legacy
-  base-schema fallbacks for pre-Alembic deployments and are missing the
-  identity columns entirely — Alembic (`alembic/versions/`) is the source of
-  truth for the current schema. See "Database Migrations" in the root
+- Alembic (`alembic/versions/`) is the sole schema owner for both tables —
+  the stores have no `CREATE TABLE` fallback (removed in #169). A
+  configuration or migration problem (e.g. missing `alembic.ini`, a
+  revision conflict) raises loudly from `run_alembic()` rather than
+  silently running with a stale/partial schema. A genuinely unreachable
+  database is not raised there — `asyncpg.create_pool()` right after it
+  fails on its own in that case. See "Database Migrations" in the root
   `CLAUDE.md`.
 - If you implement escalation, `parent_workflow_id` already has the column
   and index — the missing pieces are: an FK/validity check if you want one,
