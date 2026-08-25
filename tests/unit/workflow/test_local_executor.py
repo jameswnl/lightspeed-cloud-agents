@@ -496,3 +496,207 @@ class TestLocalWorkflowRunnerTraceContinuity:
         await executor._resume_from_store("wf-1")
 
         assert fake_state.resume_trace_parent is None
+
+
+class TestLocalWorkflowRunnerLiveTraceSharing:
+    """Tests that a live (non-paused) run's steps share one trace_id (#183).
+
+    Uses a real OTEL SDK TracerProvider (isolated to this test via
+    monkeypatching the module-level _tracer singletons, not the global
+    provider) since NoOp spans have no meaningful trace_id to compare.
+    """
+
+    @pytest.mark.asyncio
+    async def test_steps_share_one_trace_id(
+        self,
+        executor: Any,
+        mock_spawner: AsyncMock,
+        mock_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Two sequential agent steps in one live run produce one shared trace_id."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor._tracer",
+            provider.get_tracer("test-local-executor"),
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator._tracer",
+            provider.get_tracer("test-graph-translator"),
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        input_data = _make_input([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+        ])
+
+        workflow_id = await executor.start(input_data)
+        await executor._running[workflow_id]
+
+        spans = exporter.get_finished_spans()
+        step_spans = [s for s in spans if s.name == "step.execute"]
+        workflow_spans = [s for s in spans if s.name == "workflow.execute"]
+
+        assert len(step_spans) == 2
+        assert len(workflow_spans) == 1
+
+        trace_ids = {s.context.trace_id for s in step_spans}
+        assert trace_ids == {workflow_spans[0].context.trace_id}
+
+    @pytest.mark.asyncio
+    async def test_workflow_span_has_workflow_id_attribute(
+        self,
+        executor: Any,
+        mock_spawner: AsyncMock,
+        mock_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """The new workflow.execute span carries the workflow.id attribute."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor._tracer",
+            provider.get_tracer("test-local-executor"),
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        input_data = _make_input([
+            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+        ])
+        input_data["session_id"] = "ses-abc"
+
+        workflow_id = await executor.start(input_data)
+        await executor._running[workflow_id]
+
+        spans = exporter.get_finished_spans()
+        workflow_span = next(s for s in spans if s.name == "workflow.execute")
+
+        assert workflow_span.attributes["workflow.id"] == workflow_id
+        assert workflow_span.attributes["session.id"] == "ses-abc"
+
+    @pytest.mark.asyncio
+    async def test_resumed_segment_gets_a_separate_trace_from_pre_pause_segment(
+        self,
+        executor: Any,
+        mock_spawner: AsyncMock,
+        mock_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """A resume must NOT unify pre-pause and post-resume steps into one
+        trace -- #179/#181 deliberately chose two linked traces over a
+        single waterfall spanning the pause. This guards that this fix
+        for the live-run case didn't accidentally undo that.
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from cloud_agents.workflow.executor.base import ApprovalDecision
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.local.executor._tracer",
+            provider.get_tracer("test-local-executor"),
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator._tracer",
+            provider.get_tracer("test-graph-translator"),
+        )
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}, input_tokens=1, output_tokens=1
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        definition = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                    {"name": "approve-fix", "type": "human-approval", "output_key": "approval"},
+                    {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+                ]
+            },
+        }
+        provider_cfg = {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"}
+
+        workflow_id = await executor.start(
+            {"definition": definition, "provider": provider_cfg}
+        )
+        await executor._running[workflow_id]
+
+        mock_store.get.return_value = {
+            "workflow_id": workflow_id,
+            "status": "paused",
+            "current_step": "approve-fix",
+            "steps": {"r1": {"status": "completed", "output": {"ok": True}}},
+            "definition": definition,
+            "provider": provider_cfg,
+            "workflow_context": {
+                "trace_parent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+            },
+            "user_id": None,
+            "session_id": None,
+        }
+
+        await executor.approve(
+            workflow_id, ApprovalDecision(step_name="approve-fix", decision="approved")
+        )
+        await executor._running[workflow_id]
+
+        workflow_spans = [
+            s for s in exporter.get_finished_spans() if s.name == "workflow.execute"
+        ]
+        assert len(workflow_spans) == 2
+        trace_ids = {s.context.trace_id for s in workflow_spans}
+        assert len(trace_ids) == 2
