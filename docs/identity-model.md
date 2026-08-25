@@ -47,8 +47,10 @@ Primary key `workflow_id`. Identity columns (`user_id`, `session_id`,
 `parent_workflow_id`) were added by the Alembic migration
 `002_identity_model`, layered on top of the `001_baseline` migration.
 Alembic is the sole schema owner (#169) — the store itself has no
-`CREATE TABLE` fallback; `connect()` fails loudly via `run_alembic()` if
-migrations can't be applied.
+`CREATE TABLE` fallback. `run_alembic()` raises for configuration/migration
+problems (missing `alembic.ini`, a revision conflict); an unreachable
+database is not raised there and is instead surfaced by the next line,
+`asyncpg.create_pool()`, which fails on its own if the DB is truly down.
 
 ```text
 workflow_id          TEXT PRIMARY KEY
@@ -150,10 +152,13 @@ property — two workflows sharing a `session_id` can have different
   omits it, workflows just have `session_id = NULL` and won't show up under
   `list_by_session`.
 - Alembic (`alembic/versions/`) is the sole schema owner for both tables —
-  the stores have no `CREATE TABLE` fallback (removed in #169).
-  `connect()` raises if migrations can't be applied (e.g. missing
-  `alembic.ini`) rather than silently running with a stale/partial schema.
-  See "Database Migrations" in the root `CLAUDE.md`.
+  the stores have no `CREATE TABLE` fallback (removed in #169). A
+  configuration or migration problem (e.g. missing `alembic.ini`, a
+  revision conflict) raises loudly from `run_alembic()` rather than
+  silently running with a stale/partial schema. A genuinely unreachable
+  database is not raised there — `asyncpg.create_pool()` right after it
+  fails on its own in that case. See "Database Migrations" in the root
+  `CLAUDE.md`.
 - If you implement escalation, `parent_workflow_id` already has the column
   and index — the missing pieces are: an FK/validity check if you want one,
   application logic to set it meaningfully, and a way to traverse the chain

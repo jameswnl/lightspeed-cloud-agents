@@ -27,8 +27,15 @@ class TestAlembicIniPath:
 class TestRunAlembic:
     """Tests for run_alembic() helper."""
 
-    def test_skips_when_alembic_not_installed(self) -> None:
-        """run_alembic skips gracefully when alembic is not importable."""
+    def test_raises_when_alembic_not_installed(self) -> None:
+        """run_alembic raises when alembic isn't importable.
+
+        Alembic is a required dependency (so this is effectively dead
+        code in a correctly installed environment), but with no
+        CREATE TABLE fallback in the stores anymore, silently continuing
+        here would defer to a confusing "relation does not exist" error
+        on the first query instead of a clear one now.
+        """
         from cloud_agents.storage.migrate import run_alembic
 
         original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
@@ -39,8 +46,8 @@ class TestRunAlembic:
             return original_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            # Should not raise
-            run_alembic("postgresql://localhost/testdb")
+            with pytest.raises(RuntimeError, match="alembic is not importable"):
+                run_alembic("postgresql://localhost/testdb")
 
     def test_asyncpg_url_translated(self) -> None:
         """+asyncpg is stripped from URL for sync driver."""
@@ -91,5 +98,5 @@ class TestRunAlembic:
         with patch("cloud_agents.storage.migrate._ALEMBIC_INI") as mock_ini:
             mock_ini.exists.return_value = False
 
-            with pytest.raises(RuntimeError, match="alembic.ini not found"):
+            with pytest.raises(RuntimeError, match=r"alembic\.ini not found"):
                 run_alembic("postgresql://localhost/testdb")

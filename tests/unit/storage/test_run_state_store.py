@@ -246,3 +246,45 @@ class TestRunStateStoreFromEnv:
         source = open(mod.__file__).read()
         assert "from temporalio" not in source
         assert "import temporalio" not in source
+
+
+class TestRunStateStoreConnect:
+    """Tests for RunStateStore.connect() lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_connect_creates_pool(self, mocker: MockerFixture) -> None:
+        """connect() creates an asyncpg connection pool."""
+        from cloud_agents.storage.run_state_store import RunStateStore
+
+        store = RunStateStore(db_url="postgresql://localhost/testdb")
+
+        mock_pool = mocker.AsyncMock()
+        mock_create = mocker.patch(
+            "cloud_agents.storage.run_state_store.asyncpg.create_pool",
+            new_callable=mocker.AsyncMock,
+            return_value=mock_pool,
+        )
+
+        await store.connect()
+
+        mock_create.assert_called_once_with("postgresql://localhost/testdb")
+        assert store._pool is mock_pool
+
+    @pytest.mark.asyncio
+    async def test_connect_runs_alembic_migrations(self, mocker: MockerFixture) -> None:
+        """connect() applies schema via Alembic -- the sole schema owner (#169)."""
+        from cloud_agents.storage.run_state_store import RunStateStore
+
+        store = RunStateStore(db_url="postgresql://localhost/testdb")
+
+        mock_pool = mocker.AsyncMock()
+        mocker.patch(
+            "cloud_agents.storage.run_state_store.asyncpg.create_pool",
+            new_callable=mocker.AsyncMock,
+            return_value=mock_pool,
+        )
+        mock_run_alembic = mocker.patch("cloud_agents.storage.migrate.run_alembic")
+
+        await store.connect()
+
+        mock_run_alembic.assert_called_once_with("postgresql://localhost/testdb")
