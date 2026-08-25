@@ -112,6 +112,8 @@ The `CREATE TABLE IF NOT EXISTS` in each store's `connect()` is kept for backwar
 
 ### Identity model (StepMetadata)
 
+See `docs/identity-model.md` for the full identity field relationships and schema details.
+
 `StepMetadata` on `StepInput` carries cross-cutting identity fields:
 - `user_id` — who initiated the workflow
 - `session_id` — groups related workflows (caller-provided)
