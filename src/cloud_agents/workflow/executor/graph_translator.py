@@ -22,6 +22,7 @@ from pydantic_graph import GraphBuilder, StepContext
 
 from cloud_agents.runtime.tracing import extract_traceparent, get_tracer
 from cloud_agents.workflow.core.conditions import evaluate_condition
+from cloud_agents.workflow.core.interpolation import interpolate
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
 from cloud_agents.workflow.executor.middleware import (
     MiddlewareExecutor,
@@ -197,6 +198,22 @@ def _to_workflow_state(state: WorkflowGraphState) -> WorkflowState:
     )
 
 
+def _interpolate_step_text(template: str, wf_state: WorkflowState) -> str:
+    """Interpolate {{ steps.X.output.path }} placeholders, failing open.
+
+    Mirrors the Temporal executor's ``_interpolate_prompt`` error handling:
+    an unresolvable reference (missing step, missing output, bad path)
+    falls back to the raw template rather than crashing the step.
+    """
+    if "{{" not in template:
+        return template
+    try:
+        return interpolate(template, wf_state)
+    except ValueError as exc:
+        logger.debug("Template interpolation failed for %r: %s", template, exc)
+        return template
+
+
 def _build_agent_step(
     builder: GraphBuilder,
     step_name: str,
@@ -229,8 +246,9 @@ def _build_agent_step(
             }
             return {"status": "skipped"}
 
+        wf_state = _to_workflow_state(state)
+
         if condition := step_def.get("condition"):
-            wf_state = _to_workflow_state(state)
             if not evaluate_condition(condition, wf_state):
                 output_key = step_def.get("output_key", step_name)
                 state.step_results[output_key] = {"status": "skipped"}
@@ -243,10 +261,15 @@ def _build_agent_step(
             transcript_store=state.transcript_store,
         )
 
+        raw_instructions = step_def.get("instructions")
         step_input = StepInput(
-            prompt=step_def.get("prompt", ""),
+            prompt=_interpolate_step_text(step_def.get("prompt", ""), wf_state),
             provider=state.provider,
-            system_prompt=step_def.get("instructions"),
+            system_prompt=(
+                _interpolate_step_text(raw_instructions, wf_state)
+                if raw_instructions
+                else raw_instructions
+            ),
             output_schema=step_def.get("output_schema"),
             tools=step_def.get("tools", []),
             tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),

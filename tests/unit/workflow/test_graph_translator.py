@@ -25,14 +25,16 @@ class TestGraphTranslator:
         """Single agent step produces a graph with start → agent → end."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check the cluster",
-                "output_key": "diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check the cluster",
+                    "output_key": "diagnosis",
+                },
+            ]
+        )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
         assert graph is not None
@@ -42,20 +44,22 @@ class TestGraphTranslator:
         """Two agent steps produce start → A → B → end."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Diagnose",
-                "output_key": "diagnosis",
-            },
-            {
-                "name": "fix",
-                "type": "agent",
-                "prompt": "Fix it",
-                "output_key": "fix_result",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "diagnosis",
+                },
+                {
+                    "name": "fix",
+                    "type": "agent",
+                    "prompt": "Fix it",
+                    "output_key": "fix_result",
+                },
+            ]
+        )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
         assert graph is not None
@@ -64,20 +68,22 @@ class TestGraphTranslator:
         """Human-approval step translates to a graph node."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Diagnose",
-                "output_key": "diagnosis",
-            },
-            {
-                "name": "approve",
-                "type": "human-approval",
-                "output_key": "approval",
-                "message": "Approve the fix?",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "diagnosis",
+                },
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "Approve the fix?",
+                },
+            ]
+        )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
         assert graph is not None
@@ -86,14 +92,16 @@ class TestGraphTranslator:
         """Workflow state carries the workflow_id."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         _, state = build_graph(defn, workflow_id="wf-test-42")
         assert state.workflow_id == "wf-test-42"
@@ -102,22 +110,22 @@ class TestGraphTranslator:
         """Workflow state carries the step definitions for runtime access."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check it",
-                "output_key": "diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check it",
+                    "output_key": "diagnosis",
+                },
+            ]
+        )
 
         _, state = build_graph(defn, workflow_id="wf-1")
         assert "diagnose" in state.step_defs
 
     @pytest.mark.asyncio
-    async def test_agent_step_calls_step_runner(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_agent_step_calls_step_runner(self, mocker: MockerFixture) -> None:
         """Agent step node calls step_runner.run_step during execution."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -133,14 +141,16 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check the cluster",
-                "output_key": "diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check the cluster",
+                    "output_key": "diagnosis",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -154,18 +164,139 @@ class TestGraphTranslator:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_agent_step_interpolates_prompt(self, mocker: MockerFixture) -> None:
+        """Agent step prompt is interpolated with a prior step's output."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = [
+            StepResult(status="completed", output={"root_cause": "disk full"}),
+            StepResult(status="completed", output={"applied": True}),
+        ]
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition(
+            [
+                {
+                    "name": "triage",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "triage_result",
+                },
+                {
+                    "name": "remediate",
+                    "type": "agent",
+                    "prompt": "Apply the fix for: {{ steps.triage_result.output.root_cause }}",
+                    "output_key": "remediate_result",
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        await graph.run(state=state)
+
+        remediate_input = mock_executor.run.call_args_list[1].args[0]
+        assert "{{" not in remediate_input.prompt
+        assert "disk full" in remediate_input.prompt
+
+    @pytest.mark.asyncio
+    async def test_agent_step_interpolates_instructions(self, mocker: MockerFixture) -> None:
+        """Agent step instructions (system_prompt) are interpolated too."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = [
+            StepResult(status="completed", output={"host": "node-1"}),
+            StepResult(status="completed", output={"applied": True}),
+        ]
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition(
+            [
+                {
+                    "name": "triage",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "triage_result",
+                },
+                {
+                    "name": "remediate",
+                    "type": "agent",
+                    "prompt": "Apply the fix",
+                    "instructions": "Target host: {{ steps.triage_result.output.host }}",
+                    "output_key": "remediate_result",
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        await graph.run(state=state)
+
+        remediate_input = mock_executor.run.call_args_list[1].args[0]
+        assert "{{" not in remediate_input.system_prompt
+        assert "node-1" in remediate_input.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_agent_step_interpolation_fails_open(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Unresolvable template reference falls back to the raw string."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(status="completed", output={"ok": True})
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        raw_prompt = "Fix: {{ steps.missing_step.output.x }}"
+        defn = _make_definition(
+            [
+                {
+                    "name": "solo",
+                    "type": "agent",
+                    "prompt": raw_prompt,
+                    "output_key": "solo_result",
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        with caplog.at_level("DEBUG", logger="cloud_agents.workflow.executor.graph_translator"):
+            await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.prompt == raw_prompt
+        assert "Template interpolation failed" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_auto_approve_completes(self, mocker: MockerFixture) -> None:
         """Approval step with auto_approve=True completes without pausing."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "approve",
-                "type": "human-approval",
-                "output_key": "approval",
-                "message": "Approve?",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "Approve?",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -183,14 +314,16 @@ class TestGraphTranslator:
         """Approval step without auto_approve signals pause."""
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "approve",
-                "type": "human-approval",
-                "output_key": "approval",
-                "message": "Approve?",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "Approve?",
+                },
+            ]
+        )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
 
@@ -199,9 +332,7 @@ class TestGraphTranslator:
         assert state.step_results["approval"]["status"] == "awaiting_approval"
 
     @pytest.mark.asyncio
-    async def test_step_results_keyed_by_output_key(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_step_results_keyed_by_output_key(self, mocker: MockerFixture) -> None:
         """Agent step stores results under output_key, not step name."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -217,14 +348,16 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check",
-                "output_key": "my_diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check",
+                    "output_key": "my_diagnosis",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -257,15 +390,17 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-                "condition": "steps.diag.output.severity == 'high'",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "condition": "steps.diag.output.severity == 'high'",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -298,15 +433,17 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-                "condition": "steps.diag.output.severity == 'high'",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                    "condition": "steps.diag.output.severity == 'high'",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -318,9 +455,7 @@ class TestGraphTranslator:
         assert state.step_results["r1"]["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_pause_guard_skips_subsequent_steps(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_pause_guard_skips_subsequent_steps(self, mocker: MockerFixture) -> None:
         """Steps after approval gate are skipped when workflow is paused."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -336,20 +471,22 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "approve",
-                "type": "human-approval",
-                "output_key": "approval",
-                "message": "Approve?",
-            },
-            {
-                "name": "fix",
-                "type": "agent",
-                "prompt": "Fix it",
-                "output_key": "fix_result",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "Approve?",
+                },
+                {
+                    "name": "fix",
+                    "type": "agent",
+                    "prompt": "Fix it",
+                    "output_key": "fix_result",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -363,9 +500,7 @@ class TestGraphTranslator:
         assert state.step_results["fix_result"]["status"] == "skipped"
 
     @pytest.mark.asyncio
-    async def test_condition_integration_unmocked(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_condition_integration_unmocked(self, mocker: MockerFixture) -> None:
         """Condition evaluation works end-to-end without mocking evaluate_condition."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -381,21 +516,23 @@ class TestGraphTranslator:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Diagnose",
-                "output_key": "diagnosis",
-            },
-            {
-                "name": "fix",
-                "type": "agent",
-                "prompt": "Fix",
-                "output_key": "fix_result",
-                "condition": "steps.diagnosis.output.severity == 'high'",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "diagnosis",
+                },
+                {
+                    "name": "fix",
+                    "type": "agent",
+                    "prompt": "Fix",
+                    "output_key": "fix_result",
+                    "condition": "steps.diagnosis.output.severity == 'high'",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -413,15 +550,17 @@ class TestGraphTranslator:
         with caplog.at_level(logging.WARNING):
             from cloud_agents.workflow.executor.graph_translator import build_graph
 
-            defn = _make_definition([
-                {
-                    "name": "s1",
-                    "type": "agent",
-                    "prompt": "test",
-                    "output_key": "r1",
-                    "parallel_group": "group-a",
-                },
-            ])
+            defn = _make_definition(
+                [
+                    {
+                        "name": "s1",
+                        "type": "agent",
+                        "prompt": "test",
+                        "output_key": "r1",
+                        "parallel_group": "group-a",
+                    },
+                ]
+            )
 
             build_graph(defn, workflow_id="wf-1")
 
@@ -440,9 +579,7 @@ class TestGraphTranslatorOtelTracing:
     """Tests for OTEL tracing in graph_translator agent_step."""
 
     @pytest.mark.asyncio
-    async def test_span_created_with_correct_name(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_span_created_with_correct_name(self, mocker: MockerFixture) -> None:
         """agent_step creates a span named 'step.execute'."""
         from unittest.mock import MagicMock
 
@@ -478,14 +615,16 @@ class TestGraphTranslatorOtelTracing:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check cluster",
-                "output_key": "diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check cluster",
+                    "output_key": "diagnosis",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -500,9 +639,7 @@ class TestGraphTranslatorOtelTracing:
         assert call_args[0][0] == "step.execute"
 
     @pytest.mark.asyncio
-    async def test_span_has_correct_attributes(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_span_has_correct_attributes(self, mocker: MockerFixture) -> None:
         """MiddlewareExecutor sets step.name and workflow.id on the span."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -520,15 +657,17 @@ class TestGraphTranslatorOtelTracing:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check",
-                "output_key": "diagnosis",
-                "spawn": "ephemeral",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check",
+                    "output_key": "diagnosis",
+                    "spawn": "ephemeral",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -544,9 +683,7 @@ class TestGraphTranslatorOtelTracing:
         assert state.step_results["diagnosis"]["status"] == "completed"
 
     @pytest.mark.asyncio
-    async def test_span_records_result_attributes(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_span_records_result_attributes(self, mocker: MockerFixture) -> None:
         """TracingMiddleware sets result attributes on span (tested in middleware unit tests)."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -564,14 +701,16 @@ class TestGraphTranslatorOtelTracing:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -590,9 +729,7 @@ class TestGraphTranslatorTraceIdPropagation:
     """Tests for trace_id propagation to StepMetadata."""
 
     @pytest.mark.asyncio
-    async def test_trace_id_set_on_metadata(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_trace_id_set_on_metadata(self, mocker: MockerFixture) -> None:
         """TracingMiddleware is wired and metadata is populated.
 
         Trace ID propagation from OTEL span to StepMetadata is verified
@@ -621,14 +758,16 @@ class TestGraphTranslatorTraceIdPropagation:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -644,9 +783,7 @@ class TestGraphTranslatorTraceIdPropagation:
         assert captured_input["metadata"].trace_id is None
 
     @pytest.mark.asyncio
-    async def test_trace_id_not_set_when_no_trace(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_trace_id_not_set_when_no_trace(self, mocker: MockerFixture) -> None:
         """trace_id remains None when span has no trace context."""
         from unittest.mock import MagicMock
 
@@ -688,14 +825,16 @@ class TestGraphTranslatorTraceIdPropagation:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -713,9 +852,7 @@ class TestGraphTranslatorTranscriptEnrichment:
     """Tests for ConversationMessage transcript enrichment."""
 
     @pytest.mark.asyncio
-    async def test_messages_saved_to_transcript_store(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_messages_saved_to_transcript_store(self, mocker: MockerFixture) -> None:
         """TranscriptMiddleware saves ConversationMessages to transcript_store."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -736,14 +873,16 @@ class TestGraphTranslatorTranscriptEnrichment:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "diagnose",
-                "type": "agent",
-                "prompt": "Check the cluster",
-                "output_key": "diagnosis",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "diagnose",
+                    "type": "agent",
+                    "prompt": "Check the cluster",
+                    "output_key": "diagnosis",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -765,9 +904,7 @@ class TestGraphTranslatorTranscriptEnrichment:
         assert messages[1]["role"] == "assistant"
 
     @pytest.mark.asyncio
-    async def test_trace_id_passed_to_transcript_store(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_trace_id_passed_to_transcript_store(self, mocker: MockerFixture) -> None:
         """TranscriptMiddleware passes trace_id to transcript_store.save.
 
         With NoOp tracer (no OTEL endpoint), trace_id is None.
@@ -791,14 +928,16 @@ class TestGraphTranslatorTranscriptEnrichment:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -814,9 +953,7 @@ class TestGraphTranslatorTranscriptEnrichment:
         assert call_kwargs["trace_id"] is None
 
     @pytest.mark.asyncio
-    async def test_no_save_when_no_transcript_store(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_save_when_no_transcript_store(self, mocker: MockerFixture) -> None:
         """No error when transcript_store is None."""
         from unittest.mock import MagicMock
 
@@ -836,14 +973,16 @@ class TestGraphTranslatorTranscriptEnrichment:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "test",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "test",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -856,9 +995,7 @@ class TestGraphTranslatorTranscriptEnrichment:
         await graph.run(state=state)
 
     @pytest.mark.asyncio
-    async def test_assistant_content_is_json_output(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_assistant_content_is_json_output(self, mocker: MockerFixture) -> None:
         """Assistant message content is JSON-serialized output."""
         import json
 
@@ -880,14 +1017,16 @@ class TestGraphTranslatorTranscriptEnrichment:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {
-                "name": "s1",
-                "type": "agent",
-                "prompt": "check",
-                "output_key": "r1",
-            },
-        ])
+        defn = _make_definition(
+            [
+                {
+                    "name": "s1",
+                    "type": "agent",
+                    "prompt": "check",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         graph, state = build_graph(
             defn,
@@ -910,9 +1049,7 @@ class TestGraphTranslatorResumeTraceContinuity:
     """Tests for span-link trace continuity across pause/resume (issue #179)."""
 
     @pytest.mark.asyncio
-    async def test_trace_parent_captured_after_step(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_trace_parent_captured_after_step(self, mocker: MockerFixture) -> None:
         """state.trace_parent picks up the step's captured traceparent.
 
         Actual traceparent capture (from a real OTEL span) is verified in
@@ -936,9 +1073,11 @@ class TestGraphTranslatorResumeTraceContinuity:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-        ])
+        defn = _make_definition(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            ]
+        )
         graph, state = build_graph(
             defn,
             workflow_id="wf-1",
@@ -976,10 +1115,12 @@ class TestGraphTranslatorResumeTraceContinuity:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
-        ])
+        defn = _make_definition(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+            ]
+        )
         graph, state = build_graph(
             defn,
             workflow_id="wf-1",
@@ -991,9 +1132,7 @@ class TestGraphTranslatorResumeTraceContinuity:
         assert state.trace_parent is None
 
     @pytest.mark.asyncio
-    async def test_resume_trace_parent_becomes_link_once(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_resume_trace_parent_becomes_link_once(self, mocker: MockerFixture) -> None:
         """Only the first step after resume gets a Link; then it's consumed."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -1017,10 +1156,12 @@ class TestGraphTranslatorResumeTraceContinuity:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
-        ])
+        defn = _make_definition(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+            ]
+        )
         graph, state = build_graph(
             defn,
             workflow_id="wf-1",
@@ -1044,9 +1185,7 @@ class TestGraphTranslatorResumeTraceContinuity:
         assert state.resume_trace_parent is None
 
     @pytest.mark.asyncio
-    async def test_no_resume_trace_parent_means_no_links(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_resume_trace_parent_means_no_links(self, mocker: MockerFixture) -> None:
         """Normal (non-resumed) execution passes no links."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -1068,9 +1207,11 @@ class TestGraphTranslatorResumeTraceContinuity:
 
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
-        defn = _make_definition([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-        ])
+        defn = _make_definition(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            ]
+        )
         graph, state = build_graph(
             defn,
             workflow_id="wf-1",
