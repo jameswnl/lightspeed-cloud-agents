@@ -247,7 +247,9 @@ class TestGraphTranslator:
         assert "node-1" in remediate_input.system_prompt
 
     @pytest.mark.asyncio
-    async def test_agent_step_interpolation_fails_open(self, mocker: MockerFixture) -> None:
+    async def test_agent_step_interpolation_fails_open(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Unresolvable template reference falls back to the raw string."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -273,10 +275,12 @@ class TestGraphTranslator:
         )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
-        await graph.run(state=state)
+        with caplog.at_level("DEBUG", logger="cloud_agents.workflow.executor.graph_translator"):
+            await graph.run(state=state)
 
         solo_input = mock_executor.run.call_args_list[0].args[0]
         assert solo_input.prompt == raw_prompt
+        assert "Template interpolation failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_auto_approve_completes(self, mocker: MockerFixture) -> None:

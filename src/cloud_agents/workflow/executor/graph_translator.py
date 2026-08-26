@@ -209,7 +209,8 @@ def _interpolate_step_text(template: str, wf_state: WorkflowState) -> str:
         return template
     try:
         return interpolate(template, wf_state)
-    except ValueError:
+    except ValueError as exc:
+        logger.debug("Template interpolation failed for %r: %s", template, exc)
         return template
 
 
