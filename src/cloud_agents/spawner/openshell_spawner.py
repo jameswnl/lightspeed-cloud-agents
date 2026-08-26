@@ -82,13 +82,21 @@ class OpenShellSpawner(AgentSpawner):
     # for every spawn (see _do_spawn()'s call to start_server()).
     # OpenShell's supervisor calls env_clear() before exec'ing a command via
     # exec()/exec_stream() (ssh.rs apply_child_env()), then rebuilds the
-    # environment from a hardcoded allowlist -- PYTHONPATH is not in that
-    # allowlist, so it's dropped unconditionally regardless of what the
-    # sandbox image itself declares via ENV. The reference sandbox image
-    # installs its own lightspeed_agentic module at /opt/lightspeed/src,
-    # outside the interpreter's default site-packages, so it always needs
-    # PYTHONPATH explicitly -- without this, every non-advisory spawn fails
-    # with "HTTP server did not become ready" (issue #192).
+    # environment from a hardcoded allowlist plus OPENSHELL_USER_ENVIRONMENT
+    # (the caller-supplied env= passed to exec_stream() -- that part does
+    # reach the child). What's lost is the sandbox *image's* own `ENV
+    # PYTHONPATH=...` from its Containerfile: env_clear() wipes it and
+    # PYTHONPATH isn't in the supervisor's allowlist, so a plain `env=` with
+    # no PYTHONPATH key silently omits it -- unlike a normal `exec()` on the
+    # host, where a missing key would just inherit the parent's value. The
+    # reference sandbox image (quay.io/jameswong/lightspeed-agentic-sandbox,
+    # production Containerfile) installs its own lightspeed_agentic module
+    # at /opt/lightspeed/src, outside the interpreter's default
+    # site-packages, so it always needs PYTHONPATH explicitly -- without
+    # this, every non-advisory spawn fails with "HTTP server did not become
+    # ready" (issue #192). Value copied verbatim from that Containerfile's
+    # `ENV PYTHONPATH=...` line; re-verify against the image source if this
+    # ever needs to change (e.g. a Python version bump).
     _DEFAULT_EXTRA_ENV: ClassVar[dict[str, str]] = {
         "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
     }

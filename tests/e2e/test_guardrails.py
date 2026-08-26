@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import sys
 from typing import Any
 
@@ -259,11 +260,18 @@ OPENSHELL_SANDBOX_IMAGE = os.environ.get(
 # already in OpenShell's own default allowlist, so it never needed
 # PYTHONPATH and would not catch this regression. The production
 # Containerfile installs lightspeed_agentic at /opt/lightspeed/src
-# instead, which does. Defaults to the arm64 tag since that's this dev
-# environment's architecture; override via env var on amd64 CI.
+# instead, which does. The published tag is architecture-specific (no
+# multi-arch manifest), so the default is derived from the host's own
+# architecture rather than hardcoded -- override via env var if the
+# gateway's compute node doesn't match the host running pytest.
+_ARCH_TAG = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(
+    platform.machine()
+)
 OPENSHELL_PYTHONPATH_TEST_IMAGE = os.environ.get(
     "OPENSHELL_PYTHONPATH_TEST_IMAGE",
-    "quay.io/jameswong/lightspeed-agentic-sandbox:latest-arm64",
+    f"quay.io/jameswong/lightspeed-agentic-sandbox:latest-{_ARCH_TAG}"
+    if _ARCH_TAG
+    else None,
 )
 
 
@@ -443,6 +451,12 @@ class TestOpenShellGuardrails:
         spawn() raises "HTTP server did not become ready" -- reproduced
         directly against a real gateway while implementing this fix.
         """
+        if OPENSHELL_PYTHONPATH_TEST_IMAGE is None:
+            pytest.skip(
+                f"Unrecognized host architecture {platform.machine()!r} -- no published "
+                "image tag to default to. Set OPENSHELL_PYTHONPATH_TEST_IMAGE explicitly."
+            )
+
         from cloud_agents.spawner.factory import build_spawner
 
         spawner = build_spawner(
