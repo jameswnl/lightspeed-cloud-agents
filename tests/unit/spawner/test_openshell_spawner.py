@@ -1257,7 +1257,7 @@ class TestExtraReadablePathsConstructor:
         assert spawner._extra_readable_paths == []
 
     def test_rejects_filesystem_root(self) -> None:
-        """"/" widens the baseline policy to full-filesystem read (issue #189 review).
+        """ "/" widens the baseline policy to full-filesystem read (issue #189 review).
 
         The baseline policy's write list stays narrow (/tmp, /dev/null),
         but "/" in read_only would grant read access to everything --
@@ -1271,7 +1271,7 @@ class TestExtraReadablePathsConstructor:
             OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/"])
 
     def test_rejects_filesystem_root_via_extra_slashes(self) -> None:
-        """"//" and "///" are root-equivalent, caught by the strip("/") check."""
+        """ "//" and "///" are root-equivalent, caught by the strip("/") check."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         with pytest.raises(ValueError, match="root"):
@@ -1280,7 +1280,7 @@ class TestExtraReadablePathsConstructor:
             OpenShellSpawner(openshell_client=object(), extra_readable_paths=["///"])
 
     def test_rejects_filesystem_root_via_dot_segments(self) -> None:
-        """"/." and "/././" are root-equivalent once path-resolved, caught by normpath.
+        """ "/." and "/././" are root-equivalent once path-resolved, caught by normpath.
 
         strip("/") alone is not enough here: "/.".strip("/") == "." (not
         empty), since strip() only trims leading/trailing "/" characters
@@ -1415,9 +1415,7 @@ class TestExtraEnvMergedIntoServerExec:
         """The default PYTHONPATH reaches start_server()'s env, alongside caller env."""
         spawner = self._make_spawner_for_do_spawn(mocker)
 
-        await spawner.spawn(
-            "agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"}
-        )
+        await spawner.spawn("agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"})
 
         call_kwargs = spawner.start_server.call_args.kwargs
         merged_env = call_kwargs["env"]
@@ -1446,15 +1444,11 @@ class TestExtraEnvMergedIntoServerExec:
         assert call_kwargs["env"]["PYTHONPATH"] == "/caller/override"
 
     @pytest.mark.asyncio
-    async def test_empty_extra_env_leaves_caller_env_unchanged(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_empty_extra_env_leaves_caller_env_unchanged(self, mocker: MockerFixture) -> None:
         """extra_env=={} means only the caller's own env reaches start_server()."""
         spawner = self._make_spawner_for_do_spawn(mocker, extra_env={})
 
-        await spawner.spawn(
-            "agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"}
-        )
+        await spawner.spawn("agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"})
 
         call_kwargs = spawner.start_server.call_args.kwargs
         assert call_kwargs["env"] == {"LIGHTSPEED_PROVIDER": "openai"}
@@ -2108,6 +2102,104 @@ class TestExposeServiceEndpoint:
 
         assert endpoint_url == "https://external-proxy.example.com"
         assert virtual_host == "internal-gw"
+
+
+class TestGetQuerySslContext:
+    """Tests for get_query_ssl_context() (#194).
+
+    step_runner.py's query-time HTTP client had no way to learn about
+    this spawner's own TLS config, so it fell back to httpx's default
+    system trust store -- which doesn't include a self-signed OpenShell
+    gateway CA. This method exposes exactly the same SSL context
+    construction _wait_ready_with_host() already builds internally, so
+    both call sites share one implementation.
+    """
+
+    def test_returns_none_without_tls_ca(self, mocker: MockerFixture) -> None:
+        """No tls_ca configured -> None (caller falls back to its own default)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        assert spawner.get_query_ssl_context() is None
+
+    def test_returns_ssl_context_with_tls_ca(self, mocker: MockerFixture) -> None:
+        """tls_ca configured -> SSLContext built from that CA file."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_ssl_ctx = mocker.Mock()
+        mock_create_default_context = mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.ssl.create_default_context",
+            return_value=mock_ssl_ctx,
+        )
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, tls_ca="/etc/openshell-tls/ca.crt")
+
+        result = spawner.get_query_ssl_context()
+
+        mock_create_default_context.assert_called_once_with(cafile="/etc/openshell-tls/ca.crt")
+        assert result is mock_ssl_ctx
+        mock_ssl_ctx.load_cert_chain.assert_not_called()
+
+    def test_returns_ssl_context_with_mtls_client_cert(self, mocker: MockerFixture) -> None:
+        """tls_cert/tls_key configured -> client cert chain loaded onto the context."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_ssl_ctx = mocker.Mock()
+        mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.ssl.create_default_context",
+            return_value=mock_ssl_ctx,
+        )
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            tls_ca="/etc/openshell-tls/ca.crt",
+            tls_cert="/etc/openshell-tls/client.crt",
+            tls_key="/etc/openshell-tls/client.key",
+        )
+
+        result = spawner.get_query_ssl_context()
+
+        mock_ssl_ctx.load_cert_chain.assert_called_once_with(
+            "/etc/openshell-tls/client.crt", "/etc/openshell-tls/client.key"
+        )
+        assert result is mock_ssl_ctx
+
+    @pytest.mark.asyncio
+    async def test_wait_ready_with_host_uses_same_context(self, mocker: MockerFixture) -> None:
+        """_wait_ready_with_host()'s own SSL context matches get_query_ssl_context()'s.
+
+        Regression guard: the two must share one implementation, not two
+        copies that can silently drift apart.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_ssl_ctx = mocker.Mock()
+        mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.ssl.create_default_context",
+            return_value=mock_ssl_ctx,
+        )
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, tls_ca="/etc/openshell-tls/ca.crt")
+
+        mock_response = mocker.Mock(status_code=200)
+        mock_http_client = mocker.AsyncMock()
+        mock_http_client.get = mocker.AsyncMock(return_value=mock_response)
+        mock_async_client_cls = mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.httpx.AsyncClient"
+        )
+        mock_async_client_cls.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_http_client
+        )
+        mock_async_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await spawner._wait_ready_with_host("http://gw:8080", "vh", timeout=1.0)
+
+        assert mock_async_client_cls.call_args.kwargs["verify"] is mock_ssl_ctx
 
 
 class TestEntrypointSpawnerFactory:

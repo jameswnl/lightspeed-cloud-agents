@@ -37,9 +37,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-SANDBOX_IMAGE = os.environ.get(
-    "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
-)
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal")
 
 
 class TestPodmanGuardrails:
@@ -69,7 +67,8 @@ class TestPodmanGuardrails:
         name = "guardrail-label-test"
         try:
             await spawner.spawn(
-                name, SANDBOX_IMAGE,
+                name,
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             with PodmanClient() as client:
@@ -88,13 +87,15 @@ class TestPodmanGuardrails:
         names = []
         try:
             await capped_spawner.spawn(
-                "cap-test-1", SANDBOX_IMAGE,
+                "cap-test-1",
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             names.append("cap-test-1")
             with pytest.raises(RuntimeError, match="Concurrency cap"):
                 await capped_spawner.spawn(
-                    "cap-test-2", SANDBOX_IMAGE,
+                    "cap-test-2",
+                    SANDBOX_IMAGE,
                     env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
                 )
         finally:
@@ -110,7 +111,8 @@ class TestPodmanGuardrails:
 
         name = "guardrail-orphan-test"
         await spawner.spawn(
-            name, SANDBOX_IMAGE,
+            name,
+            SANDBOX_IMAGE,
             env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
         )
 
@@ -119,6 +121,7 @@ class TestPodmanGuardrails:
             assert container.status == "running"
 
         from cloud_agents.spawner.podman_spawner import PodmanSpawner
+
         fresh_spawner = PodmanSpawner(network="cloud-agents")
         await reconcile_orphaned_sandboxes(fresh_spawner)
 
@@ -134,7 +137,8 @@ class TestPodmanGuardrails:
         """Podman spawner rejects secret-backed MCP headers with clear error."""
         with pytest.raises(ValueError, match="not supported on Podman"):
             await spawner.spawn(
-                "mcp-reject-test", SANDBOX_IMAGE,
+                "mcp-reject-test",
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
                 mcp_secret_mounts=[("secret-name", "key", "/var/secrets/mcp/sn/key")],
             )
@@ -149,6 +153,7 @@ class TestKindGuardrails:
         pytest.importorskip("kubernetes")
         try:
             from kubernetes import client, config
+
             config.load_kube_config()
             v1 = client.CoreV1Api()
             v1.list_namespace()
@@ -159,6 +164,7 @@ class TestKindGuardrails:
     def spawner(self):
         """Create a KubernetesSpawner."""
         from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
+
         return KubernetesSpawner(namespace="default", service_account="default")
 
     @pytest.mark.asyncio
@@ -172,7 +178,8 @@ class TestKindGuardrails:
         name = "guardrail-sec-test"
         try:
             await spawner.spawn(
-                name, SANDBOX_IMAGE,
+                name,
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             job = batch.read_namespaced_job(f"agent-{name}", "default")
@@ -194,7 +201,8 @@ class TestKindGuardrails:
         name = "guardrail-res-test"
         try:
             await spawner.spawn(
-                name, SANDBOX_IMAGE,
+                name,
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             job = batch.read_namespaced_job(f"agent-{name}", "default")
@@ -219,7 +227,8 @@ class TestKindGuardrails:
         name = "guardrail-lbl-test"
         try:
             await spawner.spawn(
-                name, SANDBOX_IMAGE,
+                name,
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             job = batch.read_namespaced_job(f"agent-{name}", "default")
@@ -238,7 +247,8 @@ class TestKindGuardrails:
         name = "guardrail-tmp-test"
         try:
             await spawner.spawn(
-                name, SANDBOX_IMAGE,
+                name,
+                SANDBOX_IMAGE,
                 env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
             )
             job = batch.read_namespaced_job(f"agent-{name}", "default")
@@ -269,9 +279,7 @@ _ARCH_TAG = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "
 )
 OPENSHELL_PYTHONPATH_TEST_IMAGE = os.environ.get(
     "OPENSHELL_PYTHONPATH_TEST_IMAGE",
-    f"quay.io/jameswong/lightspeed-agentic-sandbox:latest-{_ARCH_TAG}"
-    if _ARCH_TAG
-    else None,
+    f"quay.io/jameswong/lightspeed-agentic-sandbox:latest-{_ARCH_TAG}" if _ARCH_TAG else None,
 )
 
 
@@ -482,3 +490,97 @@ class TestOpenShellGuardrails:
             assert resp.status_code == 200
         finally:
             await spawner.destroy(name)
+
+
+# Requires a REAL TLS-enabled OpenShell gateway with a CA that is NOT in
+# the system trust store (e.g. cert-manager self-signed, matching a real
+# deployment) -- the bug this guards against (issue #194) cannot
+# reproduce without one: a plain HTTP gateway (the default used by every
+# other test in this file) never exercises TLS verification at all, and
+# a publicly-trusted CA would silently pass even with the bug present.
+# Set OPENSHELL_TLS_CA to run this; skipped otherwise -- unlike the
+# OPENSHELL_* defaults above, there's no sensible default here, since
+# self-signed CAs are per-cluster.
+OPENSHELL_TLS_CA = os.environ.get("OPENSHELL_TLS_CA")
+OPENSHELL_TLS_GATEWAY_URL = os.environ.get("OPENSHELL_TLS_GATEWAY_URL", "localhost:9080")
+OPENSHELL_TLS_BEARER_TOKEN = os.environ.get("OPENSHELL_TLS_BEARER_TOKEN")
+OPENSHELL_TLS_DRIVER = os.environ.get("OPENSHELL_TLS_DRIVER", "podman")
+
+
+class TestOpenShellQueryTLS:
+    """E2E test for issue #194: query-time TLS trust for OpenShellSpawner.
+
+    OpenShellSpawner._wait_ready_with_host() already builds a correct SSL
+    context from the spawner's own tls_ca/tls_cert/tls_key -- that's why
+    spawn()/wait_ready() succeed cleanly even against a self-signed
+    gateway. But step_runner.py's *separate* query-call httpx client used
+    to have no way to learn about that CA at all, and fell back to
+    httpx's default system trust store, failing with
+    CERTIFICATE_VERIFY_FAILED. A unit test mocking httpx can assert the
+    client_kwargs shape, but can't prove real TLS verification actually
+    succeeds against a real self-signed cert -- this is the real gate.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_tls_gateway(self) -> None:
+        """Skip (rather than fail) when no TLS-enabled gateway is configured."""
+        pytest.importorskip("openshell")
+        if not OPENSHELL_TLS_CA:
+            pytest.skip(
+                "OPENSHELL_TLS_CA not set -- no TLS-enabled OpenShell gateway configured "
+                "(a plain HTTP gateway can't reproduce this bug at all)"
+            )
+        if not os.environ.get("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set -- required for a real query completion")
+
+    @pytest.mark.asyncio
+    async def test_query_call_trusts_spawner_ca_end_to_end(self) -> None:
+        """The full step_runner.run_step() path succeeds against a real TLS gateway.
+
+        Before the fix: this raised
+        `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate
+        verify failed: unable to get local issuer certificate`, from
+        step_runner.py's query-call httpx client -- even though this
+        exact spawner/gateway/CA combination already spawns and passes
+        wait_ready() cleanly, since that path builds its own SSL context
+        correctly. Confirmed live against a real OCP cluster with a
+        cert-manager self-signed gateway CA before implementing the fix.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_TLS_GATEWAY_URL,
+            driver=OPENSHELL_TLS_DRIVER,
+            workspace="default",
+            tls_ca=OPENSHELL_TLS_CA,
+            bearer_token=OPENSHELL_TLS_BEARER_TOKEN or "",
+        )
+
+        try:
+            result = await run_step(
+                input={
+                    "step": {"name": "query-tls-e2e-test", "prompt": "Say hello in one word."},
+                    "workflow_id": "e2e-query-tls",
+                    "provider": {"name": "openai", "model": "gpt-4o-mini"},
+                    "sandbox_image": OPENSHELL_SANDBOX_IMAGE,
+                },
+                spawner=spawner,
+            )
+        except (RuntimeError, httpx.HTTPError) as exc:
+            # httpx.ConnectError is what actually propagates from run_step()
+            # today (confirmed live, pre-fix) -- not caught/wrapped into a
+            # RuntimeError anywhere on this path. Checking both exception
+            # types (rather than just RuntimeError) is itself part of what
+            # this test verifies: asserting only RuntimeError would silently
+            # let a real ConnectError escape as an unhandled test error
+            # instead of a clear, diagnosable failure message.
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                pytest.fail(f"Query call did not trust the spawner's own gateway CA: {exc}")
+            raise
+
+        # A real response (whether the agent's own answer succeeded or
+        # failed) proves the query call completed a real TLS handshake --
+        # the bug this guards against fails before any response exists.
+        assert result["status"] in ("completed", "failed")

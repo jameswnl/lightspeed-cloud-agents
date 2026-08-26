@@ -85,9 +85,7 @@ async def _collect_transcript(
         response.raise_for_status()
         content = response.text
     except Exception:
-        logger.warning(
-            "Failed to collect transcript for step '%s'", step_name, exc_info=True
-        )
+        logger.warning("Failed to collect transcript for step '%s'", step_name, exc_info=True)
         return empty
 
     if not content or not content.strip():
@@ -330,9 +328,7 @@ async def _run_step_inner(
                 skills_paths=input.get("skills_paths"),
                 service_account=sa,
                 read_only=advisory,
-                credential_secret_name=_to_k8s_secret_name(
-                    provider.get("credentials_secret")
-                )
+                credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret"))
                 or None,
                 mcp_secret_mounts=mcp_secret_mounts or None,
                 tls_certs=tls_certs,
@@ -379,6 +375,15 @@ async def _run_step_inner(
                 ssl_ctx = ssl.create_default_context()
                 ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
                 client_kwargs["verify"] = ssl_ctx
+            else:
+                # Kubernetes-native mTLS (above) is unrelated to spawners
+                # like OpenShellSpawner whose exposed endpoints sit behind
+                # their own gateway TLS. Ask the spawner directly rather
+                # than assuming SANDBOX_TLS_MODE covers every spawner
+                # (issue #194).
+                spawner_verify = spawner.get_query_ssl_context()
+                if spawner_verify is not None:
+                    client_kwargs["verify"] = spawner_verify
 
             http_headers: dict[str, str] = {}
             if sandbox_auth_enabled and sandbox_auth_token:
@@ -433,9 +438,7 @@ async def _run_step_inner(
 
             data = response.json()
 
-            transcript = await _collect_transcript(
-                endpoint, step_name, client_kwargs, http_headers
-            )
+            transcript = await _collect_transcript(endpoint, step_name, client_kwargs, http_headers)
 
             output_key = step.get("output_key", step_name)
             if transcript_store is not None and transcript.events:
@@ -492,9 +495,7 @@ async def _run_step_inner(
 
     finally:
         if was_cancelled and endpoint:
-            ls_sandbox_timeout_total.labels(
-                step_name=step_name, reason="cancelled"
-            ).inc()
+            ls_sandbox_timeout_total.labels(step_name=step_name, reason="cancelled").inc()
             emit_audit(
                 event_type="sandbox_timeout",
                 workflow_id=workflow_id,
@@ -518,12 +519,8 @@ async def _run_step_inner(
                         details={"pod_name": pod_name},
                     )
                 except Exception:
-                    logger.warning(
-                        "Failed to destroy pod '%s'", pod_name, exc_info=True
-                    )
-                    ls_sandbox_cleanup_failures_total.labels(
-                        step_name=step_name
-                    ).inc()
+                    logger.warning("Failed to destroy pod '%s'", pod_name, exc_info=True)
+                    ls_sandbox_cleanup_failures_total.labels(step_name=step_name).inc()
 
 
 async def _stream_progress(

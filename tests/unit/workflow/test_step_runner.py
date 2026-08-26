@@ -24,6 +24,10 @@ class TestRunStep:
         spawner = mocker.AsyncMock()
         spawner.spawn.return_value = "http://pod-1:8080"
         spawner.wait_ready.return_value = True
+        # get_query_ssl_context() is a *sync* method (see AgentSpawner base
+        # class) -- must override the AsyncMock default, which would
+        # otherwise make it return an unawaited coroutine instead of None.
+        spawner.get_query_ssl_context = mocker.Mock(return_value=None)
         return spawner
 
     @pytest.fixture(name="mock_http_success")
@@ -111,9 +115,7 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
-    async def test_run_step_no_spawner_returns_stub(
-        self, step_input: dict[str, Any]
-    ) -> None:
+    async def test_run_step_no_spawner_returns_stub(self, step_input: dict[str, Any]) -> None:
         """Without a spawner, returns a stub result."""
         from cloud_agents.workflow.core.step_runner import run_step
 
@@ -183,6 +185,83 @@ class TestRunStep:
 
         with pytest.raises(RuntimeError, match="Infrastructure error"):
             await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+    @pytest.mark.asyncio
+    async def test_run_step_uses_spawner_ssl_context_for_query(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Query HTTP client trusts the spawner's own TLS CA when it provides one (#194).
+
+        Without this, the query call to a spawner's exposed HTTPS endpoint
+        (e.g. OpenShellSpawner's gateway, behind a self-signed CA) falls
+        back to httpx's default system trust store and fails with
+        CERTIFICATE_VERIFY_FAILED, even though the spawner already knows
+        how to build a correct SSL context for exactly this endpoint.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_ssl_ctx = mocker.Mock(name="spawner-ssl-context")
+        mock_spawner.get_query_ssl_context.return_value = mock_ssl_ctx
+
+        mock_http_cls = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_client = mocker.MagicMock()
+        mock_response = mocker.MagicMock(status_code=200)
+        mock_response.json.return_value = {"success": True, "output": {"summary": "done"}}
+        mock_transcript_response = mocker.MagicMock(status_code=404)
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+        mock_http_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        assert result["status"] == "completed"
+        # The query-call AsyncClient is constructed once with client_kwargs
+        # (mock_http_success's transcript-collection client is a separate
+        # patch target in other tests, but here everything routes through
+        # this single patched httpx.AsyncClient) -- find the call that
+        # received our SSL context.
+        verify_values = [call.kwargs.get("verify") for call in mock_http_cls.call_args_list]
+        assert mock_ssl_ctx in verify_values
+
+    @pytest.mark.asyncio
+    async def test_run_step_no_ssl_context_omits_verify_kwarg(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """No spawner SSL context, no app-level TLS mode -> no verify override.
+
+        Preserves existing behavior (httpx's own default) for spawners
+        that don't need special TLS handling.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        assert mock_spawner.get_query_ssl_context.return_value is None
+
+        mock_http_cls = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_client = mocker.MagicMock()
+        mock_response = mocker.MagicMock(status_code=200)
+        mock_response.json.return_value = {"success": True, "output": {"summary": "done"}}
+        mock_transcript_response = mocker.MagicMock(status_code=404)
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+        mock_http_cls.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        assert result["status"] == "completed"
+        for call in mock_http_cls.call_args_list:
+            assert "verify" not in call.kwargs
 
     @pytest.mark.asyncio
     async def test_run_step_circuit_breaker_open(

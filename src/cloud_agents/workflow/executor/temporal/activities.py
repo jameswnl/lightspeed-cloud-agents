@@ -207,9 +207,7 @@ async def _collect_transcript(
 
         content = response.text
     except Exception:
-        logger.warning(
-            "Failed to collect transcript for step '%s'", step_name, exc_info=True
-        )
+        logger.warning("Failed to collect transcript for step '%s'", step_name, exc_info=True)
         return empty
 
     if not content or not content.strip():
@@ -475,6 +473,15 @@ async def _run_sandbox_step_inner(
                 ssl_ctx = ssl.create_default_context()
                 ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
                 client_kwargs["verify"] = ssl_ctx
+            else:
+                # Kubernetes-native mTLS (above) is unrelated to spawners
+                # like OpenShellSpawner whose exposed endpoints sit behind
+                # their own gateway TLS. Ask the spawner directly rather
+                # than assuming SANDBOX_TLS_MODE covers every spawner
+                # (issue #194).
+                spawner_verify = spawner.get_query_ssl_context()
+                if spawner_verify is not None:
+                    client_kwargs["verify"] = spawner_verify
 
             # Build HTTP headers for sandbox call
             http_headers: dict[str, str] = {}
@@ -535,9 +542,7 @@ async def _run_sandbox_step_inner(
             data = response.json()
 
             # Collect transcript from sandbox event log (before destroy)
-            transcript = await _collect_transcript(
-                endpoint, step_name, client_kwargs, http_headers
-            )
+            transcript = await _collect_transcript(endpoint, step_name, client_kwargs, http_headers)
 
             # Persist full untruncated transcript to PostgreSQL (best-effort).
             # Key by output_key (not step name) to match the read paths in
@@ -777,9 +782,7 @@ async def _build_escalation_inner(
             step_transcripts = {}
             for step_key in steps:
                 try:
-                    transcript = await transcript_store.get(
-                        workflow_id or workflow_name, step_key
-                    )
+                    transcript = await transcript_store.get(workflow_id or workflow_name, step_key)
                     if transcript is not None:
                         step_transcripts[step_key] = transcript.model_dump()
                 except Exception:
