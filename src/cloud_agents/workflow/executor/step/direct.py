@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
-from pydantic_ai.exceptions import UserError
+from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import (
     ModelMessage,
@@ -191,6 +191,26 @@ async def _call_llm(
         except UserError as exc:
             logger.warning(
                 "Native structured output not supported for %s, falling back to "
+                "prompt-based schema hint: %s",
+                model_string,
+                exc,
+            )
+        except ModelHTTPError as exc:
+            # 400 means the provider rejected the request itself -- for an
+            # object-rooted schema that already passed _supports_native_output(),
+            # the most likely cause is a native-mode-specific schema
+            # constraint (unsupported keywords, draft mismatch, etc.), the
+            # same class of "this schema doesn't work in native mode"
+            # signal UserError already falls back for. Anything else
+            # (401/429/5xx) is an auth/rate-limit/infra failure unrelated
+            # to the schema -- re-raise those rather than silently
+            # retrying, consistent with the intentional "let real
+            # failures propagate" design (see
+            # test_5xx_model_http_error_propagates_without_fallback).
+            if exc.status_code != 400:
+                raise
+            logger.warning(
+                "Native structured output rejected (400) for %s, falling back to "
                 "prompt-based schema hint: %s",
                 model_string,
                 exc,
@@ -656,7 +676,7 @@ class DirectExecutor(StepExecutor):
         )
 
 
-_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_markdown_fence(content: str) -> str:

@@ -525,6 +525,22 @@ class TestParseOutput:
         result = _parse_output(content, {"type": "object"})
         assert result == {"ok": True}
 
+    def test_uppercase_json_tag_fence_stripped(self) -> None:
+        """```JSON ... ``` (uppercase tag) is also stripped, not just lowercase.
+
+        Regression test for a beesarmy review finding on #188 PR 190: the
+        fence regex's "json" tag was lowercase-only, so a model emitting
+        an uppercase ```JSON fence (the reported bug used lowercase, but
+        the tag casing isn't part of any documented contract) would fail
+        json.loads() on the still-fenced content instead of being
+        stripped.
+        """
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = '```JSON\n{"ok": true}\n```'
+        result = _parse_output(content, {"type": "object"})
+        assert result == {"ok": True}
+
     def test_fence_stripped_without_schema_too(self) -> None:
         """Fence-stripping also applies on the no-schema path."""
         from cloud_agents.workflow.executor.step.direct import _parse_output
@@ -672,6 +688,75 @@ class TestCallLlmNativeStructuredOutput:
         )
 
         with pytest.raises(RuntimeError, match="network exploded"):
+            await _call_llm(
+                provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+                messages=[{"role": "user", "content": "hi"}],
+                output_schema={"type": "object"},
+            )
+
+        assert mock_fn.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_400_model_http_error(self, mocker: MockerFixture) -> None:
+        """A 400 ModelHTTPError (provider rejected the native schema) triggers fallback.
+
+        Regression test for a beesarmy review finding on #188 PR 190:
+        _supports_native_output() only screens out the *known* unsupported
+        shape (non-object root) before ever attempting native mode -- an
+        object-rooted schema can still be rejected by the provider for
+        other reasons (unsupported keywords, draft mismatches, etc.),
+        which surfaces as pydantic_ai.exceptions.ModelHTTPError, not
+        UserError. A 400 specifically means "the request itself was
+        invalid" (as opposed to 401/429/5xx, which are auth/rate-limit/
+        infra failures unrelated to the schema) -- exactly the same class
+        of "this schema doesn't work in native mode" signal UserError
+        already triggers a fallback for.
+        """
+        from pydantic_ai.exceptions import ModelHTTPError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=[
+                ModelHTTPError(status_code=400, model_name="gpt-4o-mini", body="bad schema"),
+                mock_response,
+            ],
+        )
+
+        result = await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "object"},
+        )
+
+        assert mock_fn.call_count == 2
+        assert mock_fn.call_args_list[0].kwargs.get("model_request_parameters") is not None
+        assert mock_fn.call_args_list[1].kwargs.get("model_request_parameters") is None
+        assert result["content"] == '{"ok": true}'
+
+    @pytest.mark.asyncio
+    async def test_5xx_model_http_error_propagates_without_fallback(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A 5xx ModelHTTPError (provider/infra failure, not a schema issue) propagates."""
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=ModelHTTPError(status_code=503, model_name="gpt-4o-mini", body="down"),
+        )
+
+        with pytest.raises(ModelHTTPError):
             await _call_llm(
                 provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
                 messages=[{"role": "user", "content": "hi"}],

@@ -58,7 +58,7 @@ def _admin_connection_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
+_requires_admin_db = pytest.mark.skipif(
     not _admin_connection_available(),
     reason=f"Packaging e2e test requires a reachable PostgreSQL admin connection at {ADMIN_DB_URL}",
 )
@@ -116,6 +116,7 @@ def test_wheel_includes_alembic_assets(tmp_path: Path) -> None:
     assert "cloud_agents/_alembic/alembic/versions/002_identity_model.py" in names
 
 
+@_requires_admin_db
 def test_migrations_run_from_clean_wheel_install(tmp_path: Path, throwaway_db_url: str) -> None:
     """Migrations succeed using only an installed wheel -- no source checkout.
 
