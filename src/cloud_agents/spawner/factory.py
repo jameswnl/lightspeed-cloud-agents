@@ -64,11 +64,14 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
             For "kubernetes": namespace, service_account, config_configmap,
                 tools_configmap, secret_env_vars, projected_sa_token, max_pods.
             For "podman": network, volume_mounts, max_pods.
-            For "openshell": gateway_url, driver, workspace, http_endpoint,
+            For "openshell": gateway_url, workspace, http_endpoint,
                 tls_ca, tls_cert, tls_key, bearer_token, max_pods,
                 extra_readable_paths, extra_env -- used to build the
                 underlying SandboxClient (with TLS/bearer auth) and then
-                OpenShellSpawner.
+                OpenShellSpawner. No `driver` param -- OpenShellSpawner
+                auto-detects the gateway's own compute driver (see
+                _detect_compute_driver()) instead of requiring a caller
+                to configure it.
             Callers may pass a broader dict (e.g. a Pydantic model_dump())
             containing extra keys -- unrecognized keys and explicit None
             values are dropped rather than forwarded, so passing an unset
@@ -111,7 +114,6 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
 
 def _build_openshell_spawner(
     gateway_url: str | None = None,
-    driver: str | None = None,
     workspace: str | None = None,
     http_endpoint: str | None = None,
     tls_ca: str | None = None,
@@ -131,7 +133,6 @@ def _build_openshell_spawner(
     from openshell import SandboxClient
 
     gateway_url = gateway_url or "localhost:17670"
-    driver = driver or "podman"
     workspace = workspace or "default"
     http_endpoint = http_endpoint or ""
     tls_ca = tls_ca or ""
@@ -160,15 +161,13 @@ def _build_openshell_spawner(
 
     client = SandboxClient(**client_kwargs)
     logger.info(
-        "Using OpenShellSpawner (gateway=%s, driver=%s, workspace=%s)",
+        "Using OpenShellSpawner (gateway=%s, workspace=%s)",
         gateway_url,
-        driver,
         workspace,
     )
 
     return OpenShellSpawner(
         openshell_client=client,
-        driver=driver,
         workspace=workspace,
         endpoint=grpc_endpoint,
         http_endpoint=http_endpoint,

@@ -122,6 +122,10 @@ class OpenShellSpawner(AgentSpawner):
     ]
     _DEFAULT_BASELINE_READ_WRITE: ClassVar[list[str]] = ["/tmp", "/dev/null"]
 
+    # Where skills_image content lands in the sandbox, whether via the
+    # native podman driver_config mount or the crane/tar upload fallback.
+    _SKILLS_TARGET_PATH: ClassVar[str] = "/app/skills"
+
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
         """Validate extra_readable_paths before they reach a Landlock policy.
@@ -194,7 +198,6 @@ class OpenShellSpawner(AgentSpawner):
     def __init__(
         self,
         openshell_client: Any = None,
-        driver: str = "podman",
         workspace: str = "default",
         endpoint: str = "",
         http_endpoint: str = "",
@@ -212,13 +215,6 @@ class OpenShellSpawner(AgentSpawner):
             openshell_client: OpenShell SDK client for sandbox operations.
                 Must implement create(), wait_ready(), exec(), exec_stream(),
                 and delete().
-            driver: OpenShell compute driver type ("podman" or "kubernetes").
-                Controls how skills_image is handled:
-                - "podman": Uses native image mounts via driver_config
-                  (no extraction, no tar streaming — Podman mounts the
-                  OCI image directly at /app/skills).
-                - "kubernetes": Falls back to tar streaming (extract
-                  skills locally, stream into sandbox via exec_stream).
             endpoint: Gateway gRPC endpoint (host:port). Used for raw
                 gRPC calls (ExposeService, Provider API). Falls back to
                 reading client._endpoint if empty.
@@ -248,7 +244,7 @@ class OpenShellSpawner(AgentSpawner):
         """
         super().__init__(**kwargs)
         self._client = openshell_client
-        self._driver = driver
+        self._detected_driver: str | None = None
         self._workspace = workspace
         self._endpoint = endpoint
         self._http_endpoint = http_endpoint
@@ -403,6 +399,49 @@ class OpenShellSpawner(AgentSpawner):
             return endpoint_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
+
+    async def _detect_compute_driver(self) -> str:
+        """Query the gateway's own compute driver via GetGatewayInfo(), cached.
+
+        The gateway already knows which compute driver it runs -- there's no
+        need for a caller to configure this out-of-band (and get it wrong,
+        as happened before this method existed; see #198). Used only to pick
+        the skills_image handling strategy in _do_spawn(); nothing else in
+        this spawner's lifecycle depends on the driver at all.
+
+        Best-effort: any failure (RPC error, no drivers reported) fails open
+        to "" rather than raising or guessing a specific driver -- a gateway
+        hiccup here must never block the sandbox from spawning, and "" makes
+        _do_spawn() take the universal skills_image fallback that works
+        regardless of driver.
+
+        Returns:
+            The gateway's active compute driver name (e.g. "kubernetes",
+            "podman"), or "" if it couldn't be determined.
+        """
+        if self._detected_driver is not None:
+            return self._detected_driver
+
+        import grpc
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_get_info() -> str:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                resp = stub.GetGatewayInfo(openshell_pb2.GetGatewayInfoRequest())
+            finally:
+                channel.close()
+            if resp.compute_drivers:
+                return resp.compute_drivers[0].name
+            return ""
+
+        try:
+            self._detected_driver = await asyncio.to_thread(_sync_get_info)
+        except grpc.RpcError as exc:
+            logger.warning("Failed to detect gateway compute driver: %s", exc)
+            self._detected_driver = ""
+        return self._detected_driver
 
     async def wait_ready(
         self,
@@ -617,10 +656,11 @@ class OpenShellSpawner(AgentSpawner):
             self._build_baseline_filesystem_policy(spec)
 
         # Skills image: Podman driver mounts the OCI image directly
-        # via driver_config (no extraction needed). K8s driver falls
-        # back to tar streaming after sandbox creation.
+        # via driver_config (no extraction needed). Every other driver
+        # (including unknown/undetectable) falls back to tar streaming
+        # after sandbox creation -- see _detect_compute_driver().
         skills_via_driver_config = False
-        if skills_image and self._driver == "podman":
+        if skills_image and await self._detect_compute_driver() == "podman":
             from google.protobuf import struct_pb2
 
             mount_config = struct_pb2.Struct()
@@ -631,7 +671,7 @@ class OpenShellSpawner(AgentSpawner):
                             {
                                 "type": "image",
                                 "source": skills_image,
-                                "target": "/app/skills",
+                                "target": self._SKILLS_TARGET_PATH,
                                 "read_only": True,
                             }
                         ],
@@ -757,7 +797,7 @@ class OpenShellSpawner(AgentSpawner):
             "/tmp",
             "/home/agent",
             "/var/log",
-            "/app/skills",
+            OpenShellSpawner._SKILLS_TARGET_PATH,
             "/var/secrets/mcp",
             "/var/run/secrets/llm-credentials",
         ):
@@ -788,6 +828,13 @@ class OpenShellSpawner(AgentSpawner):
         paths alone -- sending only the extras would drop /usr, /lib,
         /proc, /etc, and /tmp, breaking things worse than the bug this
         fixes.
+
+        Also grants write access to _SKILLS_TARGET_PATH, matching
+        _build_filesystem_policy()'s existing grant -- without it, the
+        skills_image tar-upload fallback (_load_skills(), used whenever the
+        gateway's compute driver isn't podman) fails with a Landlock
+        "Permission denied" writing into a path that's otherwise read-only
+        under /app's default grant.
         """
         for path in self._DEFAULT_BASELINE_READ_ONLY:
             spec.policy.filesystem.read_only.append(path)
@@ -795,6 +842,7 @@ class OpenShellSpawner(AgentSpawner):
             spec.policy.filesystem.read_only.append(path)
         for path in self._DEFAULT_BASELINE_READ_WRITE:
             spec.policy.filesystem.read_write.append(path)
+        spec.policy.filesystem.read_write.append(self._SKILLS_TARGET_PATH)
         spec.policy.filesystem.include_workdir = True
         # Already the proto default, but set explicitly to match the
         # live-verified fix YAML in issue #189 exactly.
@@ -968,7 +1016,7 @@ class OpenShellSpawner(AgentSpawner):
             def _sync_upload() -> None:
                 for _ in self._client.exec_stream(
                     sandbox_id,
-                    ["tar", "xf", "-", "-C", "/app/skills"],
+                    ["tar", "xf", "-", "-C", self._SKILLS_TARGET_PATH],
                     stdin=tar_bytes,
                 ):
                     pass

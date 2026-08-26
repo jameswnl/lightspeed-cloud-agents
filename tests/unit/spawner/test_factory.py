@@ -205,7 +205,6 @@ class TestBuildSpawnerOpenShell:
         spawner = build_spawner(
             "openshell",
             gateway_url=None,
-            driver=None,
             workspace=None,
             tls_ca=None,
             tls_cert=None,
@@ -214,7 +213,6 @@ class TestBuildSpawnerOpenShell:
         )
 
         mock_client.assert_called_once_with(endpoint="localhost:17670")
-        assert spawner._driver == "podman"
         assert spawner._workspace == "default"
         assert spawner._tls_ca == ""
         assert spawner._bearer_token == ""

@@ -100,7 +100,6 @@ def _create_spawner():
         return build_spawner(
             "openshell",
             gateway_url=os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670"),
-            driver=os.environ.get("OPENSHELL_DRIVER", "podman"),
             workspace=os.environ.get("OPENSHELL_WORKSPACE", "default"),
             http_endpoint=os.environ.get("OPENSHELL_HTTP_ENDPOINT", ""),
             tls_ca=os.environ.get("OPENSHELL_TLS_CA", ""),
