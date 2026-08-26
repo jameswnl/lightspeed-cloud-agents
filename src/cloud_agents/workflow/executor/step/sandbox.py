@@ -26,15 +26,19 @@ def _sum_result_event_usage(events: list[dict[str, Any]] | None) -> tuple[int, i
 
     Parameters:
         events: Transcript events (dicts with "type" and "data" keys).
-            May be None or contain non-dict entries/data if the transcript
-            container is malformed or truncated -- both are skipped rather
-            than raising.
+            May be None or contain non-dict entries/data, or non-numeric
+            usage fields, if the transcript container is malformed or
+            truncated -- all are skipped rather than raising.
 
     Returns:
         (input_tokens, output_tokens, cost_usd) totals across all result
         events -- usually just one, but summed in case a step's agent
         makes multiple turns/calls.
     """
+
+    def _numeric_or_zero(value: Any) -> int | float:
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
     input_tokens = 0
     output_tokens = 0
     cost_usd = 0.0
@@ -44,9 +48,9 @@ def _sum_result_event_usage(events: list[dict[str, Any]] | None) -> tuple[int, i
         data = event.get("data")
         if not isinstance(data, dict):
             continue
-        input_tokens += data.get("input_tokens") or 0
-        output_tokens += data.get("output_tokens") or 0
-        cost_usd += data.get("cost_usd") or 0.0
+        input_tokens += _numeric_or_zero(data.get("input_tokens"))
+        output_tokens += _numeric_or_zero(data.get("output_tokens"))
+        cost_usd += _numeric_or_zero(data.get("cost_usd"))
     return input_tokens, output_tokens, cost_usd
 
 

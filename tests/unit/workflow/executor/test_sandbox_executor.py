@@ -294,6 +294,62 @@ class TestSandboxExecutor:
         assert result.cost_usd == pytest.approx(0.01)
 
     @pytest.mark.asyncio
+    async def test_non_numeric_usage_fields_are_skipped(self, mocker: MockerFixture) -> None:
+        """A result event with non-numeric usage fields is skipped, not a crash.
+
+        Regression test for a CodeRabbit finding on #188 PR 190:
+        `input_tokens += data.get("input_tokens") or 0` assumes the field
+        is numeric -- a malformed/truncated transcript with e.g.
+        `"input_tokens": "26"` (a string) reaches `0 += "26"` and raises
+        TypeError instead of being treated as unusable usage data.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.run_step",
+            return_value={
+                "status": "completed",
+                "output": {"summary": "done"},
+                "transcript": {
+                    "step_name": "s1",
+                    "events": [
+                        {
+                            "ts": "t1",
+                            "type": "result",
+                            "data": {
+                                "cost_usd": "invalid",
+                                "input_tokens": "26",
+                                "output_tokens": 136,
+                            },
+                        },
+                        {
+                            "ts": "t2",
+                            "type": "result",
+                            "data": {"cost_usd": 0.01, "input_tokens": 10, "output_tokens": 5},
+                        },
+                    ],
+                },
+            },
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
+
+        executor = SandboxExecutor(spawner=mocker.AsyncMock())
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        ))
+
+        assert result.status == "completed"
+        # First event's non-numeric input_tokens/cost_usd are skipped, but
+        # its numeric output_tokens (136) still counts -- validation is
+        # per-field, not per-event, since a partially malformed event
+        # still carries some real usage data worth keeping.
+        assert result.input_tokens == 10
+        assert result.output_tokens == 141
+        assert result.cost_usd == pytest.approx(0.01)
+
+    @pytest.mark.asyncio
     async def test_duration_ms_reflects_real_elapsed_time(self, mocker: MockerFixture) -> None:
         """duration_ms is measured around run_step(), not hardcoded to 0."""
         import asyncio

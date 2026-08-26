@@ -111,6 +111,29 @@ def _build_user_prompt(step_input: StepInput) -> str:
     return user_content
 
 
+def _supports_native_output(output_schema: dict[str, Any]) -> bool:
+    """Whether output_schema's root shape is safe to send via native structured output.
+
+    output_schema is user-authored workflow YAML, not internally
+    guaranteed to be an object-rooted JSON Schema. OpenAI's Structured
+    Outputs (what output_mode="native" maps to) requires an object root
+    -- a top-level array or anyOf/oneOf/allOf union can be rejected by
+    the provider. That rejection isn't a pydantic-ai UserError, so it
+    wouldn't be caught by the existing native-mode fallback (which
+    intentionally only retries on UserError and lets genuine API errors
+    propagate, see test_non_user_error_propagates_without_fallback) --
+    the schema shape has to be checked before attempting native mode,
+    not recovered from after.
+
+    Parameters:
+        output_schema: The step's requested JSON Schema.
+
+    Returns:
+        True if output_schema has an object root.
+    """
+    return output_schema.get("type") == "object"
+
+
 async def _call_llm(
     provider: dict[str, Any],
     messages: list[dict[str, str]],
@@ -153,7 +176,7 @@ async def _call_llm(
     request = ModelRequest.user_text_prompt(user_prompt, instructions=instructions)
 
     response = None
-    if output_schema:
+    if output_schema and _supports_native_output(output_schema):
         try:
             native_params = ModelRequestParameters(
                 output_mode="native",

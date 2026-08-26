@@ -630,6 +630,37 @@ class TestCallLlmNativeStructuredOutput:
         assert result["content"] == '{"ok": true}'
 
     @pytest.mark.asyncio
+    async def test_non_object_root_schema_skips_native_mode(self, mocker: MockerFixture) -> None:
+        """A non-object-root output_schema (e.g. top-level array) skips native mode.
+
+        Regression test for a CodeRabbit finding on #188 PR 190: OpenAI's
+        Structured Outputs (native mode) requires an object-root JSON
+        Schema. output_schema is user-authored workflow YAML, not
+        internally guaranteed to be object-rooted -- passing e.g.
+        {"type": "array", ...} through OutputObjectDefinition risks a
+        provider-level rejection that the existing UserError-only fallback
+        (see test_falls_back_when_native_mode_raises_user_error /
+        test_non_user_error_propagates_without_fallback) would NOT catch,
+        since that's an intentional "let real API errors propagate"
+        design, not a place to add a second exception-based safety net.
+        The fix instead avoids ever attempting native mode for a schema
+        shape known not to support it.
+        """
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = _mock_model_response(mocker, '["a", "b"]', 5, 5)
+
+        result = await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "array", "items": {"type": "string"}},
+        )
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("model_request_parameters") is None
+        assert result["content"] == '["a", "b"]'
+
+    @pytest.mark.asyncio
     async def test_non_user_error_propagates_without_fallback(self, mocker: MockerFixture) -> None:
         """A non-UserError exception (e.g. a real API failure) propagates -- no silent retry."""
         from cloud_agents.workflow.executor.step.direct import _call_llm
