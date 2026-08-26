@@ -483,6 +483,112 @@ class TestOpenShellSpawnerSpawn:
         assert captured["command"][:3] == ["python3", "-m", "uvicorn"]
 
 
+class TestSkillsImageDriverSelection:
+    """skills_image routing depends on the auto-detected gateway driver (#198).
+
+    Native podman driver_config mounts (no extraction) are only correct when
+    the gateway's own compute driver is actually podman -- otherwise the
+    universal crane/tar fallback (_load_skills) must run instead, or the
+    skills content silently never lands in the sandbox.
+    """
+
+    def _make_spawner(self, mocker: MockerFixture) -> Any:
+        """Build an OpenShellSpawner with spawn()'s other side effects mocked."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        return spawner
+
+    @pytest.mark.asyncio
+    async def test_podman_driver_skips_tar_fallback(self, mocker: MockerFixture) -> None:
+        """Detected podman driver uses the native mount, not _load_skills."""
+        spawner = self._make_spawner(mocker)
+        mocker.patch.object(spawner, "_detect_compute_driver", return_value="podman")
+        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            skills_image="quay.io/example/skills:latest",
+        )
+
+        mock_load_skills.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_kubernetes_driver_uses_tar_fallback(self, mocker: MockerFixture) -> None:
+        """Detected kubernetes driver falls back to _load_skills, not the native mount."""
+        spawner = self._make_spawner(mocker)
+        mocker.patch.object(spawner, "_detect_compute_driver", return_value="kubernetes")
+        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            skills_image="quay.io/example/skills:latest",
+        )
+
+        mock_load_skills.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_driver_fails_open_to_tar_fallback(self, mocker: MockerFixture) -> None:
+        """Detection failure/unknown driver falls back to the universal path.
+
+        Guessing "podman" (the old hardcoded default) on an actual kubernetes
+        gateway silently drops skills content with no error surfaced -- this
+        is exactly the bug being fixed. Failing open to the fallback that
+        works on every driver is the safe choice when detection is
+        inconclusive.
+        """
+        spawner = self._make_spawner(mocker)
+        mocker.patch.object(spawner, "_detect_compute_driver", return_value="")
+        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            skills_image="quay.io/example/skills:latest",
+        )
+
+        mock_load_skills.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_skills_image_never_detects_driver(self, mocker: MockerFixture) -> None:
+        """Spawns without skills_image don't pay for a GetGatewayInfo round-trip."""
+        spawner = self._make_spawner(mocker)
+        mock_detect = mocker.patch.object(spawner, "_detect_compute_driver")
+        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        mock_detect.assert_not_called()
+        mock_load_skills.assert_not_called()
+
+
 class TestOpenShellSpawnerDestroy:
     """Tests for _do_destroy cleanup."""
 
@@ -1074,7 +1180,7 @@ class TestBaselineFilesystemPolicy:
             assert path in spec.policy.filesystem.read_only
 
     def test_sets_default_read_write(self, mocker: MockerFixture) -> None:
-        """Baseline read_write matches OpenShell's own default (/tmp, /dev/null)."""
+        """Baseline read_write matches OpenShell's own default when no skills_image."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         spawner = OpenShellSpawner(openshell_client=object())
@@ -1083,6 +1189,44 @@ class TestBaselineFilesystemPolicy:
         spawner._build_baseline_filesystem_policy(spec)
 
         assert spec.policy.filesystem.read_write == ["/tmp", "/dev/null"]
+
+    def test_omits_skills_target_write_access_without_skills_image(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No skills_image -- no /app/skills write grant, to avoid a wider writable surface."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert "/app/skills" not in spec.policy.filesystem.read_write
+
+    def test_includes_skills_target_write_access(self, mocker: MockerFixture) -> None:
+        """Baseline grants write access to /app/skills when skills_image is set.
+
+        Matches _build_filesystem_policy()'s existing grant. Without this,
+        the skills_image tar-upload fallback (_load_skills(), used whenever
+        the gateway's compute driver isn't podman) fails with Landlock
+        "Permission denied" writing into /app/skills -- /app is read-only in
+        the default baseline allowlist, and /app/skills was never added to
+        the write allowlist the way _build_filesystem_policy() (the advisory
+        path) already does. This bug was previously masked entirely by the
+        driver auto-detection gap (#198): before that fix, a caller-
+        configured driver mismatch meant the fallback path was essentially
+        never reached against a real kubernetes-driver gateway.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(
+            spec, skills_image="quay.io/example/skills:latest"
+        )
+
+        assert "/app/skills" in spec.policy.filesystem.read_write
 
     def test_includes_workdir(self, mocker: MockerFixture) -> None:
         """Baseline sets include_workdir."""
@@ -2102,6 +2246,183 @@ class TestExposeServiceEndpoint:
 
         assert endpoint_url == "https://external-proxy.example.com"
         assert virtual_host == "internal-gw"
+
+
+class TestComputeDriverDetection:
+    """Tests for _detect_compute_driver() (#198).
+
+    Replaces the old caller-supplied `driver` constructor param: the
+    gateway's own GetGatewayInfo() RPC already reports which compute driver
+    it runs, so the client can ask instead of requiring a human to keep two
+    repos' config in sync (and get it wrong, as happened before).
+    """
+
+    @pytest.mark.asyncio
+    async def test_detects_kubernetes_driver(self, mocker: MockerFixture) -> None:
+        """Reports "kubernetes" when that's the gateway's active driver."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_driver_info = mocker.Mock()
+        mock_driver_info.name = "kubernetes"
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = [mock_driver_info]
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        assert await spawner._detect_compute_driver() == "kubernetes"
+
+    @pytest.mark.asyncio
+    async def test_detects_podman_driver(self, mocker: MockerFixture) -> None:
+        """Reports "podman" when that's the gateway's active driver."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_driver_info = mocker.Mock()
+        mock_driver_info.name = "podman"
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = [mock_driver_info]
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        assert await spawner._detect_compute_driver() == "podman"
+
+    @pytest.mark.asyncio
+    async def test_caches_result_after_first_call(self, mocker: MockerFixture) -> None:
+        """Only calls GetGatewayInfo once, even across multiple spawns."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_driver_info = mocker.Mock()
+        mock_driver_info.name = "kubernetes"
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = [mock_driver_info]
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        first = await spawner._detect_compute_driver()
+        second = await spawner._detect_compute_driver()
+
+        assert first == second == "kubernetes"
+        mock_stub_cls.return_value.GetGatewayInfo.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_empty_when_no_drivers_reported(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Empty compute_drivers list -- fails open to "" (universal path)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = []
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        assert await spawner._detect_compute_driver() == ""
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_empty_on_rpc_error(self, mocker: MockerFixture) -> None:
+        """gRPC failure fails open to "" (universal path) rather than raising.
+
+        Detection is a best-effort optimization hint, not something that
+        should ever crash a spawn -- a gateway hiccup here must never block
+        the actual sandbox from starting. Uses a plain RuntimeError rather
+        than a real grpc.RpcError -- the fix broadened the catch to
+        `except Exception` specifically because grpc.RpcError alone missed
+        real failure modes (see test_falls_back_to_empty_on_channel_setup_error
+        below), and importing the real `grpc` package isn't available in
+        every test environment (it's part of the optional `openshell` extra).
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.side_effect = RuntimeError("boom")
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        assert await spawner._detect_compute_driver() == ""
+
+    async def test_falls_back_to_empty_on_channel_setup_error(self, mocker: MockerFixture) -> None:
+        """A non-RpcError failure (e.g. channel setup) also fails open.
+
+        _create_grpc_channel() raises ValueError (not grpc.RpcError) when a
+        bearer token is configured without TLS -- catching only
+        grpc.RpcError would let this escape _detect_compute_driver() and
+        abort the spawn entirely, contradicting its own "must never block a
+        spawn" contract.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mocker.patch.object(
+            spawner, "_create_grpc_channel", side_effect=ValueError("bearer requires TLS")
+        )
+
+        assert await spawner._detect_compute_driver() == ""
+
+    async def test_retries_after_a_failed_detection(self, mocker: MockerFixture) -> None:
+        """A failed detection is not cached -- the next call retries the RPC.
+
+        Only a successful, non-empty driver name is cached; "" from an
+        error or an empty compute_drivers list must not permanently stick
+        for the rest of this spawner's lifetime.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_driver_info = mocker.Mock()
+        mock_driver_info.name = "kubernetes"
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = [mock_driver_info]
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.side_effect = [
+            RuntimeError("transient blip"),
+            mock_resp,
+        ]
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        first = await spawner._detect_compute_driver()
+        second = await spawner._detect_compute_driver()
+
+        assert first == ""
+        assert second == "kubernetes"
+        assert mock_stub_cls.return_value.GetGatewayInfo.call_count == 2
 
 
 class TestGetQuerySslContext:

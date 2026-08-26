@@ -333,7 +333,6 @@ class TestOpenShellGuardrails:
         return build_spawner(
             "openshell",
             gateway_url=OPENSHELL_GATEWAY_URL,
-            driver="podman",
             workspace="default",
         )
 
@@ -399,14 +398,12 @@ class TestOpenShellGuardrails:
         denied_spawner = build_spawner(
             "openshell",
             gateway_url=OPENSHELL_GATEWAY_URL,
-            driver="podman",
             workspace="default",
             extra_readable_paths=[],
         )
         allowed_spawner = build_spawner(
             "openshell",
             gateway_url=OPENSHELL_GATEWAY_URL,
-            driver="podman",
             workspace="default",
             extra_readable_paths=["/home"],
         )
@@ -470,7 +467,6 @@ class TestOpenShellGuardrails:
         spawner = build_spawner(
             "openshell",
             gateway_url=OPENSHELL_GATEWAY_URL,
-            driver="podman",
             workspace="default",
         )
 
@@ -504,7 +500,6 @@ class TestOpenShellGuardrails:
 OPENSHELL_TLS_CA = os.environ.get("OPENSHELL_TLS_CA")
 OPENSHELL_TLS_GATEWAY_URL = os.environ.get("OPENSHELL_TLS_GATEWAY_URL", "localhost:9080")
 OPENSHELL_TLS_BEARER_TOKEN = os.environ.get("OPENSHELL_TLS_BEARER_TOKEN")
-OPENSHELL_TLS_DRIVER = os.environ.get("OPENSHELL_TLS_DRIVER", "podman")
 
 
 class TestOpenShellQueryTLS:
@@ -560,7 +555,6 @@ class TestOpenShellQueryTLS:
         spawner = build_spawner(
             "openshell",
             gateway_url=OPENSHELL_TLS_GATEWAY_URL,
-            driver=OPENSHELL_TLS_DRIVER,
             workspace="default",
             tls_ca=OPENSHELL_TLS_CA,
             bearer_token=OPENSHELL_TLS_BEARER_TOKEN or "",
