@@ -1296,6 +1296,170 @@ class TestExtraReadablePathsConstructor:
             OpenShellSpawner(openshell_client=object(), extra_readable_paths=["/././"])
 
 
+class TestExtraEnvConstructor:
+    """Tests for the `extra_env` constructor argument (issue #192).
+
+    OpenShell's supervisor calls env_clear() before exec'ing the server
+    process (ssh.rs apply_child_env()), then rebuilds the environment from
+    a hardcoded allowlist plus whatever the caller passes as env= to
+    exec()/exec_stream() (OPENSHELL_USER_ENVIRONMENT). The reference
+    sandbox image needs PYTHONPATH to import its own lightspeed_agentic
+    module (installed at /opt/lightspeed/src, outside the interpreter's
+    default site-packages) -- but nothing ever set it, so every
+    non-advisory spawn failed with "HTTP server did not become ready".
+    """
+
+    def test_defaults_to_reference_image_pythonpath(self) -> None:
+        """Constructor default matches the reference sandbox image's PYTHONPATH."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+
+        assert spawner._extra_env == {
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        }
+
+    def test_accepts_custom_env(self) -> None:
+        """Constructor accepts an override for derived images with a different layout."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(
+            openshell_client=object(),
+            extra_env={"PYTHONPATH": "/custom/path"},
+        )
+
+        assert spawner._extra_env == {"PYTHONPATH": "/custom/path"}
+
+    def test_empty_dict_disables_the_feature(self) -> None:
+        """An explicit empty dict means no extra env is injected."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object(), extra_env={})
+
+        assert spawner._extra_env == {}
+
+    def test_none_falls_back_to_default(self) -> None:
+        """Explicit None (e.g. an unset Pydantic Optional field) behaves like omitted."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object(), extra_env=None)
+
+        assert spawner._extra_env == {
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        }
+
+    def test_rejects_empty_key(self) -> None:
+        """An empty env var name is not meaningful."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match="empty"):
+            OpenShellSpawner(openshell_client=object(), extra_env={"": "value"})
+
+    def test_caller_does_not_mutate_stored_default(self) -> None:
+        """Mutating the dict passed in must not retroactively change the spawner's policy."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        source = {"PYTHONPATH": "/custom"}
+        spawner = OpenShellSpawner(openshell_client=object(), extra_env=source)
+        source["PYTHONPATH"] = "/mutated"
+
+        assert spawner._extra_env == {"PYTHONPATH": "/custom"}
+
+
+class TestExtraEnvMergedIntoServerExec:
+    """Tests that extra_env actually reaches start_server()'s exec call (issue #192).
+
+    Unit tests can only assert this merge happens correctly -- they can't
+    catch the underlying bug itself, since that's about what OpenShell's
+    real supervisor does with the exec environment, which no mock
+    reproduces. See tests/e2e/test_guardrails.py for the real-gateway
+    regression test.
+    """
+
+    def _make_spawner_for_do_spawn(self, mocker: MockerFixture, extra_env=None):
+        """Build a spawner with _do_spawn's collaborators mocked except start_server."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        kwargs = {} if extra_env is None else {"extra_env": extra_env}
+        spawner = OpenShellSpawner(openshell_client=mock_client, **kwargs)
+
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(spawner, "start_server", new=mocker.AsyncMock())
+
+        return spawner
+
+    @pytest.mark.asyncio
+    async def test_default_extra_env_merged_into_start_server_call(
+        self, mocker: MockerFixture
+    ) -> None:
+        """The default PYTHONPATH reaches start_server()'s env, alongside caller env."""
+        spawner = self._make_spawner_for_do_spawn(mocker)
+
+        await spawner.spawn(
+            "agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"}
+        )
+
+        call_kwargs = spawner.start_server.call_args.kwargs
+        merged_env = call_kwargs["env"]
+        assert merged_env["LIGHTSPEED_PROVIDER"] == "openai"
+        assert merged_env["PYTHONPATH"] == (
+            "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        )
+
+    @pytest.mark.asyncio
+    async def test_caller_env_wins_on_key_collision(self, mocker: MockerFixture) -> None:
+        """An explicit caller-provided PYTHONPATH overrides the spawner's default.
+
+        Lets a caller targeting a different derived image override the
+        constructor default per-spawn, without needing a second spawner
+        instance.
+        """
+        spawner = self._make_spawner_for_do_spawn(mocker)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"LIGHTSPEED_PROVIDER": "openai", "PYTHONPATH": "/caller/override"},
+        )
+
+        call_kwargs = spawner.start_server.call_args.kwargs
+        assert call_kwargs["env"]["PYTHONPATH"] == "/caller/override"
+
+    @pytest.mark.asyncio
+    async def test_empty_extra_env_leaves_caller_env_unchanged(
+        self, mocker: MockerFixture
+    ) -> None:
+        """extra_env=={} means only the caller's own env reaches start_server()."""
+        spawner = self._make_spawner_for_do_spawn(mocker, extra_env={})
+
+        await spawner.spawn(
+            "agent-1", "sandbox:latest", env={"LIGHTSPEED_PROVIDER": "openai"}
+        )
+
+        call_kwargs = spawner.start_server.call_args.kwargs
+        assert call_kwargs["env"] == {"LIGHTSPEED_PROVIDER": "openai"}
+
+
 class TestCredentialInjection:
     """Tests for _inject_credentials() and Provider API integration."""
 
