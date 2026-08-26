@@ -1180,7 +1180,7 @@ class TestBaselineFilesystemPolicy:
             assert path in spec.policy.filesystem.read_only
 
     def test_sets_default_read_write(self, mocker: MockerFixture) -> None:
-        """Baseline read_write matches OpenShell's own default plus /app/skills."""
+        """Baseline read_write matches OpenShell's own default when no skills_image."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         spawner = OpenShellSpawner(openshell_client=object())
@@ -1188,27 +1188,43 @@ class TestBaselineFilesystemPolicy:
 
         spawner._build_baseline_filesystem_policy(spec)
 
-        assert spec.policy.filesystem.read_write == ["/tmp", "/dev/null", "/app/skills"]
+        assert spec.policy.filesystem.read_write == ["/tmp", "/dev/null"]
+
+    def test_omits_skills_target_write_access_without_skills_image(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No skills_image -- no /app/skills write grant, to avoid a wider writable surface."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec)
+
+        assert "/app/skills" not in spec.policy.filesystem.read_write
 
     def test_includes_skills_target_write_access(self, mocker: MockerFixture) -> None:
-        """Baseline grants write access to /app/skills, matching _build_filesystem_policy().
+        """Baseline grants write access to /app/skills when skills_image is set.
 
-        Without this, the skills_image tar-upload fallback (_load_skills(),
-        used whenever the gateway's compute driver isn't podman) fails with
-        Landlock "Permission denied" writing into /app/skills -- /app is
-        read-only in the default baseline allowlist, and /app/skills was
-        never added to the write allowlist the way _build_filesystem_policy()
-        (the advisory path) already does. This bug was previously masked
-        entirely by the driver auto-detection gap (#198): before that fix,
-        a caller-configured driver mismatch meant the fallback path was
-        essentially never reached against a real kubernetes-driver gateway.
+        Matches _build_filesystem_policy()'s existing grant. Without this,
+        the skills_image tar-upload fallback (_load_skills(), used whenever
+        the gateway's compute driver isn't podman) fails with Landlock
+        "Permission denied" writing into /app/skills -- /app is read-only in
+        the default baseline allowlist, and /app/skills was never added to
+        the write allowlist the way _build_filesystem_policy() (the advisory
+        path) already does. This bug was previously masked entirely by the
+        driver auto-detection gap (#198): before that fix, a caller-
+        configured driver mismatch meant the fallback path was essentially
+        never reached against a real kubernetes-driver gateway.
         """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         spawner = OpenShellSpawner(openshell_client=object())
         spec = self._make_spec(mocker)
 
-        spawner._build_baseline_filesystem_policy(spec)
+        spawner._build_baseline_filesystem_policy(
+            spec, skills_image="quay.io/example/skills:latest"
+        )
 
         assert "/app/skills" in spec.policy.filesystem.read_write
 
