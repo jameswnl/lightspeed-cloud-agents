@@ -11,17 +11,35 @@ class TestAlembicIniPath:
     """Tests that alembic.ini is resolved correctly."""
 
     def test_alembic_ini_exists(self) -> None:
-        """_ALEMBIC_INI points to an existing file in the repo root."""
+        """_ALEMBIC_INI points to an existing file."""
         from cloud_agents.storage.migrate import _ALEMBIC_INI
 
         assert _ALEMBIC_INI.exists(), f"alembic.ini not found at {_ALEMBIC_INI}"
 
-    def test_alembic_ini_is_in_repo_root(self) -> None:
-        """_ALEMBIC_INI is in the same directory as pyproject.toml."""
+    def test_alembic_ini_is_inside_cloud_agents_package(self) -> None:
+        """_ALEMBIC_INI lives under cloud_agents/_alembic/, not the repo root (#188).
+
+        This matters for packaging: the wheel build only includes
+        src/cloud_agents (see [tool.hatch.build.targets.wheel] in
+        pyproject.toml), and Containerfiles that COPY src/ (this repo's
+        deploy/workflow-runner/Containerfile, lightspeed-stack's
+        Containerfile.harness) don't pick up repo-root files. Living
+        inside the package means both automatically ship it.
+        """
         from cloud_agents.storage.migrate import _ALEMBIC_INI
 
-        repo_root = _ALEMBIC_INI.parent
-        assert (repo_root / "pyproject.toml").exists()
+        assert _ALEMBIC_INI.parent.name == "_alembic"
+        assert _ALEMBIC_INI.parent.parent.name == "cloud_agents"
+        assert (_ALEMBIC_INI.parent / "alembic" / "versions").is_dir()
+
+    def test_alembic_versions_present(self) -> None:
+        """Both migration files ship alongside alembic.ini."""
+        from cloud_agents.storage.migrate import _ALEMBIC_INI
+
+        versions_dir = _ALEMBIC_INI.parent / "alembic" / "versions"
+        version_files = {p.name for p in versions_dir.glob("*.py")}
+        assert "001_baseline.py" in version_files
+        assert "002_identity_model.py" in version_files
 
 
 class TestRunAlembic:

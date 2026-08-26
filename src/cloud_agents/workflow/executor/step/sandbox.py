@@ -7,11 +7,51 @@ This is the spawn: ephemeral implementation.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, StepResult
 
 logger = logging.getLogger(__name__)
+
+
+def _sum_result_event_usage(events: list[dict[str, Any]] | None) -> tuple[int, int, float]:
+    """Sum token/cost usage from "result"-type transcript events.
+
+    The sandbox agent (lightspeed_agentic.logging.EventLogger) writes one
+    "result" event per agent turn with data.input_tokens/output_tokens/
+    cost_usd -- these are the real numbers, distinct from the top-level
+    StepTranscript.input_tokens/output_tokens/cost_usd fields, which
+    step_runner._collect_transcript() never populates.
+
+    Parameters:
+        events: Transcript events (dicts with "type" and "data" keys).
+            May be None or contain non-dict entries/data, or non-numeric
+            usage fields, if the transcript container is malformed or
+            truncated -- all are skipped rather than raising.
+
+    Returns:
+        (input_tokens, output_tokens, cost_usd) totals across all result
+        events -- usually just one, but summed in case a step's agent
+        makes multiple turns/calls.
+    """
+
+    def _numeric_or_zero(value: Any) -> int | float:
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+    input_tokens = 0
+    output_tokens = 0
+    cost_usd = 0.0
+    for event in events or []:
+        if not isinstance(event, dict) or event.get("type") != "result":
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        input_tokens += _numeric_or_zero(data.get("input_tokens"))
+        output_tokens += _numeric_or_zero(data.get("output_tokens"))
+        cost_usd += _numeric_or_zero(data.get("cost_usd"))
+    return input_tokens, output_tokens, cost_usd
 
 
 class SandboxExecutor(StepExecutor):
@@ -69,25 +109,34 @@ class SandboxExecutor(StepExecutor):
             "context": step_input.context,
         }
 
+        start_ms = time.monotonic_ns() // 1_000_000
         result = await run_step(
             run_step_input,
             spawner=self._spawner,
             transcript_store=self._transcript_store,
             attempt=1,
         )
+        duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
         transcript_data = result.get("transcript", {})
         transcript_events = []
         if isinstance(transcript_data, dict):
-            transcript_events = transcript_data.get("events", [])
+            # .get(..., []) only supplies the default when "events" is
+            # *absent* -- an explicit `"events": None` (a malformed or
+            # truncated transcript container) would otherwise pass None
+            # through as StepResult.transcript, which callers expect to
+            # always be a list.
+            transcript_events = transcript_data.get("events") or []
+
+        input_tokens, output_tokens, cost_usd = _sum_result_event_usage(transcript_events)
 
         return StepResult(
             status=result.get("status", "failed"),
             output=result.get("output"),
             error=result.get("error"),
             transcript=transcript_events,
-            cost_usd=0.0,
-            input_tokens=0,
-            output_tokens=0,
-            duration_ms=0,
+            cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration_ms=duration_ms,
         )

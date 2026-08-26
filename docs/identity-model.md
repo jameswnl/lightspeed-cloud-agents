@@ -151,7 +151,7 @@ property — two workflows sharing a `session_id` can have different
 - `session_id` is not enforced or auto-generated anywhere — if a caller
   omits it, workflows just have `session_id = NULL` and won't show up under
   `list_by_session`.
-- Alembic (`alembic/versions/`) is the sole schema owner for both tables —
+- Alembic (`src/cloud_agents/_alembic/alembic/versions/`) is the sole schema owner for both tables —
   the stores have no `CREATE TABLE` fallback (removed in #169). A
   configuration or migration problem (e.g. missing `alembic.ini`, a
   revision conflict) raises loudly from `run_alembic()` rather than

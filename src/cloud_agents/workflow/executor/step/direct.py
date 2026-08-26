@@ -12,12 +12,14 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
+from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import (
     ModelMessage,
@@ -27,6 +29,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
     ToolReturnPart,
 )
+from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
 from cloud_agents.workflow.executor.step.base import (
     StepExecutor,
@@ -108,17 +111,52 @@ def _build_user_prompt(step_input: StepInput) -> str:
     return user_content
 
 
+def _supports_native_output(output_schema: dict[str, Any]) -> bool:
+    """Whether output_schema's root shape is safe to send via native structured output.
+
+    output_schema is user-authored workflow YAML, not internally
+    guaranteed to be an object-rooted JSON Schema. OpenAI's Structured
+    Outputs (what output_mode="native" maps to) requires an object root
+    -- a top-level array or anyOf/oneOf/allOf union can be rejected by
+    the provider. That rejection isn't a pydantic-ai UserError, so it
+    wouldn't be caught by the existing native-mode fallback (which
+    intentionally only retries on UserError and lets genuine API errors
+    propagate, see test_non_user_error_propagates_without_fallback) --
+    the schema shape has to be checked before attempting native mode,
+    not recovered from after.
+
+    Parameters:
+        output_schema: The step's requested JSON Schema.
+
+    Returns:
+        True if output_schema has an object root.
+    """
+    return output_schema.get("type") == "object"
+
+
 async def _call_llm(
     provider: dict[str, Any],
     messages: list[dict[str, str]],
     timeout_seconds: int = 600,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call LLM via pydantic-ai model_request.
+
+    When output_schema is set, first tries native structured output
+    (output_mode="native"), which maps to the provider's own JSON-schema
+    mode (e.g. OpenAI's response_format) instead of relying on the model
+    to follow a plain-text schema hint. Some models reliably wrap
+    text-only JSON instructions in markdown fences, which then fails
+    _parse_output()'s json.loads(); native mode avoids that at the
+    source. Falls back to the plain (schema-hint-only) call if native
+    mode isn't supported for this provider/model -- _parse_output()'s
+    fence-stripping is the safety net for that fallback path.
 
     Parameters:
         provider: Provider config (name, model, credentials_secret).
         messages: Chat messages list.
         timeout_seconds: Request timeout.
+        output_schema: Expected JSON Schema, if any.
 
     Returns:
         Dict with content, input_tokens, output_tokens.
@@ -137,11 +175,53 @@ async def _call_llm(
 
     request = ModelRequest.user_text_prompt(user_prompt, instructions=instructions)
 
-    response = await model_request(
-        model_string,
-        [request],
-        model_settings={"timeout": timeout_seconds},
-    )
+    response = None
+    if output_schema and _supports_native_output(output_schema):
+        try:
+            native_params = ModelRequestParameters(
+                output_mode="native",
+                output_object=OutputObjectDefinition(json_schema=output_schema),
+            )
+            response = await model_request(
+                model_string,
+                [request],
+                model_settings={"timeout": timeout_seconds},
+                model_request_parameters=native_params,
+            )
+        except UserError as exc:
+            logger.warning(
+                "Native structured output not supported for %s, falling back to "
+                "prompt-based schema hint: %s",
+                model_string,
+                exc,
+            )
+        except ModelHTTPError as exc:
+            # 400 means the provider rejected the request itself -- for an
+            # object-rooted schema that already passed _supports_native_output(),
+            # the most likely cause is a native-mode-specific schema
+            # constraint (unsupported keywords, draft mismatch, etc.), the
+            # same class of "this schema doesn't work in native mode"
+            # signal UserError already falls back for. Anything else
+            # (401/429/5xx) is an auth/rate-limit/infra failure unrelated
+            # to the schema -- re-raise those rather than silently
+            # retrying, consistent with the intentional "let real
+            # failures propagate" design (see
+            # test_5xx_model_http_error_propagates_without_fallback).
+            if exc.status_code != 400:
+                raise
+            logger.warning(
+                "Native structured output rejected (400) for %s, falling back to "
+                "prompt-based schema hint: %s",
+                model_string,
+                exc,
+            )
+
+    if response is None:
+        response = await model_request(
+            model_string,
+            [request],
+            model_settings={"timeout": timeout_seconds},
+        )
 
     usage = response.usage
     return {
@@ -557,6 +637,7 @@ class DirectExecutor(StepExecutor):
             provider=step_input.provider,
             messages=messages,
             timeout_seconds=step_input.timeout_seconds,
+            output_schema=step_input.output_schema,
         )
 
         content = llm_result["content"]
@@ -595,6 +676,28 @@ class DirectExecutor(StepExecutor):
         )
 
 
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_markdown_fence(content: str) -> str:
+    """Strip a wrapping ```json ... ``` / ``` ... ``` code fence, if present.
+
+    Models asked (via plain prompt text, not a provider-native JSON mode)
+    to return JSON commonly wrap it in a markdown fence anyway. This is a
+    universal safety net independent of _call_llm()'s native-structured-output
+    attempt, covering the Agent-based paths (_run_with_agent, run_stream)
+    which don't go through that native-mode logic.
+
+    Parameters:
+        content: Raw LLM response text.
+
+    Returns:
+        Fence-stripped content, or the original string if no fence is found.
+    """
+    match = _MARKDOWN_FENCE_RE.match(content.strip())
+    return match.group(1).strip() if match else content
+
+
 def _parse_output(content: Any, output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Parse LLM response content into structured output.
 
@@ -621,13 +724,13 @@ def _parse_output(content: Any, output_schema: dict[str, Any] | None) -> dict[st
 
     if output_schema:
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return json.loads(_strip_markdown_fence(content))
+        except json.JSONDecodeError as exc:
             raise ValueError(
                 f"LLM returned non-JSON response but output_schema was requested: {content[:200]}"
-            )
+            ) from exc
 
     try:
-        return json.loads(content)
+        return json.loads(_strip_markdown_fence(content))
     except json.JSONDecodeError:
         return {"response": content}

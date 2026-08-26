@@ -505,6 +505,266 @@ class TestParseOutput:
         with pytest.raises(ValueError, match="null content"):
             _parse_output(None, {"type": "object"})
 
+    def test_json_fence_stripped_with_schema(self) -> None:
+        """```json ... ``` fenced JSON is parsed when output_schema is set.
+
+        Regression test for #188 bug 1: gpt-4o-mini reliably wraps JSON
+        answers in a markdown fence when only asked via prompt text.
+        """
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = '```json\n{"severity": "high", "reason": "cpu spike"}\n```'
+        result = _parse_output(content, {"type": "object"})
+        assert result == {"severity": "high", "reason": "cpu spike"}
+
+    def test_bare_fence_without_json_tag_stripped(self) -> None:
+        """``` ... ``` (no "json" tag) is also stripped."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = '```\n{"ok": true}\n```'
+        result = _parse_output(content, {"type": "object"})
+        assert result == {"ok": True}
+
+    def test_uppercase_json_tag_fence_stripped(self) -> None:
+        """```JSON ... ``` (uppercase tag) is also stripped, not just lowercase.
+
+        Regression test for a beesarmy review finding on #188 PR 190: the
+        fence regex's "json" tag was lowercase-only, so a model emitting
+        an uppercase ```JSON fence (the reported bug used lowercase, but
+        the tag casing isn't part of any documented contract) would fail
+        json.loads() on the still-fenced content instead of being
+        stripped.
+        """
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = '```JSON\n{"ok": true}\n```'
+        result = _parse_output(content, {"type": "object"})
+        assert result == {"ok": True}
+
+    def test_fence_stripped_without_schema_too(self) -> None:
+        """Fence-stripping also applies on the no-schema path."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = '```json\n{"ok": true}\n```'
+        result = _parse_output(content, None)
+        assert result == {"ok": True}
+
+    def test_non_fenced_json_unaffected(self) -> None:
+        """Plain (non-fenced) JSON still parses correctly."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        result = _parse_output('{"severity": "low"}', {"type": "object"})
+        assert result == {"severity": "low"}
+
+    def test_still_raises_for_genuinely_non_json_fenced_content(self) -> None:
+        """A fence wrapping non-JSON text still raises -- stripping isn't a cure-all."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        with pytest.raises(ValueError, match="non-JSON"):
+            _parse_output("```\nnot actually json\n```", {"type": "object"})
+
+    def test_falls_back_to_original_content_on_unfenced_parse_failure(self) -> None:
+        """No-schema path preserves the original (unstripped) text on parse failure."""
+        from cloud_agents.workflow.executor.step.direct import _parse_output
+
+        content = "```\nnot json at all\n```"
+        result = _parse_output(content, None)
+        assert result == {"response": content}
+
+
+class TestCallLlmNativeStructuredOutput:
+    """Tests for _call_llm's native structured-output attempt + fallback (#188).
+
+    See tests/e2e/test_structured_output_e2e.py for the real-LLM regression
+    test this complements -- these are fast/deterministic coverage of the
+    specific request-shaping and fallback logic.
+    """
+
+    @pytest.mark.asyncio
+    async def test_output_schema_triggers_native_mode_request(self, mocker: MockerFixture) -> None:
+        """When output_schema is set, model_request is called with native output_mode."""
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = _mock_model_response(mocker, '{"ok": true}', 5, 5)
+
+        await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "object"},
+        )
+
+        mock_fn.assert_called_once()
+        params = mock_fn.call_args.kwargs["model_request_parameters"]
+        assert params.output_mode == "native"
+        assert params.output_object.json_schema == {"type": "object"}
+
+    @pytest.mark.asyncio
+    async def test_no_output_schema_skips_native_mode(self, mocker: MockerFixture) -> None:
+        """Without output_schema, model_request is called without model_request_parameters."""
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = _mock_model_response(mocker, "plain text", 5, 5)
+
+        await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema=None,
+        )
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("model_request_parameters") is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_native_mode_raises_user_error(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If native mode isn't supported (UserError), retries without it."""
+        from pydantic_ai.exceptions import UserError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=[UserError("native mode not supported"), mock_response],
+        )
+
+        result = await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "object"},
+        )
+
+        assert mock_fn.call_count == 2
+        assert mock_fn.call_args_list[0].kwargs.get("model_request_parameters") is not None
+        assert mock_fn.call_args_list[1].kwargs.get("model_request_parameters") is None
+        assert result["content"] == '{"ok": true}'
+
+    @pytest.mark.asyncio
+    async def test_non_object_root_schema_skips_native_mode(self, mocker: MockerFixture) -> None:
+        """A non-object-root output_schema (e.g. top-level array) skips native mode.
+
+        Regression test for a CodeRabbit finding on #188 PR 190: OpenAI's
+        Structured Outputs (native mode) requires an object-root JSON
+        Schema. output_schema is user-authored workflow YAML, not
+        internally guaranteed to be object-rooted -- passing e.g.
+        {"type": "array", ...} through OutputObjectDefinition risks a
+        provider-level rejection that the existing UserError-only fallback
+        (see test_falls_back_when_native_mode_raises_user_error /
+        test_non_user_error_propagates_without_fallback) would NOT catch,
+        since that's an intentional "let real API errors propagate"
+        design, not a place to add a second exception-based safety net.
+        The fix instead avoids ever attempting native mode for a schema
+        shape known not to support it.
+        """
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = _mock_model_response(mocker, '["a", "b"]', 5, 5)
+
+        result = await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "array", "items": {"type": "string"}},
+        )
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("model_request_parameters") is None
+        assert result["content"] == '["a", "b"]'
+
+    @pytest.mark.asyncio
+    async def test_non_user_error_propagates_without_fallback(self, mocker: MockerFixture) -> None:
+        """A non-UserError exception (e.g. a real API failure) propagates -- no silent retry."""
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network exploded"),
+        )
+
+        with pytest.raises(RuntimeError, match="network exploded"):
+            await _call_llm(
+                provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+                messages=[{"role": "user", "content": "hi"}],
+                output_schema={"type": "object"},
+            )
+
+        assert mock_fn.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_400_model_http_error(self, mocker: MockerFixture) -> None:
+        """A 400 ModelHTTPError (provider rejected the native schema) triggers fallback.
+
+        Regression test for a beesarmy review finding on #188 PR 190:
+        _supports_native_output() only screens out the *known* unsupported
+        shape (non-object root) before ever attempting native mode -- an
+        object-rooted schema can still be rejected by the provider for
+        other reasons (unsupported keywords, draft mismatches, etc.),
+        which surfaces as pydantic_ai.exceptions.ModelHTTPError, not
+        UserError. A 400 specifically means "the request itself was
+        invalid" (as opposed to 401/429/5xx, which are auth/rate-limit/
+        infra failures unrelated to the schema) -- exactly the same class
+        of "this schema doesn't work in native mode" signal UserError
+        already triggers a fallback for.
+        """
+        from pydantic_ai.exceptions import ModelHTTPError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=[
+                ModelHTTPError(status_code=400, model_name="gpt-4o-mini", body="bad schema"),
+                mock_response,
+            ],
+        )
+
+        result = await _call_llm(
+            provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            messages=[{"role": "user", "content": "hi"}],
+            output_schema={"type": "object"},
+        )
+
+        assert mock_fn.call_count == 2
+        assert mock_fn.call_args_list[0].kwargs.get("model_request_parameters") is not None
+        assert mock_fn.call_args_list[1].kwargs.get("model_request_parameters") is None
+        assert result["content"] == '{"ok": true}'
+
+    @pytest.mark.asyncio
+    async def test_5xx_model_http_error_propagates_without_fallback(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A 5xx ModelHTTPError (provider/infra failure, not a schema issue) propagates."""
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        from cloud_agents.workflow.executor.step.direct import _call_llm
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=AsyncMock,
+            side_effect=ModelHTTPError(status_code=503, model_name="gpt-4o-mini", body="down"),
+        )
+
+        with pytest.raises(ModelHTTPError):
+            await _call_llm(
+                provider={"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+                messages=[{"role": "user", "content": "hi"}],
+                output_schema={"type": "object"},
+            )
+
+        assert mock_fn.call_count == 1
+
 
 @pytest.fixture(autouse=True)
 def _clean_tool_registry() -> None:
