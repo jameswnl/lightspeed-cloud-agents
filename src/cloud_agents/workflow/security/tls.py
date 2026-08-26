@@ -13,9 +13,11 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,53 @@ def get_tls_mode() -> TLSMode:
     """
     raw = os.environ.get("SANDBOX_TLS_MODE", "disabled")
     return TLSMode(raw)
+
+
+def build_query_client_kwargs(
+    http_timeout: float,
+    tls_mode: TLSMode,
+    tls_certs: "EphemeralCerts | None",
+    spawner: Any | None,
+) -> dict[str, Any]:
+    """Build httpx.AsyncClient kwargs for the query call to a spawned sandbox.
+
+    Shared by both the local executor (step_runner.py) and the Temporal
+    executor (activities.py), which each build their own httpx client for
+    the actual query call to a sandbox's exposed endpoint -- previously
+    duplicated inline in both, and only aware of app-level ephemeral-cert
+    mTLS (SANDBOX_TLS_MODE=app, for Kubernetes-native spawners). A
+    spawner whose exposed endpoint is TLS-terminated by its own gateway
+    with a CA the caller wouldn't otherwise trust (e.g. OpenShellSpawner)
+    had no way to be consulted at all, so those query calls failed with
+    CERTIFICATE_VERIFY_FAILED even though spawn/readiness succeeded
+    (issue #194).
+
+    The two TLS mechanisms are mutually exclusive per deployment: a
+    Kubernetes-native spawner won't have a meaningful
+    get_query_ssl_context(), and OpenShell doesn't use SANDBOX_TLS_MODE.
+
+    Parameters:
+        http_timeout: Request timeout in seconds.
+        tls_mode: Current SANDBOX_TLS_MODE (see get_tls_mode()).
+        tls_certs: Ephemeral app-level mTLS certs, if tls_mode is APP.
+        spawner: The AgentSpawner instance for this step, if any. Queried
+            via get_query_ssl_context() when app-level mTLS isn't active.
+
+    Returns:
+        kwargs dict for httpx.AsyncClient(**kwargs) -- always includes
+        "timeout"; includes "verify" only when one of the two TLS
+        mechanisms above actually applies.
+    """
+    client_kwargs: dict[str, Any] = {"timeout": http_timeout}
+    if tls_mode == TLSMode.APP and tls_certs:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
+        client_kwargs["verify"] = ssl_ctx
+    elif spawner is not None:
+        spawner_verify = spawner.get_query_ssl_context()
+        if spawner_verify is not None:
+            client_kwargs["verify"] = spawner_verify
+    return client_kwargs
 
 
 @dataclass
@@ -100,10 +149,12 @@ def generate_ephemeral_certs(
 
     # Generate CA key pair (EC P-256)
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, f"ephemeral-ca-{common_name}"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "cloud-agents"),
-    ])
+    ca_name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, f"ephemeral-ca-{common_name}"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "cloud-agents"),
+        ]
+    )
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(ca_name)
@@ -136,9 +187,11 @@ def generate_ephemeral_certs(
     # Generate server key pair (EC P-256)
     server_key = ec.generate_private_key(ec.SECP256R1())
 
-    server_name = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
-    ])
+    server_name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+        ]
+    )
 
     # Build SAN entries
     san_entries: list[x509.GeneralName] = []

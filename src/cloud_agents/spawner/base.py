@@ -303,7 +303,7 @@ class AgentSpawner(ABC):
             await asyncio.sleep(2.0)
         return False
 
-    def get_query_ssl_context(self) -> ssl.SSLContext | bool | None:
+    def get_query_ssl_context(self) -> ssl.SSLContext | None:
         """Return TLS trust info for query-time HTTP calls to a spawned endpoint.
 
         Callers (e.g. step_runner.py's query call to the sandbox's
@@ -319,10 +319,9 @@ class AgentSpawner(ABC):
         override this.
 
         Returns:
-            An ssl.SSLContext to use as httpx's `verify=` value, a bool
-            for httpx's own boolean verify semantics, or None if this
-            spawner has no special query-time TLS requirements (the
-            caller should fall back to its own default handling).
+            An ssl.SSLContext to use as httpx's `verify=` value, or None
+            if this spawner has no special query-time TLS requirements
+            (the caller should fall back to its own default handling).
         """
         return None
 

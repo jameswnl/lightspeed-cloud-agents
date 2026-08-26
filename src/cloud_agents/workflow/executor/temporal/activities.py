@@ -29,7 +29,12 @@ from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
 from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_tls_errors_total
 from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
-from cloud_agents.workflow.security.tls import TLSMode, generate_ephemeral_certs, get_tls_mode
+from cloud_agents.workflow.security.tls import (
+    TLSMode,
+    build_query_client_kwargs,
+    generate_ephemeral_certs,
+    get_tls_mode,
+)
 
 _tracer = get_tracer("cloud_agents.workflow.temporal_activities")
 
@@ -468,20 +473,7 @@ async def _run_sandbox_step_inner(
                 request_body["deniedTools"] = permissions["denied_tools"]
 
             # Configure httpx client for TLS verification
-            client_kwargs: dict[str, Any] = {"timeout": http_timeout}
-            if tls_mode == TLSMode.APP and tls_certs:
-                ssl_ctx = ssl.create_default_context()
-                ssl_ctx.load_verify_locations(cadata=tls_certs.ca_cert_pem.decode())
-                client_kwargs["verify"] = ssl_ctx
-            else:
-                # Kubernetes-native mTLS (above) is unrelated to spawners
-                # like OpenShellSpawner whose exposed endpoints sit behind
-                # their own gateway TLS. Ask the spawner directly rather
-                # than assuming SANDBOX_TLS_MODE covers every spawner
-                # (issue #194).
-                spawner_verify = spawner.get_query_ssl_context()
-                if spawner_verify is not None:
-                    client_kwargs["verify"] = spawner_verify
+            client_kwargs = build_query_client_kwargs(http_timeout, tls_mode, tls_certs, spawner)
 
             # Build HTTP headers for sandbox call
             http_headers: dict[str, str] = {}

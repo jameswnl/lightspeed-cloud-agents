@@ -523,15 +523,23 @@ class TestOpenShellQueryTLS:
 
     @pytest.fixture(autouse=True)
     def _skip_if_no_tls_gateway(self) -> None:
-        """Skip (rather than fail) when no TLS-enabled gateway is configured."""
+        """Skip (rather than fail) when no TLS-enabled gateway is configured.
+
+        Deliberately does NOT require OPENAI_API_KEY: this test verifies
+        the query call's TLS handshake succeeds, which happens entirely
+        at the transport layer before any LLM credential is used inside
+        the sandbox. `status in ("completed", "failed")` already treats
+        an agent-side failure (e.g. missing/invalid provider credentials)
+        as proof the TLS layer worked -- requiring a real API key here
+        would only make this regression gate skip more often than it
+        needs to, for no added coverage.
+        """
         pytest.importorskip("openshell")
         if not OPENSHELL_TLS_CA:
             pytest.skip(
                 "OPENSHELL_TLS_CA not set -- no TLS-enabled OpenShell gateway configured "
                 "(a plain HTTP gateway can't reproduce this bug at all)"
             )
-        if not os.environ.get("OPENAI_API_KEY"):
-            pytest.skip("OPENAI_API_KEY not set -- required for a real query completion")
 
     @pytest.mark.asyncio
     async def test_query_call_trusts_spawner_ca_end_to_end(self) -> None:

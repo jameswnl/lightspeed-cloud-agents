@@ -419,7 +419,7 @@ class OpenShellSpawner(AgentSpawner):
         """
         return True
 
-    def get_query_ssl_context(self) -> ssl.SSLContext | bool | None:
+    def get_query_ssl_context(self) -> ssl.SSLContext | None:
         """Return the SSL context callers should use for HTTPS calls to
         sandboxes this spawner exposes (e.g. step_runner.py's query call
         to the sandbox's exposed endpoint).
