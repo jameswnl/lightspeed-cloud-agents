@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -209,6 +208,90 @@ class TestSandboxExecutor:
         assert result.input_tokens == 0
         assert result.output_tokens == 0
         assert result.cost_usd == 0.0
+
+    @pytest.mark.asyncio
+    async def test_null_events_does_not_crash(self, mocker: MockerFixture) -> None:
+        """transcript.events explicitly null (not just missing) doesn't crash.
+
+        Regression test for a CodeRabbit finding on #188 PR 190:
+        transcript_data.get("events", []) only falls back to [] when the
+        "events" key is *absent* -- an explicit `"events": None` (a
+        malformed/truncated transcript container) passes None straight
+        through to _sum_result_event_usage's `for event in events`, which
+        raises TypeError instead of returning a completed step result
+        with zero usage.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.run_step",
+            return_value={
+                "status": "completed",
+                "output": {"summary": "done"},
+                "transcript": {"step_name": "s1", "events": None},
+            },
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
+
+        executor = SandboxExecutor(spawner=mocker.AsyncMock())
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        ))
+
+        assert result.status == "completed"
+        assert result.transcript == []
+        assert result.input_tokens == 0
+        assert result.output_tokens == 0
+        assert result.cost_usd == 0.0
+
+    @pytest.mark.asyncio
+    async def test_result_event_with_non_dict_data_is_skipped(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A "result" event whose data is not a dict is skipped, not a crash.
+
+        Regression test for a CodeRabbit finding on #188 PR 190:
+        `data = event.get("data") or {}` only falls back to {} when data
+        is falsy -- a truthy non-dict value (e.g. a string, from a
+        malformed/truncated transcript) reaches data.get(...) and raises
+        AttributeError instead of being skipped like an event with no
+        usable usage data.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.run_step",
+            return_value={
+                "status": "completed",
+                "output": {"summary": "done"},
+                "transcript": {
+                    "step_name": "s1",
+                    "events": [
+                        {"ts": "t1", "type": "result", "data": "invalid"},
+                        {
+                            "ts": "t2",
+                            "type": "result",
+                            "data": {"cost_usd": 0.01, "input_tokens": 10, "output_tokens": 5},
+                        },
+                    ],
+                },
+            },
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
+
+        executor = SandboxExecutor(spawner=mocker.AsyncMock())
+        result = await executor.run(StepInput(
+            prompt="test",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        ))
+
+        assert result.status == "completed"
+        assert result.input_tokens == 10
+        assert result.output_tokens == 5
+        assert result.cost_usd == pytest.approx(0.01)
 
     @pytest.mark.asyncio
     async def test_duration_ms_reflects_real_elapsed_time(self, mocker: MockerFixture) -> None:

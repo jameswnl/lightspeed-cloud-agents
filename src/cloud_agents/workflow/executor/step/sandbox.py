@@ -15,7 +15,7 @@ from cloud_agents.workflow.executor.step.base import StepExecutor, StepInput, St
 logger = logging.getLogger(__name__)
 
 
-def _sum_result_event_usage(events: list[dict[str, Any]]) -> tuple[int, int, float]:
+def _sum_result_event_usage(events: list[dict[str, Any]] | None) -> tuple[int, int, float]:
     """Sum token/cost usage from "result"-type transcript events.
 
     The sandbox agent (lightspeed_agentic.logging.EventLogger) writes one
@@ -26,6 +26,9 @@ def _sum_result_event_usage(events: list[dict[str, Any]]) -> tuple[int, int, flo
 
     Parameters:
         events: Transcript events (dicts with "type" and "data" keys).
+            May be None or contain non-dict entries/data if the transcript
+            container is malformed or truncated -- both are skipped rather
+            than raising.
 
     Returns:
         (input_tokens, output_tokens, cost_usd) totals across all result
@@ -35,10 +38,12 @@ def _sum_result_event_usage(events: list[dict[str, Any]]) -> tuple[int, int, flo
     input_tokens = 0
     output_tokens = 0
     cost_usd = 0.0
-    for event in events:
+    for event in events or []:
         if not isinstance(event, dict) or event.get("type") != "result":
             continue
-        data = event.get("data") or {}
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
         input_tokens += data.get("input_tokens") or 0
         output_tokens += data.get("output_tokens") or 0
         cost_usd += data.get("cost_usd") or 0.0
@@ -112,7 +117,12 @@ class SandboxExecutor(StepExecutor):
         transcript_data = result.get("transcript", {})
         transcript_events = []
         if isinstance(transcript_data, dict):
-            transcript_events = transcript_data.get("events", [])
+            # .get(..., []) only supplies the default when "events" is
+            # *absent* -- an explicit `"events": None` (a malformed or
+            # truncated transcript container) would otherwise pass None
+            # through as StepResult.transcript, which callers expect to
+            # always be a list.
+            transcript_events = transcript_data.get("events") or []
 
         input_tokens, output_tokens, cost_usd = _sum_result_event_usage(transcript_events)
 

@@ -682,10 +682,10 @@ def _parse_output(content: Any, output_schema: dict[str, Any] | None) -> dict[st
     if output_schema:
         try:
             return json.loads(_strip_markdown_fence(content))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             raise ValueError(
                 f"LLM returned non-JSON response but output_schema was requested: {content[:200]}"
-            )
+            ) from exc
 
     try:
         return json.loads(_strip_markdown_fence(content))

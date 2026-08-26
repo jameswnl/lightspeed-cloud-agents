@@ -150,8 +150,15 @@ def test_migrations_run_from_clean_wheel_install(tmp_path: Path, throwaway_db_ur
         timeout=120,
     )
 
-    # Run from outside the repo so there's no accidental fallback onto the
-    # source checkout's alembic.ini or an ambient PYTHONPATH.
+    # Run from outside the repo, and with -I (isolated mode, which ignores
+    # PYTHONPATH and user site-packages) so there's no accidental fallback
+    # onto the source checkout's alembic.ini or cloud_agents package via an
+    # ambient PYTHONPATH -- e.g. from the very `uv run pytest` invocation
+    # running this test itself. Without -I, a PYTHONPATH pointing at this
+    # repo's src/ would let the child import cloud_agents from the source
+    # checkout, and this test would pass even if the installed wheel is
+    # missing its migration assets -- the exact bug this test exists to
+    # catch (#188 bug 3).
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     script = (
@@ -164,7 +171,7 @@ def test_migrations_run_from_clean_wheel_install(tmp_path: Path, throwaway_db_ur
         "asyncio.run(main())\n"
     )
     result = subprocess.run(
-        [str(venv_python), "-c", script],
+        [str(venv_python), "-I", "-c", script],
         cwd=run_dir,
         capture_output=True,
         text=True,
