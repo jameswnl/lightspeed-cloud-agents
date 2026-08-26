@@ -2351,10 +2351,13 @@ class TestComputeDriverDetection:
 
         Detection is a best-effort optimization hint, not something that
         should ever crash a spawn -- a gateway hiccup here must never block
-        the actual sandbox from starting.
+        the actual sandbox from starting. Uses a plain RuntimeError rather
+        than a real grpc.RpcError -- the fix broadened the catch to
+        `except Exception` specifically because grpc.RpcError alone missed
+        real failure modes (see test_falls_back_to_empty_on_channel_setup_error
+        below), and importing the real `grpc` package isn't available in
+        every test environment (it's part of the optional `openshell` extra).
         """
-        import grpc
-
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
@@ -2363,8 +2366,28 @@ class TestComputeDriverDetection:
         mock_stub_cls = mocker.patch(
             "openshell._proto.openshell_pb2_grpc.OpenShellStub",
         )
-        mock_stub_cls.return_value.GetGatewayInfo.side_effect = grpc.RpcError("boom")
+        mock_stub_cls.return_value.GetGatewayInfo.side_effect = RuntimeError("boom")
         mocker.patch.object(spawner, "_create_grpc_channel")
+
+        assert await spawner._detect_compute_driver() == ""
+
+    async def test_falls_back_to_empty_on_channel_setup_error(self, mocker: MockerFixture) -> None:
+        """A non-RpcError failure (e.g. channel setup) also fails open.
+
+        _create_grpc_channel() raises ValueError (not grpc.RpcError) when a
+        bearer token is configured without TLS -- catching only
+        grpc.RpcError would let this escape _detect_compute_driver() and
+        abort the spawn entirely, contradicting its own "must never block a
+        spawn" contract.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mocker.patch.object(
+            spawner, "_create_grpc_channel", side_effect=ValueError("bearer requires TLS")
+        )
 
         assert await spawner._detect_compute_driver() == ""
 
