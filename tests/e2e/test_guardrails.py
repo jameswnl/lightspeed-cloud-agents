@@ -253,6 +253,18 @@ OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080"
 OPENSHELL_SANDBOX_IMAGE = os.environ.get(
     "OPENSHELL_SANDBOX_IMAGE", "quay.io/jameswong/lightspeed-agentic-sandbox:latest"
 )
+# The production Containerfile image (issue #192) -- distinct from
+# OPENSHELL_SANDBOX_IMAGE above because that default (:latest, built from
+# Containerfile.dev) installs its Python packages under /usr/local,
+# already in OpenShell's own default allowlist, so it never needed
+# PYTHONPATH and would not catch this regression. The production
+# Containerfile installs lightspeed_agentic at /opt/lightspeed/src
+# instead, which does. Defaults to the arm64 tag since that's this dev
+# environment's architecture; override via env var on amd64 CI.
+OPENSHELL_PYTHONPATH_TEST_IMAGE = os.environ.get(
+    "OPENSHELL_PYTHONPATH_TEST_IMAGE",
+    "quay.io/jameswong/lightspeed-agentic-sandbox:latest-arm64",
+)
 
 
 async def _exec(client: Any, sandbox_id: str, command: list[str]) -> Any:
@@ -410,3 +422,49 @@ class TestOpenShellGuardrails:
             assert allowed_result.exit_code == 0
         finally:
             await allowed_spawner.destroy(allowed_name)
+
+    @pytest.mark.asyncio
+    async def test_production_image_server_becomes_ready_with_pythonpath(self) -> None:
+        """A non-advisory spawn of the production-layout image reaches a healthy server (issue #192).
+
+        OPENSHELL_SANDBOX_IMAGE (:latest, Containerfile.dev) installs its
+        Python packages under /usr/local -- already in OpenShell's own
+        default exec allowlist -- so a spawn against it never needed
+        PYTHONPATH and would not catch this bug (see
+        test_non_advisory_spawn_can_import_its_own_dependencies above,
+        which has the same caveat for the analogous #189 case). The
+        production Containerfile installs lightspeed_agentic at
+        /opt/lightspeed/src instead: OpenShell's supervisor calls
+        env_clear() before exec'ing start_server()'s command
+        (apply_child_env(), ssh.rs) and rebuilds the environment from a
+        hardcoded allowlist that does not include PYTHONPATH, so without
+        OpenShellSpawner explicitly injecting it, `python3 -m uvicorn
+        lightspeed_agentic.app:app` fails with ModuleNotFoundError and
+        spawn() raises "HTTP server did not become ready" -- reproduced
+        directly against a real gateway while implementing this fix.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_GATEWAY_URL,
+            driver="podman",
+            workspace="default",
+        )
+
+        name = "pythonpath-e2e-test"
+        try:
+            endpoint = await spawner.spawn(
+                name,
+                OPENSHELL_PYTHONPATH_TEST_IMAGE,
+                env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
+                read_only=False,
+            )
+            assert endpoint
+
+            headers = spawner.get_sandbox_headers(name)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{endpoint}/health", headers=headers)
+            assert resp.status_code == 200
+        finally:
+            await spawner.destroy(name)

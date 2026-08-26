@@ -285,6 +285,37 @@ class TestBuildSpawnerOpenShell:
 
         assert spawner._extra_readable_paths == ["/opt/app-root", "/opt/lightspeed"]
 
+    def test_extra_env_forwarded(self, mocker: MockerFixture) -> None:
+        """extra_env reaches OpenShellSpawner (issue #192).
+
+        Same gotcha as extra_readable_paths (#189): an unlisted kwarg
+        would be silently dropped by build_spawner's kwarg filtering, even
+        though OpenShellSpawner's own constructor accepts it.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url="gw:17670",
+            extra_env={"PYTHONPATH": "/custom/path"},
+        )
+
+        assert spawner._extra_env == {"PYTHONPATH": "/custom/path"}
+
+    def test_extra_env_none_falls_back_to_spawner_default(self, mocker: MockerFixture) -> None:
+        """Omitting extra_env (or passing None) uses OpenShellSpawner's own default."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner("openshell", gateway_url="gw:17670", extra_env=None)
+
+        assert spawner._extra_env == {
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        }
+
 
 class TestBuildSpawnerUnknownType:
     """Tests for the error path on unrecognized spawner types."""

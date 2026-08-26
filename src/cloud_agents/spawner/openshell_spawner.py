@@ -78,6 +78,21 @@ class OpenShellSpawner(AgentSpawner):
     # spawn fails with Landlock EACCES on its own dependencies (issue #189).
     _DEFAULT_EXTRA_READABLE_PATHS: ClassVar[list[str]] = ["/opt/app-root", "/opt/lightspeed"]
 
+    # Extra env vars merged into the exec'd server process's environment
+    # for every spawn (see _do_spawn()'s call to start_server()).
+    # OpenShell's supervisor calls env_clear() before exec'ing a command via
+    # exec()/exec_stream() (ssh.rs apply_child_env()), then rebuilds the
+    # environment from a hardcoded allowlist -- PYTHONPATH is not in that
+    # allowlist, so it's dropped unconditionally regardless of what the
+    # sandbox image itself declares via ENV. The reference sandbox image
+    # installs its own lightspeed_agentic module at /opt/lightspeed/src,
+    # outside the interpreter's default site-packages, so it always needs
+    # PYTHONPATH explicitly -- without this, every non-advisory spawn fails
+    # with "HTTP server did not become ready" (issue #192).
+    _DEFAULT_EXTRA_ENV: ClassVar[dict[str, str]] = {
+        "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+    }
+
     # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
     # crates/openshell-policy/src/lib.rs, confirmed against openshell@679fe4c).
     # Mirrored here because OpenShell does NOT merge a supplied filesystem
@@ -146,6 +161,27 @@ class OpenShellSpawner(AgentSpawner):
                 )
         return list(paths)
 
+    @staticmethod
+    def _validate_extra_env(env: dict[str, str]) -> dict[str, str]:
+        """Validate extra_env before it's merged into an exec'd process's environment.
+
+        Args:
+            env: Candidate env var name -> value mapping.
+
+        Returns:
+            A new dict with the same entries, if all are valid. A copy is
+            returned (rather than the input dict itself) so a caller
+            mutating the dict they passed in can't retroactively change
+            the spawner's stored defaults.
+
+        Raises:
+            ValueError: If any key is empty.
+        """
+        for key in env:
+            if not key:
+                raise ValueError("extra_env keys must not be empty")
+        return dict(env)
+
     def __init__(
         self,
         openshell_client: Any = None,
@@ -158,6 +194,7 @@ class OpenShellSpawner(AgentSpawner):
         tls_key: str = "",
         bearer_token: str = "",
         extra_readable_paths: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -193,6 +230,12 @@ class OpenShellSpawner(AgentSpawner):
                 application code. A derived image with a different
                 layout should override this. See
                 _build_baseline_filesystem_policy() and issue #189.
+            extra_env: Additional environment variables merged into the
+                exec'd server process's environment for every spawn.
+                Defaults to the reference sandbox image's PYTHONPATH
+                (see _DEFAULT_EXTRA_ENV). A derived image with a
+                different layout, or no need for this at all, should
+                override this (pass {} to disable). See issue #192.
         """
         super().__init__(**kwargs)
         self._client = openshell_client
@@ -208,6 +251,9 @@ class OpenShellSpawner(AgentSpawner):
             extra_readable_paths
             if extra_readable_paths is not None
             else list(self._DEFAULT_EXTRA_READABLE_PATHS)
+        )
+        self._extra_env = self._validate_extra_env(
+            extra_env if extra_env is not None else dict(self._DEFAULT_EXTRA_ENV)
         )
         self._podman_cli: str | None = None
         self._sandbox_names: dict[str, str] = {}
@@ -600,7 +646,12 @@ class OpenShellSpawner(AgentSpawner):
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
 
-            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=env)
+            # self._extra_env first, then the caller's own env on top, so an
+            # explicit caller-provided value (e.g. a different derived image's
+            # PYTHONPATH) wins on collision rather than being silently
+            # overridden by the spawner's own default (issue #192).
+            server_env = {**self._extra_env, **env}
+            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
 
             endpoint, virtual_host = await self._expose_service(
                 sandbox_name,
