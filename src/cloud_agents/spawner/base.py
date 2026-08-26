@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import ssl
 from abc import ABC, abstractmethod
 
 import re
@@ -301,6 +302,28 @@ class AgentSpawner(ABC):
                 pass
             await asyncio.sleep(2.0)
         return False
+
+    def get_query_ssl_context(self) -> ssl.SSLContext | None:
+        """Return TLS trust info for query-time HTTP calls to a spawned endpoint.
+
+        Callers (e.g. step_runner.py's query call to the sandbox's
+        exposed endpoint) may need to know how to verify TLS for a given
+        spawner's endpoints beyond whatever generic mTLS mechanism they
+        already handle themselves (e.g. SANDBOX_TLS_MODE=app's ephemeral
+        certs, which are unrelated to any given spawner implementation).
+
+        Most spawners have no special requirement here and should keep
+        this default. Spawners whose exposed endpoints are served behind
+        their own TLS-terminating layer with a CA the caller wouldn't
+        otherwise know to trust (e.g. OpenShellSpawner's gateway) should
+        override this.
+
+        Returns:
+            An ssl.SSLContext to use as httpx's `verify=` value, or None
+            if this spawner has no special query-time TLS requirements
+            (the caller should fall back to its own default handling).
+        """
+        return None
 
     @property
     def active_count(self) -> int:

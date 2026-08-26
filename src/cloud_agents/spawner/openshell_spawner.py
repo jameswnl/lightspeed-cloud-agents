@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import ssl
 import tempfile
 from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
@@ -418,6 +419,33 @@ class OpenShellSpawner(AgentSpawner):
         """
         return True
 
+    def get_query_ssl_context(self) -> ssl.SSLContext | None:
+        """Return the SSL context callers should use for HTTPS calls to
+        sandboxes this spawner exposes (e.g. step_runner.py's query call
+        to the sandbox's exposed endpoint).
+
+        Without this, a caller has no way to learn that this spawner's
+        exposed endpoints are served behind the OpenShell gateway's own
+        (often self-signed) TLS cert -- step_runner.py's query-time HTTP
+        client used to fall back to httpx's default system trust store,
+        which fails with CERTIFICATE_VERIFY_FAILED against a real
+        deployment's self-signed gateway CA (issue #194). Mirrors the same
+        construction _wait_ready_with_host() uses internally for its own
+        readiness check, factored out so both share one implementation.
+
+        Returns:
+            An ssl.SSLContext built from this spawner's tls_ca/tls_cert/
+            tls_key, or None if no tls_ca is configured (this spawner's
+            endpoints are plain HTTP -- see _expose_service()'s scheme
+            selection -- so there's nothing to verify).
+        """
+        if not self._tls_ca:
+            return None
+        ssl_ctx = ssl.create_default_context(cafile=self._tls_ca)
+        if self._tls_cert and self._tls_key:
+            ssl_ctx.load_cert_chain(self._tls_cert, self._tls_key)
+        return ssl_ctx
+
     async def _wait_ready_with_host(
         self,
         endpoint: str,
@@ -439,16 +467,12 @@ class OpenShellSpawner(AgentSpawner):
         Returns:
             True if the sandbox became ready, False if timed out.
         """
-        import ssl
         import time
 
         headers = {"Host": virtual_host} if virtual_host else {}
-        verify: bool | ssl.SSLContext = True
-        if self._tls_ca:
-            ssl_ctx = ssl.create_default_context(cafile=self._tls_ca)
-            if self._tls_cert and self._tls_key:
-                ssl_ctx.load_cert_chain(self._tls_cert, self._tls_key)
-            verify = ssl_ctx
+        verify: bool | ssl.SSLContext | None = self.get_query_ssl_context()
+        if verify is None:
+            verify = True
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
