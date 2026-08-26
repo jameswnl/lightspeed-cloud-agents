@@ -450,7 +450,6 @@ class OpenShellSpawner(AgentSpawner):
             logger.debug("Detected gateway compute driver: %s", detected)
             return detected
         return ""
-        return self._detected_driver
 
     async def wait_ready(
         self,

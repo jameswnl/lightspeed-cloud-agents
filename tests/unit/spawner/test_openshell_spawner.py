@@ -2391,6 +2391,39 @@ class TestComputeDriverDetection:
 
         assert await spawner._detect_compute_driver() == ""
 
+    async def test_retries_after_a_failed_detection(self, mocker: MockerFixture) -> None:
+        """A failed detection is not cached -- the next call retries the RPC.
+
+        Only a successful, non-empty driver name is cached; "" from an
+        error or an empty compute_drivers list must not permanently stick
+        for the rest of this spawner's lifetime.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
+
+        mock_driver_info = mocker.Mock()
+        mock_driver_info.name = "kubernetes"
+        mock_resp = mocker.Mock()
+        mock_resp.compute_drivers = [mock_driver_info]
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.GetGatewayInfo.side_effect = [
+            RuntimeError("transient blip"),
+            mock_resp,
+        ]
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        first = await spawner._detect_compute_driver()
+        second = await spawner._detect_compute_driver()
+
+        assert first == ""
+        assert second == "kubernetes"
+        assert mock_stub_cls.return_value.GetGatewayInfo.call_count == 2
+
 
 class TestGetQuerySslContext:
     """Tests for get_query_ssl_context() (#194).
