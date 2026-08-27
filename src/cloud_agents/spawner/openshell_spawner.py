@@ -98,6 +98,17 @@ class OpenShellSpawner(AgentSpawner):
     # `ENV PYTHONPATH=...` line; re-verify against the image source if this
     # ever needs to change (e.g. a Python version bump).
     #
+    # Where materialize-skills.sh copies the allowed_skills subset so
+    # providers can list it (see _materialize_allowed_skills()). Must be
+    # granted Landlock read_write in _build_baseline_filesystem_policy()
+    # when allowed_skills is set -- /app itself is read-only in the
+    # baseline policy, and Landlock denies writes regardless of the
+    # image's own POSIX chmod/chown, so omitting this grant makes
+    # materialize-skills.sh fail with EACCES even though the sandbox
+    # user nominally owns the directory (reproduced against a real
+    # gateway; POSIX permissions alone are not sufficient).
+    _MATERIALIZED_SKILLS_DIR: ClassVar[str] = "/app/skills"
+
     # LIGHTSPEED_SKILLS_DIR is set for the same env_clear() reason: the
     # image's own `ENV LIGHTSPEED_SKILLS_DIR=/app/skills` declaration is
     # wiped before the exec'd server process starts. Providers must list
@@ -107,7 +118,7 @@ class OpenShellSpawner(AgentSpawner):
     # skill regardless of allowed_skills (issue #202).
     _DEFAULT_EXTRA_ENV: ClassVar[dict[str, str]] = {
         "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
-        "LIGHTSPEED_SKILLS_DIR": "/app/skills",
+        "LIGHTSPEED_SKILLS_DIR": _MATERIALIZED_SKILLS_DIR,
     }
 
     # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
@@ -838,6 +849,9 @@ class OpenShellSpawner(AgentSpawner):
             self._validate_allowed_skills(allowed_skills)
             for skill_name in allowed_skills:
                 spec.policy.filesystem.read_only.append(f"{self._SKILLS_ROOT}/{skill_name}")
+            # materialize-skills.sh needs to write here; /app itself is
+            # only read-only above.
+            spec.policy.filesystem.read_write.append(self._MATERIALIZED_SKILLS_DIR)
         spec.policy.filesystem.include_workdir = True
         # Already the proto default, but set explicitly to match the
         # live-verified fix YAML in issue #189 exactly.

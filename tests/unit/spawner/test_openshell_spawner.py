@@ -1329,6 +1329,41 @@ class TestBaselineFilesystemPolicy:
         assert "/skills/git-ops" in spec.policy.filesystem.read_only
         assert "/skills/k8s-diag" not in spec.policy.filesystem.read_write
 
+    def test_allowed_skills_grants_read_write_on_materialize_destination(
+        self, mocker: MockerFixture
+    ) -> None:
+        """allowed_skills also grants read_write on the materialize destination.
+
+        /app itself is only read_only in the baseline policy, and
+        Landlock denies writes regardless of the image's own POSIX
+        chmod/chown -- so materialize-skills.sh (which OpenShellSpawner
+        execs to copy allowed_skills into this directory, see
+        _materialize_allowed_skills()) needs an explicit read_write
+        grant here, reproduced as a real EACCES against a live gateway
+        before this grant was added.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec, allowed_skills=["k8s-diag"])
+
+        assert spawner._MATERIALIZED_SKILLS_DIR in spec.policy.filesystem.read_write
+
+    def test_no_allowed_skills_does_not_grant_materialize_destination_write(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Omitting allowed_skills grants no write access to the materialize destination."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec, allowed_skills=None)
+
+        assert spawner._MATERIALIZED_SKILLS_DIR not in spec.policy.filesystem.read_write
+
     def test_allowed_skills_does_not_grant_unlisted_skills(self, mocker: MockerFixture) -> None:
         """Only the named skills get a grant -- others baked into the image stay invisible."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
