@@ -14,6 +14,7 @@ spec:
         deployments, resource pressure, or error events. Report your findings
         with the root cause.
       output_key: diagnosis
+      allowed_skills: [k8s-diag]
       output_schema:
         type: object
         properties:

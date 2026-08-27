@@ -58,6 +58,7 @@ class KubernetesSpawner(AgentSpawner):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,
@@ -69,6 +70,15 @@ class KubernetesSpawner(AgentSpawner):
         Returns the Service endpoint URL.
         """
         from cloud_agents.spawner.base import SpawnConfig
+
+        if allowed_skills:
+            logger.warning(
+                "allowed_skills=%s requested for agent '%s' but KubernetesSpawner has no "
+                "Landlock equivalent -- this spawner does not restrict skill visibility. "
+                "All skills baked into the sandbox image remain visible.",
+                allowed_skills,
+                agent_name,
+            )
 
         cfg = config_override or SpawnConfig()
 

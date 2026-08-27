@@ -487,6 +487,83 @@ class TestOpenShellGuardrails:
         finally:
             await spawner.destroy(name)
 
+    @pytest.mark.asyncio
+    async def test_allowed_skills_scoping_on_real_gateway(self) -> None:
+        """allowed_skills scoping actually works end-to-end (issue #202), against a REAL gateway.
+
+        Unit tests can only assert the Landlock policy's *shape* and that
+        exec_stream() was called with the right argv -- they cannot catch
+        the bug a human reviewer found in the first version of this PR:
+        Landlock's allow-list model can't grant partial directory listing
+        of /skills, so a naive per-name-grant-only design leaves agent
+        providers (which discover skills by *listing*
+        LIGHTSPEED_SKILLS_DIR) either unable to list anything or able to
+        list every baked-in skill regardless of allowed_skills. This test
+        exercises the real fix -- OpenShellSpawner execing the sandbox
+        image's baked-in materialize-skills.sh before starting the agent
+        server -- against a real gateway and a real sandbox image built
+        from lightspeed-agentic-sandbox's Containerfile.
+
+        Requires OPENSHELL_PYTHONPATH_TEST_IMAGE (or its arch-derived
+        default) to be built from a lightspeed-agentic-sandbox revision
+        that includes materialize-skills.sh and the skills/ directory
+        (see that repo's PR #9) -- older image tags predate both and will
+        fail this test with ENOENT on materialize-skills.sh.
+        """
+        if OPENSHELL_PYTHONPATH_TEST_IMAGE is None:
+            pytest.skip(
+                f"Unrecognized host architecture {platform.machine()!r} -- no published "
+                "image tag to default to. Set OPENSHELL_PYTHONPATH_TEST_IMAGE explicitly."
+            )
+
+        from cloud_agents.spawner.factory import build_spawner
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url=OPENSHELL_GATEWAY_URL,
+            workspace="default",
+        )
+
+        name = "allowed-skills-e2e-test"
+        try:
+            endpoint = await spawner.spawn(
+                name,
+                OPENSHELL_PYTHONPATH_TEST_IMAGE,
+                env={"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"},
+                read_only=False,
+                allowed_skills=["k8s-diag"],
+            )
+            assert endpoint
+
+            sandbox_id = spawner.get_sandbox_id(name)
+
+            # (1) The allowed skill is readable through the real Landlock
+            # grant -- the actual enforcement boundary, not just the copy.
+            read_allowed = await _exec(
+                spawner._client, sandbox_id, ["cat", "/skills/k8s-diag/SKILL.md"]
+            )
+            assert read_allowed is not None
+            assert read_allowed.exit_code == 0
+
+            # (2) An unlisted skill is genuinely unreadable at its master
+            # location, not merely absent from the materialized copy --
+            # proving Landlock is doing real work here, not just the script.
+            read_denied = await _exec(
+                spawner._client, sandbox_id, ["cat", "/skills/git-ops/SKILL.md"]
+            )
+            assert read_denied is not None
+            assert read_denied.exit_code != 0
+
+            # (3) materialize-skills.sh copied only the allowed name into
+            # the directory providers actually list (LIGHTSPEED_SKILLS_DIR).
+            listing = await _exec(spawner._client, sandbox_id, ["ls", "/app/skills"])
+            assert listing is not None
+            assert listing.exit_code == 0
+            assert "k8s-diag" in listing.stdout
+            assert "git-ops" not in listing.stdout
+        finally:
+            await spawner.destroy(name)
+
 
 # Requires a REAL TLS-enabled OpenShell gateway with a CA that is NOT in
 # the system trust store (e.g. cert-manager self-signed, matching a real

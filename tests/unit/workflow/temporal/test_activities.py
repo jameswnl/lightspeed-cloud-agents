@@ -1253,6 +1253,94 @@ class TestAdvisorySpawnerEnforcement:
         assert spawn_call[1].get("skills_image") == "skills:v1"
         assert spawn_call[1].get("skills_paths") == ["/skills/diag"]
 
+    @pytest.mark.asyncio
+    async def test_allowed_skills_forwarded_to_spawner(self, mocker: MockerFixture) -> None:
+        """A step's allowed_skills list is forwarded to spawner.spawn() (issue #202).
+
+        Unlike skills_image/skills_paths (workflow-run-level), allowed_skills
+        lives on the step itself -- each step names which baked-in-image
+        skills its own agent run should have Landlock read access to.
+        """
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {
+                    "name": "diag",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "allowed_skills": ["k8s-diag", "git-ops"],
+                },
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("allowed_skills") == ["k8s-diag", "git-ops"]
+
+    @pytest.mark.asyncio
+    async def test_no_allowed_skills_forwards_none(self, mocker: MockerFixture) -> None:
+        """A step without allowed_skills forwards None -- no skills visible by default."""
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        await run_sandbox_step(
+            {
+                "step": {"name": "diag", "prompt": "check", "output_key": "r1"},
+                "workflow_id": "wf-1",
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "k",
+                },
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        spawn_call = mock_spawner.spawn.call_args
+        assert spawn_call[1].get("allowed_skills") is None
+
 
 class TestMCPInjection:
     """Tests for MCP server config injection into sandbox env vars."""

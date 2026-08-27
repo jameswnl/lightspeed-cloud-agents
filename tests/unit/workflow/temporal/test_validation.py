@@ -122,6 +122,72 @@ class TestDefinitionValidation:
         assert any("name" in e.lower() for e in errors)
 
 
+class TestAllowedSkillsValidation:
+    """Tests for allowed_skills validation at submission time (issue #202).
+
+    Mirrors OpenShellSpawner._validate_allowed_skills() but runs at
+    /run submission (422) rather than only at spawn time, so a malformed
+    name is caught before a workflow run is even created.
+    """
+
+    def _defn_with_allowed_skills(self, allowed_skills: list[str]) -> dict:
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "s1",
+                        "type": "agent",
+                        "output_key": "r1",
+                        "prompt": "check",
+                        "allowed_skills": allowed_skills,
+                    },
+                ]
+            },
+        }
+
+    def test_valid_allowed_skills_passes(self) -> None:
+        """Plain bare names raise no errors."""
+        defn = self._defn_with_allowed_skills(["k8s-diag", "git-ops"])
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+    def test_empty_name_rejected(self) -> None:
+        """An empty string entry is caught."""
+        defn = self._defn_with_allowed_skills([""])
+        errors = validate_definition(defn)
+        assert any("empty" in e.lower() for e in errors)
+
+    def test_path_traversal_rejected(self) -> None:
+        """A '/' or '..' segment is caught before it ever reaches spawn."""
+        defn = self._defn_with_allowed_skills(["../../etc"])
+        errors = validate_definition(defn)
+        assert any("allowed_skills" in e for e in errors)
+
+    def test_dot_dot_alone_rejected(self) -> None:
+        """A bare '..' entry is caught."""
+        defn = self._defn_with_allowed_skills([".."])
+        errors = validate_definition(defn)
+        assert any("allowed_skills" in e for e in errors)
+
+    def test_omitted_allowed_skills_passes(self) -> None:
+        """No allowed_skills field at all is valid (least-privilege default)."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "check"},
+                ]
+            },
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+
 class TestOutputSchemaValidation:
     """Tests for output_schema validation in workflow definitions."""
 
@@ -146,31 +212,35 @@ class TestOutputSchemaValidation:
 
     def test_array_without_items_rejected(self) -> None:
         """Array type without items definition is rejected."""
-        errors = validate_definition(self._defn_with_schema(
-            {"type": "object", "properties": {"things": {"type": "array"}}}
-        ))
+        errors = validate_definition(
+            self._defn_with_schema({"type": "object", "properties": {"things": {"type": "array"}}})
+        )
         assert any("items" in e.lower() and "things" in e for e in errors)
 
     def test_array_with_items_passes(self) -> None:
         """Array type with items definition passes."""
-        errors = validate_definition(self._defn_with_schema(
-            {"type": "object", "properties": {"things": {"type": "array", "items": {"type": "string"}}}}
-        ))
+        errors = validate_definition(
+            self._defn_with_schema(
+                {
+                    "type": "object",
+                    "properties": {"things": {"type": "array", "items": {"type": "string"}}},
+                }
+            )
+        )
         assert not any("items" in e.lower() for e in errors)
 
     def test_nested_array_without_items_rejected(self) -> None:
         """Nested array without items is caught recursively."""
-        errors = validate_definition(self._defn_with_schema({
-            "type": "object",
-            "properties": {
-                "outer": {
+        errors = validate_definition(
+            self._defn_with_schema(
+                {
                     "type": "object",
                     "properties": {
-                        "inner_list": {"type": "array"}
-                    }
+                        "outer": {"type": "object", "properties": {"inner_list": {"type": "array"}}}
+                    },
                 }
-            }
-        }))
+            )
+        )
         assert any("items" in e.lower() and "root.outer.inner_list" in e for e in errors)
 
     def test_no_output_schema_passes(self) -> None:
@@ -190,37 +260,51 @@ class TestOutputSchemaValidation:
 
     def test_valid_complex_schema_passes(self) -> None:
         """Complex schema with arrays, objects, and nesting passes."""
-        errors = validate_definition(self._defn_with_schema({
-            "type": "object",
-            "properties": {
-                "summary": {"type": "string"},
-                "findings": {"type": "array", "items": {"type": "string"}},
-                "details": {
+        errors = validate_definition(
+            self._defn_with_schema(
+                {
                     "type": "object",
                     "properties": {
-                        "hosts": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}}},
-                    }
+                        "summary": {"type": "string"},
+                        "findings": {"type": "array", "items": {"type": "string"}},
+                        "details": {
+                            "type": "object",
+                            "properties": {
+                                "hosts": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "required": ["summary"],
                 }
-            },
-            "required": ["summary"]
-        }))
+            )
+        )
         assert len(errors) == 0
 
     def test_multiple_arrays_without_items_all_reported(self) -> None:
         """Multiple arrays without items each produce an error."""
-        errors = validate_definition(self._defn_with_schema({
-            "type": "object",
-            "properties": {
-                "list_a": {"type": "array"},
-                "list_b": {"type": "array"},
-            }
-        }))
+        errors = validate_definition(
+            self._defn_with_schema(
+                {
+                    "type": "object",
+                    "properties": {
+                        "list_a": {"type": "array"},
+                        "list_b": {"type": "array"},
+                    },
+                }
+            )
+        )
         items_errors = [e for e in errors if "items" in e.lower()]
         assert len(items_errors) == 2
 
     def test_error_message_includes_step_name(self) -> None:
         """Error message includes the step name for context."""
-        errors = validate_definition(self._defn_with_schema(
-            {"type": "object", "properties": {"things": {"type": "array"}}}
-        ))
+        errors = validate_definition(
+            self._defn_with_schema({"type": "object", "properties": {"things": {"type": "array"}}})
+        )
         assert any("s1" in e for e in errors)

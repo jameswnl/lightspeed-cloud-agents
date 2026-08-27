@@ -331,6 +331,7 @@ async def _run_step_inner(
                 labels=labels,
                 skills_image=input.get("skills_image"),
                 skills_paths=input.get("skills_paths"),
+                allowed_skills=step.get("allowed_skills"),
                 service_account=sa,
                 read_only=advisory,
                 credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret"))

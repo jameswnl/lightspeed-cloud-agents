@@ -389,18 +389,24 @@ spec:
 
 Steps with `spawn: none` (in-process) or `spawn: local` (subprocess) bypass the spawner entirely and are unaffected.
 
-### Skills Image (Podman driver)
+### Skills
 
-When using the Podman driver, skills are mounted as native OCI image volumes (no extraction or streaming):
+All available skills are baked into the sandbox image at build time, under `/skills/<name>/...` (see `lightspeed-agentic-sandbox`'s Containerfile) — there is no separate `skills_image` mounted or extracted at runtime (issue #202 removed that mechanism entirely). Which of the baked-in skills a given step's agent can actually read is controlled per-step via `allowed_skills`, a list of skill names:
 
-```json
-{
-  "skills_image": "quay.io/my-org/my-skills:latest",
-  "skills_paths": ["/skills"]
-}
+```yaml
+steps:
+  - name: diagnose
+    allowed_skills: ["k8s-diag"]
+    prompt: "Diagnose the issue..."
+    output_key: diagnosis
 ```
 
-The spawner configures Podman `image` mounts via `driver_config` on the `SandboxTemplate`. For the Kubernetes driver, skills are extracted locally and streamed into the sandbox via `tar` over `exec_stream`.
+`OpenShellSpawner` enforces this two ways, because Landlock alone can't scope directory *listing* — a `PathBeneath` grant on `/skills/<name>` doesn't grant `ReadDir` on the parent `/skills`, and agent providers discover skills by listing `LIGHTSPEED_SKILLS_DIR`, not by opening a known path directly:
+
+1. A Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills` (non-advisory spawns only — advisory/`read_only=True` spawns grant blanket filesystem read for investigation purposes, which already includes everything under `/skills` regardless of this field). This is the real enforcement boundary: an unlisted name is genuinely unreadable, not merely absent elsewhere.
+2. Before starting the agent server, the spawner execs the sandbox image's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv, which copies just those names from `/skills` into `/app/skills` — a plain, freshly-listable directory. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` (not `/skills`) so provider-side listing sees only the scoped subset. The copy itself still goes through the Landlock grant from (1), so a name that isn't in `allowed_skills` can't be materialized even if this script were compromised.
+
+`KubernetesSpawner`/`PodmanSpawner` accept `allowed_skills` for interface consistency but have no Landlock equivalent, so they log a warning and do not restrict visibility.
 
 ### Credentials
 

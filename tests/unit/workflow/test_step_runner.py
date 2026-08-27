@@ -115,6 +115,43 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
+    async def test_run_step_forwards_allowed_skills_to_spawner(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """A step's allowed_skills list is forwarded to spawner.spawn() (issue #202)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        step_input["step"]["allowed_skills"] = ["k8s-diag", "git-ops"]
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs.get("allowed_skills") == ["k8s-diag", "git-ops"]
+
+    @pytest.mark.asyncio
+    async def test_run_step_no_allowed_skills_forwards_none(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """A step without allowed_skills forwards None -- no skills visible by default."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs.get("allowed_skills") is None
+
+    @pytest.mark.asyncio
     async def test_run_step_no_spawner_returns_stub(self, step_input: dict[str, Any]) -> None:
         """Without a spawner, returns a stub result."""
         from cloud_agents.workflow.core.step_runner import run_step

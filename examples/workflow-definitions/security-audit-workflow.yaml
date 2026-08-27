@@ -11,7 +11,9 @@ spec:
       prompt: >
         Perform a security audit of the production namespace. Check for:
         pods running as root, missing network policies, exposed secrets,
-        resource limits. Report compliance status.
+        resource limits, and container images with known CVEs. Report
+        compliance status.
+      allowed_skills: [security-audit, cve-scan]
       output_schema:
         type: object
         properties:
