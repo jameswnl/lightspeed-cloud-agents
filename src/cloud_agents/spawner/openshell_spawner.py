@@ -1038,14 +1038,14 @@ class OpenShellSpawner(AgentSpawner):
                 "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
                 "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
             )
-        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+        from openshell._proto import datamodel_pb2, openshell_pb2, openshell_pb2_grpc
 
         def _sync_create() -> str:
             channel = self._create_grpc_channel()
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 create_req = openshell_pb2.CreateProviderRequest(
-                    provider=openshell_pb2.Provider(
+                    provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),
@@ -1086,7 +1086,7 @@ class OpenShellSpawner(AgentSpawner):
                 "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
                 "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
             )
-        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+        from openshell._proto import datamodel_pb2, openshell_pb2, openshell_pb2_grpc
 
         def _sync_provider() -> str:
             channel = self._create_grpc_channel()
@@ -1094,7 +1094,7 @@ class OpenShellSpawner(AgentSpawner):
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
 
                 create_req = openshell_pb2.CreateProviderRequest(
-                    provider=openshell_pb2.Provider(
+                    provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),

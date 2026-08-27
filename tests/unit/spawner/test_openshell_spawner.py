@@ -2018,6 +2018,60 @@ class TestCredentialInjection:
         with pytest.raises(RuntimeError, match="not found in env"):
             await spawner._inject_credentials("agent-1", "sb-1", "MISSING_KEY", {})
 
+    def test_provider_uses_datamodel_module(self):
+        """Regression for issue #211: Provider lives in datamodel_pb2, not openshell_pb2."""
+        from pathlib import Path
+
+        # Check the source file directly -- avoids MagicMock stub in this test module
+        # (which replaces openshell with a mock when the extra is not installed)
+        src = Path("src/cloud_agents/spawner/openshell_spawner.py").read_text()
+        # Both provider creation sites must use datamodel_pb2.Provider
+        assert src.count("datamodel_pb2.Provider") == 2, (
+            "Expected 2 uses of datamodel_pb2.Provider (for _create_provider and "
+            "_create_and_attach_provider), found %d" % src.count("datamodel_pb2.Provider")
+        )
+        assert "openshell_pb2.Provider" not in src, (
+            "Found stale openshell_pb2.Provider -- should be datamodel_pb2.Provider (issue #211)"
+        )
+        # Also verify the import is present
+        assert "from openshell._proto import datamodel_pb2" in src
+
+        # If the real openshell package is available, also verify the proto descriptor
+        try:
+            # Bypass the MagicMock stub that this test file installs at import time
+            import sys
+            from unittest.mock import MagicMock
+            # Remove the mock if present and try real import
+            was_mocked = isinstance(sys.modules.get("openshell"), MagicMock)
+            if was_mocked:
+                # Save and remove mock, then try real import
+                saved = {k: sys.modules.pop(k) for k in list(sys.modules.keys()) if k.startswith("openshell")}
+                try:
+                    from openshell._proto import datamodel_pb2 as real_datamodel, openshell_pb2 as real_openshell
+                    req = real_openshell.CreateProviderRequest(
+                        provider=real_datamodel.Provider(
+                            type="cloud-agents",
+                            credentials={"OPENAI_API_KEY": "test"},
+                        ),
+                    )
+                    assert req.provider.type == "cloud-agents"
+                    assert real_openshell.CreateProviderRequest.DESCRIPTOR.fields_by_name["provider"].message_type.full_name == "openshell.datamodel.v1.Provider"
+                    assert not hasattr(real_openshell, "Provider")
+                finally:
+                    # Restore mock for other tests
+                    sys.modules.update(saved)
+            else:
+                from openshell._proto import datamodel_pb2, openshell_pb2
+                req = openshell_pb2.CreateProviderRequest(
+                    provider=datamodel_pb2.Provider(
+                        type="cloud-agents",
+                        credentials={"OPENAI_API_KEY": "test"},
+                    ),
+                )
+                assert req.provider.type == "cloud-agents"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
 
 class TestMCPSecretInjection:
     """Tests for _inject_mcp_secrets() file injection."""
