@@ -50,6 +50,9 @@ class StepInput:
         sandbox_image: Container image for ephemeral mode.
         skills_image: Optional OCI image for skills.
         skills_paths: Optional paths within skills image.
+        allowed_skills: Optional allowlist of skill names (subdirectories baked
+            into the sandbox image at /skills or local CLOUD_AGENTS_SKILLS_PATHS);
+            None/omitted means no skills, passed as SkillsCapability(include=...).
         mcp_servers: Optional MCP server configurations.
         workflow_id: Workflow execution ID.
         step_name: Step name within the workflow.

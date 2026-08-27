@@ -1641,3 +1641,45 @@ class TestSaveTurnToolMessages:
         assert len(messages) == 2
         assert messages[0]["role"] == "user"
         assert messages[1]["role"] == "assistant"
+
+class TestChatWorkflowAllowedSkills:
+    """Least-privilege allowed_skills for chat turns (same as workflow steps)."""
+
+    def test_config_defaults_to_no_skills(self) -> None:
+        """ChatWorkflowConfig defaults to allowed_skills=None (no skills)."""
+        cfg = ChatWorkflowConfig(provider=_PROVIDER)
+        assert cfg.allowed_skills is None
+
+    def test_build_step_input_forwards_allowed_skills(self, runner: ChatWorkflowRunner) -> None:
+        """_build_step_input forwards allowed_skills from config."""
+        runner._config.allowed_skills = ["k8s-diag"]
+        step_input = runner._build_step_input(
+            prompt="hi",
+            workflow_id="chat-123",
+            turn_name="turn-0",
+            context={},
+        )
+        assert step_input.allowed_skills == ["k8s-diag"]
+
+    def test_build_step_input_omitted_is_none(self, runner: ChatWorkflowRunner) -> None:
+        """Omitted allowed_skills -> StepInput.allowed_skills is None (no skills)."""
+        runner._config.allowed_skills = None
+        step_input = runner._build_step_input(
+            prompt="hi",
+            workflow_id="chat-123",
+            turn_name="turn-0",
+            context={},
+        )
+        assert step_input.allowed_skills is None
+
+    def test_send_message_builds_input_with_skills(self, runner: ChatWorkflowRunner) -> None:
+        """Chat turn StepInput carries allowed_skills (same default as workflow steps)."""
+        runner._config.allowed_skills = ["k8s-diag", "git-ops"]
+        step_input = runner._build_step_input(
+            prompt="hi",
+            workflow_id="chat-123",
+            turn_name="turn-1",
+            context={},
+        )
+        assert step_input.allowed_skills == ["k8s-diag", "git-ops"]
+

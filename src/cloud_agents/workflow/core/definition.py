@@ -26,17 +26,19 @@ class WorkflowStepSpec(BaseModel):
         message: Human-readable message for type=human-approval.
         timeout_seconds: Maximum seconds for this step.
         allowed_skills: Optional list of skill names (subdirectories baked
-            into the sandbox image's /skills) this step's agent may read.
-            Unlike mcp_servers, there's no workflow-level catalog to
-            select from -- the catalog is whatever the deployed sandbox
-            image happens to bake in, unvalidated by cloud_agents.
-            Enforced via a per-spawn Landlock read-only grant on
-            /skills/<name> (see OpenShellSpawner); other spawners accept
-            but do not enforce this field. None or omitted means no
-            skills are visible -- least-privilege default, not "all" --
-            except in OpenShellSpawner's advisory (read_only) mode,
-            which grants blanket filesystem read for investigation
-            purposes regardless of this field.
+            into the sandbox image's /skills or local CLOUD_AGENTS_SKILLS_PATHS).
+            For spawn: none/local, enforced via SkillsCapability(include=[...]);
+            for spawn: ephemeral, via a per-spawn Landlock read-only grant on
+            /skills/<name> (see OpenShellSpawner). Other spawners
+            (Kubernetes/Podman) accept but do not enforce this field.
+            ChatWorkflowConfig.allowed_skills threads the same allowlist for
+            chat turns. None or omitted (and []) means no skills are visible --
+            least-privilege default, not "all" -- except in OpenShellSpawner's
+            advisory (read_only) mode, which grants blanket filesystem read for
+            investigation purposes regardless of this field. Unlike
+            mcp_servers, there's no workflow-level catalog to select from --
+            the catalog is whatever the deployed sandbox image or local
+            CLOUD_AGENTS_SKILLS_PATHS happens to provide.
     """
 
     name: str

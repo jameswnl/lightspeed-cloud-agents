@@ -2002,6 +2002,108 @@ class TestDirectExecutorWithSkills:
         assert call_kwargs["capabilities"] == [mock_cap]
 
 
+class TestDirectExecutorAllowedSkillsDefaults:
+    """Least-privilege defaults for allowed_skills (issue #202)."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_allowed_skills_does_not_call_get_skills(self, mocker: MockerFixture) -> None:
+        """Omitted allowed_skills -> get_skills_capability not called, even with env set."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch("cloud_agents.workflow.executor.step.direct.ensure_credentials_env")
+        mock_agent_cls = mocker.patch("cloud_agents.workflow.executor.step.direct.Agent")
+        mock_agent_instance = mocker.AsyncMock()
+        mock_result = mocker.MagicMock()
+        mock_result.output = "{\"response\": \"hi\"}"
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 5
+        mock_usage.output_tokens = 5
+        mock_result.usage = mock_usage
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_get_skills = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability"
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="hi",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        mock_get_skills.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_allowed_skills_no_capability(self, mocker: MockerFixture) -> None:
+        """allowed_skills=[] -> no capability (include=[] short-circuits to None)."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch("cloud_agents.workflow.executor.step.direct.ensure_credentials_env")
+        mock_caps = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=None,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.model_request",
+            new_callable=mocker.AsyncMock,
+        )
+
+        executor = DirectExecutor()
+        result = await executor.run(
+            StepInput(
+                prompt="hi",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                allowed_skills=[],
+            )
+        )
+
+        # Empty list returns None via skills.py guard -> no capability -> falls back to model_request path
+        mock_caps.assert_called_once_with(include=[])
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_allowed_skills_forwards_include(self, mocker: MockerFixture) -> None:
+        """allowed_skills=[...] -> get_skills_capability(include=[...]) asserted on mock args."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch("cloud_agents.workflow.executor.step.direct.ensure_credentials_env")
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+        mock_result = mocker.MagicMock()
+        mock_result.output = "{\"ok\": true}"
+        mock_result.usage = mock_usage
+        mock_agent_cls = mocker.patch("cloud_agents.workflow.executor.step.direct.Agent")
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        mock_cap = mocker.MagicMock()
+        mock_get_skills = mocker.patch(
+            "cloud_agents.workflow.executor.step.direct.get_skills_capability",
+            return_value=mock_cap,
+        )
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                allowed_skills=["k8s-diag"],
+            )
+        )
+
+        mock_get_skills.assert_called_once_with(include=["k8s-diag"])
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert call_kwargs["capabilities"] == [mock_cap]
+
+
 class TestMessageHistory:
     """Tests for Fix 2: message_history from conversation context."""
 

@@ -76,7 +76,7 @@ async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
 
     skills_cap = get_skills_capability(include=allowed_skills) if allowed_skills is not None else None
     if tool_names or mcp_servers or skills_cap:
-        return await _run_with_agent(input_data, tool_names)
+        return await _run_with_agent(input_data, tool_names, skills_cap)
     return await _run_model_request(input_data)
 
 
@@ -160,7 +160,9 @@ def _parse_content(content: Any, output_schema: dict[str, Any] | None) -> dict[s
     }
 
 
-async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> dict[str, Any]:
+async def _run_with_agent(
+    input_data: dict[str, Any], tool_names: list[str], skills_cap: Any | None = None
+) -> dict[str, Any]:
     """Execute using pydantic-ai Agent with tools and/or MCP servers.
 
     When MCP servers are configured, creates MCPToolset instances using
@@ -203,9 +205,11 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
             active_ts = await stack.enter_async_context(ts)
             active_toolsets.append(active_ts)
 
-        # Build capabilities
+        # Build capabilities (already resolved in _run; passed through to avoid double call)
         capabilities = []
-        skills_cap = get_skills_capability(include=input_data.get("allowed_skills")) if input_data.get("allowed_skills") is not None else None
+        if skills_cap is None and input_data.get("allowed_skills") is not None:
+            # Fallback for direct _run_with_agent calls in tests that bypass _run
+            skills_cap = get_skills_capability(include=input_data.get("allowed_skills"))
         if skills_cap:
             capabilities.append(skills_cap)
 
