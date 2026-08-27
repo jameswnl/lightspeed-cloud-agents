@@ -1,0 +1,220 @@
+# Testing OpenShellSpawner against real gateways
+
+Notes from verifying `allowed_skills` (and general spawn) behavior against
+three real OpenShell gateways beyond the local Podman-compose stack
+(`~/ws/local-infra`, see its `local-infra` skill): a Kind cluster running the
+OpenShell gateway with the kubernetes compute driver, a real OCP cluster with
+OpenShell deployed, and a hosted staging gateway with no underlying-cluster
+access at all. Each has a different auth/network shape; this doc collects
+what's needed for each so the next verification pass doesn't re-derive it.
+
+## 1. Get a CLI that matches the gateway's feature set
+
+The Homebrew/release `openshell` CLI can lag the gateway's actual protocol
+support (missing flags like `--oidc-issuer`/`--oidc-client-id`/
+`--oidc-audience`). If a flag is missing, build from the vendored source:
+
+```bash
+cd ~/ws/OpenShell
+cargo build --release -p openshell-cli
+# binary at target/release/openshell
+export PATH="$HOME/ws/OpenShell/target/release:$PATH"
+openshell --version
+```
+
+## 2. Register the gateway
+
+For gateways with a plain bearer token or no auth (e.g. local-infra), pass
+`--gateway-insecure` or a static token directly to the SDK/spawner. For OIDC
+gateways (real OCP, staging), log in interactively — this opens a real
+browser even from a background job, because the job runs on your actual
+local machine:
+
+```bash
+openshell gateway add \
+  --name <gateway-nickname> \
+  --oidc-issuer <keycloak-realm-url> \
+  --oidc-client-id <client-id> \
+  --oidc-audience <client-id> \
+  <gateway-host>:443
+```
+
+Token state lands in `~/.config/openshell/gateways/<name>/oidc_token.json`
+(`access_token`, `refresh_token`, `expires_at`, `issuer`, `client_id`). TTLs
+observed as short as ~300s. Any CLI call against that gateway (e.g.
+`openshell -g <name> sandbox list`) silently refreshes it — run one
+immediately before extracting the token for a Python script:
+
+```bash
+openshell -g <name> sandbox list >/dev/null 2>&1
+python3 -c "
+import json
+d = json.load(open('$HOME/.config/openshell/gateways/<name>/oidc_token.json'))
+print(d['access_token'])
+"
+```
+
+## 3. Wire up a real (non-mocked) LLM provider on the gateway
+
+Gateways can be network-locked so sandboxes can *only* reach the gateway's
+own internal inference proxy (`https://inference.local`), not the public
+internet — plain `LIGHTSPEED_PROVIDER=openai` pointed at `api.openai.com`
+will fail even though the gateway itself has outbound access. Route through
+the gateway's own provider mechanism instead:
+
+```bash
+openshell -g <name> provider create \
+  --name my-openai \
+  --type openai \
+  --credential OPENAI_API_KEY="$OPENAI_API_KEY"
+
+openshell -g <name> inference set --provider my-openai --model gpt-4o-mini
+```
+
+`openshell provider create --type openai --help`-style discovery isn't
+needed — the type strings are fixed; see
+`crates/openshell-providers/src/lib.rs::normalize_provider_type` in the
+OpenShell source for the full list (`openai`, `anthropic`, `nvidia`,
+`copilot`, `google-vertex-ai`/`vertex`, `gitlab`, `github`, `claude-code`,
+`generic`).
+
+Then spawn sandboxes with:
+
+```python
+env = {
+    "LIGHTSPEED_PROVIDER": "openai",
+    "LIGHTSPEED_PROVIDER_URL": "https://inference.local",
+    "LIGHTSPEED_MODEL": "gpt-4o-mini",
+    "OPENAI_API_KEY": "unused",  # gateway injects the real credential; only needs to be non-empty
+}
+```
+
+`OpenShellSpawner._build_network_policy()` already grants Landlock egress to
+`LIGHTSPEED_PROVIDER_URL`'s host automatically — no extra policy wiring
+needed on the caller's side.
+
+**A bare `curl https://inference.local/` returning
+`{"error":"connection not allowed by policy"}` (HTTP 403) is expected, not a
+bug** — the gateway's inference proxy only forwards recognized inference API
+paths (e.g. `POST /v1/chat/completions`), and denies anything else
+(`openshell-supervisor-network/src/proxy.rs`, "Not an inference request —
+deny"). Don't use a bare GET as a smoke test; use the real app instead (see
+§5).
+
+## 4. Build and push a sandbox image for the gateway's node architecture
+
+Local Kind on Apple Silicon needs `arm64`; real OCP/staging gateways are
+typically `amd64`. Build both when unsure:
+
+```bash
+cd ~/ws/lightspeed-agentic-sandbox
+podman build --security-opt label=disable --platform linux/amd64 \
+  -t quay.io/<you>/lightspeed-agentic-sandbox:latest-amd64 .
+podman push quay.io/<you>/lightspeed-agentic-sandbox:latest-amd64
+```
+
+Watch for **stale image cache** on Kind nodes (`imagePullPolicy:
+IfNotPresent` for non-`latest` tags reuses an old layer even after a push).
+Symptom: `materialize-skills.sh: No such file or directory` even though the
+script is definitely in the image you just pushed. Fix — evict the cached
+image from the node's CRI store (this Kind setup uses the podman provider,
+so it's `podman exec`, not `docker exec`):
+
+```bash
+podman exec local-infra-control-plane crictl rmi <image>
+```
+
+## 5. Manually exec the app to debug without waiting on `spawn()`'s cleanup
+
+`spawner.spawn()` deletes the sandbox automatically on any post-create
+failure ("deleting sandbox to prevent orphan"), which destroys the exact
+evidence you need to debug. To inspect a live failure, replicate
+`_do_spawn()`'s steps by hand against the low-level client instead of
+calling `spawn()`:
+
+```python
+spec = openshell_pb2.SandboxSpec(template=openshell_pb2.SandboxTemplate(image=IMAGE, labels={}))
+for k, v in env.items():
+    spec.environment[k] = v
+spawner._build_network_policy(spec, env)
+spawner._build_baseline_filesystem_policy(spec, allowed_skills=["k8s-diag"])
+sandbox_ref = spawner._client.create(workspace="default", spec=spec)
+spawner._client.wait_ready(sandbox_ref.name, workspace="default", timeout_seconds=60)
+# ... exec whatever you need, without any automatic teardown
+```
+
+Two env vars matter when manually exec'ing commands (normally supplied by
+`_do_spawn()`'s `self._extra_env` merge, which manual `sandbox exec` calls
+don't get automatically):
+
+```
+PYTHONPATH=/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages
+LIGHTSPEED_SKILLS_DIR=/app/skills
+```
+
+Without `PYTHONPATH`, `python3 -c "import lightspeed_agentic.app"` fails
+with `ModuleNotFoundError: No module named 'lightspeed_agentic'` even though
+the source is present on disk at `/opt/lightspeed/src` — the sandbox image's
+Containerfile `ENV PYTHONPATH=...` is **not** inherited by `sandbox exec`;
+only `SandboxSpec.environment` and the spawner's own `_extra_env` merge
+apply.
+
+To bring up the real app server by hand and hit it from inside the sandbox
+(bypassing the gateway's HTTP exposure layer entirely):
+
+```bash
+openshell -g <name> sandbox exec -n <sandbox> \
+  --env PYTHONPATH=/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages \
+  --env LIGHTSPEED_SKILLS_DIR=/app/skills \
+  --env LIGHTSPEED_PROVIDER=openai \
+  --env LIGHTSPEED_PROVIDER_URL=https://inference.local \
+  --env LIGHTSPEED_MODEL=gpt-4o-mini \
+  --env OPENAI_API_KEY=unused \
+  -- sh -c "nohup python3 -m uvicorn lightspeed_agentic.app:app --host 0.0.0.0 --port 8080 >/tmp/server.log 2>&1 & sleep 5; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/health"
+```
+
+## 6. Known gap: HTTP exposure/readiness can 404 on gateways without Host-header multiplexing
+
+`OpenShellSpawner._wait_ready_with_host()` polls the gateway's HTTP-proxied
+`/health` route using `ExposeService`'s returned virtual host as a `Host`
+header against the *same* `host:port` as the gRPC endpoint. This worked
+against local Kind (podman + kubernetes drivers) and a real OCP cluster, but
+returned a bare `HTTP/2 404` (no body, no `content-type` — i.e. rejected
+before reaching FastAPI) against one hosted staging gateway, even with a
+correct `Host` header and a valid bearer token. The app itself was
+confirmed healthy the entire time via direct in-sandbox `curl
+127.0.0.1:8080/health` (§5) — this is specifically a gap in that gateway's
+ingress not supporting Host-header-multiplexed HTTP proxying to arbitrary
+sandbox ports on its main TLS port, not a bug in the sandbox image or the
+provider wiring. If `spawner.spawn()` times out with "HTTP server did not
+become ready" but the manual exec in §5 shows a healthy local `/health`,
+this is the same gap — don't waste time re-debugging the app or provider
+config.
+
+## 7. Verify `allowed_skills` scoping once the sandbox is up
+
+Whether via full `spawn()` or the manual path in §5, the same three checks
+prove per-name skill scoping end-to-end (mirrors
+`tests/e2e/test_guardrails.py::test_allowed_skills_scoping_on_real_gateway`):
+
+```python
+await spawner._materialize_allowed_skills(sandbox_id, ["k8s-diag"])
+
+r1 = spawner._client.exec(sandbox_id, ["cat", "/skills/k8s-diag/SKILL.md"])
+assert r1.exit_code == 0                      # allowed skill readable
+
+r2 = spawner._client.exec(sandbox_id, ["cat", "/skills/git-ops/SKILL.md"])
+assert r2.exit_code != 0                      # unlisted skill: EACCES via Landlock
+
+r3 = spawner._client.exec(sandbox_id, ["ls", "/app/skills"])
+assert "k8s-diag" in r3.stdout and "git-ops" not in r3.stdout
+```
+
+## Quick reference: env vars per driver/gateway
+
+| Gateway | Compute driver | TLS CA | Auth |
+|---|---|---|---|
+| `~/ws/local-infra` | podman | disabled (plaintext) | none |
+| Kind (this workspace) | podman or kubernetes | disabled or self-signed | none / static token |
+| Real OCP | kubernetes | secret varies **per Route** — a passthrough Route's serving cert may be signed by a *different* CA than other TLS secrets in the namespace; always pull the CA from the exact secret the Route references | OIDC bearer token; `iss` claim must match the token request's `Host` header exactly (e.g. `-H "Host: keycloak.keycloak.svc.cluster.local:9090"` even when reaching Keycloak via `localhost` port-forward) |
+| Hosted staging (no cluster access) | kubernetes | public CA (`certifi.where()` — Let's Encrypt) | OIDC bearer token via `openshell gateway add --oidc-*` |
