@@ -1082,7 +1082,7 @@ class OpenShellSpawner(AgentSpawner):
                     "Set OPENSHELL_TLS_CA for TLS, or "
                     "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
                 )
-            _logging.getLogger(__name__).warning(
+            logger.warning(
                 "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
                 "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
             )

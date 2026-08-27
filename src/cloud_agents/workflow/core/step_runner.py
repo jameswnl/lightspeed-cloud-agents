@@ -215,10 +215,7 @@ async def _run_step_inner(
             # putting the real value in spec.environment would expose it
             # directly to the sandboxed process (issue #199). PodmanSpawner
             # pulls the credential directly from os.environ at spawn time,
-            # and Kubernetes uses Secret mounts, so neither needs it here. PodmanSpawner needs
-            # it in env (it ignores credential_secret_name), so we keep
-            # it here for Podman and let OpenShell filter. Kubernetes
-            # uses Secret mounts, not env.
+            # and Kubernetes uses Secret mounts, so neither needs it here.
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []

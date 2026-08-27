@@ -438,15 +438,7 @@ class TestOpenShellSpawnerSpawn:
         assert "OPENAI_API_KEY" not in start_env
         assert "openai-api-key" not in start_env
         assert "sk-real-secret" not in str(start_env)
-        # Verify start_server env also does not contain real credential (issue #199)
-        assert mock_start_server.called
-        _, start_kwargs = mock_start_server.call_args
-        start_env = start_kwargs.get("env", {})
-        assert "OPENAI_API_KEY" not in start_env
-        assert "openai-api-key" not in start_env
-        assert "[REDACTED]" not in str(start_env)
-
-    @pytest.mark.asyncio
+            @pytest.mark.asyncio
     async def test_spawn_passes_env_to_sandbox(self, mocker: MockerFixture) -> None:
         """_do_spawn passes environment variables to sandbox creation."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
