@@ -1075,3 +1075,58 @@ class TestKubernetesSpawnerSkillsLoaderInjection:
         assert "/skills-a" in command
         assert "/skills-b" in command
         assert command[-1] == "/skills-data"
+
+
+class TestKubernetesSpawnerAllowedSkills:
+    """Tests for allowed_skills on KubernetesSpawner (issue #202).
+
+    KubernetesSpawner has no Landlock equivalent, so it does not enforce
+    per-skill scoping -- it must simply accept the shared ABC parameter
+    without raising, logging a warning so a caller relying on scoping
+    isn't silently unprotected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spawn_with_allowed_skills_does_not_raise(self, caplog) -> None:
+        """spawn(allowed_skills=[...]) succeeds through the real ABC spawn() wrapper.
+
+        Regression test for a real gap: KubernetesSpawner._do_spawn() had
+        no `allowed_skills` parameter, so AgentSpawner.spawn() (which
+        unconditionally forwards allowed_skills to _do_spawn()) would
+        raise TypeError for any caller going through the public .spawn()
+        method -- not caught by tests that call ._do_spawn() directly,
+        bypassing the ABC wrapper entirely.
+        """
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            import logging
+
+            with caplog.at_level(logging.WARNING):
+                await spawner.spawn(
+                    "allowed-skills-agent",
+                    "agent-runtime:latest",
+                    allowed_skills=["k8s-diag"],
+                )
+
+        assert "allowed_skills" in caplog.text.lower()

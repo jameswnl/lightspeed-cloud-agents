@@ -64,6 +64,7 @@ class PodmanSpawner(AgentSpawner):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,
@@ -71,6 +72,14 @@ class PodmanSpawner(AgentSpawner):
         tls_certs: "EphemeralCerts | None" = None,
     ) -> str:
         """Create a Podman container for the agent."""
+        if allowed_skills:
+            logger.warning(
+                "allowed_skills=%s requested for agent '%s' but PodmanSpawner has no "
+                "Landlock equivalent -- this spawner does not restrict skill visibility. "
+                "All skills baked into the sandbox image remain visible.",
+                allowed_skills,
+                agent_name,
+            )
         if credential_secret_name:
             logger.warning(
                 "K8s Secret volume mount not supported on Podman; "

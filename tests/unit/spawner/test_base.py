@@ -14,9 +14,11 @@ class MockSpawner(AgentSpawner):
         self.spawned = []
         self.destroyed = []
         self.written_files: dict[str, str] = {}
+        self.last_do_spawn_kwargs: dict = {}
 
     async def _do_spawn(self, agent_name, image, env, config=None, labels=None, **kwargs):
         self.spawned.append(agent_name)
+        self.last_do_spawn_kwargs = kwargs
         return f"http://{agent_name}:8080"
 
     async def _do_destroy(self, agent_name):
@@ -115,6 +117,30 @@ class TestAgentSpawner:
             env={"OLLAMA_URL": "http://ollama:11434/v1"},
         )
         assert endpoint == "http://test:8080"
+
+    @pytest.mark.asyncio
+    async def test_spawn_forwards_allowed_skills_to_do_spawn(self) -> None:
+        """allowed_skills passed to spawn() reaches _do_spawn() (issue #202).
+
+        Per-step skill scoping: OpenShellSpawner enforces this via a
+        Landlock read-only grant, but the parameter itself is defined on
+        the shared ABC so every spawner implementation receives it
+        uniformly, whether or not that implementation enforces it.
+        """
+        spawner = MockSpawner()
+        await spawner.spawn(
+            "test",
+            "image:latest",
+            allowed_skills=["k8s-diag", "git-ops"],
+        )
+        assert spawner.last_do_spawn_kwargs.get("allowed_skills") == ["k8s-diag", "git-ops"]
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_allowed_skills_forwards_none(self) -> None:
+        """Omitting allowed_skills forwards None -- no skills visible by default."""
+        spawner = MockSpawner()
+        await spawner.spawn("test", "image:latest")
+        assert spawner.last_do_spawn_kwargs.get("allowed_skills") is None
 
 
 class TestWaitReadyTLS:

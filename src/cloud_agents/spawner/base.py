@@ -110,6 +110,7 @@ class AgentSpawner(ABC):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,
@@ -126,6 +127,19 @@ class AgentSpawner(ABC):
             labels: Optional metadata labels for the spawned resource.
             skills_image: Optional OCI image containing skills to mount.
             skills_paths: Paths within skills image to copy.
+            allowed_skills: Optional list of skill names (subdirectories
+                under a sandbox image's /skills, baked in at build time)
+                this step's agent may read. Defined on the shared ABC so
+                every spawner receives it uniformly; only OpenShellSpawner
+                currently enforces it (via a Landlock read-only grant on
+                /skills/<name>) -- other implementations accept it but do
+                not restrict anything. None means no skills are visible,
+                but only in OpenShellSpawner's non-advisory (baseline)
+                mode -- advisory/read_only=True spawns grant blanket
+                read access to the whole filesystem for investigation
+                purposes, which already includes all of /skills
+                regardless of this parameter; this is an integrity
+                (no-write) boundary there, not a confidentiality one.
             service_account: Override ServiceAccount for this pod.
             read_only: Run container with read-only filesystem (advisory mode).
             credential_secret_name: K8s Secret to mount as volume and envFrom
@@ -156,6 +170,7 @@ class AgentSpawner(ABC):
                 labels,
                 skills_image=skills_image,
                 skills_paths=skills_paths,
+                allowed_skills=allowed_skills,
                 service_account=service_account,
                 read_only=read_only,
                 credential_secret_name=credential_secret_name,
@@ -178,6 +193,7 @@ class AgentSpawner(ABC):
         labels: dict[str, str] | None = None,
         skills_image: str | None = None,
         skills_paths: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
         service_account: str | None = None,
         read_only: bool = False,
         credential_secret_name: str | None = None,

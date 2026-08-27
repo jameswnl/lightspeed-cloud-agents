@@ -68,10 +68,7 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
                 tls_ca, tls_cert, tls_key, bearer_token, max_pods,
                 extra_readable_paths, extra_env -- used to build the
                 underlying SandboxClient (with TLS/bearer auth) and then
-                OpenShellSpawner. No `driver` param -- OpenShellSpawner
-                auto-detects the gateway's own compute driver (see
-                _detect_compute_driver()) instead of requiring a caller
-                to configure it.
+                OpenShellSpawner.
             Callers may pass a broader dict (e.g. a Pydantic model_dump())
             containing extra keys -- unrecognized keys and explicit None
             values are dropped rather than forwarded, so passing an unset

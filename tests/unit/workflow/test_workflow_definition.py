@@ -157,3 +157,34 @@ class TestWorkflowStepSpecTools:
         defn = WorkflowDefinition.model_validate(data)
         restored = WorkflowDefinition.model_validate_json(defn.model_dump_json())
         assert restored.spec.steps[0].tools == ["kubectl_get"]
+
+
+class TestWorkflowStepSpecAllowedSkills:
+    """Tests for WorkflowStepSpec.allowed_skills field (issue #202 redesign).
+
+    Per-step, unlike skills_image/skills_paths which are workflow-run-level:
+    each step names which baked-in-image skills (see
+    lightspeed-agentic-sandbox's /skills) its own agent run should have
+    Landlock read access to.
+    """
+
+    def test_allowed_skills_defaults_to_none(self) -> None:
+        """allowed_skills defaults to None (no skills) when not specified."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].allowed_skills is None
+
+    def test_allowed_skills_field_accepted(self) -> None:
+        """allowed_skills field is accepted and preserved."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        data["spec"]["steps"][0]["allowed_skills"] = ["k8s-diag", "git-ops"]
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].allowed_skills == ["k8s-diag", "git-ops"]
+
+    def test_allowed_skills_field_round_trip(self) -> None:
+        """allowed_skills field survives JSON serialization round-trip."""
+        data = yaml.safe_load(MINIMAL_WORKFLOW)
+        data["spec"]["steps"][0]["allowed_skills"] = ["cve-scan"]
+        defn = WorkflowDefinition.model_validate(data)
+        restored = WorkflowDefinition.model_validate_json(defn.model_dump_json())
+        assert restored.spec.steps[0].allowed_skills == ["cve-scan"]

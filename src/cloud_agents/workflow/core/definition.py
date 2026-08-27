@@ -25,6 +25,18 @@ class WorkflowStepSpec(BaseModel):
         condition: Optional expression — skip step if evaluates to false.
         message: Human-readable message for type=human-approval.
         timeout_seconds: Maximum seconds for this step.
+        allowed_skills: Optional list of skill names (subdirectories baked
+            into the sandbox image's /skills) this step's agent may read.
+            Unlike mcp_servers, there's no workflow-level catalog to
+            select from -- the catalog is whatever the deployed sandbox
+            image happens to bake in, unvalidated by cloud_agents.
+            Enforced via a per-spawn Landlock read-only grant on
+            /skills/<name> (see OpenShellSpawner); other spawners accept
+            but do not enforce this field. None or omitted means no
+            skills are visible -- least-privilege default, not "all" --
+            except in OpenShellSpawner's advisory (read_only) mode,
+            which grants blanket filesystem read for investigation
+            purposes regardless of this field.
     """
 
     name: str
@@ -49,6 +61,7 @@ class WorkflowStepSpec(BaseModel):
     tools: list[str] = Field(default_factory=list)
     service_account: Optional[str] = None
     target_namespaces: Optional[list[str]] = None
+    allowed_skills: Optional[list[str]] = None
 
 
 class WorkflowSpec(BaseModel):

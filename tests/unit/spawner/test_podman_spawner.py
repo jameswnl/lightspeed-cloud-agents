@@ -699,6 +699,44 @@ class TestPodmanSpawnerIdempotentTLS:
             assert endpoint == "https://agent-tls-agent:8443"
 
 
+class TestPodmanSpawnerAllowedSkills:
+    """Tests for allowed_skills on PodmanSpawner (issue #202).
+
+    PodmanSpawner has no Landlock equivalent, so it does not enforce
+    per-skill scoping -- it must simply accept the shared ABC parameter
+    without raising, logging a warning so a caller relying on scoping
+    isn't silently unprotected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spawn_with_allowed_skills_does_not_raise(self, caplog) -> None:
+        """spawn(allowed_skills=[...]) succeeds through the real ABC spawn() wrapper.
+
+        Regression test for a real gap: PodmanSpawner._do_spawn() had no
+        `allowed_skills` parameter, so AgentSpawner.spawn() (which
+        unconditionally forwards allowed_skills to _do_spawn()) would
+        raise TypeError for any caller going through the public .spawn()
+        method -- not caught by tests that call ._do_spawn() directly,
+        bypassing the ABC wrapper entirely.
+        """
+        mock_podman_client, mock_podman_module = (
+            TestPodmanSpawnerSkillsLoaderInjection._setup_podman_mocks()
+        )
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            import logging
+
+            with caplog.at_level(logging.WARNING):
+                await spawner.spawn(
+                    "allowed-skills-agent",
+                    "image:latest",
+                    allowed_skills=["k8s-diag"],
+                )
+
+        assert "allowed_skills" in caplog.text.lower()
+
+
 class TestPodmanSpawnerDestroy:
     """Tests for PodmanSpawner destroy behavior."""
 

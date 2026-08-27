@@ -389,18 +389,19 @@ spec:
 
 Steps with `spawn: none` (in-process) or `spawn: local` (subprocess) bypass the spawner entirely and are unaffected.
 
-### Skills Image (Podman driver)
+### Skills
 
-When using the Podman driver, skills are mounted as native OCI image volumes (no extraction or streaming):
+All available skills are baked into the sandbox image at build time, under `/skills/<name>/...` (see `lightspeed-agentic-sandbox`'s Containerfile) — there is no separate `skills_image` mounted or extracted at runtime (issue #202 removed that mechanism entirely). Which of the baked-in skills a given step's agent can actually read is controlled per-step via `allowed_skills`, a list of skill names:
 
-```json
-{
-  "skills_image": "quay.io/my-org/my-skills:latest",
-  "skills_paths": ["/skills"]
-}
+```yaml
+steps:
+  - name: diagnose
+    allowed_skills: ["k8s-diag"]
+    prompt: "Diagnose the issue..."
+    output_key: diagnosis
 ```
 
-The spawner configures Podman `image` mounts via `driver_config` on the `SandboxTemplate`. For the Kubernetes driver, skills are extracted locally and streamed into the sandbox via `tar` over `exec_stream`.
+`OpenShellSpawner` enforces this with a Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills` (non-advisory spawns only — advisory/`read_only=True` spawns grant blanket filesystem read for investigation purposes, which already includes everything under `/skills` regardless of this field). `KubernetesSpawner`/`PodmanSpawner` accept `allowed_skills` for interface consistency but have no Landlock equivalent, so they log a warning and do not restrict visibility.
 
 ### Credentials
 

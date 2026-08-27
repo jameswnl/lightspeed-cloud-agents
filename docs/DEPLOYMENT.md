@@ -291,6 +291,7 @@ curl -s -X POST http://localhost:8080/v1/workflows/<workflow_id>/cancel
 | `max_retries` | No | Number of retry attempts (default: 1) |
 | `parallel_group` | No | Steps sharing the same group run concurrently |
 | `mcp_servers` | No | List of MCP server names (from run request catalog) to inject into this step |
+| `allowed_skills` | No | List of skill names (baked into the sandbox image at `/skills/<name>`) this step's agent may read. OpenShellSpawner-only (Landlock-enforced); Kubernetes/Podman spawners accept but don't restrict. |
 | `spawn` | No | `ephemeral` (container, default), `local` (subprocess), `none` (LLM-only) |
 
 ### API request fields
@@ -301,7 +302,7 @@ The workflow YAML defines *what* (steps, prompts, schemas). The API request prov
 |-------|-------------|
 | `provider` | `{name, model, credentials_secret}` — LLM provider config |
 | `sandbox_image` | Container image for agent steps |
-| `skills_image` / `skills_paths` | Optional skills OCI image |
+| `skills_image` / `skills_paths` | Optional skills OCI image (Kubernetes/Podman spawners only — OpenShellSpawner ignores these, see per-step `allowed_skills` above) |
 | `mcp_servers` | MCP server catalog — `[{name, url, headers}]`. Steps reference by name. |
 | `approval_policy` | `{auto_approve_risk_levels: ["low"]}` |
 | `workflow_id` | Optional caller-supplied idempotency key |
