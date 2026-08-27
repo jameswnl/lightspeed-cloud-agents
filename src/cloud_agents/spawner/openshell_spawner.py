@@ -780,7 +780,11 @@ class OpenShellSpawner(AgentSpawner):
             # explicit caller-provided value (e.g. a different derived image's
             # PYTHONPATH) wins on collision rather than being silently
             # overridden by the spawner's own default (issue #192).
-            server_env = {**self._extra_env, **env}
+            # Filter credential keys from server_env as well -- start_server
+            # execs inside the sandbox, so env there would also expose the
+            # real credential to the sandboxed process (issue #199).
+            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
+            server_env = {**self._extra_env, **filtered_env}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
@@ -1007,8 +1011,15 @@ class OpenShellSpawner(AgentSpawner):
         SandboxSpec.providers at create time, not via a separate Attach
         call. The caller is responsible for storing the ID for cleanup.
 
-        Returns the provider ID.
+        Requires TLS (tls_ca) to avoid sending credentials over cleartext
+        gRPC (issue #199 review). In-cluster service URL with disable_tls
+        is not considered secure for credential transmission.
         """ 
+        if not self._tls_ca:
+            raise ValueError(
+                "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
+                "refusing to send credentials over insecure channel"
+            )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_create() -> str:

@@ -422,8 +422,12 @@ class TestOpenShellSpawnerSpawn:
         assert "openai-api-key" not in env_dict
         assert "sk-real-secret" not in str(env_dict)
         # But spec.providers should contain the provider ID
-        # Check providers append was called (spec is a MagicMock in tests)
-        spec.providers.append.assert_called_once_with("provider-123")
+        # Check providers: real protobuf has list, mocked spec has append mock
+        from unittest.mock import MagicMock
+        if isinstance(spec.providers, MagicMock):
+            spec.providers.append.assert_called_once_with("provider-123")
+        else:
+            assert list(spec.providers) == ["provider-123"]
         # Also ensure the spawner stored the provider ID for cleanup
         assert spawner._provider_ids["agent-1"] == "provider-123"
 
