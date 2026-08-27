@@ -319,6 +319,8 @@ class OpenShellSpawner(AgentSpawner):
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
+        # Despite the name, stores each provider's *name* (metadata.name),
+        # not its metadata.id -- see _create_provider()'s docstring.
         self._provider_ids: dict[str, str] = {}
 
     def _resolve_grpc_target(self) -> str:
@@ -1015,11 +1017,18 @@ class OpenShellSpawner(AgentSpawner):
         self,
         credentials: dict[str, str],
     ) -> str:
-        """Create an OpenShell provider and return its ID.
+        """Create an OpenShell provider and return its name.
+
+        Returns metadata.name, not metadata.id -- spec.providers,
+        AttachSandboxProvider, and DetachSandboxProvider all resolve
+        providers by name, not id (confirmed against a real gateway;
+        passing the id gets "provider '<id>' not found"). Called
+        "provider_id" at most call sites for historical reasons; it's
+        actually the provider's name.
 
         For use before sandbox creation -- the provider is attached via
         SandboxSpec.providers at create time, not via a separate Attach
-        call. The caller is responsible for storing the ID for cleanup.
+        call. The caller is responsible for storing the name for cleanup.
 
         Requires TLS (tls_ca) to avoid sending credentials over cleartext
         gRPC (issue #199 review). In-cluster service URL with disable_tls
@@ -1061,7 +1070,13 @@ class OpenShellSpawner(AgentSpawner):
                 # below), not its id -- confirmed against a real gateway that
                 # passing metadata.id here makes CreateSandbox fail with
                 # "provider '<id>' not found" even though the provider exists.
-                return create_resp.provider.metadata.name
+                name = create_resp.provider.metadata.name
+                if not name:
+                    raise RuntimeError(
+                        "Gateway returned an empty provider name from CreateProvider "
+                        "-- cannot reference this provider from spec.providers"
+                    )
+                return name
             finally:
                 channel.close()
 
@@ -1078,7 +1093,9 @@ class OpenShellSpawner(AgentSpawner):
             This post-create attach path is retained for backwards
             compatibility but now also requires TLS.
 
-        Returns the provider ID for later cleanup.
+        Returns the provider's name for later cleanup (see the matching
+        note in _create_provider() -- called "id" at most call sites for
+        historical reasons; it's actually the name).
         """
         if not self._tls_ca:
             import os as _os
@@ -1115,6 +1132,11 @@ class OpenShellSpawner(AgentSpawner):
                 # See the matching comment in _create_provider() -- attach/detach
                 # resolve providers by name, not id.
                 provider_id = create_resp.provider.metadata.name
+                if not provider_id:
+                    raise RuntimeError(
+                        "Gateway returned an empty provider name from CreateProvider "
+                        "-- cannot attach this provider to the sandbox"
+                    )
 
                 attach_req = openshell_pb2.AttachSandboxProviderRequest(
                     sandbox_name=sandbox_name,

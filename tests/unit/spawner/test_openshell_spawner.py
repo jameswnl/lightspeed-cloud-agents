@@ -2190,6 +2190,45 @@ class TestProviderResponseMessages:
         except (ImportError, ModuleNotFoundError):
             pytest.skip("openshell not installed")
 
+    @pytest.mark.asyncio
+    async def test_create_provider_returns_metadata_name_ci(self, mocker: MockerFixture) -> None:
+        """CI-runnable version of test_create_provider_returns_metadata_name.
+
+        That test skips in CI (the openshell extra isn't installed there --
+        the same gap that let #211/#213's bugs ship). This one doesn't need
+        the real package: it controls CreateProvider's return value directly
+        via mocker.patch, using types.SimpleNamespace (not MagicMock) so a
+        wrong attribute access (.provider.id instead of .provider.metadata.name)
+        raises AttributeError instead of silently returning another mock,
+        regardless of whether openshell is actually installed.
+        """
+        from types import SimpleNamespace
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        fake_response = SimpleNamespace(
+            provider=SimpleNamespace(
+                metadata=SimpleNamespace(name="provider-name-should-be-returned"),
+            ),
+        )
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.CreateProvider.return_value = fake_response
+        mocker.patch("openshell._proto.openshell_pb2.CreateProviderRequest")
+        mocker.patch("openshell._proto.datamodel_pb2.Provider")
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        result = await spawner._create_provider(credentials={"OPENAI_API_KEY": "sk-test"})
+
+        assert result == "provider-name-should-be-returned"
+
     def test_provider_request_has_workspace_field(self) -> None:
         """Regression: CreateProviderRequest must include workspace parameter.
 
