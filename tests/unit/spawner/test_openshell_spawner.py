@@ -570,7 +570,7 @@ class TestOpenShellSpawnerMaterializeAllowedSkills:
     """
 
     @staticmethod
-    def _make_spawner(mocker: MockerFixture):
+    def _make_spawner(mocker: MockerFixture, materialize_exit_code: int = 0):
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -578,6 +578,12 @@ class TestOpenShellSpawnerMaterializeAllowedSkills:
 
             def __init__(self, name):
                 self.name = name
+
+        class FakeExecResult:
+            def __init__(self, exit_code: int, stderr: str = ""):
+                self.exit_code = exit_code
+                self.stdout = ""
+                self.stderr = stderr
 
         exec_calls: list[list[str]] = []
 
@@ -587,7 +593,9 @@ class TestOpenShellSpawnerMaterializeAllowedSkills:
 
         def exec_stream(sandbox_id, command, **kwargs):
             exec_calls.append(command)
-            return iter([])
+            if command[0].endswith("materialize-skills.sh"):
+                return iter([FakeExecResult(materialize_exit_code, stderr="boom")])
+            return iter([FakeExecResult(0)])
 
         mock_client.exec_stream = exec_stream
 
@@ -693,6 +701,91 @@ class TestOpenShellSpawnerMaterializeAllowedSkills:
 
         materialize_calls = [c for c in exec_calls if c[0].endswith("materialize-skills.sh")]
         assert materialize_calls == []
+
+    @pytest.mark.asyncio
+    async def test_materialize_failure_raises_and_blocks_server_start(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A nonzero materialize-skills.sh exit aborts the spawn instead of continuing silently.
+
+        exec_stream() does not raise on a nonzero exit by itself -- without
+        an explicit check, a failed materialize (Landlock write denied, or
+        an older image predating the script entirely: ENOENT/127) would
+        leave the sandbox with no/partial skills while spawn() reported
+        success, exactly the failure mode reproduced live against a real
+        gateway before this check existed.
+        """
+        spawner, exec_calls = self._make_spawner(mocker, materialize_exit_code=1)
+
+        with pytest.raises(RuntimeError, match="materialize-skills.sh"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={},
+                allowed_skills=["k8s-diag"],
+            )
+
+        server_start_calls = [c for c in exec_calls if c[:2] == ["python3", "-m"]]
+        assert server_start_calls == []
+
+    @pytest.mark.asyncio
+    async def test_advisory_spawn_skips_materialize(self, mocker: MockerFixture) -> None:
+        """read_only=True spawns skip materialize entirely, even with allowed_skills set.
+
+        Advisory mode's own Landlock policy (_build_filesystem_policy())
+        grants blanket "/" read but no write outside a fixed set of paths
+        that doesn't include the materialize destination -- so running
+        materialize there would hit the same EACCES this class's other
+        tests guard against. Advisory already documents its blanket read
+        grant as covering all of /skills regardless of allowed_skills, so
+        skipping materialize (and listing the master _SKILLS_ROOT
+        directly -- see test_advisory_spawn_lists_skills_root) preserves
+        that semantics without needing a second write grant.
+        """
+        spawner, exec_calls = self._make_spawner(mocker)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            allowed_skills=["k8s-diag"],
+            read_only=True,
+        )
+
+        materialize_calls = [c for c in exec_calls if c[0].endswith("materialize-skills.sh")]
+        assert materialize_calls == []
+
+    @pytest.mark.asyncio
+    async def test_advisory_spawn_lists_skills_root_not_materialized_dir(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Advisory spawns point LIGHTSPEED_SKILLS_DIR at the master /skills, not /app/skills.
+
+        /app/skills is never materialized in advisory mode (see
+        test_advisory_spawn_skips_materialize), so pointing providers
+        there would make them discover zero skills -- the opposite of
+        advisory's documented "blanket read already covers all of
+        /skills" semantics.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner, _ = self._make_spawner(mocker)
+        captured_env: dict[str, str] = {}
+
+        async def capture_start_server(sandbox_name, command, env=None):
+            captured_env.update(env or {})
+
+        mocker.patch.object(spawner, "start_server", side_effect=capture_start_server)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            allowed_skills=["k8s-diag"],
+            read_only=True,
+        )
+
+        assert captured_env["LIGHTSPEED_SKILLS_DIR"] == OpenShellSpawner._SKILLS_ROOT
 
 
 class TestOpenShellSpawnerDestroy:

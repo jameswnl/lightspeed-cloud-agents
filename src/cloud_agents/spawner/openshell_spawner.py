@@ -705,7 +705,18 @@ class OpenShellSpawner(AgentSpawner):
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
 
-            if allowed_skills:
+            # Advisory (read_only=True) spawns use _build_filesystem_policy(),
+            # which grants blanket "/" read but no write outside /tmp,
+            # /home/agent, /var/log, MCP, and credentials -- not
+            # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
+            # the same EACCES this method now raises loudly for, so advisory
+            # spawns skip materialize entirely and list _SKILLS_ROOT (the
+            # master) directly below instead -- consistent with advisory
+            # mode's existing documented semantics that its blanket read
+            # grant already covers all of /skills regardless of
+            # allowed_skills, since advisory is an integrity boundary
+            # (no-write), not a confidentiality one.
+            if allowed_skills and not read_only:
                 await self._materialize_allowed_skills(sandbox_id, allowed_skills)
 
             # self._extra_env first, then the caller's own env on top, so an
@@ -713,6 +724,8 @@ class OpenShellSpawner(AgentSpawner):
             # PYTHONPATH) wins on collision rather than being silently
             # overridden by the spawner's own default (issue #192).
             server_env = {**self._extra_env, **env}
+            if read_only:
+                server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
 
             endpoint, virtual_host = await self._expose_service(
@@ -1052,17 +1065,36 @@ class OpenShellSpawner(AgentSpawner):
         _build_baseline_filesystem_policy()) because advisory-mode spawns
         use _build_filesystem_policy() instead, which never validates
         allowed_skills.
+
+        Raises:
+            RuntimeError: If materialize-skills.sh exits nonzero (e.g. the
+                Landlock write grant is missing, or an older image predates
+                the script entirely -- ENOENT/127). exec_stream() does not
+                raise on a nonzero exit by itself, so without this check a
+                failed materialize silently leaves the sandbox with no (or
+                partial) skills while spawn() reports success -- exactly
+                the failure this method exists to prevent, reproduced
+                live against a real gateway before this check was added.
         """
         self._validate_allowed_skills(allowed_skills)
 
-        def _sync_materialize() -> None:
-            for _ in self._client.exec_stream(
+        def _sync_materialize() -> Any:
+            result = None
+            for item in self._client.exec_stream(
                 sandbox_id,
                 [self._MATERIALIZE_SKILLS_SCRIPT, *allowed_skills],
             ):
-                pass
+                if hasattr(item, "exit_code"):
+                    result = item
+            return result
 
-        await asyncio.to_thread(_sync_materialize)
+        result = await asyncio.to_thread(_sync_materialize)
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"materialize-skills.sh failed for sandbox '{sandbox_id}' "
+                f"(allowed_skills={allowed_skills}): "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def start_server(
         self,
