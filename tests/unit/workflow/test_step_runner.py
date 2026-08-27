@@ -422,9 +422,11 @@ class TestRunStep:
         mock_spawner: AsyncMock,
         mock_http_success: None,
         mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Credential lookup normalizes K8s secret name to env var format."""
-        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}, clear=False)
+        """Credential is NOT placed in plain env; Provider injects placeholder (issue #199)."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        monkeypatch.delenv("openai-api-key", raising=False)
 
         from cloud_agents.workflow.core.step_runner import run_step
 
@@ -444,6 +446,6 @@ class TestRunStep:
 
         call_kwargs = mock_spawner.spawn.call_args[1]
         env = call_kwargs["env"]
-        assert "OPENAI_API_KEY" in env
-        assert env["OPENAI_API_KEY"] == "sk-test-key"
+        assert "OPENAI_API_KEY" not in env
         assert "openai-api-key" not in env
+        assert call_kwargs["credential_secret_name"] == "openai-api-key"

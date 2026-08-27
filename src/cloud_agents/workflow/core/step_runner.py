@@ -209,8 +209,13 @@ async def _run_step_inner(
         env_key = cred_secret.upper().replace("-", "_")
         cred_val = os.environ.get(env_key) or os.environ.get(cred_secret)
         if cred_val:
-            env_vars[env_key] = cred_val
             secret_values.add(cred_val)
+            # Do NOT add to env_vars -- OpenShell's Provider system injects
+            # a placeholder (openshell:resolve:env:...) via spec.providers;
+            # putting the real value in spec.environment would expose it
+            # directly to the sandboxed process (issue #199). PodmanSpawner
+            # pulls the credential directly from os.environ at spawn time,
+            # and Kubernetes uses Secret mounts, so neither needs it here.
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []

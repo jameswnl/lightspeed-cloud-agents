@@ -81,12 +81,29 @@ class PodmanSpawner(AgentSpawner):
                 agent_name,
             )
         if credential_secret_name:
-            logger.warning(
-                "K8s Secret volume mount not supported on Podman; "
-                "credential_secret_name '%s' will be ignored for '%s'",
-                credential_secret_name,
-                agent_name,
+            # For Podman there is no K8s Secret mount -- the credential must
+            # be injected as a plain env var. Pull it directly from the
+            # runner's own environment (mirroring how OpenShell/K8s each
+            # handle credentials on their own path) instead of relying on
+            # the shared step_runner env_vars, which intentionally omits
+            # the real value to avoid exposing it via K8s PodSpec
+            # (issue #199, PR review 5044152808).
+            env_key = credential_secret_name.upper().replace("-", "_")
+            cred_val = (
+                env.get(env_key)
+                or env.get(credential_secret_name)
+                or __import__("os").environ.get(env_key)
+                or __import__("os").environ.get(credential_secret_name)
             )
+            if cred_val:
+                env[env_key] = cred_val
+            else:
+                logger.warning(
+                    "Credential '%s' not found in env for Podman container '%s' -- "
+                    "container will start without LLM credentials",
+                    credential_secret_name,
+                    agent_name,
+                )
         if mcp_secret_mounts:
             raise ValueError(
                 f"Secret-based MCP headers are not supported on Podman. "

@@ -660,14 +660,73 @@ class OpenShellSpawner(AgentSpawner):
 
         sandbox_name = f"ca-agent-{agent_name}"
 
+        # --- Credential handling (issue #199): create Provider BEFORE sandbox creation ---
+        # The real credential must never be placed in spec.environment; OpenShell's
+        # Provider system will inject a placeholder (openshell:resolve:env:...)
+        # via spec.providers and resolve it only inside the supervisor's proxy.
+        # We create the Provider here, before the sandbox exists, and attach
+        # via spec.providers at create time. The credential value is fetched
+        # from the runner's own environment (not from the caller's env dict,
+        # which no longer contains it after step_runner fix) or from env dict
+        # as fallback for tests that pass it explicitly.
+        provider_id: str | None = None
+        if credential_secret_name:
+            # Resolve credential value: try env dict first (for tests), then os.environ
+            original_key = credential_secret_name.upper().replace("-", "_")
+            cred_value = (
+                env.get(credential_secret_name)
+                or env.get(original_key)
+                or os.environ.get(original_key)
+                or os.environ.get(credential_secret_name)
+            )
+            if not cred_value:
+                raise RuntimeError(
+                    f"Credential '{credential_secret_name}' not found in env "
+                    f"for sandbox '{sandbox_name}' — cannot start agent without credentials"
+                )
+            # Do not let the real credential leak into spec.environment even
+            # if the caller mistakenly included it in env dict
+            # (defense in depth for pre-fix callers)
+            # Filter it out when populating spec.environment below
+            try:
+                # Use the uppercased env var name as the credential key
+                # (e.g., OPENAI_API_KEY) since the agent reads that env var
+                # and the placeholder is openshell:resolve:env:OPENAI_API_KEY
+                env_cred_key = credential_secret_name.upper().replace("-", "_")
+                provider_id = await self._create_provider(
+                    credentials={env_cred_key: cred_value},
+                )
+                self._provider_ids[agent_name] = provider_id
+                logger.info(
+                    "Created credential provider '%s' for sandbox '%s'",
+                    provider_id,
+                    sandbox_name,
+                )
+            except Exception:
+                logger.warning(
+                    "Provider creation failed for '%s' — failing spawn (no file fallback)",
+                    sandbox_name,
+                    exc_info=True,
+                )
+                raise
+
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
                 image=image,
                 labels=labels or {},
             )
         )
+        # Filter credential keys from environment to avoid direct exposure
+        cred_keys = set()
+        if credential_secret_name:
+            cred_keys.add(credential_secret_name)
+            cred_keys.add(credential_secret_name.upper().replace("-", "_"))
         for key, value in env.items():
+            if key in cred_keys:
+                continue
             spec.environment[key] = value
+        if provider_id:
+            spec.providers.append(provider_id)
 
         self._build_network_policy(spec, env)
 
@@ -676,17 +735,18 @@ class OpenShellSpawner(AgentSpawner):
         else:
             self._build_baseline_filesystem_policy(spec, allowed_skills=allowed_skills)
 
-        sandbox_ref = await asyncio.to_thread(
-            self._client.create,
-            workspace=self._workspace,
-            spec=spec,
-        )
-        sandbox_name = sandbox_ref.name
-        sandbox_id = sandbox_ref.id
-        self._sandbox_names[agent_name] = sandbox_name
-        self._sandbox_ids[agent_name] = sandbox_id
-
         try:
+            sandbox_ref = await asyncio.to_thread(
+                self._client.create,
+                workspace=self._workspace,
+                spec=spec,
+            )
+            sandbox_name = sandbox_ref.name
+            sandbox_id = sandbox_ref.id
+            self._sandbox_names[agent_name] = sandbox_name
+            self._sandbox_ids[agent_name] = sandbox_id
+
+
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
@@ -694,13 +754,11 @@ class OpenShellSpawner(AgentSpawner):
                 timeout_seconds=300,
             )
 
-            if credential_secret_name:
-                await self._inject_credentials(
-                    agent_name,
-                    sandbox_name,
-                    credential_secret_name,
-                    env,
-                )
+            # Credential Provider already created and attached via spec.providers
+            # before sandbox creation (see above) -- no post-create injection needed.
+            # The old _inject_credentials path (CreateProvider + Attach after
+            # wait_ready with real env) is removed to avoid exposing the real
+            # credential in spec.environment (issue #199).
 
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
@@ -723,7 +781,11 @@ class OpenShellSpawner(AgentSpawner):
             # explicit caller-provided value (e.g. a different derived image's
             # PYTHONPATH) wins on collision rather than being silently
             # overridden by the spawner's own default (issue #192).
-            server_env = {**self._extra_env, **env}
+            # Filter credential keys from server_env as well -- start_server
+            # execs inside the sandbox, so env there would also expose the
+            # real credential to the sandboxed process (issue #199).
+            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
+            server_env = {**self._extra_env, **filtered_env}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
@@ -749,6 +811,16 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
                 exc_info=True,
             )
+            # If provider was created before sandbox creation and sandbox creation failed,
+            # the provider will be leaked since _cleanup_sandbox only detaches if sandbox exists.
+            # Clean up the provider explicitly if it was created.
+            if provider_id and agent_name in self._provider_ids:
+                try:
+                    await self._delete_provider(provider_id)
+                    self._provider_ids.pop(agent_name, None)
+                    logger.info("Cleaned up orphaned provider '%s' after failed create", provider_id)
+                except Exception:
+                    logger.warning("Failed to delete orphaned provider '%s'", provider_id, exc_info=True)
             await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
@@ -879,8 +951,11 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Inject LLM credentials into the sandbox via Provider API.
 
-        Uses the OpenShell Provider system for gateway-managed credentials.
-        Falls back to file-based injection if Provider RPCs fail.
+        .. deprecated:: This post-create path is deprecated. Credentials
+            are now injected via spec.providers at sandbox creation time
+            (see _do_spawn). This method is retained for backwards
+            compatibility in tests but should not be used for new code.
+            It no longer falls back to file injection with real values.
         """
         # credential_secret_name may be K8s-normalized (e.g. "openai-api-key")
         # while the env dict has the original key (e.g. "OPENAI_API_KEY").
@@ -907,16 +982,13 @@ class OpenShellSpawner(AgentSpawner):
                 sandbox_name,
             )
         except Exception:
-            logger.warning(
-                "Provider API failed for '%s' — falling back to file injection",
+            logger.error(
+                "Provider API failed for '%s' — not falling back to file injection "
+                "(file fallback would expose real credential; failing spawn)",
                 sandbox_name,
                 exc_info=True,
             )
-            await self._inject_credentials_via_files(
-                agent_name,
-                credential_secret_name,
-                cred_value,
-            )
+            raise
 
     async def _inject_credentials_via_files(
         self,
@@ -926,19 +998,64 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Write credential files to the sandbox filesystem.
 
-        Handles both API-key providers (env var only) and file-backed
-        providers like Vertex (GOOGLE_APPLICATION_CREDENTIALS).
-        """
-        cred_dir = "/var/run/secrets/llm-credentials"
-        sandbox_id = self._sandbox_ids[agent_name]
-        await self._exec_mkdir(sandbox_id, cred_dir)
-        file_path = f"{cred_dir}/{credential_secret_name}"
-        await self._do_write_file(agent_name, file_path, cred_value)
-        logger.info(
-            "Injected credential file '%s' into sandbox for agent '%s'",
-            file_path,
-            agent_name,
+        .. deprecated:: This method would write the raw credential value
+            directly into a sandbox-readable file, exposing it to the
+            sandboxed process (issue #199). It is retained for backwards
+            compatibility but now raises instead of writing.
+        """ 
+        raise RuntimeError(
+            "_inject_credentials_via_files is deprecated -- credentials are now "
+            "injected via Provider placeholder, not via files with real values"
         )
+
+    async def _create_provider(
+        self,
+        credentials: dict[str, str],
+    ) -> str:
+        """Create an OpenShell provider and return its ID.
+
+        For use before sandbox creation -- the provider is attached via
+        SandboxSpec.providers at create time, not via a separate Attach
+        call. The caller is responsible for storing the ID for cleanup.
+
+        Requires TLS (tls_ca) to avoid sending credentials over cleartext
+        gRPC (issue #199 review). In-cluster service URL with disable_tls
+        is not considered secure for credential transmission.
+        """ 
+        if not self._tls_ca:
+            import os as _os
+            # Fail-closed by default: credentials must not be sent over
+            # cleartext gRPC. Opt *in* to insecure for local Kind via
+            # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
+            if _os.environ.get("OPENSHELL_ALLOW_INSECURE_CREDENTIALS") != "1":
+                raise ValueError(
+                    "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
+                    "refusing to send credentials over insecure channel. "
+                    "Set OPENSHELL_TLS_CA for TLS, or "
+                    "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
+                )
+            logger.warning(
+                "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
+                "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
+            )
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_create() -> str:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                create_req = openshell_pb2.CreateProviderRequest(
+                    provider=openshell_pb2.Provider(
+                        type="cloud-agents",
+                        credentials=credentials,
+                    ),
+                )
+                create_resp = stub.CreateProvider(create_req)
+                return create_resp.provider.id
+            finally:
+                channel.close()
+
+        return await asyncio.to_thread(_sync_create)
 
     async def _create_and_attach_provider(
         self,
@@ -947,8 +1064,28 @@ class OpenShellSpawner(AgentSpawner):
     ) -> str:
         """Create an OpenShell provider and attach it to a sandbox.
 
+        .. deprecated:: Use _create_provider with spec.providers instead.
+            This post-create attach path is retained for backwards
+            compatibility but now also requires TLS.
+
         Returns the provider ID for later cleanup.
-        """
+        """ 
+        if not self._tls_ca:
+            import os as _os
+            # Fail-closed by default: credentials must not be sent over
+            # cleartext gRPC. Opt *in* to insecure for local Kind via
+            # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
+            if _os.environ.get("OPENSHELL_ALLOW_INSECURE_CREDENTIALS") != "1":
+                raise ValueError(
+                    "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
+                    "refusing to send credentials over insecure channel. "
+                    "Set OPENSHELL_TLS_CA for TLS, or "
+                    "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
+                )
+            logger.warning(
+                "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
+                "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
+            )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_provider() -> str:
@@ -975,6 +1112,26 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         return await asyncio.to_thread(_sync_provider)
+
+    async def _delete_provider(
+        self,
+        provider_id: str,
+    ) -> None:
+        """Delete a provider (for cleanup of orphaned providers).""" 
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_delete() -> None:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                req = openshell_pb2.DeleteProviderRequest(
+                    provider=provider_id,
+                )
+                stub.DeleteProvider(req)
+            finally:
+                channel.close()
+
+        await asyncio.to_thread(_sync_delete)
 
     async def _detach_provider(
         self,
