@@ -400,6 +400,7 @@ class TestOpenShellSpawnerSpawn:
 
         # Mock provider creation to return a fake provider ID
         mock_create_provider = mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mock_start_server = mocker.patch.object(spawner, "start_server", return_value=None)
         # Ensure credential value is available via os.environ
         mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
 
@@ -430,6 +431,20 @@ class TestOpenShellSpawnerSpawn:
             assert list(spec.providers) == ["provider-123"]
         # Also ensure the spawner stored the provider ID for cleanup
         assert spawner._provider_ids["agent-1"] == "provider-123"
+        # Verify start_server env also does not contain real credential (issue #199)
+        assert mock_start_server.called
+        _, start_kwargs = mock_start_server.call_args
+        start_env = start_kwargs.get("env", {})
+        assert "OPENAI_API_KEY" not in start_env
+        assert "openai-api-key" not in start_env
+        assert "sk-real-secret" not in str(start_env)
+        # Verify start_server env also does not contain real credential (issue #199)
+        assert mock_start_server.called
+        _, start_kwargs = mock_start_server.call_args
+        start_env = start_kwargs.get("env", {})
+        assert "OPENAI_API_KEY" not in start_env
+        assert "openai-api-key" not in start_env
+        assert "[REDACTED]" not in str(start_env)
 
     @pytest.mark.asyncio
     async def test_spawn_passes_env_to_sandbox(self, mocker: MockerFixture) -> None:

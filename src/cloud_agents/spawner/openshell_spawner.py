@@ -735,17 +735,18 @@ class OpenShellSpawner(AgentSpawner):
         else:
             self._build_baseline_filesystem_policy(spec, allowed_skills=allowed_skills)
 
-        sandbox_ref = await asyncio.to_thread(
-            self._client.create,
-            workspace=self._workspace,
-            spec=spec,
-        )
-        sandbox_name = sandbox_ref.name
-        sandbox_id = sandbox_ref.id
-        self._sandbox_names[agent_name] = sandbox_name
-        self._sandbox_ids[agent_name] = sandbox_id
-
         try:
+            sandbox_ref = await asyncio.to_thread(
+                self._client.create,
+                workspace=self._workspace,
+                spec=spec,
+            )
+            sandbox_name = sandbox_ref.name
+            sandbox_id = sandbox_ref.id
+            self._sandbox_names[agent_name] = sandbox_name
+            self._sandbox_ids[agent_name] = sandbox_id
+
+
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
@@ -1006,16 +1007,6 @@ class OpenShellSpawner(AgentSpawner):
             "_inject_credentials_via_files is deprecated -- credentials are now "
             "injected via Provider placeholder, not via files with real values"
         )
-        cred_dir = "/var/run/secrets/llm-credentials"
-        sandbox_id = self._sandbox_ids[agent_name]
-        await self._exec_mkdir(sandbox_id, cred_dir)
-        file_path = f"{cred_dir}/{credential_secret_name}"
-        await self._do_write_file(agent_name, file_path, cred_value)
-        logger.info(
-            "Injected credential file '%s' into sandbox for agent '%s'",
-            file_path,
-            agent_name,
-        )
 
     async def _create_provider(
         self,
@@ -1032,21 +1023,20 @@ class OpenShellSpawner(AgentSpawner):
         is not considered secure for credential transmission.
         """ 
         if not self._tls_ca:
-            # In production, credentials must not be sent over insecure gRPC.
-            # For local Kind / HTTP gateways (disable_tls=true), the gateway
-            # is in-cluster and not exposed, but we still warn.
-            # Fail-closed for prod is right; for local, allow with warning
-            # and document that e2e Kind needs TLS setup or will go dark.
             import os as _os
-            if _os.environ.get("ENVIRONMENT", "").lower() == "prod" or _os.environ.get("OPENSHELL_REQUIRE_TLS", "").lower() == "true":
+            # Fail-closed by default: credentials must not be sent over
+            # cleartext gRPC. Opt *in* to insecure for local Kind via
+            # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
+            if _os.environ.get("OPENSHELL_ALLOW_INSECURE_CREDENTIALS") != "1":
                 raise ValueError(
                     "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
-                    "refusing to send credentials over insecure channel"
+                    "refusing to send credentials over insecure channel. "
+                    "Set OPENSHELL_TLS_CA for TLS, or "
+                    "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
                 )
             logger.warning(
                 "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
-                "credential will be sent over insecure channel. Set "
-                "OPENSHELL_TLS_CA for production or OPENSHELL_REQUIRE_TLS=true to enforce."
+                "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
             )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
@@ -1082,15 +1072,19 @@ class OpenShellSpawner(AgentSpawner):
         """ 
         if not self._tls_ca:
             import os as _os
-            if _os.environ.get("ENVIRONMENT", "").lower() == "prod" or _os.environ.get("OPENSHELL_REQUIRE_TLS", "").lower() == "true":
+            # Fail-closed by default: credentials must not be sent over
+            # cleartext gRPC. Opt *in* to insecure for local Kind via
+            # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
+            if _os.environ.get("OPENSHELL_ALLOW_INSECURE_CREDENTIALS") != "1":
                 raise ValueError(
                     "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
-                    "refusing to send credentials over insecure channel"
+                    "refusing to send credentials over insecure channel. "
+                    "Set OPENSHELL_TLS_CA for TLS, or "
+                    "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
                 )
-            import logging as _logging
             _logging.getLogger(__name__).warning(
                 "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
-                "credential will be sent over insecure channel."
+                "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
             )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
