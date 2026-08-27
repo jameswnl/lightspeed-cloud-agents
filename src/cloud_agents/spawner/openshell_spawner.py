@@ -810,6 +810,16 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
                 exc_info=True,
             )
+            # If provider was created before sandbox creation and sandbox creation failed,
+            # the provider will be leaked since _cleanup_sandbox only detaches if sandbox exists.
+            # Clean up the provider explicitly if it was created.
+            if provider_id and agent_name in self._provider_ids:
+                try:
+                    await self._delete_provider(provider_id)
+                    self._provider_ids.pop(agent_name, None)
+                    logger.info("Cleaned up orphaned provider '%s' after failed create", provider_id)
+                except Exception:
+                    logger.warning("Failed to delete orphaned provider '%s'", provider_id, exc_info=True)
             await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
@@ -987,9 +997,15 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Write credential files to the sandbox filesystem.
 
-        Handles both API-key providers (env var only) and file-backed
-        providers like Vertex (GOOGLE_APPLICATION_CREDENTIALS).
-        """
+        .. deprecated:: This method would write the raw credential value
+            directly into a sandbox-readable file, exposing it to the
+            sandboxed process (issue #199). It is retained for backwards
+            compatibility but now raises instead of writing.
+        """ 
+        raise RuntimeError(
+            "_inject_credentials_via_files is deprecated -- credentials are now "
+            "injected via Provider placeholder, not via files with real values"
+        )
         cred_dir = "/var/run/secrets/llm-credentials"
         sandbox_id = self._sandbox_ids[agent_name]
         await self._exec_mkdir(sandbox_id, cred_dir)
@@ -1016,9 +1032,21 @@ class OpenShellSpawner(AgentSpawner):
         is not considered secure for credential transmission.
         """ 
         if not self._tls_ca:
-            raise ValueError(
-                "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
-                "refusing to send credentials over insecure channel"
+            # In production, credentials must not be sent over insecure gRPC.
+            # For local Kind / HTTP gateways (disable_tls=true), the gateway
+            # is in-cluster and not exposed, but we still warn.
+            # Fail-closed for prod is right; for local, allow with warning
+            # and document that e2e Kind needs TLS setup or will go dark.
+            import os as _os
+            if _os.environ.get("ENVIRONMENT", "").lower() == "prod" or _os.environ.get("OPENSHELL_REQUIRE_TLS", "").lower() == "true":
+                raise ValueError(
+                    "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
+                    "refusing to send credentials over insecure channel"
+                )
+            logger.warning(
+                "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
+                "credential will be sent over insecure channel. Set "
+                "OPENSHELL_TLS_CA for production or OPENSHELL_REQUIRE_TLS=true to enforce."
             )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
@@ -1046,8 +1074,24 @@ class OpenShellSpawner(AgentSpawner):
     ) -> str:
         """Create an OpenShell provider and attach it to a sandbox.
 
+        .. deprecated:: Use _create_provider with spec.providers instead.
+            This post-create attach path is retained for backwards
+            compatibility but now also requires TLS.
+
         Returns the provider ID for later cleanup.
-        """
+        """ 
+        if not self._tls_ca:
+            import os as _os
+            if _os.environ.get("ENVIRONMENT", "").lower() == "prod" or _os.environ.get("OPENSHELL_REQUIRE_TLS", "").lower() == "true":
+                raise ValueError(
+                    "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
+                    "refusing to send credentials over insecure channel"
+                )
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
+                "credential will be sent over insecure channel."
+            )
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_provider() -> str:
@@ -1074,6 +1118,26 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         return await asyncio.to_thread(_sync_provider)
+
+    async def _delete_provider(
+        self,
+        provider_id: str,
+    ) -> None:
+        """Delete a provider (for cleanup of orphaned providers).""" 
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_delete() -> None:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                req = openshell_pb2.DeleteProviderRequest(
+                    provider=provider_id,
+                )
+                stub.DeleteProvider(req)
+            finally:
+                channel.close()
+
+        await asyncio.to_thread(_sync_delete)
 
     async def _detach_provider(
         self,
