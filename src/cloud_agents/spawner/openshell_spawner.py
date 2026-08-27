@@ -746,7 +746,6 @@ class OpenShellSpawner(AgentSpawner):
             self._sandbox_names[agent_name] = sandbox_name
             self._sandbox_ids[agent_name] = sandbox_id
 
-
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
@@ -818,9 +817,13 @@ class OpenShellSpawner(AgentSpawner):
                 try:
                     await self._delete_provider(provider_id)
                     self._provider_ids.pop(agent_name, None)
-                    logger.info("Cleaned up orphaned provider '%s' after failed create", provider_id)
+                    logger.info(
+                        "Cleaned up orphaned provider '%s' after failed create", provider_id
+                    )
                 except Exception:
-                    logger.warning("Failed to delete orphaned provider '%s'", provider_id, exc_info=True)
+                    logger.warning(
+                        "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
+                    )
             await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
@@ -1002,7 +1005,7 @@ class OpenShellSpawner(AgentSpawner):
             directly into a sandbox-readable file, exposing it to the
             sandboxed process (issue #199). It is retained for backwards
             compatibility but now raises instead of writing.
-        """ 
+        """
         raise RuntimeError(
             "_inject_credentials_via_files is deprecated -- credentials are now "
             "injected via Provider placeholder, not via files with real values"
@@ -1021,9 +1024,10 @@ class OpenShellSpawner(AgentSpawner):
         Requires TLS (tls_ca) to avoid sending credentials over cleartext
         gRPC (issue #199 review). In-cluster service URL with disable_tls
         is not considered secure for credential transmission.
-        """ 
+        """
         if not self._tls_ca:
             import os as _os
+
             # Fail-closed by default: credentials must not be sent over
             # cleartext gRPC. Opt *in* to insecure for local Kind via
             # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
@@ -1045,13 +1049,14 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 create_req = openshell_pb2.CreateProviderRequest(
+                    workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                return create_resp.provider.id
+                return create_resp.provider.metadata.id
             finally:
                 channel.close()
 
@@ -1069,9 +1074,10 @@ class OpenShellSpawner(AgentSpawner):
             compatibility but now also requires TLS.
 
         Returns the provider ID for later cleanup.
-        """ 
+        """
         if not self._tls_ca:
             import os as _os
+
             # Fail-closed by default: credentials must not be sent over
             # cleartext gRPC. Opt *in* to insecure for local Kind via
             # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
@@ -1094,17 +1100,19 @@ class OpenShellSpawner(AgentSpawner):
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
 
                 create_req = openshell_pb2.CreateProviderRequest(
+                    workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                provider_id = create_resp.provider.id
+                provider_id = create_resp.provider.metadata.id
 
                 attach_req = openshell_pb2.AttachSandboxProviderRequest(
-                    sandbox=sandbox_name,
-                    provider=provider_id,
+                    sandbox_name=sandbox_name,
+                    provider_name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.AttachSandboxProvider(attach_req)
                 return provider_id
@@ -1117,7 +1125,7 @@ class OpenShellSpawner(AgentSpawner):
         self,
         provider_id: str,
     ) -> None:
-        """Delete a provider (for cleanup of orphaned providers).""" 
+        """Delete a provider (for cleanup of orphaned providers)."""
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_delete() -> None:
@@ -1125,7 +1133,8 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 req = openshell_pb2.DeleteProviderRequest(
-                    provider=provider_id,
+                    name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.DeleteProvider(req)
             finally:
@@ -1146,8 +1155,9 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 req = openshell_pb2.DetachSandboxProviderRequest(
-                    sandbox=sandbox_name,
-                    provider=provider_id,
+                    sandbox_name=sandbox_name,
+                    provider_name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.DetachSandboxProvider(req)
             finally:
