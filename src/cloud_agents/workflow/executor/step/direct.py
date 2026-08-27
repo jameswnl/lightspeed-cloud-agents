@@ -351,7 +351,7 @@ class DirectExecutor(StepExecutor):
         start_ms = time.monotonic_ns() // 1_000_000
 
         try:
-            skills_cap = get_skills_capability()
+            skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
             has_conversation = _has_conversation_context(step_input.context)
             if step_input.tools or step_input.mcp_servers or skills_cap or has_conversation:
                 return await self._run_with_agent(step_input, start_ms, skills_cap=skills_cap)
@@ -394,7 +394,8 @@ class DirectExecutor(StepExecutor):
             StreamEvent instances (token deltas followed by complete/error).
         """
         has_conversation = _has_conversation_context(step_input.context)
-        if not (step_input.tools or step_input.mcp_servers or has_conversation):
+        skills_cap_probe = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
+        if not (step_input.tools or step_input.mcp_servers or skills_cap_probe or has_conversation):
             async for event in super().run_stream(step_input):
                 yield event
             return
@@ -439,7 +440,7 @@ class DirectExecutor(StepExecutor):
                     active_toolsets.append(active_ts)
 
                 capabilities = []
-                skills_cap = get_skills_capability()
+                skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
                 if skills_cap:
                     capabilities.append(skills_cap)
 
@@ -560,7 +561,7 @@ class DirectExecutor(StepExecutor):
             # Build capabilities
             capabilities = []
             if skills_cap is None:
-                skills_cap = get_skills_capability()
+                skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
             if skills_cap:
                 capabilities.append(skills_cap)
 

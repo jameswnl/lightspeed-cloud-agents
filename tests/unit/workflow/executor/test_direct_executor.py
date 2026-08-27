@@ -873,6 +873,7 @@ class TestDirectExecutorWithTools:
                 prompt="test",
                 provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
                 tools=["kubectl_get"],
+                allowed_skills=["k8s-diag"],
             )
         )
 
@@ -1830,6 +1831,7 @@ class TestDirectExecutorWithSkills:
                 prompt="test",
                 provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
                 tools=["kubectl_get"],
+                allowed_skills=["k8s-diag"],
             )
         )
 
@@ -1873,6 +1875,7 @@ class TestDirectExecutorWithSkills:
             StepInput(
                 prompt="Use a skill to answer",
                 provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                allowed_skills=["k8s-diag"],
             )
         )
 
@@ -1923,6 +1926,7 @@ class TestDirectExecutorWithSkills:
                 prompt="test",
                 provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
                 tools=["kubectl_get"],
+                allowed_skills=["k8s-diag"],
             )
         )
 
@@ -1984,6 +1988,7 @@ class TestDirectExecutorWithSkills:
                 mcp_servers=[
                     {"name": "kubectl", "url": "http://mcp-kubectl:8080/sse"},
                 ],
+                allowed_skills=["k8s-diag"],
             )
         )
 

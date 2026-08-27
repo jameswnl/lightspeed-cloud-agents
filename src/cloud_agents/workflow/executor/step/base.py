@@ -68,6 +68,7 @@ class StepInput:
     sandbox_image: str = "sandbox:latest"
     skills_image: Optional[str] = None
     skills_paths: Optional[list[str]] = None
+    allowed_skills: Optional[list[str]] = None
     mcp_servers: Optional[list[dict[str, Any]]] = None
     workflow_id: str = ""
     step_name: str = ""

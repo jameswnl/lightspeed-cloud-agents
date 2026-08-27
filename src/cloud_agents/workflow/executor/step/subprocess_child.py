@@ -72,8 +72,9 @@ async def _run(input_data: dict[str, Any]) -> dict[str, Any]:
     """
     tool_names = input_data.get("tools", [])
     mcp_servers = input_data.get("mcp_servers") or []
+    allowed_skills = input_data.get("allowed_skills")
 
-    skills_cap = get_skills_capability()
+    skills_cap = get_skills_capability(include=allowed_skills) if allowed_skills is not None else None
     if tool_names or mcp_servers or skills_cap:
         return await _run_with_agent(input_data, tool_names)
     return await _run_model_request(input_data)
@@ -204,7 +205,7 @@ async def _run_with_agent(input_data: dict[str, Any], tool_names: list[str]) -> 
 
         # Build capabilities
         capabilities = []
-        skills_cap = get_skills_capability()
+        skills_cap = get_skills_capability(include=input_data.get("allowed_skills")) if input_data.get("allowed_skills") is not None else None
         if skills_cap:
             capabilities.append(skills_cap)
 

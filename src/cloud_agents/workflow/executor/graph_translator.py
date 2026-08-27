@@ -278,6 +278,7 @@ def _build_agent_step(
             sandbox_image=state.sandbox_image,
             skills_image=state.skills_image,
             skills_paths=state.skills_paths,
+            allowed_skills=step_def.get("allowed_skills"),
             mcp_servers=state.mcp_servers,
             workflow_id=state.workflow_id,
             raw_step=step_def,
