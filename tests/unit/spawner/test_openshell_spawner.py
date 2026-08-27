@@ -376,6 +376,58 @@ class TestOpenShellSpawnerSpawn:
         mock_client.wait_ready.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_spawn_with_credential_does_not_expose_real_value(self, mocker: MockerFixture) -> None:
+        """Credential via Provider: real value NOT in spec.environment, placeholder via providers (issue #199)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(spawner, "_expose_service", return_value=("http://gateway:17670", "sandbox.openshell.localhost"))
+        async def mock_ready(*args, **kwargs):
+            return True
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(OpenShellSpawner, "_build_baseline_filesystem_policy")
+
+        # Mock provider creation to return a fake provider ID
+        mock_create_provider = mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        # Ensure credential value is available via os.environ
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        endpoint = await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"LIGHTSPEED_PROVIDER": "openai", "OPENAI_API_KEY": "sk-real-secret"},
+            credential_secret_name="openai-api-key",
+        )
+
+        assert endpoint == "http://gateway:17670"
+        # Provider should be created with the real credential (env var name, uppercased)
+        mock_create_provider.assert_called_once_with(credentials={"OPENAI_API_KEY": "sk-real-secret"})
+        # Check that spec.environment does NOT contain the real credential
+        create_kwargs = mock_client.create.call_args[1]
+        spec = create_kwargs["spec"]
+        # spec.environment is a proto map, check via dict
+        env_dict = dict(spec.environment)
+        assert "OPENAI_API_KEY" not in env_dict
+        assert "openai-api-key" not in env_dict
+        assert "sk-real-secret" not in str(env_dict)
+        # But spec.providers should contain the provider ID
+        # Check providers append was called (spec is a MagicMock in tests)
+        spec.providers.append.assert_called_once_with("provider-123")
+        # Also ensure the spawner stored the provider ID for cleanup
+        assert spawner._provider_ids["agent-1"] == "provider-123"
+
+    @pytest.mark.asyncio
     async def test_spawn_passes_env_to_sandbox(self, mocker: MockerFixture) -> None:
         """_do_spawn passes environment variables to sandbox creation."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
@@ -1915,8 +1967,8 @@ class TestCredentialInjection:
         assert spawner._provider_ids["agent-1"] == "provider-123"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_file_injection(self, mocker: MockerFixture) -> None:
-        """Falls back to file injection when Provider API fails."""
+    async def test_provider_failure_does_not_fallback_to_file(self, mocker: MockerFixture) -> None:
+        """Provider failure no longer falls back to file injection (issue #199)."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
@@ -1933,18 +1985,15 @@ class TestCredentialInjection:
             "_inject_credentials_via_files",
         )
 
-        await spawner._inject_credentials(
-            "agent-1",
-            "sb-1",
-            "OPENAI_API_KEY",
-            {"OPENAI_API_KEY": "sk-test"},
-        )
+        with pytest.raises(Exception, match="gRPC unavailable"):
+            await spawner._inject_credentials(
+                "agent-1",
+                "sb-1",
+                "OPENAI_API_KEY",
+                {"OPENAI_API_KEY": "sk-test"},
+            )
 
-        mock_file_inject.assert_called_once_with(
-            "agent-1",
-            "OPENAI_API_KEY",
-            "sk-test",
-        )
+        mock_file_inject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_raises_when_credential_not_in_env(self, mocker: MockerFixture) -> None:

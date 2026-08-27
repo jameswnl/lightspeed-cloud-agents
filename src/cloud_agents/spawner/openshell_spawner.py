@@ -660,14 +660,73 @@ class OpenShellSpawner(AgentSpawner):
 
         sandbox_name = f"ca-agent-{agent_name}"
 
+        # --- Credential handling (issue #199): create Provider BEFORE sandbox creation ---
+        # The real credential must never be placed in spec.environment; OpenShell's
+        # Provider system will inject a placeholder (openshell:resolve:env:...)
+        # via spec.providers and resolve it only inside the supervisor's proxy.
+        # We create the Provider here, before the sandbox exists, and attach
+        # via spec.providers at create time. The credential value is fetched
+        # from the runner's own environment (not from the caller's env dict,
+        # which no longer contains it after step_runner fix) or from env dict
+        # as fallback for tests that pass it explicitly.
+        provider_id: str | None = None
+        if credential_secret_name:
+            # Resolve credential value: try env dict first (for tests), then os.environ
+            original_key = credential_secret_name.upper().replace("-", "_")
+            cred_value = (
+                env.get(credential_secret_name)
+                or env.get(original_key)
+                or os.environ.get(original_key)
+                or os.environ.get(credential_secret_name)
+            )
+            if not cred_value:
+                raise RuntimeError(
+                    f"Credential '{credential_secret_name}' not found in env "
+                    f"for sandbox '{sandbox_name}' — cannot start agent without credentials"
+                )
+            # Do not let the real credential leak into spec.environment even
+            # if the caller mistakenly included it in env dict
+            # (defense in depth for pre-fix callers)
+            # Filter it out when populating spec.environment below
+            try:
+                # Use the uppercased env var name as the credential key
+                # (e.g., OPENAI_API_KEY) since the agent reads that env var
+                # and the placeholder is openshell:resolve:env:OPENAI_API_KEY
+                env_cred_key = credential_secret_name.upper().replace("-", "_")
+                provider_id = await self._create_provider(
+                    credentials={env_cred_key: cred_value},
+                )
+                self._provider_ids[agent_name] = provider_id
+                logger.info(
+                    "Created credential provider '%s' for sandbox '%s'",
+                    provider_id,
+                    sandbox_name,
+                )
+            except Exception:
+                logger.warning(
+                    "Provider creation failed for '%s' — failing spawn (no file fallback)",
+                    sandbox_name,
+                    exc_info=True,
+                )
+                raise
+
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
                 image=image,
                 labels=labels or {},
             )
         )
+        # Filter credential keys from environment to avoid direct exposure
+        cred_keys = set()
+        if credential_secret_name:
+            cred_keys.add(credential_secret_name)
+            cred_keys.add(credential_secret_name.upper().replace("-", "_"))
         for key, value in env.items():
+            if key in cred_keys:
+                continue
             spec.environment[key] = value
+        if provider_id:
+            spec.providers.append(provider_id)
 
         self._build_network_policy(spec, env)
 
@@ -694,13 +753,11 @@ class OpenShellSpawner(AgentSpawner):
                 timeout_seconds=300,
             )
 
-            if credential_secret_name:
-                await self._inject_credentials(
-                    agent_name,
-                    sandbox_name,
-                    credential_secret_name,
-                    env,
-                )
+            # Credential Provider already created and attached via spec.providers
+            # before sandbox creation (see above) -- no post-create injection needed.
+            # The old _inject_credentials path (CreateProvider + Attach after
+            # wait_ready with real env) is removed to avoid exposing the real
+            # credential in spec.environment (issue #199).
 
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
@@ -879,8 +936,11 @@ class OpenShellSpawner(AgentSpawner):
     ) -> None:
         """Inject LLM credentials into the sandbox via Provider API.
 
-        Uses the OpenShell Provider system for gateway-managed credentials.
-        Falls back to file-based injection if Provider RPCs fail.
+        .. deprecated:: This post-create path is deprecated. Credentials
+            are now injected via spec.providers at sandbox creation time
+            (see _do_spawn). This method is retained for backwards
+            compatibility in tests but should not be used for new code.
+            It no longer falls back to file injection with real values.
         """
         # credential_secret_name may be K8s-normalized (e.g. "openai-api-key")
         # while the env dict has the original key (e.g. "OPENAI_API_KEY").
@@ -907,16 +967,13 @@ class OpenShellSpawner(AgentSpawner):
                 sandbox_name,
             )
         except Exception:
-            logger.warning(
-                "Provider API failed for '%s' — falling back to file injection",
+            logger.error(
+                "Provider API failed for '%s' — not falling back to file injection "
+                "(file fallback would expose real credential; failing spawn)",
                 sandbox_name,
                 exc_info=True,
             )
-            await self._inject_credentials_via_files(
-                agent_name,
-                credential_secret_name,
-                cred_value,
-            )
+            raise
 
     async def _inject_credentials_via_files(
         self,
@@ -939,6 +996,37 @@ class OpenShellSpawner(AgentSpawner):
             file_path,
             agent_name,
         )
+
+    async def _create_provider(
+        self,
+        credentials: dict[str, str],
+    ) -> str:
+        """Create an OpenShell provider and return its ID.
+
+        For use before sandbox creation -- the provider is attached via
+        SandboxSpec.providers at create time, not via a separate Attach
+        call. The caller is responsible for storing the ID for cleanup.
+
+        Returns the provider ID.
+        """ 
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_create() -> str:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                create_req = openshell_pb2.CreateProviderRequest(
+                    provider=openshell_pb2.Provider(
+                        type="cloud-agents",
+                        credentials=credentials,
+                    ),
+                )
+                create_resp = stub.CreateProvider(create_req)
+                return create_resp.provider.id
+            finally:
+                channel.close()
+
+        return await asyncio.to_thread(_sync_create)
 
     async def _create_and_attach_provider(
         self,
