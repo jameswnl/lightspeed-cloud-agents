@@ -438,7 +438,8 @@ class TestOpenShellSpawnerSpawn:
         assert "OPENAI_API_KEY" not in start_env
         assert "openai-api-key" not in start_env
         assert "sk-real-secret" not in str(start_env)
-            @pytest.mark.asyncio
+
+    @pytest.mark.asyncio
     async def test_spawn_passes_env_to_sandbox(self, mocker: MockerFixture) -> None:
         """_do_spawn passes environment variables to sandbox creation."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
