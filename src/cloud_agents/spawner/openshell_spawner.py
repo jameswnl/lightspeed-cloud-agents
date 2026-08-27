@@ -1077,8 +1077,11 @@ class OpenShellSpawner(AgentSpawner):
             )
 
         def _crane_extract() -> None:
+            # The "--" separator stops an option-shaped skills_image (e.g.
+            # "--insecure") from being parsed as a crane flag instead of a
+            # literal image reference.
             result = subprocess.run(
-                [crane_bin, "export", skills_image, "-"],
+                [crane_bin, "export", "--", skills_image, "-"],
                 capture_output=True,
                 timeout=120,
             )
@@ -1091,22 +1094,34 @@ class OpenShellSpawner(AgentSpawner):
                         continue
                     for skill_path in copy_paths:
                         prefix = skill_path.lstrip("/") + "/"
-                        if member.name.startswith(prefix):
-                            member.name = member.name[len(prefix) :]
-                            resolved = os.path.normpath(
-                                os.path.join(tmp_dir, member.name),
-                            )
-                            # Require an os.sep boundary (or exact equality),
-                            # not just a string prefix -- resolved.startswith(tmp_dir)
-                            # alone would incorrectly accept a sibling directory
-                            # whose name happens to share tmp_dir as a string
-                            # prefix (e.g. tmp_dir="/tmp/skills-x" matching a
-                            # resolved path under "/tmp/skills-xyz/") (issue #202).
-                            if resolved != tmp_dir and not resolved.startswith(
-                                tmp_dir + os.sep
-                            ):
-                                continue
-                            tar.extract(member, tmp_dir)
+                        if not member.name.startswith(prefix):
+                            continue
+                        # Match at most one skill_path per member -- the
+                        # previous version mutated member.name in place and
+                        # kept scanning the remaining copy_paths, so an
+                        # already-stripped name could spuriously match a
+                        # second prefix and get extracted a second time at
+                        # the wrong location.
+                        relative_name = member.name[len(prefix) :]
+                        resolved = os.path.normpath(
+                            os.path.join(tmp_dir, relative_name),
+                        )
+                        # Require an os.sep boundary (or exact equality),
+                        # not just a string prefix -- resolved.startswith(tmp_dir)
+                        # alone would incorrectly accept a sibling directory
+                        # whose name happens to share tmp_dir as a string
+                        # prefix (e.g. tmp_dir="/tmp/skills-x" matching a
+                        # resolved path under "/tmp/skills-xyz/") (issue #202).
+                        if resolved == tmp_dir or resolved.startswith(tmp_dir + os.sep):
+                            member.name = relative_name
+                            # filter="data" is passed explicitly rather than
+                            # relying on tarfile's own default: that default
+                            # only became "data" in Python 3.14 (PEP 706) --
+                            # on 3.12/3.13 (what the runner actually deploys)
+                            # it's still "fully_trusted", so the manual check
+                            # above is the real defense, not this filter.
+                            tar.extract(member, tmp_dir, filter="data")
+                        break
 
         await asyncio.to_thread(_crane_extract)
         logger.info("Extracted skills via crane from '%s'", skills_image)

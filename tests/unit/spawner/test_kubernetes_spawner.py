@@ -929,6 +929,59 @@ class TestKubernetesSpawnerSkillsLoaderInjection:
         assert "sh" not in command, "skills-loader must not invoke a shell"
         assert "-c" not in command
         assert command[0] == "cp"
+        assert "--" in command, "cp must have a -- separator before positional paths"
+
+    @pytest.mark.asyncio
+    async def test_skills_loader_treats_option_shaped_path_as_literal(self) -> None:
+        """A skills_paths value that looks like a cp flag (e.g. "-t") is not parsed as one.
+
+        Regression test for a beesarmy review finding on PR #203: without
+        a `--` separator between `cp -r` and the positional paths, a
+        request-supplied skills_paths entry shaped like an option (e.g.
+        "-t") would be parsed by `cp` as a flag rather than a literal
+        source path -- `skills_paths=["-t", "/tmp"]` becoming
+        `cp -r -t /tmp /skills-data` reassigns cp's target directory
+        instead of copying a file literally named "-t".
+        """
+        import sys
+
+        mock_batch = MagicMock()
+        mock_core = MagicMock()
+
+        mock_k8s_client = MagicMock()
+        mock_k8s_client.BatchV1Api.return_value = mock_batch
+        mock_k8s_client.CoreV1Api.return_value = mock_core
+        mock_k8s_config = MagicMock()
+
+        mock_k8s = MagicMock()
+        mock_k8s.client = mock_k8s_client
+        mock_k8s.config = mock_k8s_config
+
+        with patch.dict(
+            sys.modules,
+            {
+                "kubernetes": mock_k8s,
+                "kubernetes.client": mock_k8s_client,
+                "kubernetes.config": mock_k8s_config,
+            },
+        ):
+            spawner = KubernetesSpawner(namespace="default")
+            await spawner._do_spawn(
+                "skills-agent-4",
+                "agent-runtime:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["-t", "/tmp"],
+            )
+
+        container_calls = mock_k8s_client.V1Container.call_args_list
+        loader_calls = [c for c in container_calls if (c[1] or {}).get("name") == "skills-loader"]
+        command = loader_calls[0][1]["command"]
+
+        assert command.index("--") < command.index("-t"), (
+            "the -- separator must precede the option-shaped path so cp treats it "
+            "as a literal filename, not a flag"
+        )
 
     @pytest.mark.asyncio
     async def test_skills_loader_command_not_shell_interpolated_with_malicious_path(self) -> None:

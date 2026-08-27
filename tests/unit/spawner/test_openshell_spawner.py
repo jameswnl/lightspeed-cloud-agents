@@ -2715,7 +2715,46 @@ class TestExtractSkillsImageCraneOnly:
         await spawner._extract_skills_image(malicious_image, ["/skills"], str(tmp_path))
 
         call_args = mock_run.call_args[0][0]
-        assert call_args == ["/usr/local/bin/crane", "export", malicious_image, "-"]
+        assert call_args == ["/usr/local/bin/crane", "export", "--", malicious_image, "-"]
+
+    @pytest.mark.asyncio
+    async def test_crane_export_treats_option_shaped_image_as_literal(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """A leading-dash skills_image is not parsed as a crane flag.
+
+        Regression test for a beesarmy review finding on PR #203: without
+        a `--` separator between `export` and the positional skills_image
+        argument, a request-supplied skills_image shaped like an option
+        (e.g. "--insecure") would be parsed by crane as a flag rather
+        than a literal image reference.
+        """
+        import tarfile
+        from io import BytesIO
+
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+
+        tar_buf = BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            info = tarfile.TarInfo(name="skills/hello.txt")
+            data = b"hi"
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+
+        mock_run = mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
+        )
+
+        option_shaped_image = "--insecure"
+        await spawner._extract_skills_image(option_shaped_image, ["/skills"], str(tmp_path))
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args.index("--") < call_args.index(option_shaped_image), (
+            "the -- separator must precede the option-shaped image so crane treats "
+            "it as a literal reference, not a flag"
+        )
 
     @pytest.mark.asyncio
     async def test_extracts_matching_paths_and_strips_prefix(
@@ -2754,6 +2793,52 @@ class TestExtractSkillsImageCraneOnly:
         assert not (Path(tmp_path) / "usr").exists()
 
     @pytest.mark.asyncio
+    async def test_member_matching_two_prefixes_extracted_only_once_at_correct_path(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """A member is matched against copy_paths at most once, at its correct location.
+
+        Regression test for a beesarmy review finding on PR #203: the
+        extraction loop used to mutate `member.name` in place then keep
+        scanning the remaining copy_paths entries. With
+        copy_paths=["/a", "/b"] and a member named "a/b/c": the first
+        iteration (skill_path="/a") strips the "a/" prefix, mutating
+        member.name to "b/c", and extracts it at tmp_dir/b/c -- correct
+        so far. But the loop then continues to the next skill_path
+        ("/b"), and the now-mutated "b/c" ALSO starts with the "b/"
+        prefix, so it strips again and extracts a SECOND time at
+        tmp_dir/c -- a member that only actually lived under "/a" ends
+        up duplicated at a path that looks like it came from "/b".
+        """
+        import tarfile
+        from io import BytesIO
+        from pathlib import Path
+
+        spawner = self._make_spawner(mocker)
+        mocker.patch("shutil.which", return_value="/usr/local/bin/crane")
+
+        tar_buf = BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            data = b"content"
+            info = tarfile.TarInfo(name="a/b/c")
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+
+        mocker.patch(
+            "subprocess.run",
+            return_value=mocker.Mock(returncode=0, stdout=tar_buf.getvalue()),
+        )
+
+        await spawner._extract_skills_image(
+            "quay.io/example/skills:latest", ["/a", "/b"], str(tmp_path)
+        )
+
+        assert (Path(tmp_path) / "b" / "c").read_bytes() == b"content"
+        assert not (Path(tmp_path) / "c").exists(), (
+            "member must not be re-matched and re-extracted against a second prefix"
+        )
+
+    @pytest.mark.asyncio
     async def test_traversal_guard_rejects_sibling_dir_sharing_prefix(
         self, mocker: MockerFixture, tmp_path
     ) -> None:
@@ -2768,13 +2853,20 @@ class TestExtractSkillsImageCraneOnly:
         though skills-xyz is not inside skills-x.
 
         The malicious member must be skipped *before* tar.extract() is
-        ever called for it (Python's own tarfile "data" extraction filter,
-        default since 3.12/PEP 706, would also independently reject an
-        unsafe destination -- but by raising, aborting the whole batch,
-        rather than skipping just the one bad member). The other,
-        legitimate member in the same tar must still extract normally,
-        proving this is a graceful per-member skip, not something that
-        depends on the whole extraction failing.
+        ever called for it. This guard is the actual defense, not a
+        backup to a stdlib default: PEP 706's "data" extraction filter
+        only became the *default* in Python 3.14 -- on 3.12/3.13 (what
+        the runner actually deploys, per deploy/workflow-runner/Containerfile's
+        python:3.12-slim base), tarfile.extract() still defaults to
+        "fully_trusted" with no traversal protection at all unless a
+        filter is passed explicitly. This test now passes filter="data"
+        explicitly on the extract call so the code is correct regardless
+        of Python version, rather than relying on a version-dependent
+        default -- but the manual pre-check below is what actually
+        prevents an unsafe write on 3.12/3.13. The other, legitimate
+        member in the same tar must still extract normally, proving this
+        is a graceful per-member skip, not something that depends on the
+        whole extraction failing.
         """
         import tarfile
         from io import BytesIO

@@ -214,6 +214,38 @@ class TestPodmanSpawnerSkillsLoaderInjection:
         assert "sh" not in command, "skills extraction must not invoke a shell"
         assert "-c" not in command
         assert command[0] == "cp"
+        assert "--" in command, "cp must have a -- separator before positional paths"
+
+    @pytest.mark.asyncio
+    async def test_skills_extraction_treats_option_shaped_path_as_literal(self) -> None:
+        """A skills_paths value that looks like a cp flag (e.g. "-t") is not parsed as one.
+
+        Regression test for a beesarmy review finding on PR #203: without
+        a `--` separator between `cp -r` and the positional paths, a
+        request-supplied skills_paths entry shaped like an option (e.g.
+        "-t") would be parsed by `cp` as a flag rather than a literal
+        source path.
+        """
+        mock_podman_client, mock_podman_module = self._setup_podman_mocks()
+
+        with patch.dict(sys.modules, {"podman": mock_podman_module}):
+            spawner = PodmanSpawner(network="test")
+            await spawner._do_spawn(
+                "skills-agent-4",
+                "image:latest",
+                {},
+                skills_image="quay.io/example/skills:latest",
+                skills_paths=["-t", "/tmp"],
+            )
+
+        run_calls = mock_podman_client.containers.run.call_args_list
+        skills_calls = [c for c in run_calls if c[0] and c[0][0] == "quay.io/example/skills:latest"]
+        command = skills_calls[0][1]["command"]
+
+        assert command.index("--") < command.index("-t"), (
+            "the -- separator must precede the option-shaped path so cp treats it "
+            "as a literal filename, not a flag"
+        )
 
     @pytest.mark.asyncio
     async def test_skills_extraction_command_not_shell_interpolated_with_malicious_path(

