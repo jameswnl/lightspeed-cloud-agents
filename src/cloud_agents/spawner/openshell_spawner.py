@@ -97,8 +97,17 @@ class OpenShellSpawner(AgentSpawner):
     # ready" (issue #192). Value copied verbatim from that Containerfile's
     # `ENV PYTHONPATH=...` line; re-verify against the image source if this
     # ever needs to change (e.g. a Python version bump).
+    #
+    # LIGHTSPEED_SKILLS_DIR is set for the same env_clear() reason: the
+    # image's own `ENV LIGHTSPEED_SKILLS_DIR=/app/skills` declaration is
+    # wiped before the exec'd server process starts. Providers must list
+    # /app/skills specifically -- the materialize-skills.sh output
+    # (_do_spawn() execs it before start_server() when allowed_skills is
+    # set) -- not the read-only /skills master, which holds every baked-in
+    # skill regardless of allowed_skills (issue #202).
     _DEFAULT_EXTRA_ENV: ClassVar[dict[str, str]] = {
-        "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+        "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
+        "LIGHTSPEED_SKILLS_DIR": "/app/skills",
     }
 
     # OpenShell's own hardcoded restrictive_default_policy() (Rust side,
@@ -130,6 +139,13 @@ class OpenShellSpawner(AgentSpawner):
     # skills_image/skills_paths runtime mount-and-copy mechanism (issue
     # #202) is gone.
     _SKILLS_ROOT: ClassVar[str] = "/skills"
+
+    # Baked into the sandbox image (lightspeed-agentic-sandbox's
+    # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
+    # into LIGHTSPEED_SKILLS_DIR so providers' directory-listing-based
+    # skill discovery sees only the scoped set. See
+    # _materialize_allowed_skills().
+    _MATERIALIZE_SKILLS_SCRIPT: ClassVar[str] = "/usr/local/bin/materialize-skills.sh"
 
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
@@ -678,6 +694,9 @@ class OpenShellSpawner(AgentSpawner):
             if mcp_secret_mounts:
                 await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
 
+            if allowed_skills:
+                await self._materialize_allowed_skills(sandbox_id, allowed_skills)
+
             # self._extra_env first, then the caller's own env on top, so an
             # explicit caller-provided value (e.g. a different derived image's
             # PYTHONPATH) wins on collision rather than being silently
@@ -1000,6 +1019,36 @@ class OpenShellSpawner(AgentSpawner):
                 pass
 
         await asyncio.to_thread(_sync_mkdir)
+
+    async def _materialize_allowed_skills(self, sandbox_id: str, allowed_skills: list[str]) -> None:
+        """Copy the allowed_skills subset into the provider-listable skills dir.
+
+        Providers discover skills by *listing* LIGHTSPEED_SKILLS_DIR, and
+        Landlock's allow-list model can't grant partial listing of
+        _SKILLS_ROOT without granting full listing (which would defeat
+        per-name scoping) -- see _build_baseline_filesystem_policy(). So
+        instead this execs the sandbox image's baked-in
+        materialize-skills.sh (lightspeed-agentic-sandbox), which copies
+        just these names from _SKILLS_ROOT into a plain, freshly-listable
+        directory. The real enforcement remains the per-name Landlock
+        grant on _SKILLS_ROOT/<name>: an unlisted name is unreadable to
+        this copy too, not merely absent from it.
+
+        Validated independently here (not only in
+        _build_baseline_filesystem_policy()) because advisory-mode spawns
+        use _build_filesystem_policy() instead, which never validates
+        allowed_skills.
+        """
+        self._validate_allowed_skills(allowed_skills)
+
+        def _sync_materialize() -> None:
+            for _ in self._client.exec_stream(
+                sandbox_id,
+                [self._MATERIALIZE_SKILLS_SCRIPT, *allowed_skills],
+            ):
+                pass
+
+        await asyncio.to_thread(_sync_materialize)
 
     async def start_server(
         self,

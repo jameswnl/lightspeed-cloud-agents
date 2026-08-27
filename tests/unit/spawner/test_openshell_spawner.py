@@ -143,7 +143,7 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress handles chunks containing multiple JSONL lines."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        chunk = '{"type": "tool_call", "name": "a"}\n' '{"type": "tool_result", "name": "a"}\n'
+        chunk = '{"type": "tool_call", "name": "a"}\n{"type": "tool_result", "name": "a"}\n'
 
         class ExecChunk:
             def __init__(self, chunk):
@@ -542,9 +542,7 @@ class TestOpenShellSpawnerLegacySkillsDeprecation:
         assert "allowed_skills" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_no_legacy_skills_params_no_warning(
-        self, mocker: MockerFixture, caplog
-    ) -> None:
+    async def test_no_legacy_skills_params_no_warning(self, mocker: MockerFixture, caplog) -> None:
         """A normal spawn with no legacy params logs nothing about skills_image."""
         import logging
 
@@ -554,6 +552,147 @@ class TestOpenShellSpawnerLegacySkillsDeprecation:
             await spawner.spawn("agent-1", "sandbox:latest", env={})
 
         assert "skills_image" not in caplog.text
+
+
+class TestOpenShellSpawnerMaterializeAllowedSkills:
+    """Tests for materializing allowed_skills before the server starts (issue #202).
+
+    Landlock's allow-list model can't grant partial directory listing of
+    /skills without granting full listing (which would defeat per-name
+    scoping): every agent provider discovers skills by *listing*
+    LIGHTSPEED_SKILLS_DIR, not by opening a known path directly. So
+    OpenShellSpawner execs the sandbox image's baked-in
+    materialize-skills.sh (see lightspeed-agentic-sandbox) to physically
+    copy just the allowed names into a plain, freshly-listable directory
+    before starting the agent server -- the actual Landlock per-name
+    grant on /skills/<name> remains the real enforcement; this step is
+    what makes provider-side discovery of that scoped subset work at all.
+    """
+
+    @staticmethod
+    def _make_spawner(mocker: MockerFixture):
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        exec_calls: list[list[str]] = []
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        def exec_stream(sandbox_id, command, **kwargs):
+            exec_calls.append(command)
+            return iter([])
+
+        mock_client.exec_stream = exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        return spawner, exec_calls
+
+    @pytest.mark.asyncio
+    async def test_execs_materialize_script_with_allowed_skills_as_argv(
+        self, mocker: MockerFixture
+    ) -> None:
+        """allowed_skills names are passed as separate argv elements, not a shell string."""
+        spawner, exec_calls = self._make_spawner(mocker)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            allowed_skills=["k8s-diag", "git-ops"],
+        )
+
+        materialize_calls = [c for c in exec_calls if c[0].endswith("materialize-skills.sh")]
+        assert len(materialize_calls) == 1
+        assert materialize_calls[0] == [
+            "/usr/local/bin/materialize-skills.sh",
+            "k8s-diag",
+            "git-ops",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_allowed_skills_does_not_exec_materialize_script(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No allowed_skills -- the materialize step is skipped entirely."""
+        spawner, exec_calls = self._make_spawner(mocker)
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        materialize_calls = [c for c in exec_calls if c[0].endswith("materialize-skills.sh")]
+        assert materialize_calls == []
+
+    @pytest.mark.asyncio
+    async def test_materialize_runs_before_server_start(self, mocker: MockerFixture) -> None:
+        """The materialize call is awaited (and completes) before start_server is invoked.
+
+        start_server() itself is fire-and-forget (its exec runs in a
+        background task), so ordering must be verified at the call-site
+        level -- i.e. _materialize_allowed_skills is awaited to completion
+        before start_server() is even called -- rather than by racing
+        against that background task's own exec_stream call.
+        """
+        spawner, exec_calls = self._make_spawner(mocker)
+
+        call_order: list[str] = []
+        real_materialize = spawner._materialize_allowed_skills
+
+        async def tracked_materialize(sandbox_id, allowed_skills):
+            await real_materialize(sandbox_id, allowed_skills)
+            call_order.append("materialize")
+
+        async def tracked_start_server(*args, **kwargs):
+            call_order.append("start_server")
+
+        mocker.patch.object(spawner, "_materialize_allowed_skills", side_effect=tracked_materialize)
+        mocker.patch.object(spawner, "start_server", side_effect=tracked_start_server)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            allowed_skills=["k8s-diag"],
+        )
+
+        assert call_order == ["materialize", "start_server"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_traversal_name_before_exec(self, mocker: MockerFixture) -> None:
+        """A malicious allowed_skills name is rejected before it ever reaches exec.
+
+        Defense in depth independent of _build_baseline_filesystem_policy()'s
+        own validation: advisory-mode spawns (read_only=True) never call
+        that method at all, so this exec path must validate independently.
+        """
+        spawner, exec_calls = self._make_spawner(mocker)
+
+        with pytest.raises(ValueError, match="allowed_skills"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={},
+                allowed_skills=["../../etc"],
+            )
+
+        materialize_calls = [c for c in exec_calls if c[0].endswith("materialize-skills.sh")]
+        assert materialize_calls == []
 
 
 class TestOpenShellSpawnerDestroy:
@@ -1461,8 +1600,24 @@ class TestExtraEnvConstructor:
         spawner = OpenShellSpawner(openshell_client=object())
 
         assert spawner._extra_env == {
-            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
+            "LIGHTSPEED_SKILLS_DIR": "/app/skills",
         }
+
+    def test_defaults_include_lightspeed_skills_dir(self) -> None:
+        """Constructor default sets LIGHTSPEED_SKILLS_DIR to the materialized-skills path.
+
+        Same env_clear() problem as PYTHONPATH (issue #192): the sandbox
+        image's own `ENV LIGHTSPEED_SKILLS_DIR=/app/skills` declaration
+        is wiped before the exec'd server process starts, and providers
+        need to list /app/skills specifically (the materialize-skills.sh
+        output), not the read-only /skills master (issue #202).
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=object())
+
+        assert spawner._extra_env["LIGHTSPEED_SKILLS_DIR"] == "/app/skills"
 
     def test_accepts_custom_env(self) -> None:
         """Constructor accepts an override for derived images with a different layout."""
@@ -1490,7 +1645,8 @@ class TestExtraEnvConstructor:
         spawner = OpenShellSpawner(openshell_client=object(), extra_env=None)
 
         assert spawner._extra_env == {
-            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
+            "LIGHTSPEED_SKILLS_DIR": "/app/skills",
         }
 
     def test_rejects_empty_key(self) -> None:
@@ -2249,7 +2405,6 @@ class TestExposeServiceEndpoint:
         assert virtual_host == "internal-gw"
 
 
-
 class TestGetQuerySslContext:
     """Tests for get_query_ssl_context() (#194).
 
@@ -2452,4 +2607,3 @@ class TestEntrypointSpawnerFactory:
         spawner = _create_spawner()
 
         assert spawner._http_endpoint == "https://proxy.example.com"
-

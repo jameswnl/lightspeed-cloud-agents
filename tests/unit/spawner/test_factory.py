@@ -311,7 +311,8 @@ class TestBuildSpawnerOpenShell:
         spawner = build_spawner("openshell", gateway_url="gw:17670", extra_env=None)
 
         assert spawner._extra_env == {
-            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages"
+            "PYTHONPATH": "/opt/lightspeed/src:/opt/app-root/lib64/python3.12/site-packages",
+            "LIGHTSPEED_SKILLS_DIR": "/app/skills",
         }
 
 

@@ -83,13 +83,30 @@ def validate_definition(
         refs = re.findall(r"\{\{\s*steps\.(\w+)\.", prompt)
         for ref in refs:
             if ref not in output_keys:
-                errors.append(
-                    f"Step '{name}' references undefined step '{ref}' in prompt template"
-                )
+                errors.append(f"Step '{name}' references undefined step '{ref}' in prompt template")
 
         output_schema = step.get("output_schema")
         if output_schema and isinstance(output_schema, dict):
             _validate_schema(output_schema, name, "root", errors)
+
+        # Mirrors OpenShellSpawner._validate_allowed_skills() -- this copy
+        # catches malformed names at submission time (422) instead of only
+        # at spawn time; keep both in sync if the rules change.
+        allowed_skills = step.get("allowed_skills")
+        if allowed_skills:
+            for skill_name in allowed_skills:
+                if not skill_name:
+                    errors.append(f"Step '{name}': allowed_skills entries must not be empty")
+                elif "/" in skill_name:
+                    errors.append(
+                        f"Step '{name}': allowed_skills entries must not contain "
+                        f"'/': {skill_name!r}"
+                    )
+                elif skill_name in (".", ".."):
+                    errors.append(
+                        f"Step '{name}': allowed_skills entries must not be "
+                        f"'.' or '..': {skill_name!r}"
+                    )
 
     # --- Content policy checks ---
     if content_policy is not None:
