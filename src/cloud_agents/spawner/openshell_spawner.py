@@ -1062,9 +1062,12 @@ class OpenShellSpawner(AgentSpawner):
         this copy too, not merely absent from it.
 
         Validated independently here (not only in
-        _build_baseline_filesystem_policy()) because advisory-mode spawns
-        use _build_filesystem_policy() instead, which never validates
-        allowed_skills.
+        _build_baseline_filesystem_policy()) since this is the sole
+        exec-reaching call site for allowed_skills -- advisory-mode
+        spawns never call this method at all (see _do_spawn(), which
+        skips materialize entirely when read_only=True), so this
+        validation is defense in depth against a future non-advisory
+        call path rather than a gap advisory mode would otherwise hit.
 
         Raises:
             RuntimeError: If materialize-skills.sh exits nonzero (e.g. the
