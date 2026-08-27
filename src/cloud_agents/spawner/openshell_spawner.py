@@ -1056,7 +1056,12 @@ class OpenShellSpawner(AgentSpawner):
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                return create_resp.provider.metadata.id
+                # spec.providers/AttachSandboxProvider/DetachSandboxProvider all
+                # resolve by the provider's *name* (see provider_name/name fields
+                # below), not its id -- confirmed against a real gateway that
+                # passing metadata.id here makes CreateSandbox fail with
+                # "provider '<id>' not found" even though the provider exists.
+                return create_resp.provider.metadata.name
             finally:
                 channel.close()
 
@@ -1107,7 +1112,9 @@ class OpenShellSpawner(AgentSpawner):
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                provider_id = create_resp.provider.metadata.id
+                # See the matching comment in _create_provider() -- attach/detach
+                # resolve providers by name, not id.
+                provider_id = create_resp.provider.metadata.name
 
                 attach_req = openshell_pb2.AttachSandboxProviderRequest(
                     sandbox_name=sandbox_name,
