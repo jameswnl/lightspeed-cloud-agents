@@ -52,6 +52,8 @@ class ChatWorkflowConfig:
         tools: Tool names available in conversations.
         tools_module: Module path for tool loading in subprocess.
         mcp_servers: Optional MCP server configs.
+        allowed_skills: Optional allowlist of skill names for each turn;
+            None (default) means no skills, matching workflow steps.
         max_context_turns: Max prior turns to include as context.
         spawn: Spawn mode for step execution.
     """
@@ -61,6 +63,7 @@ class ChatWorkflowConfig:
     tools: list[str] = field(default_factory=list)
     tools_module: Optional[str] = None
     mcp_servers: Optional[list[dict[str, Any]]] = None
+    allowed_skills: Optional[list[str]] = None
     max_context_turns: int = 20
     timeout_seconds: int = 600
     spawn: str = "none"
@@ -575,6 +578,7 @@ class ChatWorkflowRunner(WorkflowRunner):
             tools=self._config.tools,
             tools_module=self._config.tools_module,
             mcp_servers=self._config.mcp_servers,
+            allowed_skills=self._config.allowed_skills,
             context=context,
             timeout_seconds=self._config.timeout_seconds,
             workflow_id=workflow_id,

@@ -52,7 +52,7 @@ Tools are Python functions registered via `@step_tool` or `register_tool()` from
 
 ### Skills
 
-Skills extend agent capabilities via the `pydantic-ai-skills` package (`SkillsCapability`). Set `CLOUD_AGENTS_SKILLS_PATHS` to a colon-separated list of directories containing skill subdirectories, each with a `SKILL.md` file (YAML frontmatter + instructions). The capability is automatically passed to the pydantic-ai Agent for **every** `spawn: none` and `spawn: local` step — there is no per-step allowlist (unlike `tools:`). If the env var is unset or the package is not installed, skills are silently skipped.
+Skills extend agent capabilities via the `pydantic-ai-skills` package (`SkillsCapability`). Set `CLOUD_AGENTS_SKILLS_PATHS` to a colon-separated list of directories containing skill subdirectories, each with a `SKILL.md` file (YAML frontmatter + instructions). Steps opt into a subset via `allowed_skills: [name, ...]` (per-step allowlist, mirrored through `ChatWorkflowConfig.allowed_skills` for chat turns and threaded as `SkillsCapability(include=...)` for `spawn: none`/`local`, and as Landlock-policed `/skills/<name>` for `spawn: ephemeral`). `None`/omitted means **no skills** (least-privilege default); `[]` also means none. If the env var is unset or the package is not installed, skills are silently skipped regardless of the allowlist.
 
 **Trust model:** `SkillsCapability` registers `run_skill_script` which can execute arbitrary Python from skill directories. Only configure `CLOUD_AGENTS_SKILLS_PATHS` to directories owned by trusted users. Do not point at world-writable or user-uploaded paths.
 

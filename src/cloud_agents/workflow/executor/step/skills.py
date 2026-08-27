@@ -37,18 +37,34 @@ def _import_skills_capability() -> type:
     return SkillsCapability
 
 
-def get_skills_capability() -> Any | None:
+def get_skills_capability(
+    include: list[str] | None = None,
+) -> Any | None:
     """Create a SkillsCapability from configured directories.
 
     Reads CLOUD_AGENTS_SKILLS_PATHS env var (colon-separated paths).
     Returns None if no paths are configured or all paths are invalid.
+    When include is an empty list, returns None (no skills requested).
 
     Paths are resolved to absolute paths. Non-existent directories
     are skipped with a warning.
 
+    Parameters:
+        include: Optional allowlist of skill names to expose. None means
+            no filtering (all skills). Passed through to
+            SkillsCapability(include=...). The caller (executor)
+            maps a step with no allowed_skills to no capability at all.
+
     Returns:
         SkillsCapability instance, or None.
     """
+    # Per-step allowlist: empty list means no skills; None means no filtering (all skills).
+    # Steps that did not request any skills should not call get_skills_capability at all
+    # (executor handles allowed_skills is None => no skills). This keeps
+    # direct calls like get_skills_capability() for tests returning all skills.
+    if include is not None and len(include) == 0:
+        return None
+
     paths_str = os.environ.get(SKILLS_PATHS_ENV, "")
     paths = [p.strip() for p in paths_str.split(":") if p.strip()]
 
@@ -77,7 +93,7 @@ def get_skills_capability() -> Any | None:
         )
         return None
 
-    logger.info("Loading skills from directories: %s", valid_paths)
+    logger.info("Loading skills from directories: %s (include=%s)", valid_paths, include)
     # validate=False: skip checking SKILL.md schema at construction time
     # to avoid startup failures from minor schema issues in skill files
-    return skills_cls(directories=valid_paths, validate=False)
+    return skills_cls(directories=valid_paths, include=include, validate=False)

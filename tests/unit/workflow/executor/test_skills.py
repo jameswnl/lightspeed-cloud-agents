@@ -144,3 +144,42 @@ class TestGetSkillsCapability:
         from cloud_agents.workflow.executor.step.skills import SKILLS_PATHS_ENV
 
         assert SKILLS_PATHS_ENV == "CLOUD_AGENTS_SKILLS_PATHS"
+
+    def test_returns_none_for_empty_include(self) -> None:
+        """get_skills_capability(include=[]) returns None (no skills requested)."""
+        from cloud_agents.workflow.executor.step.skills import (
+            SKILLS_PATHS_ENV,
+            get_skills_capability,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {SKILLS_PATHS_ENV: tmpdir}, clear=False):
+                result = get_skills_capability(include=[])
+
+            assert result is None
+
+    def test_passes_include_to_skills_capability(self) -> None:
+        """include=[...] is forwarded to SkillsCapability(include=...)."""
+        from unittest.mock import MagicMock
+
+        from cloud_agents.workflow.executor.step.skills import (
+            SKILLS_PATHS_ENV,
+            get_skills_capability,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_cls = MagicMock()
+            mock_instance = MagicMock()
+            mock_cls.return_value = mock_instance
+            with (
+                patch.dict(os.environ, {SKILLS_PATHS_ENV: tmpdir}, clear=False),
+                patch(
+                    "cloud_agents.workflow.executor.step.skills._import_skills_capability",
+                    return_value=mock_cls,
+                ),
+            ):
+                result = get_skills_capability(include=["k8s-diag"])
+
+            expected_dir = os.path.realpath(tmpdir)
+            mock_cls.assert_called_once_with(directories=[expected_dir], include=["k8s-diag"], validate=False)
+            assert result is mock_instance

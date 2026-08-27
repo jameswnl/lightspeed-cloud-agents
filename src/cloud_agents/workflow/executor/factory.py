@@ -163,6 +163,10 @@ def _create_chat(
     system_prompt = os.environ.get("CHAT_SYSTEM_PROMPT")
     max_context_turns = int(os.environ.get("CHAT_MAX_CONTEXT_TURNS", "20"))
     spawn_mode = os.environ.get("CHAT_SPAWN_MODE", "none")
+    chat_skills_raw = os.environ.get("CHAT_ALLOWED_SKILLS", "")
+    chat_allowed_skills = (
+        [s.strip() for s in chat_skills_raw.split(",") if s.strip()] if chat_skills_raw else None
+    )
 
     config = ChatWorkflowConfig(
         provider={
@@ -173,6 +177,7 @@ def _create_chat(
         system_prompt=system_prompt,
         max_context_turns=max_context_turns,
         spawn=spawn_mode,
+        allowed_skills=chat_allowed_skills,
     )
 
     logger.info("Using ChatWorkflowRunner (WORKFLOW_ENGINE=chat)")

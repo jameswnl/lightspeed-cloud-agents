@@ -793,6 +793,7 @@ class TestSubprocessChildWithSkills:
             "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
             "context": {},
             "tools": ["kubectl_get"],
+            "allowed_skills": ["k8s-diag"],
         }
 
         stdin_mock = StringIO(json.dumps(input_data))
@@ -848,6 +849,7 @@ class TestSubprocessChildWithSkills:
             "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
             "context": {},
             "tools": ["kubectl_get"],
+            "allowed_skills": ["k8s-diag"],
         }
 
         stdin_mock = StringIO(json.dumps(input_data))

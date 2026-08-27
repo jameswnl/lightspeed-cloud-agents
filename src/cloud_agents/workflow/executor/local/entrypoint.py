@@ -148,6 +148,10 @@ def build_local_app() -> FastAPI:
             ChatWorkflowRunner,
         )
 
+        _chat_skills_raw = os.environ.get("CHAT_ALLOWED_SKILLS", "")
+        _chat_allowed = (
+            [s.strip() for s in _chat_skills_raw.split(",") if s.strip()] if _chat_skills_raw else None
+        )
         chat_config = ChatWorkflowConfig(
             provider={
                 "name": os.environ.get("CHAT_PROVIDER", "openai"),
@@ -155,6 +159,7 @@ def build_local_app() -> FastAPI:
                 "credentials_secret": os.environ.get("CHAT_CREDENTIALS_SECRET", "openai-api-key"),
             },
             system_prompt=os.environ.get("CHAT_SYSTEM_PROMPT"),
+            allowed_skills=_chat_allowed,
         )
         chat_runner = ChatWorkflowRunner(
             run_store=run_state_store,
