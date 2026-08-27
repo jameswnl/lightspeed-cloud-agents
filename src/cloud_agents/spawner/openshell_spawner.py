@@ -319,6 +319,8 @@ class OpenShellSpawner(AgentSpawner):
         self._sandbox_ids: dict[str, str] = {}
         self._virtual_hosts: dict[str, str] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
+        # Despite the name, stores each provider's *name* (metadata.name),
+        # not its metadata.id -- see _create_provider()'s docstring.
         self._provider_ids: dict[str, str] = {}
 
     def _resolve_grpc_target(self) -> str:
@@ -746,7 +748,6 @@ class OpenShellSpawner(AgentSpawner):
             self._sandbox_names[agent_name] = sandbox_name
             self._sandbox_ids[agent_name] = sandbox_id
 
-
             await asyncio.to_thread(
                 self._client.wait_ready,
                 sandbox_name,
@@ -818,9 +819,13 @@ class OpenShellSpawner(AgentSpawner):
                 try:
                     await self._delete_provider(provider_id)
                     self._provider_ids.pop(agent_name, None)
-                    logger.info("Cleaned up orphaned provider '%s' after failed create", provider_id)
+                    logger.info(
+                        "Cleaned up orphaned provider '%s' after failed create", provider_id
+                    )
                 except Exception:
-                    logger.warning("Failed to delete orphaned provider '%s'", provider_id, exc_info=True)
+                    logger.warning(
+                        "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
+                    )
             await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
@@ -1002,7 +1007,7 @@ class OpenShellSpawner(AgentSpawner):
             directly into a sandbox-readable file, exposing it to the
             sandboxed process (issue #199). It is retained for backwards
             compatibility but now raises instead of writing.
-        """ 
+        """
         raise RuntimeError(
             "_inject_credentials_via_files is deprecated -- credentials are now "
             "injected via Provider placeholder, not via files with real values"
@@ -1012,18 +1017,26 @@ class OpenShellSpawner(AgentSpawner):
         self,
         credentials: dict[str, str],
     ) -> str:
-        """Create an OpenShell provider and return its ID.
+        """Create an OpenShell provider and return its name.
+
+        Returns metadata.name, not metadata.id -- spec.providers,
+        AttachSandboxProvider, and DetachSandboxProvider all resolve
+        providers by name, not id (confirmed against a real gateway;
+        passing the id gets "provider '<id>' not found"). Called
+        "provider_id" at most call sites for historical reasons; it's
+        actually the provider's name.
 
         For use before sandbox creation -- the provider is attached via
         SandboxSpec.providers at create time, not via a separate Attach
-        call. The caller is responsible for storing the ID for cleanup.
+        call. The caller is responsible for storing the name for cleanup.
 
         Requires TLS (tls_ca) to avoid sending credentials over cleartext
         gRPC (issue #199 review). In-cluster service URL with disable_tls
         is not considered secure for credential transmission.
-        """ 
+        """
         if not self._tls_ca:
             import os as _os
+
             # Fail-closed by default: credentials must not be sent over
             # cleartext gRPC. Opt *in* to insecure for local Kind via
             # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
@@ -1045,13 +1058,25 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 create_req = openshell_pb2.CreateProviderRequest(
+                    workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                return create_resp.provider.id
+                # spec.providers/AttachSandboxProvider/DetachSandboxProvider all
+                # resolve by the provider's *name* (see provider_name/name fields
+                # below), not its id -- confirmed against a real gateway that
+                # passing metadata.id here makes CreateSandbox fail with
+                # "provider '<id>' not found" even though the provider exists.
+                name = create_resp.provider.metadata.name
+                if not name:
+                    raise RuntimeError(
+                        "Gateway returned an empty provider name from CreateProvider "
+                        "-- cannot reference this provider from spec.providers"
+                    )
+                return name
             finally:
                 channel.close()
 
@@ -1068,10 +1093,13 @@ class OpenShellSpawner(AgentSpawner):
             This post-create attach path is retained for backwards
             compatibility but now also requires TLS.
 
-        Returns the provider ID for later cleanup.
-        """ 
+        Returns the provider's name for later cleanup (see the matching
+        note in _create_provider() -- called "id" at most call sites for
+        historical reasons; it's actually the name).
+        """
         if not self._tls_ca:
             import os as _os
+
             # Fail-closed by default: credentials must not be sent over
             # cleartext gRPC. Opt *in* to insecure for local Kind via
             # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
@@ -1094,17 +1122,26 @@ class OpenShellSpawner(AgentSpawner):
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
 
                 create_req = openshell_pb2.CreateProviderRequest(
+                    workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
                         type="cloud-agents",
                         credentials=credentials,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
-                provider_id = create_resp.provider.id
+                # See the matching comment in _create_provider() -- attach/detach
+                # resolve providers by name, not id.
+                provider_id = create_resp.provider.metadata.name
+                if not provider_id:
+                    raise RuntimeError(
+                        "Gateway returned an empty provider name from CreateProvider "
+                        "-- cannot attach this provider to the sandbox"
+                    )
 
                 attach_req = openshell_pb2.AttachSandboxProviderRequest(
-                    sandbox=sandbox_name,
-                    provider=provider_id,
+                    sandbox_name=sandbox_name,
+                    provider_name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.AttachSandboxProvider(attach_req)
                 return provider_id
@@ -1117,7 +1154,7 @@ class OpenShellSpawner(AgentSpawner):
         self,
         provider_id: str,
     ) -> None:
-        """Delete a provider (for cleanup of orphaned providers).""" 
+        """Delete a provider (for cleanup of orphaned providers)."""
         from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
         def _sync_delete() -> None:
@@ -1125,7 +1162,8 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 req = openshell_pb2.DeleteProviderRequest(
-                    provider=provider_id,
+                    name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.DeleteProvider(req)
             finally:
@@ -1146,8 +1184,9 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 req = openshell_pb2.DetachSandboxProviderRequest(
-                    sandbox=sandbox_name,
-                    provider=provider_id,
+                    sandbox_name=sandbox_name,
+                    provider_name=provider_id,
+                    workspace=self._workspace,
                 )
                 stub.DetachSandboxProvider(req)
             finally:

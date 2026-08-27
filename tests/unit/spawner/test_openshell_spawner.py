@@ -21,10 +21,50 @@ import asyncio
 import json
 import os
 import threading
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import pytest
 from pytest_mock import MockerFixture
+
+
+@contextmanager
+def _real_openshell_modules() -> "Iterator[None]":
+    """Temporarily swap in the real `openshell` package over the CI test-stub MagicMock.
+
+    This test file stubs `openshell` with a MagicMock at import time when the
+    real package isn't installed (CI doesn't install the openshell extra).
+    When it IS installed (e.g. local dev), swap the stub out for the real
+    modules for the duration of a test that needs to construct real protobuf
+    objects.
+
+    Restores the FULL sys.modules snapshot afterward, not just the
+    originally-mocked keys -- a naive "pop these keys, then restore only
+    those same keys" approach leaves behind any *new* real submodules (e.g.
+    openshell._proto.datamodel_pb2, openshell._proto.openshell_pb2_grpc) that
+    get imported for the first time while swapped in, since they were never
+    part of the original mocked set. That leftover mix of restored mock +
+    stray real modules previously corrupted later tests in this file
+    (TestExposeServiceEndpoint) that expect a fully-mocked `openshell` --
+    `_expose_service()` would resolve `openshell_pb2_grpc` to a fresh
+    auto-generated MagicMock attribute rather than the intended stub, and
+    urlparse() would then choke on a MagicMock `.url` instead of a string.
+    """
+    was_mocked = isinstance(sys.modules.get("openshell"), MagicMock)
+    if not was_mocked:
+        yield
+        return
+    snapshot = {
+        k: v for k, v in sys.modules.items() if k == "openshell" or k.startswith("openshell.")
+    }
+    for k in list(snapshot):
+        del sys.modules[k]
+    try:
+        yield
+    finally:
+        for k in [k for k in sys.modules if k == "openshell" or k.startswith("openshell.")]:
+            del sys.modules[k]
+        sys.modules.update(snapshot)
 
 
 class TestOpenShellSpawnerStartServer:
@@ -376,12 +416,15 @@ class TestOpenShellSpawnerSpawn:
         mock_client.wait_ready.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_spawn_with_credential_does_not_expose_real_value(self, mocker: MockerFixture) -> None:
+    async def test_spawn_with_credential_does_not_expose_real_value(
+        self, mocker: MockerFixture
+    ) -> None:
         """Credential via Provider: real value NOT in spec.environment, placeholder via providers (issue #199)."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
             id: str = "test-id"
+
             def __init__(self, name):
                 self.name = name
 
@@ -391,15 +434,23 @@ class TestOpenShellSpawnerSpawn:
         mock_client.exec_stream.return_value = iter([])
 
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        mocker.patch.object(spawner, "_expose_service", return_value=("http://gateway:17670", "sandbox.openshell.localhost"))
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
         async def mock_ready(*args, **kwargs):
             return True
+
         mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
         mocker.patch.object(OpenShellSpawner, "_build_network_policy")
         mocker.patch.object(OpenShellSpawner, "_build_baseline_filesystem_policy")
 
         # Mock provider creation to return a fake provider ID
-        mock_create_provider = mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mock_create_provider = mocker.patch.object(
+            spawner, "_create_provider", return_value="provider-123"
+        )
         mock_start_server = mocker.patch.object(spawner, "start_server", return_value=None)
         # Ensure credential value is available via os.environ
         mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
@@ -413,7 +464,9 @@ class TestOpenShellSpawnerSpawn:
 
         assert endpoint == "http://gateway:17670"
         # Provider should be created with the real credential (env var name, uppercased)
-        mock_create_provider.assert_called_once_with(credentials={"OPENAI_API_KEY": "sk-real-secret"})
+        mock_create_provider.assert_called_once_with(
+            credentials={"OPENAI_API_KEY": "sk-real-secret"}
+        )
         # Check that spec.environment does NOT contain the real credential
         create_kwargs = mock_client.create.call_args[1]
         spec = create_kwargs["spec"]
@@ -425,6 +478,7 @@ class TestOpenShellSpawnerSpawn:
         # But spec.providers should contain the provider ID
         # Check providers: real protobuf has list, mocked spec has append mock
         from unittest.mock import MagicMock
+
         if isinstance(spec.providers, MagicMock):
             spec.providers.append.assert_called_once_with("provider-123")
         else:
@@ -2030,38 +2084,17 @@ class TestCredentialInjection:
             "Expected 2 uses of datamodel_pb2.Provider (for _create_provider and "
             "_create_and_attach_provider), found %d" % src.count("datamodel_pb2.Provider")
         )
-        assert "openshell_pb2.Provider" not in src, (
-            "Found stale openshell_pb2.Provider -- should be datamodel_pb2.Provider (issue #211)"
-        )
+        assert (
+            "openshell_pb2.Provider" not in src
+        ), "Found stale openshell_pb2.Provider -- should be datamodel_pb2.Provider (issue #211)"
         # Also verify the import is present
         assert "from openshell._proto import datamodel_pb2" in src
 
         # If the real openshell package is available, also verify the proto descriptor
         try:
-            # Bypass the MagicMock stub that this test file installs at import time
-            import sys
-            from unittest.mock import MagicMock
-            # Remove the mock if present and try real import
-            was_mocked = isinstance(sys.modules.get("openshell"), MagicMock)
-            if was_mocked:
-                # Save and remove mock, then try real import
-                saved = {k: sys.modules.pop(k) for k in list(sys.modules.keys()) if k.startswith("openshell")}
-                try:
-                    from openshell._proto import datamodel_pb2 as real_datamodel, openshell_pb2 as real_openshell
-                    req = real_openshell.CreateProviderRequest(
-                        provider=real_datamodel.Provider(
-                            type="cloud-agents",
-                            credentials={"OPENAI_API_KEY": "test"},
-                        ),
-                    )
-                    assert req.provider.type == "cloud-agents"
-                    assert real_openshell.CreateProviderRequest.DESCRIPTOR.fields_by_name["provider"].message_type.full_name == "openshell.datamodel.v1.Provider"
-                    assert not hasattr(real_openshell, "Provider")
-                finally:
-                    # Restore mock for other tests
-                    sys.modules.update(saved)
-            else:
+            with _real_openshell_modules():
                 from openshell._proto import datamodel_pb2, openshell_pb2
+
                 req = openshell_pb2.CreateProviderRequest(
                     provider=datamodel_pb2.Provider(
                         type="cloud-agents",
@@ -2069,6 +2102,203 @@ class TestCredentialInjection:
                     ),
                 )
                 assert req.provider.type == "cloud-agents"
+                assert (
+                    openshell_pb2.CreateProviderRequest.DESCRIPTOR.fields_by_name[
+                        "provider"
+                    ].message_type.full_name
+                    == "openshell.datamodel.v1.Provider"
+                )
+                assert not hasattr(openshell_pb2, "Provider")
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+
+class TestProviderResponseMessages:
+    """Tests for correct parsing of real OpenShell provider response messages.
+
+    These construct real protobuf objects from openshell._proto (not plain
+    Mocks, which auto-create any attribute access and would hide exactly
+    this class of bug) to verify the spawner code reads the right
+    fields/attributes -- confirmed against a real gateway that several of
+    these were wrong (see issue #211 and its follow-ups).
+    """
+
+    def test_provider_metadata_has_no_top_level_id(self) -> None:
+        """Provider's identifying fields live under metadata, not top-level.
+
+        Structural check only -- see test_create_provider_returns_metadata_name
+        below for the actual behavioral assertion (which field _create_provider()
+        must read). Confirmed against a real gateway that reading metadata.id
+        here (instead of metadata.name) makes CreateSandbox fail with
+        "provider '<id>' not found" -- spec.providers/AttachSandboxProvider/
+        DetachSandboxProvider all resolve providers by name.
+        """
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import datamodel_pb2
+
+                provider = datamodel_pb2.Provider(
+                    type="cloud-agents",
+                    metadata=datamodel_pb2.ObjectMeta(
+                        id="provider-uuid-12345",
+                        name="test-provider",
+                    ),
+                )
+                assert provider.metadata.id == "provider-uuid-12345"
+                assert not hasattr(provider, "id"), "Provider should not have top-level id field"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+    @pytest.mark.asyncio
+    async def test_create_provider_returns_metadata_name(self, mocker: MockerFixture) -> None:
+        """_create_provider() must return metadata.name, not metadata.id.
+
+        id and name are set to different values here specifically so a wrong
+        extraction is caught rather than coincidentally passing.
+        """
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import datamodel_pb2, openshell_pb2
+
+                from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+                real_response = openshell_pb2.ProviderResponse(
+                    provider=datamodel_pb2.Provider(
+                        type="cloud-agents",
+                        metadata=datamodel_pb2.ObjectMeta(
+                            id="provider-uuid-should-not-be-returned",
+                            name="provider-name-should-be-returned",
+                        ),
+                    )
+                )
+
+                mock_stub_cls = mocker.patch(
+                    "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+                )
+                mock_stub_cls.return_value.CreateProvider.return_value = real_response
+
+                spawner = OpenShellSpawner(
+                    openshell_client=mocker.Mock(),
+                    tls_ca="/tmp/fake-ca.pem",
+                )
+                mocker.patch.object(spawner, "_create_grpc_channel")
+
+                result = await spawner._create_provider(credentials={"OPENAI_API_KEY": "sk-test"})
+
+                assert result == "provider-name-should-be-returned"
+                assert result != "provider-uuid-should-not-be-returned"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+    @pytest.mark.asyncio
+    async def test_create_provider_returns_metadata_name_ci(self, mocker: MockerFixture) -> None:
+        """CI-runnable version of test_create_provider_returns_metadata_name.
+
+        That test skips in CI (the openshell extra isn't installed there --
+        the same gap that let #211/#213's bugs ship). This one doesn't need
+        the real package: it controls CreateProvider's return value directly
+        via mocker.patch, using types.SimpleNamespace (not MagicMock) so a
+        wrong attribute access (.provider.id instead of .provider.metadata.name)
+        raises AttributeError instead of silently returning another mock,
+        regardless of whether openshell is actually installed.
+        """
+        from types import SimpleNamespace
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        fake_response = SimpleNamespace(
+            provider=SimpleNamespace(
+                metadata=SimpleNamespace(name="provider-name-should-be-returned"),
+            ),
+        )
+
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.CreateProvider.return_value = fake_response
+        mocker.patch("openshell._proto.openshell_pb2.CreateProviderRequest")
+        mocker.patch("openshell._proto.datamodel_pb2.Provider")
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        result = await spawner._create_provider(credentials={"OPENAI_API_KEY": "sk-test"})
+
+        assert result == "provider-name-should-be-returned"
+
+    def test_provider_request_has_workspace_field(self) -> None:
+        """Regression: CreateProviderRequest must include workspace parameter.
+
+        Verify that CreateProviderRequest accepts and stores a workspace field,
+        which is required for the provider to be created in the correct workspace.
+        """
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import datamodel_pb2, openshell_pb2
+
+                req = openshell_pb2.CreateProviderRequest(
+                    workspace="test-workspace",
+                    provider=datamodel_pb2.Provider(
+                        type="cloud-agents",
+                        credentials={"KEY": "value"},
+                    ),
+                )
+                assert req.workspace == "test-workspace"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+    def test_attach_sandbox_provider_request_fields(self) -> None:
+        """Regression: AttachSandboxProviderRequest uses sandbox_name and provider_name fields.
+
+        Verify the correct field names for attaching a provider to a sandbox.
+        """
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import openshell_pb2
+
+                req = openshell_pb2.AttachSandboxProviderRequest(
+                    sandbox_name="test-sandbox",
+                    provider_name="test-provider-id",
+                    workspace="test-workspace",
+                )
+                assert req.sandbox_name == "test-sandbox"
+                assert req.provider_name == "test-provider-id"
+                assert req.workspace == "test-workspace"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+    def test_detach_sandbox_provider_request_fields(self) -> None:
+        """Regression: DetachSandboxProviderRequest uses sandbox_name and provider_name fields."""
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import openshell_pb2
+
+                req = openshell_pb2.DetachSandboxProviderRequest(
+                    sandbox_name="test-sandbox",
+                    provider_name="test-provider-id",
+                    workspace="test-workspace",
+                )
+                assert req.sandbox_name == "test-sandbox"
+                assert req.provider_name == "test-provider-id"
+                assert req.workspace == "test-workspace"
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("openshell not installed")
+
+    def test_delete_provider_request_fields(self) -> None:
+        """Regression: DeleteProviderRequest uses 'name' field for provider ID."""
+        try:
+            with _real_openshell_modules():
+                from openshell._proto import openshell_pb2
+
+                req = openshell_pb2.DeleteProviderRequest(
+                    name="test-provider-id",
+                    workspace="test-workspace",
+                )
+                assert req.name == "test-provider-id"
+                assert req.workspace == "test-workspace"
         except (ImportError, ModuleNotFoundError):
             pytest.skip("openshell not installed")
 
