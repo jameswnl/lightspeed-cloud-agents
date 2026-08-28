@@ -498,6 +498,14 @@ class OpenShellSpawner(AgentSpawner):
             ssl_ctx.load_cert_chain(self._tls_cert, self._tls_key)
         return ssl_ctx
 
+    # Consecutive bare-404 responses (no body, no content-type) before
+    # _wait_ready_with_host() gives up early and raises a diagnostic error
+    # instead of waiting out the full timeout (issue #209). Chosen high
+    # enough (~10s+ of continuous signal at the 2s poll interval) that a
+    # transient blip while a route propagates on a slower-but-working
+    # gateway (real OCP, local Kind) shouldn't false-positive.
+    _INGRESS_MISMATCH_STREAK_LIMIT: ClassVar[int] = 5
+
     async def _wait_ready_with_host(
         self,
         endpoint: str,
@@ -518,6 +526,16 @@ class OpenShellSpawner(AgentSpawner):
 
         Returns:
             True if the sandbox became ready, False if timed out.
+
+        Raises:
+            RuntimeError: If the gateway returns a bare 404 (no body, no
+                content-type) several times in a row -- this is the
+                fingerprint of an ingress that doesn't support
+                Host-header-based HTTP routing to sandbox ports on its
+                main TLS port (issue #209), not a slow-starting sandbox.
+                Raised early instead of waiting out the full timeout so
+                the failure is diagnosable rather than a generic
+                "did not become ready" after 60s.
         """
         import time
 
@@ -525,6 +543,8 @@ class OpenShellSpawner(AgentSpawner):
         verify: bool | ssl.SSLContext | None = self.get_query_ssl_context()
         if verify is None:
             verify = True
+
+        ingress_mismatch_streak = 0
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
@@ -536,8 +556,29 @@ class OpenShellSpawner(AgentSpawner):
                     )
                     if resp.status_code == 200:
                         return True
+                    if (
+                        resp.status_code == 404
+                        and not resp.content
+                        and "content-type" not in resp.headers
+                    ):
+                        ingress_mismatch_streak += 1
+                        if ingress_mismatch_streak >= self._INGRESS_MISMATCH_STREAK_LIMIT:
+                            raise RuntimeError(
+                                f"Gateway returned a bare 404 (no body, no content-type) "
+                                f"{ingress_mismatch_streak} times in a row for Host "
+                                f"'{virtual_host}' at {endpoint}{health_path}. This "
+                                "matches the fingerprint of an ingress that doesn't "
+                                "support Host-header-based HTTP routing to sandbox "
+                                "ports on its main TLS port (see issue #209) -- the "
+                                "sandbox's app itself may be perfectly healthy. If this "
+                                "gateway exposes a separate HTTP ingress route for "
+                                "sandboxes, construct this spawner with "
+                                "http_endpoint=<that route's URL> instead."
+                            )
+                    else:
+                        ingress_mismatch_streak = 0
             except httpx.HTTPError:
-                pass
+                ingress_mismatch_streak = 0
             await asyncio.sleep(2.0)
         return False
 

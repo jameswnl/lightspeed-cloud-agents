@@ -3038,6 +3038,98 @@ class TestGetQuerySslContext:
         assert mock_async_client_cls.call_args.kwargs["verify"] is mock_ssl_ctx
 
 
+class TestWaitReadyIngressMismatchDiagnostic:
+    """Tests for _wait_ready_with_host()'s issue #209 fail-fast diagnostic.
+
+    A repeated bare 404 (no body, no content-type) is the fingerprint of
+    an ingress that doesn't support Host-header-based HTTP routing to
+    sandbox ports on its main TLS port -- not a slow-starting sandbox.
+    Raising early with a clear message beats silently waiting out the
+    full timeout for a generic "did not become ready" error.
+    """
+
+    def _mock_http_client(self, mocker: MockerFixture, responses: list) -> Any:
+        """Patch httpx.AsyncClient so client.get() yields `responses` in order."""
+        mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.asyncio.sleep",
+            new=mocker.AsyncMock(),
+        )
+        mock_http_client = mocker.AsyncMock()
+        mock_http_client.get = mocker.AsyncMock(side_effect=responses)
+        mock_async_client_cls = mocker.patch(
+            "cloud_agents.spawner.openshell_spawner.httpx.AsyncClient"
+        )
+        mock_async_client_cls.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mock_http_client
+        )
+        mock_async_client_cls.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+        return mock_http_client
+
+    @pytest.mark.asyncio
+    async def test_raises_on_repeated_bare_404(self, mocker: MockerFixture) -> None:
+        """5 consecutive bare 404s raise a diagnostic error, not a plain timeout."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        bare_404 = mocker.Mock(status_code=404, content=b"", headers={})
+        http_client = self._mock_http_client(mocker, [bare_404] * 5)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await spawner._wait_ready_with_host(
+                "https://gw:443", "default--sb.openshell.localhost", timeout=60.0
+            )
+
+        assert "bare 404" in str(exc_info.value)
+        assert "issue #209" in str(exc_info.value)
+        assert "default--sb.openshell.localhost" in str(exc_info.value)
+        assert http_client.get.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_tolerates_transient_bare_404_before_success(self, mocker: MockerFixture) -> None:
+        """A short blip of bare 404s that resolves to 200 must not raise."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        bare_404 = mocker.Mock(status_code=404, content=b"", headers={})
+        healthy = mocker.Mock(status_code=200)
+        self._mock_http_client(mocker, [bare_404, bare_404, healthy])
+
+        result = await spawner._wait_ready_with_host("https://gw:443", "vh", timeout=60.0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_404_with_content_type_is_not_treated_as_ingress_mismatch(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A real app-level 404 (has content-type) never triggers the diagnostic.
+
+        Distinguishes a genuine 404 response from the sandbox's own app
+        (which would have a content-type header, e.g. application/json)
+        from the ingress's bare 404 with no body/headers at all.
+        """
+        import itertools
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        app_404 = mocker.Mock(
+            status_code=404,
+            content=b'{"detail":"not found"}',
+            headers={"content-type": "application/json"},
+        )
+        # asyncio.sleep is mocked to a no-op (see _mock_http_client), so the
+        # while loop can spin far faster than wall-clock time -- an
+        # infinite iterator avoids exhausting a finite response list
+        # before the timeout check below actually trips.
+        http_client = self._mock_http_client(mocker, itertools.repeat(app_404))
+
+        result = await spawner._wait_ready_with_host("https://gw:443", "vh", timeout=0.05)
+
+        assert result is False
+        assert http_client.get.call_count >= 1
+
+
 class TestEntrypointSpawnerFactory:
     """Tests for _create_spawner() auth configuration (#174)."""
 
