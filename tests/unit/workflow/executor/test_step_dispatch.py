@@ -116,3 +116,44 @@ class TestGraphTranslatorUsesStepExecutor:
 
         await graph.run(state=state)
         mock_executor.run.assert_called_once()
+
+
+class TestSpawnModeEngineParity:
+    """Both engines dispatch spawn: none/local through the same get_step_executor()
+    call (issue #228) -- proving structural parity, not bit-identical LLM output.
+    """
+
+    def test_none_and_local_executors_never_reference_the_spawner(self) -> None:
+        """A spawner passed in is never touched for spawn: none/local.
+
+        Unlike SandboxExecutor (constructed with spawner=...), DirectExecutor
+        and SubprocessExecutor are constructed with no arguments at all --
+        get_step_executor() doesn't even pass the spawner through. This is
+        the structural guarantee both the local engine (graph_translator.py)
+        and the Temporal engine (activities.py, since issue #228) rely on:
+        whichever caller invokes get_step_executor(), a real spawner object
+        passed for an unrelated ephemeral step elsewhere can never leak into
+        a none/local step's execution.
+        """
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.dispatch import get_step_executor
+        from cloud_agents.workflow.executor.step.subprocess_exec import SubprocessExecutor
+
+        class TrackedSpawner:
+            def __init__(self) -> None:
+                self.touched = False
+
+            def __getattr__(self, name: str) -> Any:
+                self.touched = True
+                raise AssertionError(f"spawner.{name} should never be accessed")
+
+        spawner = TrackedSpawner()
+
+        none_executor = get_step_executor(step={"name": "s1", "spawn": "none"}, spawner=spawner)
+        local_executor = get_step_executor(step={"name": "s2", "spawn": "local"}, spawner=spawner)
+
+        assert isinstance(none_executor, DirectExecutor)
+        assert isinstance(local_executor, SubprocessExecutor)
+        assert not spawner.touched
+        assert not hasattr(none_executor, "spawner")
+        assert not hasattr(local_executor, "spawner")

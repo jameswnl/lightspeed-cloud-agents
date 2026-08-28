@@ -27,8 +27,19 @@ from cloud_agents.workflow.notifiers.escalation import LogPackager
 from cloud_agents.workflow.notifiers.notifier import NullNotifier
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
+from cloud_agents.workflow.core.interpolation import interpolate
+from cloud_agents.workflow.core.state import StepResult as LegacyStepResult
+from cloud_agents.workflow.core.state import WorkflowState
 from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_tls_errors_total
-from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
+from cloud_agents.workflow.core.models import (
+    StepResult,
+    StepTranscript,
+    TranscriptEvent,
+    normalize_transcript_events,
+)
+from cloud_agents.workflow.executor.middleware import TranscriptMiddleware, apply_middleware
+from cloud_agents.workflow.executor.step.base import StepInput
+from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 from cloud_agents.workflow.security.tls import (
     TLSMode,
     build_query_client_kwargs,
@@ -85,6 +96,121 @@ def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
     hash_input = f"{workflow_id}:{step_name}:{attempt}"
     digest = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
     return f"ca-{digest}"
+
+
+def _interpolate_instructions(template: str | None, context: dict[str, Any]) -> str | None:
+    """Fail-open {{ steps.X.output.path }} interpolation for `instructions`.
+
+    Temporal only interpolated `prompt` before issue #228 -- `instructions`
+    was passed through raw as the sandbox's systemPrompt. Mirrors
+    graph_translator.py's _interpolate_step_text() for the local engine,
+    but deliberately does NOT handle `{{ input }}` (instructions never
+    supported that placeholder on either engine -- that's _interpolate_prompt-
+    specific, tied to WorkflowInput.input_prompt, which this activity
+    doesn't have).
+
+    Parameters:
+        template: Raw instructions text, or None.
+        context: Prior step results dict, keyed by output_key (same shape
+            as run_sandbox_step's `input["context"]`).
+
+    Returns:
+        Interpolated text, or the raw template unchanged if interpolation
+        fails or there's nothing to interpolate.
+    """
+    if not template or "{{" not in template:
+        return template
+    steps = {
+        k: LegacyStepResult(
+            step_name=k,
+            status=v.get("status", "completed"),
+            output=v.get("output"),
+            error=v.get("error"),
+        )
+        for k, v in context.items()
+    }
+    wf_state = WorkflowState(
+        workflow_id="", workflow_name="", steps=steps, created_at="", updated_at=""
+    )
+    try:
+        return interpolate(template, wf_state)
+    except ValueError:
+        logger.debug("Instructions interpolation failed for %r", template, exc_info=True)
+        return template
+
+
+async def _run_direct_or_local_step(
+    input: dict[str, Any],
+    step: dict[str, Any],
+    provider: dict[str, Any],
+    provider_name: str,
+    transcript_store: Optional[Any],
+) -> dict[str, Any]:
+    """Dispatch spawn: none/local steps to DirectExecutor/SubprocessExecutor.
+
+    Mirrors the local engine's dispatch (graph_translator.py) instead of
+    spawning a sandbox -- these modes never touch the spawner, regardless
+    of whether one is configured (issue #228).
+    """
+    step_name = step["name"]
+    output_key = step.get("output_key", step_name)
+    context = input.get("context", {})
+
+    step_input = StepInput(
+        prompt=step.get("prompt", ""),  # already interpolated by the workflow
+        provider=provider,
+        system_prompt=_interpolate_instructions(step.get("instructions"), context),
+        output_schema=step.get("output_schema"),
+        tools=step.get("tools", []),
+        tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
+        context=context,
+        timeout_seconds=step.get("timeout_seconds", 600),
+        sandbox_image=input.get("sandbox_image", "sandbox:latest"),
+        skills_image=input.get("skills_image"),
+        skills_paths=input.get("skills_paths"),
+        allowed_skills=step.get("allowed_skills"),
+        # Full unfiltered catalog, matching the local engine's actual
+        # current behavior -- the ephemeral path's per-step-name filtering
+        # (see below) does not apply to none/local, same as on the local
+        # engine today (a step's own mcp_servers: field is a no-op there).
+        mcp_servers=input.get("mcp_servers"),
+        workflow_id=input["workflow_id"],
+        raw_step=step,
+        step_name=step_name,
+        output_key=output_key,
+    )
+
+    executor = get_step_executor(step, spawner=None, transcript_store=None)
+    middlewares = [TranscriptMiddleware(transcript_store)] if transcript_store is not None else []
+    wrapped = apply_middleware(executor, middlewares)
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        result = await wrapped.run(step_input)
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+    if result.status == "completed":
+        _circuit_breaker.record_success(provider_name)
+    else:
+        _circuit_breaker.record_failure(provider_name)
+
+    transcript = StepTranscript(
+        step_name=step_name,
+        events=normalize_transcript_events(result.transcript),
+        cost_usd=result.cost_usd,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        duration_ms=result.duration_ms,
+    )
+    return {
+        "status": result.status,
+        "output": result.output,
+        "error": result.error,
+        "transcript": transcript.model_dump(),
+    }
 
 
 async def _heartbeat_loop(interval_seconds: float = 30) -> None:
@@ -244,7 +370,14 @@ async def run_sandbox_step(
     spawner: Optional[Any] = None,
     transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
-    """Spawn a sandbox pod, call POST /v1/agent/run, return result."""
+    """Run an agent step, dispatching by spawn mode.
+
+    spawn: ephemeral (default) spawns a sandbox pod and calls
+    POST /v1/agent/run. spawn: none/local instead run in-process/subprocess
+    via get_step_executor() -- see _run_direct_or_local_step(). The
+    activity name/registration stays "run_sandbox_step" for all three
+    modes (issue #228 -- Temporal replay safety).
+    """
     step = input["step"]
     step_name = step["name"]
     workflow_id = input["workflow_id"]
@@ -277,6 +410,21 @@ async def _run_sandbox_step_inner(
                 "— too many consecutive failures"
             ),
         }
+
+    spawn_mode = step.get("spawn", "ephemeral")
+    if spawn_mode != "ephemeral":
+        try:
+            return await _run_direct_or_local_step(
+                input, step, provider, provider_name, transcript_store
+            )
+        except ValueError as exc:
+            # get_step_executor() raises ValueError for a genuinely unknown
+            # spawn value -- a deterministic misconfiguration, not a
+            # transient failure. Return failed like the circuit-breaker
+            # check above rather than letting it propagate as an activity
+            # exception, which would trigger RetryPolicy retries that
+            # can never succeed.
+            return {"status": "failed", "error": str(exc)}
 
     pod_name = compute_pod_name(workflow_id, step_name, attempt)
     labels = {
@@ -469,7 +617,9 @@ async def _run_sandbox_step_inner(
                 "context": context,
             }
             if instructions := step.get("instructions"):
-                request_body["systemPrompt"] = instructions
+                request_body["systemPrompt"] = _interpolate_instructions(
+                    instructions, input.get("context", {})
+                )
             if output_schema := step.get("output_schema"):
                 request_body["outputSchema"] = output_schema
             if permissions.get("allowed_tools"):
