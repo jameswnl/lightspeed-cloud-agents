@@ -68,6 +68,8 @@ graph TD
 | **Auth per sandbox** | Optional bearer token | Mandatory JWT per sandbox |
 | **Multi-runtime** | Separate spawner per runtime | One spawner, gateway handles runtime |
 | **Agent contract** | POST /v1/agent/run | POST /v1/agent/run (unchanged) |
+| **Transcript collection** | GET /v1/agent/events | GET /v1/agent/events (unchanged) |
+| **Extra infrastructure** | None | Gateway service + SQLite/Postgres |
 
 ### Deployment Topologies
 
@@ -333,9 +335,8 @@ Set the following environment variables on the workflow runner container:
 
 | Env Var | Default | Description |
 |---|---|---|
-| `WORKFLOW_SPAWNER` | *(empty)* | Set to `openshell` to enable OpenShellSpawner |
+| `WORKFLOW_SPAWNER` | *(empty)* | Must be `openshell` to enable OpenShellSpawner -- the only supported ephemeral spawner (issue #198); any other non-empty value fails startup |
 | `OPENSHELL_GATEWAY_URL` | `localhost:17670` | Gateway gRPC endpoint (no `http://` prefix) |
-| `OPENSHELL_DRIVER` | `podman` | Compute driver: `podman` or `kubernetes` |
 | `OPENSHELL_WORKSPACE` | `default` | OpenShell workspace name |
 | `OPENSHELL_HTTP_ENDPOINT` | *(from gateway)* | Override HTTP proxy endpoint when gateway URL is not routable |
 | `OPENSHELL_TLS_CA` | | CA certificate path for TLS |
@@ -343,12 +344,19 @@ Set the following environment variables on the workflow runner container:
 | `OPENSHELL_TLS_KEY` | | Client key path for mTLS |
 | `OPENSHELL_BEARER_TOKEN` | | OIDC bearer token (requires TLS) |
 
+> **Compute driver is not a client setting.** The gateway's own compute
+> driver (`podman` vs `kubernetes`, see "Gateway Environment Reference"
+> below) must match *the gateway's* deployment target, but that's a
+> gateway-side deployment detail, invisible to callers -- there is no
+> client-side driver env var and no client-side driver detection.
+> `OpenShellSpawner`'s entire lifecycle (create/exec/expose/query/destroy)
+> is fully gateway-mediated regardless of driver.
+
 Example (local dev, no auth):
 
 ```bash
 export WORKFLOW_SPAWNER=openshell
 export OPENSHELL_GATEWAY_URL=localhost:17670
-export OPENSHELL_DRIVER=podman
 export OPENSHELL_WORKSPACE=default
 ```
 
@@ -405,8 +413,6 @@ steps:
 
 1. A Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills` (non-advisory spawns only — advisory/`read_only=True` spawns grant blanket filesystem read for investigation purposes, which already includes everything under `/skills` regardless of this field). This is the real enforcement boundary: an unlisted name is genuinely unreadable, not merely absent elsewhere.
 2. Before starting the agent server, the spawner execs the sandbox image's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv, which copies just those names from `/skills` into `/app/skills` — a plain, freshly-listable directory. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` (not `/skills`) so provider-side listing sees only the scoped subset. The copy itself still goes through the Landlock grant from (1), so a name that isn't in `allowed_skills` can't be materialized even if this script were compromised.
-
-`KubernetesSpawner`/`PodmanSpawner` accept `allowed_skills` for interface consistency but have no Landlock equivalent, so they log a warning and do not restrict visibility.
 
 **`spawn: none`/`spawn: local` parity (issue #204):** these modes bypass the spawner (no Landlock, no container boundary), but they honor the same `allowed_skills` field. `DirectExecutor` and the `spawn: local` subprocess child call `get_skills_capability(include=step_input.allowed_skills)` (`step/skills.py`) **only when `step_input.allowed_skills` is not `None`** — omitted/`None` skips the call entirely, producing no skills capability at all, matching the ephemeral default. This executor-level gate is the actual least-privilege enforcement; it is *not* the same as `get_skills_capability`'s own `include=None` behavior, which means "no filtering" (all configured skills) rather than "no skills" — that path is only reachable by calling the function directly (e.g. in tests), never through the executors. An explicit `allowed_skills: []` also yields no skills, since `get_skills_capability` treats an empty `include` list as "no skills requested". A non-empty `allowed_skills` loads directories from the operator-configured `CLOUD_AGENTS_SKILLS_PATHS` env var and passes `include=` straight through to `pydantic-ai-skills`' `SkillsCapability`, filtering by skill name. There is no per-request `skills_image`/OCI-image equivalent for these modes — pulling and running a caller-specified image with no sandbox/Landlock boundary was rejected as unsafe (see #204) — so the set of skills *available* to select from is still operator-curated via `CLOUD_AGENTS_SKILLS_PATHS`; `allowed_skills` only narrows which of those a given step can see.
 

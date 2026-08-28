@@ -38,11 +38,7 @@ spec:
             - name: WORKFLOW_SPAWNER
               value: "openshell"
             - name: OPENSHELL_GATEWAY_URL
-              value: "http://openshell-gateway:17670"
-            - name: OPENSHELL_DRIVER
-              value: "podman"
-            - name: SPAWNER_NAMESPACE
-              value: "default"
+              value: "openshell-gateway:17670"
             - name: AUTH_REQUIRED
               value: "false"
             - name: OPENAI_API_KEY

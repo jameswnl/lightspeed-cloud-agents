@@ -34,11 +34,21 @@ spec:
     - ports:
         - port: 7233
           protocol: TCP
-    # Sandbox pods
+    # OpenShell gateway (control plane + gateway-mediated HTTP routing to
+    # sandboxes, issue #198 -- OpenShellSpawner never talks to sandbox pods
+    # directly, everything is gateway-mediated)
+    - ports:
+        - port: 17670
+          protocol: TCP
+    # Sandbox pods -- leftover from the deleted KubernetesSpawner's direct
+    # pod egress. OpenShellSpawner never talks to sandbox pods directly
+    # (see the gateway rule above), so this is not required for the
+    # current spawn path; left in place rather than risk breaking an
+    # untested topology, candidate for removal in a follow-up.
     - ports:
         - port: 8080
           protocol: TCP
-    # K8s API
+    # K8s API (TokenReview auth, runtime/auth.py)
     - ports:
         - port: 443
           protocol: TCP

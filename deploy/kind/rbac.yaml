@@ -25,38 +25,10 @@ metadata:
     app: workflow-runner
     environment: cloud-agents
 ---
-# Workflow runner needs permission to create Jobs (for on-demand spawning in Phase 4b)
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: workflow-runner-role
-  labels:
-    environment: cloud-agents
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "delete", "list"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["create", "get", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: workflow-runner-binding
-  labels:
-    environment: cloud-agents
-subjects:
-  - kind: ServiceAccount
-    name: workflow-runner
-roleRef:
-  kind: Role
-  name: workflow-runner-role
-  apiGroup: rbac.authorization.k8s.io
----
+# Note: workflow-runner no longer needs direct Jobs/pods/services permissions --
+# OpenShellSpawner is the only ephemeral spawner (issue #198) and talks to the
+# OpenShell gateway over gRPC; the gateway's own compute driver (not
+# workflow-runner) is what touches the Kubernetes API to spawn sandboxes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
