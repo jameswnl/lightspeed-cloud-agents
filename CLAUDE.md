@@ -42,12 +42,18 @@ Do NOT use these in examples or documentation. The test `test_no_dead_fields` wi
 
 ### Active fields: spawn mode
 
-The `spawn` field controls step execution isolation:
+The `spawn` field controls step execution isolation, and applies identically under both the local (`LocalWorkflowRunner`) and Temporal (`TemporalWorkflowRunner`) engines (issue #228 — before that, Temporal ignored `spawn` entirely and always ran the sandbox path):
 - `none` — direct LLM call via pydantic-ai `model_request`, no tools, runs in-process
 - `local` — LLM call via pydantic-ai in a forked subprocess, process-level isolation
 - `ephemeral` — full OpenShell sandbox container (default)
 
 The Agent path (`Agent.run()`) is used when any of: `tools`, `mcp_servers`, or `CLOUD_AGENTS_SKILLS_PATHS` are present. Without any of these, a single `model_request()` call is made.
+
+Both engines dispatch through the same `get_step_executor()` (`workflow/executor/step/dispatch.py`) to `DirectExecutor`/`SubprocessExecutor`/`SandboxExecutor`. Under Temporal, `none`/`local` run inside `_run_sandbox_step_inner` (`temporal/activities.py`) — i.e. **on the worker process itself, not in a sandbox** — but the *activity type* scheduled by the workflow is always `run_sandbox_step` regardless of spawn mode; the branch happens inside the activity implementation, not in `_handle_agent_step()`'s `execute_activity()` call. This is deliberate: Temporal replay keys on activity type name + schedule order, not on the activity body, so branching inside the activity is replay-safe across in-flight workflow histories, while scheduling a different activity name per spawn mode would not be (would need `workflow.patched()` guarding, which this codebase doesn't use).
+
+Caveats that apply to Temporal's `none`/`local` the same way they already applied to the local engine's:
+- No `SpawnConfig` CPU/memory resource caps for `spawn: local`'s subprocess — unlike ephemeral sandboxes, a runaway subprocess isn't capped.
+- `ensure_credentials_env()` (`step/provider.py`) mutates `os.environ` with first-key-wins, no locking — a real risk under Temporal's concurrent activities (default `MAX_CONCURRENT_ACTIVITIES=10`) sharing one worker process: two steps for different providers running concurrently can race on which provider's API key ends up in the shared environment.
 
 ### Tool registration
 

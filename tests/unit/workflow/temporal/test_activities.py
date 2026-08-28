@@ -3967,3 +3967,366 @@ class TestTranscriptPersistence:
 
         assert result["status"] == "failed"
         mock_store.save.assert_called_once_with("wf-1", "r1", full_transcript)
+
+
+class TestSpawnModeDispatch:
+    """Tests for spawn: none/local dispatch in the Temporal activity (issue #228).
+
+    Before this fix, _run_sandbox_step_inner ignored step["spawn"] entirely
+    and always ran the sandbox-spawn path -- these tests prove none/local
+    steps dispatch to DirectExecutor/SubprocessExecutor instead, matching
+    the local engine's graph_translator.py behavior.
+    """
+
+    def _make_input(self, spawn: str | None, **step_overrides: Any) -> dict:
+        step = {"name": "s1", "prompt": "hello", "output_key": "r1"}
+        if spawn is not None:
+            step["spawn"] = spawn
+        step.update(step_overrides)
+        return {
+            "step": step,
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_spawn_none_never_calls_spawner(self, mocker: MockerFixture) -> None:
+        """spawn: none dispatches to DirectExecutor and never touches the spawner."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(status="completed", output={"ok": True})
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_spawner = mocker.AsyncMock()
+
+        result = await run_sandbox_step(
+            self._make_input("none"),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        assert result["output"] == {"ok": True}
+        mock_spawner.spawn.assert_not_called()
+        mock_executor.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_spawn_local_never_calls_spawner(self, mocker: MockerFixture) -> None:
+        """spawn: local dispatches to SubprocessExecutor and never touches the spawner."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(status="completed", output={"ok": True})
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_spawner = mocker.AsyncMock()
+
+        result = await run_sandbox_step(
+            self._make_input("local"),
+            spawner=mock_spawner,
+        )
+
+        assert result["status"] == "completed"
+        mock_spawner.spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_spawn_none_with_no_spawner_configured_still_runs(
+        self, mocker: MockerFixture
+    ) -> None:
+        """spawn: none must NOT hit the 'no spawner configured' stub -- that
+        stub is ephemeral-only. none/local always actually calls the LLM,
+        regardless of whether a spawner is configured for ephemeral steps.
+        """
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(status="completed", output={"real": True})
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        result = await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        assert result["status"] == "completed"
+        assert result["output"] == {"real": True}
+        assert "executed-" not in str(result.get("output"))
+
+    @pytest.mark.asyncio
+    async def test_unknown_spawn_mode_raises(self) -> None:
+        """An unrecognized spawn value raises rather than silently running ephemeral."""
+        with pytest.raises(ValueError, match="Unknown spawn mode"):
+            await run_sandbox_step(self._make_input("not-a-real-mode"), spawner=None)
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_still_uses_stub_when_no_spawner(self) -> None:
+        """spawn: ephemeral (explicit or default) keeps the existing stub behavior."""
+        result = await run_sandbox_step(self._make_input("ephemeral"), spawner=None)
+        assert result["status"] == "completed"
+        assert result["output"]["summary"] == "executed-s1"
+
+        result_default = await run_sandbox_step(self._make_input(None), spawner=None)
+        assert result_default["output"]["summary"] == "executed-s1"
+
+    @pytest.mark.asyncio
+    async def test_transcript_round_trip_survives_step_transcript_validation(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Flat DirectExecutor-shaped transcript events must not crash StepTranscript(**data).
+
+        Regression test for the bug this fix would have introduced without
+        normalize_transcript_events(): raw flat events (unrecognized "type")
+        fail TranscriptEvent's Literal validation if fed straight through.
+        """
+        from cloud_agents.workflow.core.models import StepTranscript
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(
+            status="completed",
+            output={"ok": True},
+            transcript=[
+                {"type": "llm.call", "model": "gpt-4", "input_tokens": 10},
+                {"type": "llm.response", "output_tokens": 20},
+            ],
+            input_tokens=10,
+            output_tokens=20,
+            duration_ms=500,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        result = await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        transcript_data = result.pop("transcript")
+        # This is the actual assertion: _handle_agent_step() does exactly
+        # this construction on the workflow side. It must not raise.
+        transcript = StepTranscript(**transcript_data)
+        assert transcript.input_tokens == 10
+        assert transcript.output_tokens == 20
+        assert len(transcript.events) == 2
+        # Unrecognized "type" values are coerced to "result" by
+        # normalize_transcript_events(), not passed through raw.
+        assert all(e.type == "result" for e in transcript.events)
+
+    @pytest.mark.asyncio
+    async def test_instructions_interpolated_for_spawn_none(self, mocker: MockerFixture) -> None:
+        """{{ steps.X.output.Y }} in `instructions` is expanded for spawn: none.
+
+        Temporal never interpolated `instructions` before this fix (only
+        `prompt`) -- this is the new gap found during review, not a generic
+        StepInput-mapping test.
+        """
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        captured: dict[str, StepInput] = {}
+
+        async def fake_run(step_input: StepInput) -> ExecStepResult:
+            captured["step_input"] = step_input
+            return ExecStepResult(status="completed", output={"ok": True})
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = fake_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_spawner = mocker.AsyncMock()
+
+        input_dict = self._make_input(
+            "none",
+            instructions="Prior result: {{ steps.prior.output.summary }}",
+        )
+        input_dict["context"] = {
+            "prior": {"status": "completed", "output": {"summary": "all clear"}},
+        }
+
+        result = await run_sandbox_step(input_dict, spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        mock_spawner.spawn.assert_not_called()
+        assert "all clear" in captured["step_input"].system_prompt
+
+    @pytest.mark.asyncio
+    async def test_instructions_interpolation_fails_open(self, mocker: MockerFixture) -> None:
+        """An unresolvable {{ steps.X... }} reference in instructions falls back to raw text."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        captured: dict[str, StepInput] = {}
+
+        async def fake_run(step_input: StepInput) -> ExecStepResult:
+            captured["step_input"] = step_input
+            return ExecStepResult(status="completed", output={"ok": True})
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = fake_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        input_dict = self._make_input(
+            "none",
+            instructions="Missing: {{ steps.nonexistent.output.x }}",
+        )
+
+        result = await run_sandbox_step(input_dict, spawner=None)
+
+        assert result["status"] == "completed"
+        assert captured["step_input"].system_prompt == "Missing: {{ steps.nonexistent.output.x }}"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_called_during_direct_dispatch(self, mocker: MockerFixture) -> None:
+        """A long-running DirectExecutor call is heartbeated (heartbeat_timeout=180s)."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_heartbeat = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.activity.heartbeat"
+        )
+
+        async def slow_run(step_input: Any) -> ExecStepResult:
+            await asyncio.sleep(0)
+            return ExecStepResult(status="completed", output={"ok": True})
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = slow_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        assert mock_heartbeat.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_full_unfiltered_mcp_catalog_passed_for_none(self, mocker: MockerFixture) -> None:
+        """spawn: none passes the full MCP catalog, matching local engine's
+
+        actual current behavior -- NOT the ephemeral path's per-step-name
+        filtering (step-level mcp_servers is a no-op for none/local today,
+        same as under the local engine's DirectExecutor).
+        """
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        captured: dict[str, StepInput] = {}
+
+        async def fake_run(step_input: StepInput) -> ExecStepResult:
+            captured["step_input"] = step_input
+            return ExecStepResult(status="completed", output={"ok": True})
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = fake_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        input_dict = self._make_input("none", mcp_servers=["only-this-one"])
+        input_dict["mcp_servers"] = [
+            {"name": "only-this-one", "url": "http://a"},
+            {"name": "other-server", "url": "http://b"},
+        ]
+
+        await run_sandbox_step(input_dict, spawner=None)
+
+        server_names = {s["name"] for s in captured["step_input"].mcp_servers}
+        assert server_names == {"only-this-one", "other-server"}
+
+    @pytest.mark.asyncio
+    async def test_transcript_persisted_for_spawn_none_when_store_configured(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A configured transcript_store persists spawn: none results too."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(
+            status="completed",
+            output={"ok": True},
+            transcript=[],
+            input_tokens=5,
+            output_tokens=7,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_store = mocker.AsyncMock()
+
+        await run_sandbox_step(
+            self._make_input("none"),
+            spawner=None,
+            transcript_store=mock_store,
+        )
+
+        mock_store.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_records_success_for_spawn_none(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A successful spawn: none step records success on the provider breaker."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = False
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(status="completed", output={"ok": True})
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        mock_cb.record_success.assert_called_once_with("openai")
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_records_failure_for_spawn_none(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A failed spawn: none step records failure on the provider breaker."""
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = False
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(status="failed", error="boom")
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        mock_cb.record_failure.assert_called_once_with("openai")
+
+    @pytest.mark.asyncio
+    async def test_open_breaker_blocks_spawn_none_too(self, mocker: MockerFixture) -> None:
+        """An open circuit breaker blocks spawn: none steps too, not just ephemeral."""
+        mock_cb = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities._circuit_breaker"
+        )
+        mock_cb.is_open.return_value = True
+
+        result = await run_sandbox_step(self._make_input("none"), spawner=None)
+
+        assert result["status"] == "failed"
+        assert "circuit breaker" in result["error"].lower()

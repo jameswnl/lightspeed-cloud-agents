@@ -809,3 +809,56 @@ class TestTranscriptStorage:
         transcript = StepTranscript(step_name="big", events=events)
         truncated = transcript.truncate(max_events=50)
         assert len(truncated.events) <= 51  # 25 + marker + 25
+
+
+class TestSpawnModeReplayContract:
+    """A spawn: none/local step must still schedule the run_sandbox_step
+    activity type (issue #228) -- dispatch is branched inside the activity
+    implementation, not by scheduling a different activity per spawn mode,
+    so in-flight workflow histories replay safely across a worker upgrade.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spawn_none_step_still_uses_run_sandbox_step_activity(
+        self, env: WorkflowEnvironment, mocker
+    ) -> None:
+        """A spawn: none step resolves via the same run_sandbox_step activity
+        registration as ephemeral steps -- only its internal dispatch differs.
+        """
+        from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = ExecStepResult(
+            status="completed", output={"direct": True}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        steps = [
+            {
+                "name": "step1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "hello",
+                "spawn": "none",
+            },
+        ]
+
+        async with Worker(
+            env.client,
+            task_queue="test-q-spawn-none",
+            workflows=[AgentWorkflow],
+            activities=[run_sandbox_step, build_escalation_activity],
+        ):
+            result = await env.client.execute_workflow(
+                AgentWorkflow.run,
+                _make_input(steps),
+                id="wf-spawn-none-1",
+                task_queue="test-q-spawn-none",
+            )
+
+        assert result.steps["r1"].status == "completed"
+        assert result.steps["r1"].output == {"direct": True}
+        mock_executor.run.assert_called_once()
