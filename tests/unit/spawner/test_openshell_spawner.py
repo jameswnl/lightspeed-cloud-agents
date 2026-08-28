@@ -24,6 +24,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+import httpx
 import pytest
 from pytest_mock import MockerFixture
 
@@ -3097,6 +3098,28 @@ class TestWaitReadyIngressMismatchDiagnostic:
         result = await spawner._wait_ready_with_host("https://gw:443", "vh", timeout=60.0)
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_transport_error_resets_the_bare_404_streak(self, mocker: MockerFixture) -> None:
+        """An httpx.HTTPError between bare 404s resets the streak, not just pauses it.
+
+        2 bare 404s, then a transport error, then 5 more bare 404s: if the
+        error didn't reset the streak, it would raise after only 3 more
+        (2 + 3 = 5) instead of requiring 5 more (2 + error + 5 = 8 calls).
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        bare_404 = mocker.Mock(status_code=404, content=b"", headers={})
+        http_client = self._mock_http_client(
+            mocker,
+            [bare_404, bare_404, httpx.ConnectError("boom")] + [bare_404] * 5,
+        )
+
+        with pytest.raises(RuntimeError):
+            await spawner._wait_ready_with_host("https://gw:443", "vh", timeout=60.0)
+
+        assert http_client.get.call_count == 8
 
     @pytest.mark.asyncio
     async def test_404_with_content_type_is_not_treated_as_ingress_mismatch(
