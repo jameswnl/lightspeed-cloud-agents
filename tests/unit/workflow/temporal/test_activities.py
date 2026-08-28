@@ -3992,6 +3992,56 @@ class TestSpawnModeDispatch:
         }
 
     @pytest.mark.asyncio
+    async def test_instructions_interpolated_for_ephemeral_too(
+        self, mocker: MockerFixture
+    ) -> None:
+        """{{ steps.X.output.Y }} in `instructions` is expanded for spawn: ephemeral too.
+
+        Regression test for a review finding: _interpolate_instructions()
+        was built but only wired into the none/local path, leaving the
+        ephemeral systemPrompt assignment passing instructions raw --
+        the same pre-#228 bug, just for the default spawn mode instead of
+        none/local, and a new engine inconsistency (expanded under
+        Temporal none/local and the local engine, literal under Temporal
+        ephemeral).
+        """
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        captured_body: dict[str, Any] = {}
+
+        async def fake_post(url: str, json: dict[str, Any], **kwargs: Any) -> Any:
+            captured_body.update(json)
+            return mock_response
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
+        )
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(side_effect=fake_post)
+        mock_client.get = mocker.AsyncMock(return_value=mocker.MagicMock(status_code=404))
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        input_dict = self._make_input(
+            "ephemeral",
+            instructions="Prior result: {{ steps.prior.output.summary }}",
+        )
+        input_dict["context"] = {
+            "prior": {"status": "completed", "output": {"summary": "all clear"}},
+        }
+
+        result = await run_sandbox_step(input_dict, spawner=mock_spawner)
+
+        assert result["status"] == "completed"
+        assert captured_body["systemPrompt"] == "Prior result: <data>\"all clear\"</data>"
+
+    @pytest.mark.asyncio
     async def test_spawn_none_never_calls_spawner(self, mocker: MockerFixture) -> None:
         """spawn: none dispatches to DirectExecutor and never touches the spawner."""
         from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
@@ -4059,10 +4109,16 @@ class TestSpawnModeDispatch:
         assert "executed-" not in str(result.get("output"))
 
     @pytest.mark.asyncio
-    async def test_unknown_spawn_mode_raises(self) -> None:
-        """An unrecognized spawn value raises rather than silently running ephemeral."""
-        with pytest.raises(ValueError, match="Unknown spawn mode"):
-            await run_sandbox_step(self._make_input("not-a-real-mode"), spawner=None)
+    async def test_unknown_spawn_mode_returns_failed_not_ephemeral(self) -> None:
+        """An unrecognized spawn value returns failed rather than silently running ephemeral.
+
+        Deterministic misconfiguration -- returned as a failed result (like
+        the circuit-breaker check) rather than raised, so it doesn't trigger
+        useless RetryPolicy retries that can never succeed.
+        """
+        result = await run_sandbox_step(self._make_input("not-a-real-mode"), spawner=None)
+        assert result["status"] == "failed"
+        assert "Unknown spawn mode" in result["error"]
 
     @pytest.mark.asyncio
     async def test_ephemeral_still_uses_stub_when_no_spawner(self) -> None:

@@ -370,7 +370,14 @@ async def run_sandbox_step(
     spawner: Optional[Any] = None,
     transcript_store: Optional[Any] = None,
 ) -> dict[str, Any]:
-    """Spawn a sandbox pod, call POST /v1/agent/run, return result."""
+    """Run an agent step, dispatching by spawn mode.
+
+    spawn: ephemeral (default) spawns a sandbox pod and calls
+    POST /v1/agent/run. spawn: none/local instead run in-process/subprocess
+    via get_step_executor() -- see _run_direct_or_local_step(). The
+    activity name/registration stays "run_sandbox_step" for all three
+    modes (issue #228 -- Temporal replay safety).
+    """
     step = input["step"]
     step_name = step["name"]
     workflow_id = input["workflow_id"]
@@ -406,10 +413,18 @@ async def _run_sandbox_step_inner(
 
     spawn_mode = step.get("spawn", "ephemeral")
     if spawn_mode != "ephemeral":
-        # get_step_executor() raises ValueError for a genuinely unknown
-        # spawn value -- let that propagate rather than silently falling
-        # through to the ephemeral path below.
-        return await _run_direct_or_local_step(input, step, provider, provider_name, transcript_store)
+        try:
+            return await _run_direct_or_local_step(
+                input, step, provider, provider_name, transcript_store
+            )
+        except ValueError as exc:
+            # get_step_executor() raises ValueError for a genuinely unknown
+            # spawn value -- a deterministic misconfiguration, not a
+            # transient failure. Return failed like the circuit-breaker
+            # check above rather than letting it propagate as an activity
+            # exception, which would trigger RetryPolicy retries that
+            # can never succeed.
+            return {"status": "failed", "error": str(exc)}
 
     pod_name = compute_pod_name(workflow_id, step_name, attempt)
     labels = {
@@ -602,7 +617,9 @@ async def _run_sandbox_step_inner(
                 "context": context,
             }
             if instructions := step.get("instructions"):
-                request_body["systemPrompt"] = instructions
+                request_body["systemPrompt"] = _interpolate_instructions(
+                    instructions, input.get("context", {})
+                )
             if output_schema := step.get("output_schema"):
                 request_body["outputSchema"] = output_schema
             if permissions.get("allowed_tools"):
