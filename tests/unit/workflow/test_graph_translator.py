@@ -330,6 +330,97 @@ class TestGraphTranslator:
         result = await graph.run(state=state)
         assert state.paused_at_step == "approve"
         assert state.step_results["approval"]["status"] == "awaiting_approval"
+        assert state.step_results["approval"]["output"] == {"message": "Approve?"}
+
+    @pytest.mark.asyncio
+    async def test_approval_message_interpolated(self, mocker: MockerFixture) -> None:
+        """Approval message is interpolated with prior step outputs (#197)."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(status="completed", output={"host": "node-1"})
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition(
+            [
+                {
+                    "name": "triage",
+                    "type": "agent",
+                    "prompt": "Diagnose",
+                    "output_key": "triage_result",
+                },
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "Apply fix to {{ steps.triage_result.output.host }}?",
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        await graph.run(state=state)
+
+        # interpolate() wraps substituted values in <data>...</data> (shared
+        # prompt-injection boundary with LLM-facing prompts, incl. Temporal's
+        # approval notifications) -- asserting the exact string here, not
+        # just substring/absence checks, so a change to that wrapping shows
+        # up as a test failure in the human-facing approval message too.
+        assert state.step_results["approval"]["output"] == {
+            "message": 'Apply fix to <data>"node-1"</data>?'
+        }
+
+    @pytest.mark.asyncio
+    async def test_approval_message_absent_is_noop(self, mocker: MockerFixture) -> None:
+        """Approval step with no message field pauses with a None output (#197)."""
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition(
+            [
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        await graph.run(state=state)
+
+        assert state.step_results["approval"]["output"] is None
+
+    @pytest.mark.asyncio
+    async def test_approval_message_interpolation_fails_open(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Unresolvable reference in the approval message falls back to the
+        raw string rather than crashing the step (#197)."""
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        raw_message = "Approve for {{ steps.missing_step.output.x }}?"
+        defn = _make_definition(
+            [
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": raw_message,
+                },
+            ]
+        )
+
+        graph, state = build_graph(defn, workflow_id="wf-1")
+        with caplog.at_level("DEBUG", logger="cloud_agents.workflow.executor.graph_translator"):
+            await graph.run(state=state)
+
+        assert state.step_results["approval"]["output"] == {"message": raw_message}
+        assert "Template interpolation failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_step_results_keyed_by_output_key(self, mocker: MockerFixture) -> None:
