@@ -4,6 +4,14 @@
 **Status**: Complete (prototype + findings)
 **Date**: 2026-07-07
 
+> **Historical record.** This spike predates the final architectural
+> decision in [issue #198](https://github.com/jameswnl/lightspeed-cloud-agents/issues/198):
+> `OpenShellSpawner` is the *sole* ephemeral spawner (not one of several
+> comparable options), `KubernetesSpawner`/`PodmanSpawner` were deleted
+> entirely, and the compute driver is auto-detected from the gateway
+> rather than freely selected by the client. Left as-is below for
+> historical context, not current guidance.
+
 ## Summary
 
 Built an `OpenShellSpawner` implementing the `AgentSpawner` ABC using the OpenShell Python SDK (`openshell>=0.0.70`). The prototype uses Option C from the issue: start our sandbox image via the OpenShell Gateway, expose its HTTP port via `ExposeService`, and preserve the `POST /v1/agent/run` contract.

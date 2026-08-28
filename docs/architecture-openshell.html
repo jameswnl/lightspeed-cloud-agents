@@ -49,7 +49,7 @@ graph TD
     subgraph cluster["K8s Cluster / Podman Host"]
         subgraph platform["Platform Framework"]
             WR["Workflow Runner\nFastAPI + Temporal Worker"]
-            SP["Spawner ABC\nKubernetesSpawner / PodmanSpawner"]
+            SP["Spawner ABC\nOpenShellSpawner"]
             DS["Definition Store"]
             TST["Transcript Store\nPostgreSQL"]
         end

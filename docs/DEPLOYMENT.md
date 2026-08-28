@@ -59,8 +59,10 @@ helm install cloud-agents deploy/helm/ \
   --set workflowRunner.image.repository=quay.io/openshift-lightspeed/workflow-runner \
   --set workflowRunner.image.tag=latest \
   --set temporal.url=temporal-server:7233 \
-  --set spawner.type=kubernetes
+  --set spawner.gatewayUrl=openshell-gateway:17670
 ```
+
+`spawner.type` defaults to `openshell` -- the only supported ephemeral spawner (issue #198). It requires a separately-deployed OpenShell gateway (see `deploy/kind/openshell-gateway.yaml` for a reference manifest); the gateway's own compute driver must match its own deployment target (`kubernetes` for OCP/K8s/Kind, `podman` for Podman), but that pairing is invisible to `spawner.gatewayUrl`/`workflowRunner` values here.
 
 ---
 
@@ -291,7 +293,7 @@ curl -s -X POST http://localhost:8080/v1/workflows/<workflow_id>/cancel
 | `max_retries` | No | Number of retry attempts (default: 1) |
 | `parallel_group` | No | Steps sharing the same group run concurrently |
 | `mcp_servers` | No | List of MCP server names (from run request catalog) to inject into this step |
-| `allowed_skills` | No | List of skill names (baked into the sandbox image at `/skills/<name>`) this step's agent may read. OpenShellSpawner-only (Landlock-enforced); Kubernetes/Podman spawners accept but don't restrict. |
+| `allowed_skills` | No | List of skill names (baked into the sandbox image at `/skills/<name>`) this step's agent may read. Landlock-enforced by `OpenShellSpawner`, the sole ephemeral spawner (issue #198). |
 | `spawn` | No | `ephemeral` (container, default), `local` (subprocess), `none` (LLM-only) |
 
 ### API request fields
@@ -302,7 +304,7 @@ The workflow YAML defines *what* (steps, prompts, schemas). The API request prov
 |-------|-------------|
 | `provider` | `{name, model, credentials_secret}` — LLM provider config |
 | `sandbox_image` | Container image for agent steps |
-| `skills_image` / `skills_paths` | Optional skills OCI image (Kubernetes/Podman spawners only — OpenShellSpawner ignores these, see per-step `allowed_skills` above) |
+| `skills_image` / `skills_paths` | Dead -- accepted for backward compatibility but ignored by `OpenShellSpawner`, the sole ephemeral spawner (issue #198; logs a warning if set). Use per-step `allowed_skills` above instead. |
 | `mcp_servers` | MCP server catalog — `[{name, url, headers}]`. Steps reference by name. |
 | `approval_policy` | `{auto_approve_risk_levels: ["low"]}` |
 | `workflow_id` | Optional caller-supplied idempotency key |

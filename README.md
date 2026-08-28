@@ -112,17 +112,17 @@ Run the workflow runner locally (without containers) for development and debuggi
 
 ```bash
 # Install dependencies
-uv sync --group dev --extra podman
+uv sync --group dev --extra openshell
 
-# Start Temporal (still needs containers)
-podman compose -f deploy/podman/docker-compose.yaml up -d temporal-db temporal-server
+# Start Temporal and the OpenShell gateway (still needs containers)
+podman compose -f deploy/podman/docker-compose.yaml up -d temporal-db temporal-server openshell-gateway
 
 # Run the workflow runner on the host
 TEMPORAL_URL=localhost:7233 \
-WORKFLOW_SPAWNER=podman \
-SPAWNER_NETWORK=podman_default \
+WORKFLOW_SPAWNER=openshell \
+OPENSHELL_GATEWAY_URL=localhost:17670 \
 AUTH_REQUIRED=false \
-uv run uvicorn cloud_agents.workflow.temporal_entrypoint:app --host 0.0.0.0 --port 8080
+uv run uvicorn cloud_agents.workflow.executor.temporal.entrypoint:app --host 0.0.0.0 --port 8080
 ```
 
 Run tests:

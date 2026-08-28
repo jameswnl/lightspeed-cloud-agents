@@ -159,7 +159,7 @@ Similar scope, different architecture. lightspeed-stack + cloud-agents is modula
 
 In the Ansible deployment model, Podman is the production container runtime (not K8s). Two modes:
 
-- **Growth**: All pods in a single VM. The VM is the security/resource boundary. Our Podman spawner works here today — VM caps everything, per-container resource limits are less critical.
+- **Growth**: All pods in a single VM. The VM is the security/resource boundary. Ephemeral spawning goes through OpenShellSpawner + an OpenShell gateway with the Podman compute driver (issue #198) — VM caps everything, per-container resource limits are less critical.
 - **Enterprise**: Pods distributed across multiple VMs with redundancy. Ansible installer calculates resource needs and fits containers to VMs. Here, per-container resource limits and cross-VM networking matter more.
 
 | Concern | Growth (single VM) | Enterprise (multi-VM) | Status |

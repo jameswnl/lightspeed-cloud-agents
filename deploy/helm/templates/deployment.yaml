@@ -29,10 +29,10 @@ spec:
               value: {{ .Values.temporal.namespace | quote }}
             - name: WORKFLOW_SPAWNER
               value: {{ .Values.spawner.type | quote }}
-            - name: SPAWNER_NAMESPACE
-              value: {{ .Values.spawner.namespace | quote }}
-            - name: SPAWNER_SERVICE_ACCOUNT
-              value: {{ .Values.spawner.serviceAccount | quote }}
+            - name: OPENSHELL_GATEWAY_URL
+              value: {{ .Values.spawner.gatewayUrl | quote }}
+            - name: OPENSHELL_WORKSPACE
+              value: {{ .Values.spawner.workspace | quote }}
             - name: AUTH_REQUIRED
               value: {{ .Values.auth.required | quote }}
             {{- if .Values.temporal.tls.enabled }}

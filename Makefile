@@ -135,6 +135,13 @@ KIND_CLUSTER ?= cloud-agents
 
 .PHONY: kind-up kind-down
 
+# NOTE: this target deploys workflow-runner with WORKFLOW_SPAWNER=openshell
+# (OpenShellSpawner is the only ephemeral spawner, issue #198) but does not
+# itself deploy an OpenShell gateway -- without one, ephemeral steps will
+# fail to spawn at runtime (the app still starts fine; build_spawner()
+# doesn't eagerly connect). For a verified, working Kind + OpenShell gateway
+# setup, use deploy/kind/setup-openshell.sh instead, or see
+# docs/testing-against-openshell-gateways.md.
 kind-up: build-demo  ## Create Kind cluster and deploy cloud agents (WORKFLOW_ENGINE=local|temporal)
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
 	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar

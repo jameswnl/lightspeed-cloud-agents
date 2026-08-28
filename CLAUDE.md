@@ -13,8 +13,7 @@ Cloud Agents uses **Temporal** or **pydantic-graph** (local runner) for workflow
 | API | `workflow/temporal_api.py` | REST endpoints: /run, /approve, /{id}, /definitions |
 | Entrypoint | `workflow/temporal_entrypoint.py` | FastAPI app with Temporal Worker lifespan |
 | Models | `workflow/temporal_models.py` | ProviderConfig, WorkflowInput, MCPServerConfig, StepResult |
-| KubernetesSpawner | `spawner/kubernetes_spawner.py` | K8s Jobs with scoped SAs, securityContext, Secret mounts |
-| PodmanSpawner | `spawner/podman_spawner.py` | Podman containers with network config |
+| OpenShellSpawner | `spawner/openshell_spawner.py` | Sole ephemeral spawner (issue #198) -- talks to an OpenShell gateway over gRPC, fully gateway-mediated |
 | Spawner ABC | `spawner/base.py` | spawn/destroy/wait_ready/list_active + SpawnConfig validation |
 
 ### What the workflow YAML controls vs what the API request controls
@@ -25,7 +24,7 @@ Cloud Agents uses **Temporal** or **pydantic-graph** (local runner) for workflow
 
 **API request** (`RunWorkflowRequest`) provides *how*:
 - provider (name, model, credentials_secret)
-- sandbox_image, skills_image, skills_paths
+- sandbox_image, skills_image, skills_paths (`skills_image`/`skills_paths` are dead -- see below)
 - mcp_servers, approval_policy, notifier_config, escalation_config
 - workflow_id (optional, for idempotency)
 
@@ -36,6 +35,10 @@ These fields exist in the Pydantic model but are NOT read by the workflow engine
 - `spawn_config` — resource limits come from SpawnConfig defaults
 
 Do NOT use these in examples or documentation. The test `test_no_dead_fields` will catch it.
+
+### Dead fields in RunWorkflowRequest
+
+- `skills_image` / `skills_paths` — accepted for backward compatibility but ignored by `OpenShellSpawner` (logs a warning if set). This mount-and-extract mechanism was removed in issue #202 in favor of skills baked into the sandbox image plus per-step `allowed_skills`; it became fully dead once `KubernetesSpawner`/`PodmanSpawner` (the only spawners that ever read it) were deleted in issue #198. Do NOT use these in examples or documentation — use per-step `allowed_skills` instead.
 
 ### Active fields: spawn mode
 
@@ -75,23 +78,15 @@ All implemented guardrails have corresponding tests. When adding a new guardrail
 | Hard timeouts | `temporal_workflow.py` | `temporal/test_workflow.py` |
 | Resource limits (SpawnConfig) | `spawner/base.py` | `spawner/test_base.py` |
 | Concurrency cap | `spawner/base.py` | `spawner/test_base.py` |
-| securityContext | `kubernetes_spawner.py` | `spawner/test_kubernetes_spawner.py` |
-| Credential Secret mount | `kubernetes_spawner.py` | `spawner/test_kubernetes_spawner.py` |
+| Filesystem policy (Landlock) | `openshell_spawner.py` | `spawner/test_openshell_spawner.py`, `e2e/test_guardrails.py::TestOpenShellGuardrails` |
+| Credential injection (Provider API) | `openshell_spawner.py` | `spawner/test_openshell_spawner.py` |
 | MCP secret allowlist | `temporal_activities.py` | `temporal/test_activities.py` |
 | Audit events | `audit.py` + `temporal_api.py` | `temporal/test_audit.py`, `temporal/test_api.py` |
 | RBAC (CallerIdentity + PolicyFile) | `authorization.py` + `policy_authorizer.py` + `temporal_api.py` | `test_authorization.py`, `test_policy_authorizer.py`, `temporal/test_api.py` |
 | Circuit breaker | `circuit_breaker.py` + `temporal_activities.py` | `test_circuit_breaker.py`, `temporal/test_activities.py` |
 | Cleanup failure metrics | `temporal_metrics.py` + `temporal_activities.py` | `temporal/test_cleanup_metrics.py` |
-| Orphan reconciliation | `temporal_entrypoint.py` | `temporal/test_startup_reconciliation.py` |
-| Podman spawned-by label | `podman_spawner.py` | `spawner/test_podman_spawner.py` |
-| E2E guardrails | Both spawners | `e2e/test_guardrails.py` |
-
-## Podman Specifics
-
-- `PodmanSpawner` rejects `mcp_secret_mounts` with `ValueError` (K8s Secrets not available)
-- `PodmanSpawner` logs a warning for `credential_secret_name` (ignored on Podman)
-- `list_active()` filter format: Podman needs `filters={"label": "key=value"}` (string), NOT `["key=value"]` (list). The list format silently returns empty results.
-- Podman tests can take ~10 minutes due to socket initialization. This is normal.
+| Orphan reconciliation | `temporal_entrypoint.py` | `temporal/test_startup_reconciliation.py` -- **known gap**: this test only exercises the call pattern against a mocked spawner. `OpenShellSpawner._do_list_active()` (issue #198) returns names from an in-memory dict (`self._sandbox_names`) that resets on process restart, so real cross-restart orphan recovery does not currently work for OpenShellSpawner -- unlike the deleted `KubernetesSpawner`/`PodmanSpawner`, which queried real infra-level labels. Needs a follow-up: either the gateway exposes a way to list/label sandboxes by owner, or this guardrail needs redesigning for OpenShellSpawner specifically. |
+| E2E guardrails | `openshell_spawner.py` | `e2e/test_guardrails.py::TestOpenShellGuardrails`, `TestOpenShellQueryTLS` |
 
 ## Database Migrations (Alembic)
 
@@ -178,5 +173,5 @@ When updating documentation:
 - Claiming `PermissionScope` (allowed_tools/denied_tools) is fully enforced — the runner forwards `allowedTools`/`deniedTools` in the sandbox POST body, but sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox)
 - Using `image.repository` in Helm values — the correct path is `workflowRunner.image.repository`
 - Using `app=temporal` as a K8s label selector — the actual label is `app=temporal-server`
-- Podman `list_active` filter as a list instead of string — silently returns empty
+- Referencing `KubernetesSpawner`/`PodmanSpawner`, `spawner.type=kubernetes`, or `WORKFLOW_SPAWNER=kubernetes|podman` — both classes were deleted entirely in issue #198; `OpenShellSpawner` is the only ephemeral spawner, and `WORKFLOW_SPAWNER` must be `openshell` or unset (anything else fails startup, fail-closed)
 - Adding fields to workflow YAML or `temporal_workflow.py`/`temporal_activities.py` without updating `WorkflowStepSpec` in `definition.py` — Pydantic v2 silently ignores extra fields, so the YAML still loads but the schema is wrong and validation is skipped for that field

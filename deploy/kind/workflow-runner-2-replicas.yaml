@@ -45,11 +45,9 @@ spec:
             - name: TEMPORAL_NAMESPACE
               value: "default"
             - name: WORKFLOW_SPAWNER
-              value: "kubernetes"
-            - name: SPAWNER_NAMESPACE
-              value: "default"
-            - name: SPAWNER_SERVICE_ACCOUNT
-              value: "workflow-runner"
+              value: "openshell"
+            - name: OPENSHELL_GATEWAY_URL
+              value: "http://openshell-gateway:17670"
             - name: AUTH_REQUIRED
               value: "false"
             - name: OPENAI_API_KEY
