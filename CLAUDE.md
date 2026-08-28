@@ -161,6 +161,8 @@ uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v
 - `docs/design/cloud-agents/architecture-visualization.html` — interactive visualization (passcode: lcs)
 - `docs/design/cloud-agents/productization-roadmap.md` — P0/P1/backlog gap analysis
 - `docs/design/cloud-agents/prod/implementation-plan.md` — productization task breakdown
+- `docs/testing-against-openshell-gateways.md` — how to verify `OpenShellSpawner` changes against real gateways (local-infra, Kind, real OCP, hosted staging); load before trusting any spawner change that only passed mocked tests
+- `docs/archived/openshell-resolved-issues-catalog.md` — catalog of real `OpenShellSpawner` bugs mocks couldn't catch (protobuf module split between `openshell_pb2`/`datamodel_pb2`, id-vs-name cross-reference semantics, the #199 credential-exposure fix chain, the #202 Landlock materialize-skills permission bug); load if debugging a similar-looking `OpenShellSpawner` failure
 
 When updating documentation:
 1. Verify claims against actual code (grep for class/function names)
