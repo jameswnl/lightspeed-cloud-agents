@@ -410,11 +410,67 @@ class TestOpenShellSpawnerSpawn:
         # Mock _build_network_policy (static method)
         mocker.patch.object(OpenShellSpawner, "_build_network_policy")
 
-        endpoint = await spawner.spawn("agent-1", "sandbox:latest", env={"K": "V"})
+        endpoint = await spawner.spawn(
+            "agent-1", "sandbox:latest", env={"K": "V"}, labels={"cloud-agents/step-name": "s1"}
+        )
 
         assert endpoint == "http://gateway:17670"
         mock_client.create.assert_called_once()
         mock_client.wait_ready.assert_called_once()
+
+        # issue #224: labels must be durably attached at the gateway (not just
+        # on spec.template.labels) so a restarted process can rediscover this
+        # sandbox via ListSandboxes(label_selector=...). No name= is passed --
+        # the gateway enforces a 19-char limit on caller-supplied names, too
+        # short for most agent_name values -- so agent_name is recovered via
+        # the cloud-agents/agent-name label instead.
+        create_kwargs = mock_client.create.call_args.kwargs
+        assert "name" not in create_kwargs
+        assert create_kwargs["labels"] == {
+            "cloud-agents/step-name": "s1",
+            "spawned-by": "workflow-runner",
+            "cloud-agents/agent-name": "agent-1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_spawn_attaches_spawned_by_label_even_without_caller_labels(
+        self, mocker: MockerFixture
+    ) -> None:
+        """spawned-by=workflow-runner is attached unconditionally (issue #224) --
+        reconcile_orphaned_sandboxes() filters on this label and previously
+        nothing ever set it, so orphans could never be found even in principle.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream = lambda *a, **k: iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(
+            spawner, "_expose_service", return_value=("http://gateway:17670", "host")
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        create_kwargs = mock_client.create.call_args.kwargs
+        assert create_kwargs["labels"] == {
+            "spawned-by": "workflow-runner",
+            "cloud-agents/agent-name": "agent-1",
+        }
 
     @pytest.mark.asyncio
     async def test_spawn_with_credential_does_not_expose_real_value(
@@ -956,25 +1012,195 @@ class TestOpenShellSpawnerDestroy:
         assert fake_task.cancel_count == 1
         mock_client.delete.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_destroy_looks_up_gateway_by_label_when_untracked(
+        self, mocker: MockerFixture
+    ) -> None:
+        """issue #224: reconcile_orphaned_sandboxes() discovers orphan agent
+        names via a gateway query on a *restarted* process, where
+        self._sandbox_names is empty. destroy() must still be able to find
+        and delete them, via a gateway label lookup -- the gateway assigns
+        its own opaque sandbox name (19-char limit), so it cannot be
+        reconstructed from agent_name.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-class TestOpenShellSpawnerListActive:
-    """Tests for _do_list_active."""
+        class FakeRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = [FakeRef("petname-1")]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        assert "orphan-agent" not in spawner._sandbox_names
+
+        await spawner.destroy("orphan-agent")
+
+        mock_client.list.assert_called_once_with(
+            workspace="default",
+            label_selector="cloud-agents/agent-name=orphan-agent",
+        )
+        mock_client.delete.assert_called_once_with("petname-1", workspace="default")
 
     @pytest.mark.asyncio
-    async def test_list_active_returns_sandbox_names(self, mocker: MockerFixture) -> None:
-        """list_active returns tracked sandbox agent names."""
+    async def test_destroy_falls_back_to_literal_name_when_label_lookup_empty(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If no sandbox carries a matching agent-name label (e.g. the
+        agent_name is actually a raw sandbox name returned by
+        list_active()'s own fallback for label-less sandboxes), destroy()
+        treats agent_name as a literal sandbox name rather than giving up.
+        """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
+        mock_client.list.return_value = []
         spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_names["agent-1"] = "sb-1"
-        spawner._sandbox_ids["agent-1"] = "id-1"
-        spawner._sandbox_names["agent-2"] = "sb-2"
-        spawner._sandbox_ids["agent-2"] = "id-2"
+
+        await spawner.destroy("some-other-name")
+
+        mock_client.delete.assert_called_once_with("some-other-name", workspace="default")
+
+    @pytest.mark.asyncio
+    async def test_destroy_deletes_all_matches_from_label_lookup(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A genuine agent_name should map to at most one live sandbox, but
+        if a prior failed attempt left more than one carrying the same
+        agent-name label, destroy every match rather than just the first.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class FakeRef:
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = [FakeRef("petname-1"), FakeRef("petname-2")]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        await spawner.destroy("orphan-agent")
+
+        assert mock_client.delete.call_count == 2
+        deleted_names = {call.args[0] for call in mock_client.delete.call_args_list}
+        assert deleted_names == {"petname-1", "petname-2"}
+
+    @pytest.mark.asyncio
+    async def test_destroy_logs_when_falling_back_to_gateway_lookup(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """Falling back to a gateway lookup for an untracked agent_name
+        should be visible in logs -- distinguishes a genuine orphan-recovery
+        destroy from a caller passing a typo'd/unknown agent_name.
+        """
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = []
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        with caplog.at_level(logging.INFO):
+            await spawner.destroy("orphan-agent")
+
+        assert "orphan-agent" in caplog.text
+        assert "not tracked" in caplog.text.lower()
+
+
+class TestOpenShellSpawnerListActive:
+    """Tests for _do_list_active (issue #224).
+
+    _do_list_active() must query the gateway's durable sandbox state via
+    ListSandboxes rather than local in-memory tracking (self._sandbox_names),
+    which is empty after a process restart -- exactly the crash-recovery
+    scenario reconcile_orphaned_sandboxes() is meant to cover.
+    """
+
+    class _FakeRef:
+        def __init__(self, name: str, labels: dict[str, str] | None = None):
+            self.name = name
+            self.labels = labels or {}
+
+    @pytest.mark.asyncio
+    async def test_list_active_queries_gateway_not_local_state(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A freshly-constructed spawner (no local tracking) still discovers
+        sandboxes a *previous* process created, by querying the gateway and
+        reading each sandbox's cloud-agents/agent-name label -- the gateway
+        assigns its own opaque sandbox name (19-char limit), so agent_name
+        cannot be recovered from the name itself.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = [
+            self._FakeRef("petname-1", {"cloud-agents/agent-name": "agent-1"}),
+            self._FakeRef("petname-2", {"cloud-agents/agent-name": "agent-2"}),
+        ]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        # No spawn() call was made on this instance -- _sandbox_names is empty,
+        # simulating a restarted process.
+        assert spawner._sandbox_names == {}
+
+        result = await spawner.list_active({"spawned-by": "workflow-runner"})
+
+        assert set(result) == {"agent-1", "agent-2"}
+        mock_client.list.assert_called_once_with(
+            workspace=spawner._workspace,
+            label_selector="spawned-by=workflow-runner",
+            limit=1000,
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_active_without_labels_sends_no_selector(
+        self, mocker: MockerFixture
+    ) -> None:
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = []
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        await spawner.list_active()
+
+        mock_client.list.assert_called_once_with(
+            workspace=spawner._workspace,
+            label_selector=None,
+            limit=1000,
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_active_combines_multiple_labels(self, mocker: MockerFixture) -> None:
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = []
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        await spawner.list_active({"spawned-by": "workflow-runner", "env": "prod"})
+
+        selector = mock_client.list.call_args.kwargs["label_selector"]
+        assert set(selector.split(",")) == {"spawned-by=workflow-runner", "env=prod"}
+
+    @pytest.mark.asyncio
+    async def test_list_active_falls_back_to_raw_name_when_label_missing(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Sandboxes without the agent-name label (e.g. pre-fix sandboxes, or
+        created by another tool) shouldn't be silently dropped -- return the
+        raw gateway name rather than raising or filtering it out.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = [self._FakeRef("some-other-name")]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
 
         result = await spawner.list_active()
 
-        assert set(result) == {"agent-1", "agent-2"}
+        assert result == ["some-other-name"]
 
 
 class TestOpenShellSpawnerDestroyTracking:
