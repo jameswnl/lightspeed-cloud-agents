@@ -54,6 +54,25 @@ print(d['access_token'])
 "
 ```
 
+## 2a. TLS for public-CA (Let's Encrypt) gateways
+
+`build_spawner()`'s `tls_ca` param only enables TLS on the client if it's
+truthy (`src/cloud_agents/spawner/factory.py`, `build_spawner()`: `if tls_ca:
+... TlsConfig(ca_path=Path(tls_ca))`) — passing nothing means the client
+attempts a **plaintext** connection, which fails against an `https://`
+gateway. For a gateway with a public CA (e.g. a hosted staging gateway behind
+Let's Encrypt), point `GATEWAY_TLS_CA` at the certifi bundle inside the
+**project's own venv** (not the system Python's — a system Python may have a
+different or missing bundle):
+
+```bash
+uv run python -c "import certifi; print(certifi.where())"
+```
+
+(`openshell.TlsConfig()` with no args also supports "system roots" per its
+docstring, but the verification scripts here only expose a `tls_ca` path
+param, so certifi's bundle is the practical equivalent.)
+
 ## 3. Wire up a real (non-mocked) LLM provider on the gateway
 
 Gateways can be network-locked so sandboxes can *only* reach the gateway's
@@ -208,6 +227,67 @@ assert r2.exit_code != 0                      # unlisted skill: EACCES via Landl
 
 r3 = spawner._client.exec(sandbox_id, ["ls", "/app/skills"])
 assert "k8s-diag" in r3.stdout and "git-ops" not in r3.stdout
+```
+
+## 7a. Fastest loop: run the verification scripts against local-infra
+
+For iterating on `OpenShellSpawner` changes, `scripts/gateway-verification/`
+(see its README) wraps §2-§7 into two reusable scripts:
+
+```bash
+cd ~/ws/local-infra && make up-openshell   # plaintext, JWT auth, allow_unauthenticated_users=true, Podman driver
+
+GATEWAY_URL=localhost:8080 SANDBOX_IMAGE=quay.io/jameswong/lightspeed-agentic-sandbox:latest-arm64 \
+  uv run python scripts/gateway-verification/verify_credential_provider_fix.py
+
+GATEWAY_URL=localhost:8080 SANDBOX_IMAGE=quay.io/jameswong/lightspeed-agentic-sandbox:latest-arm64 \
+  uv run python scripts/gateway-verification/verify_allowed_skills.py
+```
+
+Both should print `ALL CHECKS PASSED`. If something fails post-create, use
+`scripts/gateway-verification/diagnose_sandbox.py` — it stops short of the
+failure-prone steps so the sandbox survives for inspection (`spawner.spawn()`
+auto-deletes on any post-create failure, destroying the evidence).
+
+For Kind / real OCP / a hosted staging gateway instead of local-infra: same
+scripts, different `GATEWAY_URL`/`GATEWAY_TLS_CA`/`GATEWAY_BEARER_TOKEN` env
+vars per §1-§2a above and `scripts/openshell-refresh-token.sh` for the token.
+
+## 8. Testing spawn:ephemeral against a plaintext local gateway
+
+Since the #199 credential-exposure fix, provider creation fails closed on any
+non-TLS gateway (`RuntimeError: Provider creation requires TLS
+(OPENSHELL_TLS_CA) — refusing to send credentials over insecure channel`).
+`local-infra`'s gateway is plaintext by default, so exercising
+`spawn:ephemeral` against it needs an explicit opt-in:
+
+```bash
+OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1
+```
+
+Only use this for known-plaintext dev gateways (e.g. local-infra) — never for
+a gateway that's supposed to be TLS-protected, since it disables the
+protection the #199 fix added.
+
+## 9. App-level e2e (beyond the spawner-level verification scripts)
+
+The `scripts/gateway-verification/*.py` scripts above verify `OpenShellSpawner`
+in isolation. To verify the full stack (workflow YAML → step executor →
+spawner → real gateway → real LLM), run the existing real-OpenAI e2e suites
+from `lightspeed-stack` (needs `OPENAI_API_KEY`):
+
+```bash
+cd ~/ws/lightspeed-stack
+
+# /v1/agents/run + full workflow execution, spawn:none
+OPENSHELL_GATEWAY_URL=localhost:8080 \
+  uv run pytest tests/e2e/cloud_agents/test_agents_e2e.py tests/e2e/cloud_agents/test_workflow_execution_e2e.py -v
+
+# spawn:none / local / ephemeral matrix against local-infra
+OPENSHELL_GATEWAY_URL=localhost:8080 \
+LIGHTSPEED_SANDBOX_IMAGE=quay.io/jameswong/lightspeed-agentic-sandbox:latest-arm64 \
+OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 \
+  uv run pytest tests/e2e/cloud_agents/test_spawn_modes_e2e.py -v
 ```
 
 ## Quick reference: env vars per driver/gateway
