@@ -111,7 +111,7 @@ Both runners share the same workflow YAML definitions, REST API, and sandbox con
 - **Temporal AgentWorkflow** (TemporalWorkflowRunner only) — a single `@workflow.defn` class that interprets any workflow YAML at runtime. Handles conditions, retry, approval signals, and parallel groups. Registered once at worker startup — new workflow definitions don't require worker restarts.
 - **Sandbox activities** — `run_sandbox_step` spawns an ephemeral container, calls the runtime HTTP interface, collects the result, and destroys the container. `send_approval_notification` dispatches approval requests to pluggable notifiers. `build_escalation_activity` packages failed workflow context for follow-up.
 - **DefinitionStore** — CRUD for workflow definitions with versioning. The current app wiring uses an in-memory store. Shared persistence is an extension point rather than the default runtime behavior.
-- **Spawner** — `AgentSpawner` ABC with `KubernetesSpawner`, `PodmanSpawner`, and `OpenShellSpawner` implementations. Handles `spawn()` → endpoint URL, `wait_ready()` → readiness polling, `destroy()` → cleanup, and `list_active()` → orphan detection. `OpenShellSpawner` uses gateway ExposeService for HTTP routing and auto-derives L7 network policy from provider and MCP config.
+- **Spawner** — `AgentSpawner` ABC with `OpenShellSpawner` as the sole implementation (issue #198; Kubernetes/Podman deployment targets are reached through OpenShell's own gateway compute driver, not separate spawner classes). Handles `spawn()` → endpoint URL, `wait_ready()` → readiness polling, `destroy()` → cleanup, and `list_active()` → orphan detection. `OpenShellSpawner` uses gateway ExposeService for HTTP routing and auto-derives L7 network policy from provider and MCP config.
 
 ### Sandbox Runtime
 
@@ -132,6 +132,7 @@ The sandbox is an HTTP service that receives a step request from the workflow en
 | `AGENT_API_TOKEN` env var (optional) | Runner-to-sandbox bearer auth token. Injected when `SANDBOX_AUTH_ENABLED=true`. Sandbox validates via `BearerAuthMiddleware` |
 | `AGENT_EVENT_LOG` env var | Path where the sandbox writes structured JSONL events (`/tmp/agent-events.jsonl`). Activates the EventLogger file sink for transcript collection |
 | `/app/skills/` (optional) | Domain knowledge packages from skills OCI image |
+| `LIGHTSPEED_SKILLS_DIR` env var (optional) | Path where the skills OCI image content is mounted in the sandbox (default `/app/skills`) |
 
 The architecture treats the runtime interface generically: the workflow engine sends a prompt plus workflow context and receives structured output. Exact route shapes and runtime adapters are implementation details.
 

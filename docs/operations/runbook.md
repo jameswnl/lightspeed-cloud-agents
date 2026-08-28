@@ -123,7 +123,7 @@ kubectl delete pod <sandbox-pod-name> --force --grace-period=0
 # Podman
 podman rm -f <sandbox-container-name>
 ```
-3. Check if the spawner has permissions to delete pods (`SPAWNER_NAMESPACE`, `SPAWNER_SERVICE_ACCOUNT`)
+3. Check if the OpenShell gateway's own service account has permissions to delete pods/containers on its deployment target
 
 ---
 
@@ -260,10 +260,8 @@ kubectl logs deploy/workflow-runner | grep -i "spawner"
 ```
 
 Relevant env vars:
-- `WORKFLOW_SPAWNER` -- `kubernetes`, `podman`, or empty (stub mode)
-- `SPAWNER_NAMESPACE` -- K8s namespace for sandbox pods (default: `default`)
-- `SPAWNER_SERVICE_ACCOUNT` -- SA for sandbox pods (default: `workflow-runner`)
-- `SPAWNER_NETWORK` -- Podman network name (default: `cloud-agents`)
+- `WORKFLOW_SPAWNER` -- `openshell`, or empty (stub mode). OpenShellSpawner is the only supported ephemeral spawner (issue #198)
+- `OPENSHELL_GATEWAY_URL`, `OPENSHELL_WORKSPACE` -- gateway connection config for OpenShellSpawner
 
 ---
 

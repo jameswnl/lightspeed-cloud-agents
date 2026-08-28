@@ -8,101 +8,6 @@ import pytest
 from pytest_mock import MockerFixture
 
 
-class TestBuildSpawnerKubernetes:
-    """Tests for the kubernetes branch."""
-
-    def test_builds_kubernetes_spawner(self) -> None:
-        """build_spawner("kubernetes", ...) returns a configured KubernetesSpawner."""
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
-
-        spawner = build_spawner("kubernetes", namespace="my-ns", service_account="my-sa")
-
-        assert isinstance(spawner, KubernetesSpawner)
-        assert spawner._namespace == "my-ns"
-        assert spawner._service_account == "my-sa"
-
-    def test_uses_class_defaults_when_no_params(self) -> None:
-        """With no params, KubernetesSpawner's own defaults apply (no factory-level defaulting)."""
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
-
-        spawner = build_spawner("kubernetes")
-
-        assert isinstance(spawner, KubernetesSpawner)
-        assert spawner._namespace == "cloud-agents"
-
-    def test_explicit_none_falls_back_to_class_default(self) -> None:
-        """namespace=None (e.g. an unset Pydantic Optional field) must not
-        override KubernetesSpawner's own default with a literal None.
-        """
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
-
-        spawner = build_spawner("kubernetes", namespace=None, service_account=None, max_pods=None)
-
-        assert isinstance(spawner, KubernetesSpawner)
-        assert spawner._namespace == "cloud-agents"
-        assert spawner._service_account == "workflow-runner"
-
-    def test_unknown_keys_are_dropped_not_forwarded(self) -> None:
-        """Passing a broader config dict (extra unrelated keys) doesn't TypeError.
-
-        KubernetesSpawner forwards unrecognized kwargs to
-        AgentSpawner.__init__(max_pods=...), so an unfiltered pass-through
-        of e.g. a Pydantic model_dump() containing `type`/`sandbox_image`
-        would fail several frames away from the real cause.
-        """
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.kubernetes_spawner import KubernetesSpawner
-
-        spawner = build_spawner(
-            "kubernetes",
-            namespace="my-ns",
-            type="kubernetes",
-            sandbox_image="sandbox:latest",
-        )
-
-        assert isinstance(spawner, KubernetesSpawner)
-        assert spawner._namespace == "my-ns"
-
-
-class TestBuildSpawnerPodman:
-    """Tests for the podman branch."""
-
-    def test_builds_podman_spawner(self) -> None:
-        """build_spawner("podman", ...) returns a configured PodmanSpawner."""
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
-
-        spawner = build_spawner("podman", network="my-net")
-
-        assert isinstance(spawner, PodmanSpawner)
-        assert spawner._network == "my-net"
-
-    def test_explicit_none_falls_back_to_class_default(self) -> None:
-        """network=None must not override PodmanSpawner's own default."""
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
-
-        spawner = build_spawner("podman", network=None)
-
-        assert isinstance(spawner, PodmanSpawner)
-        assert spawner._network == "cloud-agents"
-
-    def test_unknown_keys_are_dropped_not_forwarded(self) -> None:
-        """Extra unrelated keys (e.g. from a broader config dict) don't TypeError."""
-        from cloud_agents.spawner.factory import build_spawner
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
-
-        spawner = build_spawner(
-            "podman", network="my-net", type="podman", sandbox_image="sandbox:latest"
-        )
-
-        assert isinstance(spawner, PodmanSpawner)
-        assert spawner._network == "my-net"
-
-
 class TestBuildSpawnerOpenShell:
     """Tests for the openshell branch, including TLS/bearer-token wiring."""
 
@@ -325,6 +230,19 @@ class TestBuildSpawnerUnknownType:
 
         with pytest.raises(ValueError, match="Unknown spawner_type"):
             build_spawner("not-a-real-type")
+
+    def test_kubernetes_and_podman_are_no_longer_valid_types(self) -> None:
+        """kubernetes/podman were removed as spawner types (issue #198) --
+        OpenShellSpawner is the sole ephemeral spawner; Kubernetes/Podman
+        deployment targets are reached through OpenShell's own gateway
+        compute driver instead of separate AgentSpawner implementations.
+        """
+        from cloud_agents.spawner.factory import build_spawner
+
+        with pytest.raises(ValueError, match=r"expected one of \('openshell',\)"):
+            build_spawner("kubernetes")
+        with pytest.raises(ValueError, match=r"expected one of \('openshell',\)"):
+            build_spawner("podman")
 
     def test_raises_on_empty_string(self) -> None:
         """Empty string is also treated as invalid, not as 'no spawner'.

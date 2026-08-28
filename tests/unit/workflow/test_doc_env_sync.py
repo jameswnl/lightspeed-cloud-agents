@@ -21,8 +21,7 @@ _ARCHITECTURE_MD = _PROJECT_ROOT / "docs" / "ARCHITECTURE.md"
 _TEMPORAL_ACTIVITIES = (
     _PROJECT_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "activities.py"
 )
-_PODMAN_SPAWNER = _PROJECT_ROOT / "src" / "cloud_agents" / "spawner" / "podman_spawner.py"
-_K8S_SPAWNER = _PROJECT_ROOT / "src" / "cloud_agents" / "spawner" / "kubernetes_spawner.py"
+_OPENSHELL_SPAWNER = _PROJECT_ROOT / "src" / "cloud_agents" / "spawner" / "openshell_spawner.py"
 
 
 def _extract_config_table_text(arch_md: str) -> str:
@@ -127,11 +126,10 @@ class TestDocEnvVarSync:
         return _TEMPORAL_ACTIVITIES.read_text()
 
     @pytest.fixture(name="spawner_sources")
-    def spawner_sources_fixture(self) -> tuple[str, str]:
+    def spawner_sources_fixture(self) -> tuple[str, ...]:
         """Read spawner source files."""
-        assert _PODMAN_SPAWNER.exists(), f"Missing {_PODMAN_SPAWNER}"
-        assert _K8S_SPAWNER.exists(), f"Missing {_K8S_SPAWNER}"
-        return _PODMAN_SPAWNER.read_text(), _K8S_SPAWNER.read_text()
+        assert _OPENSHELL_SPAWNER.exists(), f"Missing {_OPENSHELL_SPAWNER}"
+        return (_OPENSHELL_SPAWNER.read_text(),)
 
     def test_all_activity_env_vars_documented(
         self,
@@ -152,7 +150,7 @@ class TestDocEnvVarSync:
     def test_all_spawner_env_vars_documented(
         self,
         arch_md_content: str,
-        spawner_sources: tuple[str, str],
+        spawner_sources: tuple[str, ...],
     ) -> None:
         """Every env var set by spawners must appear in config table."""
         table_text = _extract_config_table_text(arch_md_content)
@@ -169,7 +167,7 @@ class TestDocEnvVarSync:
         self,
         arch_md_content: str,
         activities_source: str,
-        spawner_sources: tuple[str, str],
+        spawner_sources: tuple[str, ...],
     ) -> None:
         """Combined check: all env vars from activities + spawners are documented."""
         table_text = _extract_config_table_text(arch_md_content)
