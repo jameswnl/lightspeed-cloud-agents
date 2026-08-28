@@ -387,7 +387,7 @@ spec:
       output_key: diagnosis
 ```
 
-Steps with `spawn: none` (in-process) or `spawn: local` (subprocess) bypass the spawner entirely and are unaffected.
+Steps with `spawn: none` (in-process) or `spawn: local` (subprocess) bypass the spawner entirely and are unaffected by OpenShell-specific mechanisms (Landlock, credential injection). Skill visibility is still scoped for these modes, just via a different mechanism — see "`spawn: none`/`spawn: local` parity" under Skills below.
 
 ### Skills
 
@@ -407,6 +407,8 @@ steps:
 2. Before starting the agent server, the spawner execs the sandbox image's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv, which copies just those names from `/skills` into `/app/skills` — a plain, freshly-listable directory. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` (not `/skills`) so provider-side listing sees only the scoped subset. The copy itself still goes through the Landlock grant from (1), so a name that isn't in `allowed_skills` can't be materialized even if this script were compromised.
 
 `KubernetesSpawner`/`PodmanSpawner` accept `allowed_skills` for interface consistency but have no Landlock equivalent, so they log a warning and do not restrict visibility.
+
+**`spawn: none`/`spawn: local` parity (issue #204):** these modes bypass the spawner (no Landlock, no container boundary), but they honor the same `allowed_skills` field. `DirectExecutor` and the `spawn: local` subprocess child call `get_skills_capability(include=step_input.allowed_skills)` (`step/skills.py`) **only when `step_input.allowed_skills` is not `None`** — omitted/`None` skips the call entirely, producing no skills capability at all, matching the ephemeral default. This executor-level gate is the actual least-privilege enforcement; it is *not* the same as `get_skills_capability`'s own `include=None` behavior, which means "no filtering" (all configured skills) rather than "no skills" — that path is only reachable by calling the function directly (e.g. in tests), never through the executors. An explicit `allowed_skills: []` also yields no skills, since `get_skills_capability` treats an empty `include` list as "no skills requested". A non-empty `allowed_skills` loads directories from the operator-configured `CLOUD_AGENTS_SKILLS_PATHS` env var and passes `include=` straight through to `pydantic-ai-skills`' `SkillsCapability`, filtering by skill name. There is no per-request `skills_image`/OCI-image equivalent for these modes — pulling and running a caller-specified image with no sandbox/Landlock boundary was rejected as unsafe (see #204) — so the set of skills *available* to select from is still operator-curated via `CLOUD_AGENTS_SKILLS_PATHS`; `allowed_skills` only narrows which of those a given step can see.
 
 ### Credentials
 
