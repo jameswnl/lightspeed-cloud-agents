@@ -887,7 +887,7 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 
 **Effort**: 1 day (plus 3 rounds of design review before implementation, given replay-safety and behavioral-parity constraints)
 
-### T59: `spawn: local` under `LocalWorkflowRunner`'s real orchestration untested ([issue #227](https://github.com/jameswnl/lightspeed-cloud-agents/issues/227)) -- Done (PR #231)
+### T59: `spawn: local` under `LocalWorkflowRunner`'s real orchestration untested ([issue #227](https://github.com/jameswnl/lightspeed-cloud-agents/issues/227)) -- Done (PR #232)
 
 **Status**: Done
 
