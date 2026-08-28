@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
+from cloud_agents.workflow.core.models import StepTranscript, normalize_transcript_events
 from cloud_agents.workflow.executor.base import (
     ApprovalDecision,
     WorkflowRunner,
@@ -640,17 +640,9 @@ class ChatWorkflowRunner(WorkflowRunner):
             content = self._extract_assistant_text(result.output)
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
-        # Convert result.transcript dicts to TranscriptEvent objects.
-        # Map non-standard types (agent.run, agent.stream, llm.call) to "result".
-        _VALID_TYPES = frozenset({"tool_call", "tool_result", "thinking", "result", "error"})
-        events = [
-            TranscriptEvent(
-                ts=e.get("ts", ""),
-                type=e.get("type") if e.get("type") in _VALID_TYPES else "result",
-                data={k: v for k, v in e.items() if k not in ("ts", "type")},
-            )
-            for e in (result.transcript or [])
-        ]
+        # Convert result.transcript dicts to TranscriptEvent objects, mapping
+        # non-standard types (agent.run, agent.stream, llm.call) to "result".
+        events = normalize_transcript_events(result.transcript)
 
         # Save to transcript store
         transcript = StepTranscript(

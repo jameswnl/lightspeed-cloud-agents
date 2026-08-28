@@ -84,6 +84,52 @@ class TranscriptEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+_VALID_TRANSCRIPT_EVENT_TYPES = frozenset(
+    {"tool_call", "tool_result", "thinking", "result", "error"}
+)
+
+
+def normalize_transcript_events(raw_events: list[dict[str, Any]] | None) -> list[TranscriptEvent]:
+    """Convert raw executor transcript dicts into valid TranscriptEvent objects.
+
+    Raw events come in two shapes depending on the executor:
+
+    - Canonical (e.g. SandboxExecutor, via step_runner._collect_transcript /
+      StepTranscript.model_dump()): already `{"ts": ..., "type": ...,
+      "data": {...}}`. Used as-is.
+    - Flat (e.g. DirectExecutor's `{"type": "llm.call", "model": ...}`):
+      executor-specific type (not in TranscriptEvent's Literal) and no "ts"
+      or "data" key -- the remaining keys are the payload.
+
+    Treating a canonical event as flat would nest its existing "data" dict
+    under a second "data" key, corrupting it; treating a flat event as
+    canonical would validate-error on its type. Distinguish them by
+    whether "type" is already valid AND "data" is present as a dict.
+
+    Parameters:
+        raw_events: Raw transcript event dicts from a StepResult, or None.
+
+    Returns:
+        TranscriptEvent list: canonical events passed through unchanged,
+        flat events with unrecognized types mapped to "result" and a
+        missing "ts" defaulted to "".
+    """
+    events = []
+    for e in raw_events or []:
+        raw_type = e.get("type")
+        if raw_type in _VALID_TRANSCRIPT_EVENT_TYPES and isinstance(e.get("data"), dict):
+            events.append(TranscriptEvent(ts=e.get("ts", ""), type=raw_type, data=e["data"]))
+        else:
+            events.append(
+                TranscriptEvent(
+                    ts=e.get("ts", ""),
+                    type=raw_type if raw_type in _VALID_TRANSCRIPT_EVENT_TYPES else "result",
+                    data={k: v for k, v in e.items() if k not in ("ts", "type")},
+                )
+            )
+    return events
+
+
 class StepTranscript(BaseModel):
     """Transcript of an agent step's multi-turn execution.
 

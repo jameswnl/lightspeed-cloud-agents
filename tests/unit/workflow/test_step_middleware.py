@@ -560,6 +560,82 @@ class TestTranscriptMiddleware:
         assert parsed["severity"] == "high"
 
     @pytest.mark.asyncio
+    async def test_after_normalizes_non_standard_event_types(self) -> None:
+        """after() saves transcripts containing DirectExecutor's "llm.call" events.
+
+        Regression test: StepResult.transcript can contain event dicts with
+        types outside TranscriptEvent's Literal (e.g. DirectExecutor emits
+        {"type": "llm.call", ...} with no "ts") -- constructing StepTranscript
+        from these raw dicts directly raises a pydantic ValidationError,
+        which after() previously let escape into its broad except-and-log,
+        silently dropping the transcript for every spawn:none/local step.
+        """
+        from cloud_agents.workflow.executor.middleware import TranscriptMiddleware
+
+        mock_store = AsyncMock()
+        mw = TranscriptMiddleware(mock_store)
+
+        step_input = _make_step_input()
+        result = _make_step_result(
+            transcript=[
+                {
+                    "type": "llm.call",
+                    "model": "gpt-4o",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "step_name": "step-1",
+                }
+            ],
+        )
+
+        await mw.after(step_input, result)
+
+        mock_store.save.assert_called_once()
+        transcript = mock_store.save.call_args[1]["transcript"]
+        assert len(transcript.events) == 1
+        assert transcript.events[0].type == "result"
+        assert transcript.events[0].ts == ""
+        assert transcript.events[0].data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_after_preserves_canonical_sandbox_event_shape(self) -> None:
+        """after() does not double-nest an already-canonical event's data.
+
+        Regression test: SandboxExecutor (spawn:ephemeral) events already
+        arrive as {"ts": ..., "type": ..., "data": {...}} -- StepTranscript's
+        exact field shape, built by step_runner._collect_transcript /
+        StepTranscript.model_dump(). Flattening remaining top-level keys
+        into a new "data" dict (correct for DirectExecutor's flat events)
+        would wrap the existing "data" mapping as {"data": {"data": {...}}},
+        corrupting it. Canonical events must pass through unchanged.
+        """
+        from cloud_agents.workflow.executor.middleware import TranscriptMiddleware
+
+        mock_store = AsyncMock()
+        mw = TranscriptMiddleware(mock_store)
+
+        step_input = _make_step_input()
+        result = _make_step_result(
+            transcript=[
+                {
+                    "ts": "2026-08-28T00:00:00Z",
+                    "type": "tool_call",
+                    "data": {"name": "kubectl", "args": {"pod": "checkout-7f9"}},
+                }
+            ],
+        )
+
+        await mw.after(step_input, result)
+
+        transcript = mock_store.save.call_args[1]["transcript"]
+        assert len(transcript.events) == 1
+        event = transcript.events[0]
+        assert event.type == "tool_call"
+        assert event.ts == "2026-08-28T00:00:00Z"
+        assert event.data["name"] == "kubectl"
+        assert "data" not in event.data
+
+    @pytest.mark.asyncio
     async def test_after_no_output_only_user_message(self) -> None:
         """after() only saves user message when result.output is None."""
         from cloud_agents.workflow.executor.middleware import TranscriptMiddleware

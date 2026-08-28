@@ -151,7 +151,10 @@ class TranscriptMiddleware:
             return result
 
         try:
-            from cloud_agents.workflow.core.models import StepTranscript
+            from cloud_agents.workflow.core.models import (
+                StepTranscript,
+                normalize_transcript_events,
+            )
             from cloud_agents.workflow.executor.step.conversation import (
                 ConversationMessage,
             )
@@ -176,7 +179,7 @@ class TranscriptMiddleware:
                 step_name=step_name,
                 transcript=StepTranscript(
                     step_name=step_name,
-                    events=result.transcript,
+                    events=normalize_transcript_events(result.transcript),
                     input_tokens=result.input_tokens,
                     output_tokens=result.output_tokens,
                     duration_ms=result.duration_ms,
