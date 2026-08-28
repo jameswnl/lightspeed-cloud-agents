@@ -151,11 +151,14 @@ class OpenShellSpawner(AgentSpawner):
     # #202) is gone.
     _SKILLS_ROOT: ClassVar[str] = "/skills"
 
-    # Prefix for the deterministic sandbox name derived from agent_name.
-    # Must be sent as CreateSandboxRequest.name (not left to the gateway to
-    # assign) so a restarted process can recover the agent_name from a
-    # ListSandboxes result without relying on in-memory state (issue #224).
-    _SANDBOX_NAME_PREFIX: ClassVar[str] = "ca-agent-"
+    # CreateSandboxRequest.name is left empty (gateway auto-generates a
+    # short, unique, routable name) -- the gateway enforces a 19-character
+    # limit on caller-supplied names (three DNS-1123 segments must fit a
+    # 63-char label: 19 + 2 + 19 + 2 + 19 = 61), which real agent_name
+    # values (e.g. "ca-<12 hex chars>") already approach on their own and
+    # would exceed with any prefix. So agent_name is recovered via a durable
+    # label instead of the sandbox name (issue #224).
+    _AGENT_NAME_LABEL_KEY: ClassVar[str] = "cloud-agents/agent-name"
 
     # Attached to every sandbox at create time (merged with caller-supplied
     # labels) so reconcile_orphaned_sandboxes() can find sandboxes spawned by
@@ -735,7 +738,11 @@ class OpenShellSpawner(AgentSpawner):
                 "TLS certs not needed for OpenShell — gateway provides transport security",
             )
 
-        sandbox_name = f"{self._SANDBOX_NAME_PREFIX}{agent_name}"
+        # Placeholder for log messages only, until overwritten by the
+        # gateway-assigned sandbox_ref.name below -- CreateSandboxRequest.name
+        # is left empty so the gateway generates the real (short, routable)
+        # name (issue #224; see _AGENT_NAME_LABEL_KEY).
+        sandbox_name = f"ca-agent-{agent_name}"
 
         # --- Credential handling (issue #199): create Provider BEFORE sandbox creation ---
         # The real credential must never be placed in spec.environment; OpenShell's
@@ -787,10 +794,15 @@ class OpenShellSpawner(AgentSpawner):
                 )
                 raise
 
-        # Merge caller labels with the fixed spawned-by label; spawned-by
-        # always wins so a caller can't accidentally suppress orphan
-        # discovery (issue #224).
-        sandbox_labels = {**(labels or {}), **self._SPAWNED_BY_LABEL}
+        # Merge caller labels with the fixed spawned-by label and the
+        # agent_name recovery label; both always win over caller-supplied
+        # labels of the same key so a caller can't accidentally suppress
+        # orphan discovery (issue #224).
+        sandbox_labels = {
+            **(labels or {}),
+            **self._SPAWNED_BY_LABEL,
+            self._AGENT_NAME_LABEL_KEY: agent_name,
+        }
 
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
@@ -822,7 +834,6 @@ class OpenShellSpawner(AgentSpawner):
                 self._client.create,
                 workspace=self._workspace,
                 spec=spec,
-                name=sandbox_name,
                 labels=sandbox_labels,
             )
             sandbox_name = sandbox_ref.name
@@ -886,43 +897,20 @@ class OpenShellSpawner(AgentSpawner):
             )
             if not ready:
                 raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
-        except Exception as exc:
-            # Duck-typed rather than `except grpc.RpcError` -- grpc is only
-            # available when the optional `openshell` extra is installed,
-            # and importing it here would break tests that exercise this
-            # handler with plain mocked exceptions in environments without
-            # that extra.
-            status_name = getattr(getattr(exc, "code", lambda: None)(), "name", None)
-            if status_name == "ALREADY_EXISTS":
-                logger.warning(
-                    "Sandbox '%s' already exists at the gateway (agent=%s) -- "
-                    "likely a stale same-agent_name orphan missed by "
-                    "reconcile_orphaned_sandboxes(), or (if this runner is "
-                    "ever scaled to multiple replicas) a live sandbox from a "
-                    "concurrent replica. Deleting it as if it were ours; this "
-                    "is only safe under the single-replica-per-agent_name "
-                    "assumption (issue #224).",
-                    sandbox_name,
-                    agent_name,
-                )
-            else:
-                logger.warning(
-                    "Post-create step failed for sandbox '%s' (agent=%s); "
-                    "deleting sandbox to prevent orphan",
-                    sandbox_name,
-                    agent_name,
-                    exc_info=True,
-                )
+        except Exception:
+            logger.warning(
+                "Post-create step failed for sandbox '%s' (agent=%s); "
+                "deleting sandbox to prevent orphan",
+                sandbox_name,
+                agent_name,
+                exc_info=True,
+            )
             # _cleanup_sandbox() detaches the provider from the sandbox (if
             # still tracked) and deletes the sandbox. This must happen
             # BEFORE deleting the provider itself -- the gateway refuses
             # DeleteProvider while it's still attached to a sandbox
             # (FAILED_PRECONDITION), which previously leaked the provider
             # on every post-create failure (issue #214).
-            #
-            # On ALREADY_EXISTS (see above), this deletes the sandbox that
-            # already held the deterministic name -- only safe under the
-            # single-replica-per-agent_name assumption (issue #224).
             await self._cleanup_sandbox(agent_name, sandbox_name)
             if provider_id:
                 try:
@@ -1622,63 +1610,86 @@ class OpenShellSpawner(AgentSpawner):
         return content
 
     async def _do_destroy(self, agent_name: str) -> None:
-        """Delete the OpenShell sandbox and clean up all resources.
+        """Delete the OpenShell sandbox(es) for agent_name and clean up resources.
 
-        Falls back to the deterministic sandbox name when agent_name isn't in
-        self._sandbox_names -- this happens for orphans discovered by
+        For an agent_name tracked in this process (self._sandbox_names),
+        destroys the exact sandbox spawn() created.
+
+        For an untracked agent_name -- orphans discovered by
         reconcile_orphaned_sandboxes() via a gateway query on a restarted
-        process, where local tracking is empty (issue #224). Provider
-        detachment and virtual-host cleanup are best-effort in that case
-        since this process never tracked that state.
+        process, where local tracking is by definition empty (issue #224) --
+        queries the gateway for sandboxes carrying a matching
+        _AGENT_NAME_LABEL_KEY label and destroys every match (a genuine
+        agent_name should map to at most one live sandbox, but destroying
+        every match is the correct cleanup behavior if a prior failed
+        attempt left more than one). If none carry that label (e.g. a
+        sandbox _do_list_active() returned by raw name because it predates
+        this labeling scheme, or has no label for another reason), falls
+        back to treating agent_name as a literal sandbox name.
+
+        Provider detachment and task/virtual-host tracking cleanup only
+        apply to the tracked case -- an untracked agent_name never had that
+        state recorded in this process.
         """
-        sandbox_name = self._sandbox_names.get(agent_name)
-        if not sandbox_name:
-            sandbox_name = f"{self._SANDBOX_NAME_PREFIX}{agent_name}"
+        tracked_name = self._sandbox_names.get(agent_name)
+        if tracked_name:
+            candidate_names = [tracked_name]
+        else:
+            refs = await asyncio.to_thread(
+                self._client.list,
+                workspace=self._workspace,
+                label_selector=f"{self._AGENT_NAME_LABEL_KEY}={agent_name}",
+            )
+            candidate_names = [ref.name for ref in refs] or [agent_name]
             logger.info(
-                "agent '%s' not tracked locally -- deriving sandbox name '%s' "
-                "for destroy (expected for orphan recovery; if unexpected, "
+                "agent '%s' not tracked locally -- resolved to sandbox name(s) "
+                "%s for destroy (expected for orphan recovery; if unexpected, "
                 "check for a typo'd or unknown agent_name)",
                 agent_name,
-                sandbox_name,
+                candidate_names,
             )
 
-        task = self._server_tasks.pop(sandbox_name, None)
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        for sandbox_name in candidate_names:
+            task = self._server_tasks.pop(sandbox_name, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
-        provider_id = self._provider_ids.get(agent_name)
-        if provider_id:
+            provider_id = self._provider_ids.get(agent_name)
+            if provider_id:
+                try:
+                    await self._detach_provider(sandbox_name, provider_id)
+                    self._provider_ids.pop(agent_name, None)
+                except Exception:
+                    logger.warning(
+                        "Failed to detach provider '%s' from sandbox '%s' — "
+                        "retained for retry on next destroy",
+                        provider_id,
+                        sandbox_name,
+                        exc_info=True,
+                    )
+
             try:
-                await self._detach_provider(sandbox_name, provider_id)
-                self._provider_ids.pop(agent_name, None)
+                await asyncio.to_thread(
+                    self._client.delete, sandbox_name, workspace=self._workspace
+                )
+                logger.info(
+                    "Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name
+                )
             except Exception:
                 logger.warning(
-                    "Failed to detach provider '%s' from sandbox '%s' — "
-                    "retained for retry on next destroy",
-                    provider_id,
+                    "Failed to destroy sandbox '%s' (agent=%s) — "
+                    "sandbox retained for manual cleanup",
                     sandbox_name,
+                    agent_name,
                     exc_info=True,
                 )
-
-        try:
-            await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
-            logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
-        except Exception:
-            logger.warning(
-                "Failed to destroy sandbox '%s' (agent=%s) — "
-                "sandbox retained in _sandbox_names for manual cleanup",
-                sandbox_name,
-                agent_name,
-                exc_info=True,
-            )
-            return
-        sandbox_name = self._sandbox_names.pop(agent_name, None)
-        self._sandbox_ids.pop(agent_name, None)
-        if sandbox_name:
+                continue
+            self._sandbox_names.pop(agent_name, None)
+            self._sandbox_ids.pop(agent_name, None)
             self._virtual_hosts.pop(sandbox_name, None)
 
     async def _do_list_active(
@@ -1699,24 +1710,26 @@ class OpenShellSpawner(AgentSpawner):
 
         Returns:
             List of agent names with active sandboxes. Names are recovered
-            by stripping the deterministic _SANDBOX_NAME_PREFIX that spawn()
-            assigns; sandboxes with an unrecognized name format (e.g. created
-            before this convention existed) are returned as-is for visibility
-            rather than silently dropped -- though destroy() re-prepends
-            _SANDBOX_NAME_PREFIX, so such an entry won't actually be
-            destroyable via reconcile_orphaned_sandboxes() and will need
-            manual cleanup.
+            from each sandbox's _AGENT_NAME_LABEL_KEY label (spawn() always
+            sets it) rather than the gateway-assigned sandbox name itself,
+            which is opaque and unrelated to agent_name -- the gateway
+            enforces a 19-character limit on caller-supplied names, too
+            short to encode most agent_name values, so CreateSandboxRequest.
+            name is left for the gateway to assign (issue #224). Sandboxes
+            missing the label (e.g. created before this scheme existed, or
+            by another tool) are returned by their raw sandbox name instead
+            of being silently dropped -- destroy() falls back to treating
+            such a name literally, so this remains cleanable.
         """
         label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
         refs = await asyncio.to_thread(
             self._client.list,
             workspace=self._workspace,
             label_selector=label_selector or None,
+            # SandboxClient.list() defaults to limit=100 with no built-in
+            # pagination here; raised well above expected orphan counts as a
+            # cheap mitigation. True pagination is a follow-up if a workspace
+            # ever legitimately exceeds this.
+            limit=1000,
         )
-        agent_names = []
-        for ref in refs:
-            if ref.name.startswith(self._SANDBOX_NAME_PREFIX):
-                agent_names.append(ref.name[len(self._SANDBOX_NAME_PREFIX) :])
-            else:
-                agent_names.append(ref.name)
-        return agent_names
+        return [ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name for ref in refs]
