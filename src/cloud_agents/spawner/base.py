@@ -1,7 +1,9 @@
 """Abstract base class for agent pod spawning.
 
 Defines the interface for creating and destroying agent pods on demand.
-Implementations for Kubernetes and Podman deployment targets.
+OpenShellSpawner is the sole implementation (see cloud_agents.spawner.factory);
+Kubernetes/Podman deployment targets are reached through OpenShell's own
+gateway compute driver, not through separate AgentSpawner implementations.
 """
 
 from __future__ import annotations

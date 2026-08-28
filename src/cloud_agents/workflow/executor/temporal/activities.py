@@ -315,9 +315,7 @@ async def _run_sandbox_step_inner(
         if cred_val:
             secret_values.add(cred_val)
             # Do NOT add to env_vars -- OpenShell's Provider system injects
-            # a placeholder via spec.providers; PodmanSpawner pulls the
-            # credential directly from os.environ at spawn time, and
-            # Kubernetes uses Secret mounts, so neither needs it here.
+            # a placeholder via spec.providers, so it doesn't need it here.
 
     # MCP server injection — step references servers by name from workflow-level catalog
     mcp_secret_mounts: list[tuple[str, str, str]] = []

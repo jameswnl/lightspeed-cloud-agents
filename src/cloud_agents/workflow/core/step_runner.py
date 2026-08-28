@@ -213,9 +213,7 @@ async def _run_step_inner(
             # Do NOT add to env_vars -- OpenShell's Provider system injects
             # a placeholder (openshell:resolve:env:...) via spec.providers;
             # putting the real value in spec.environment would expose it
-            # directly to the sandboxed process (issue #199). PodmanSpawner
-            # pulls the credential directly from os.environ at spawn time,
-            # and Kubernetes uses Secret mounts, so neither needs it here.
+            # directly to the sandboxed process (issue #199).
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []

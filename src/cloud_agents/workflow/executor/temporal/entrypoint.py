@@ -74,29 +74,19 @@ def _create_spawner():
     """Create spawner based on environment config.
 
     Thin env-var-reading wrapper around cloud_agents.spawner.factory.build_spawner
-    -- see that module for the actual per-type construction logic.
-    """
-    from cloud_agents.spawner.factory import build_spawner
+    -- see that module for the actual per-type construction logic. OpenShellSpawner
+    is the only supported ephemeral spawner (issue #198).
 
-    if SPAWNER_TYPE == "kubernetes":
-        # NOTE: this "default" fallback predates build_spawner()/KubernetesSpawner,
-        # which both default to "cloud-agents" when namespace is omitted entirely.
-        # Preserved as-is to avoid changing behavior for existing deployments
-        # that rely on unset SPAWNER_NAMESPACE meaning the "default" namespace.
-        # Other callers of build_spawner("kubernetes", ...) (e.g. lightspeed-stack)
-        # should not copy "default" as their own implicit namespace fallback --
-        # pick one deliberately, or omit namespace to get "cloud-agents".
-        return build_spawner(
-            "kubernetes",
-            namespace=os.environ.get("SPAWNER_NAMESPACE", "default"),
-            service_account=os.environ.get("SPAWNER_SERVICE_ACCOUNT", "workflow-runner"),
-        )
-    if SPAWNER_TYPE == "podman":
-        return build_spawner(
-            "podman",
-            network=os.environ.get("SPAWNER_NETWORK", "cloud-agents"),
-        )
+    Raises:
+        ValueError: If WORKFLOW_SPAWNER is set to anything other than "openshell"
+            or empty. This must be fail-closed, not a silent stub fallback --
+            e.g. a leftover "kubernetes"/"podman" value from an unmigrated
+            deploy manifest (or a typo) would otherwise silently disable
+            ephemeral spawning instead of refusing to start.
+    """
     if SPAWNER_TYPE == "openshell":
+        from cloud_agents.spawner.factory import build_spawner
+
         return build_spawner(
             "openshell",
             gateway_url=os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670"),
@@ -107,8 +97,12 @@ def _create_spawner():
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
         )
-    logger.info("No spawner configured — sandbox activity will use stub mode")
-    return None
+    if SPAWNER_TYPE == "":
+        logger.info("No spawner configured — sandbox activity will use stub mode")
+        return None
+    raise ValueError(
+        f"Unknown WORKFLOW_SPAWNER={SPAWNER_TYPE!r}; expected 'openshell' or unset (stub mode)"
+    )
 
 
 async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:

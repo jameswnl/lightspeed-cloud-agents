@@ -1,13 +1,13 @@
 """E2E test: full-stack workflow with real containers and real LLM calls.
 
 Exercises the complete spawn -> HTTP -> LLM -> destroy lifecycle
-using a real spawner (PodmanSpawner or KubernetesSpawner) and a
-real LLM provider. This proves the orchestration works beyond
-stub-mode activities.
+using a real OpenShellSpawner (the only supported ephemeral spawner,
+issue #198) and a real LLM provider. This proves the orchestration
+works beyond stub-mode activities.
 
 Prerequisites:
-  - Podman running with socket accessible (or Kind cluster)
-  - lightspeed-agentic-sandbox:temporal image built
+  - a reachable OpenShell gateway (OPENSHELL_GATEWAY_URL)
+  - lightspeed-agentic-sandbox:temporal image available to that gateway
   - OPENAI_API_KEY (or equivalent) set in environment
   - Temporal server running (TEMPORAL_E2E_URL)
 
@@ -20,18 +20,19 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 import uuid
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 TEMPORAL_URL = os.environ.get("TEMPORAL_E2E_URL", "localhost:7233")
+OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080")
 SANDBOX_IMAGE = os.environ.get(
     "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
 )
@@ -93,34 +94,20 @@ class TestFullStackWorkflow:
     """Run a real workflow with real sandbox containers and real LLM calls."""
 
     @pytest.fixture(autouse=True)
-    def _skip_if_no_podman(self) -> None:
-        """Skip if podman-py is not available or daemon is not reachable."""
-        pytest.importorskip("podman")
-        # Verify Podman daemon is actually reachable
-        result = subprocess.run(
-            ["podman", "info"],
-            capture_output=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            pytest.skip("Podman daemon is not reachable")
+    def _skip_if_no_gateway(self) -> None:
+        """Skip (rather than fail) when no real OpenShell gateway is reachable."""
+        pytest.importorskip("openshell")
+        try:
+            httpx.get(f"http://{OPENSHELL_GATEWAY_URL}/", timeout=3.0)
+        except httpx.HTTPError:
+            pytest.skip(f"No accessible OpenShell gateway at {OPENSHELL_GATEWAY_URL}")
 
     @pytest.fixture
     def spawner(self):
-        """Create a PodmanSpawner with test network."""
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
+        """Create an OpenShellSpawner against the real gateway."""
+        from cloud_agents.spawner.factory import build_spawner
 
-        result = subprocess.run(
-            ["podman", "network", "exists", "cloud-agents"],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            subprocess.run(
-                ["podman", "network", "create", "cloud-agents"],
-                capture_output=True,
-                check=False,
-            )
-        return PodmanSpawner(network="cloud-agents")
+        return build_spawner("openshell", gateway_url=OPENSHELL_GATEWAY_URL, workspace="default")
 
     async def test_single_step_real_llm(self, spawner) -> None:
         """Single-step workflow completes with real LLM output.

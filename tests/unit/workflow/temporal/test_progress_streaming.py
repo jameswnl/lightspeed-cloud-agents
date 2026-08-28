@@ -221,10 +221,10 @@ class TestGracefulDegradation:
         assert len(progress_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_kubernetes_spawner_no_progress(
+    async def test_non_openshell_spawner_no_progress(
         self, mocker: MockerFixture
     ) -> None:
-        """KubernetesSpawner (not OpenShell) gets no progress streaming."""
+        """A non-OpenShell spawner gets no progress streaming."""
         # Just verify isinstance check works by using a plain AsyncMock
         # (which is not an OpenShellSpawner)
         mock_spawner = mocker.AsyncMock()

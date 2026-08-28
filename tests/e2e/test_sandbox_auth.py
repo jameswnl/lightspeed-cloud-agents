@@ -7,8 +7,8 @@ Validates that the runner-to-sandbox auth flow works end-to-end:
 - Wrong tokens are rejected
 
 Prerequisites:
-  - Podman running with socket accessible
-  - lightspeed-agentic-sandbox:temporal image built
+  - a reachable OpenShell gateway (OPENSHELL_GATEWAY_URL)
+  - lightspeed-agentic-sandbox:temporal image available to that gateway
   - SANDBOX_AUTH_ENABLED=true in environment
 
 Usage:
@@ -21,10 +21,12 @@ from __future__ import annotations
 import os
 import sys
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
+OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080")
 SANDBOX_IMAGE = os.environ.get(
     "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
 )
@@ -42,20 +44,20 @@ class TestSandboxAuthE2E:
     """
 
     @pytest.fixture(autouse=True)
-    def _skip_if_no_podman(self) -> None:
-        """Skip if podman-py is not available."""
-        pytest.importorskip("podman")
+    def _skip_if_no_gateway(self) -> None:
+        """Skip (rather than fail) when no real OpenShell gateway is reachable."""
+        pytest.importorskip("openshell")
+        try:
+            httpx.get(f"http://{OPENSHELL_GATEWAY_URL}/", timeout=3.0)
+        except httpx.HTTPError:
+            pytest.skip(f"No accessible OpenShell gateway at {OPENSHELL_GATEWAY_URL}")
 
     @pytest.fixture
     def spawner(self):
-        """Create a PodmanSpawner with test network."""
-        from cloud_agents.spawner.podman_spawner import PodmanSpawner
+        """Create an OpenShellSpawner against the real gateway."""
+        from cloud_agents.spawner.factory import build_spawner
 
-        os.system(
-            "podman network exists cloud-agents 2>/dev/null "
-            "|| podman network create cloud-agents >/dev/null 2>&1"
-        )
-        return PodmanSpawner(network="cloud-agents")
+        return build_spawner("openshell", gateway_url=OPENSHELL_GATEWAY_URL, workspace="default")
 
     @pytest.mark.asyncio
     async def test_unauthenticated_rejected(self, spawner) -> None:
