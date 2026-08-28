@@ -47,7 +47,7 @@ spec:
             - name: WORKFLOW_SPAWNER
               value: "openshell"
             - name: OPENSHELL_GATEWAY_URL
-              value: "http://openshell-gateway:17670"
+              value: "openshell-gateway:17670"
             - name: AUTH_REQUIRED
               value: "false"
             - name: OPENAI_API_KEY

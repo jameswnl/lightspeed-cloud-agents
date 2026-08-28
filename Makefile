@@ -193,6 +193,12 @@ endif
 	@echo "Kind cluster '$(KIND_CLUSTER)' ready (WORKFLOW_ENGINE=$(WORKFLOW_ENGINE))."
 	@echo "Run: kubectl port-forward svc/workflow-runner 8080:8080"
 	@echo "Then: curl http://localhost:8080/readyz"
+	@echo ""
+	@echo "*** WARNING: ephemeral steps will NOT spawn. ***"
+	@echo "workflow-runner is configured with WORKFLOW_SPAWNER=openshell, but this"
+	@echo "target does not deploy an OpenShell gateway or mount the Podman socket"
+	@echo "this Kind cluster would need for one. Use ./deploy/kind/setup-openshell.sh"
+	@echo "instead for a working Kind + OpenShell gateway setup."
 
 kind-down:  ## Delete Kind cluster
 	KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name $(KIND_CLUSTER)

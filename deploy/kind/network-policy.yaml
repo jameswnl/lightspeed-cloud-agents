@@ -70,8 +70,11 @@ spec:
     - ports:
         - port: 17670
           protocol: TCP
-    # Sandbox pods (HTTP; retained for deployments where the gateway's own
-    # compute driver exposes a direct pod route rather than proxying)
+    # Sandbox pods (HTTP) -- leftover from the deleted KubernetesSpawner's
+    # direct pod egress. OpenShellSpawner never talks to sandbox pods
+    # directly (see the gateway rule above), so this is not required for
+    # the current spawn path; left in place rather than risk breaking an
+    # untested topology, candidate for removal in a follow-up.
     - ports:
         - port: 8080
           protocol: TCP

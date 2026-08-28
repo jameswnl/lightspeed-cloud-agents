@@ -68,6 +68,8 @@ graph TD
 | **Auth per sandbox** | Optional bearer token | Mandatory JWT per sandbox |
 | **Multi-runtime** | Separate spawner per runtime | One spawner, gateway handles runtime |
 | **Agent contract** | POST /v1/agent/run | POST /v1/agent/run (unchanged) |
+| **Transcript collection** | GET /v1/agent/events | GET /v1/agent/events (unchanged) |
+| **Extra infrastructure** | None | Gateway service + SQLite/Postgres |
 
 ### Deployment Topologies
 
@@ -346,10 +348,9 @@ Set the following environment variables on the workflow runner container:
 > driver (`podman` vs `kubernetes`, see "Gateway Environment Reference"
 > below) must match *the gateway's* deployment target, but that's a
 > gateway-side deployment detail, invisible to callers -- there is no
-> client-side driver env var. `OpenShellSpawner` queries the gateway's own
-> `GetGatewayInfo()` RPC to auto-detect it (cached per spawner instance),
-> used only to pick the fastest `skills_image` transfer strategy; every
-> other operation is fully gateway-mediated regardless of driver.
+> client-side driver env var and no client-side driver detection.
+> `OpenShellSpawner`'s entire lifecycle (create/exec/expose/query/destroy)
+> is fully gateway-mediated regardless of driver.
 
 Example (local dev, no auth):
 

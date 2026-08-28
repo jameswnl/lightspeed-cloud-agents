@@ -65,7 +65,7 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 
 ## Architecture
 
-> **OpenShell integration**: For the secured spawner architecture with Landlock/seccomp/L7 policy via OpenShell Gateway, see [architecture-with-openshell.md](architecture-with-openshell.md) ([interactive HTML](architecture-openshell.html)).
+> **OpenShell integration**: For the secured spawner architecture with Landlock/seccomp/L7 policy via OpenShell Gateway, see [architecture-with-openshell.md](architecture-with-openshell.md).
 
 ```mermaid
 graph TD

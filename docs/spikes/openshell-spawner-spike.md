@@ -8,9 +8,9 @@
 > decision in [issue #198](https://github.com/jameswnl/lightspeed-cloud-agents/issues/198):
 > `OpenShellSpawner` is the *sole* ephemeral spawner (not one of several
 > comparable options), `KubernetesSpawner`/`PodmanSpawner` were deleted
-> entirely, and the compute driver is auto-detected from the gateway
-> rather than freely selected by the client. Left as-is below for
-> historical context, not current guidance.
+> entirely, and the compute driver is a gateway-side deployment detail,
+> invisible to the client, rather than freely selected by it. Left as-is
+> below for historical context, not current guidance.
 
 ## Summary
 
