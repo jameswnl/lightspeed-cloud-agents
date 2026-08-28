@@ -76,10 +76,17 @@ def _create_spawner():
     Thin env-var-reading wrapper around cloud_agents.spawner.factory.build_spawner
     -- see that module for the actual per-type construction logic. OpenShellSpawner
     is the only supported ephemeral spawner (issue #198).
-    """
-    from cloud_agents.spawner.factory import build_spawner
 
+    Raises:
+        ValueError: If WORKFLOW_SPAWNER is set to anything other than "openshell"
+            or empty. This must be fail-closed, not a silent stub fallback --
+            e.g. a leftover "kubernetes"/"podman" value from an unmigrated
+            deploy manifest (or a typo) would otherwise silently disable
+            ephemeral spawning instead of refusing to start.
+    """
     if SPAWNER_TYPE == "openshell":
+        from cloud_agents.spawner.factory import build_spawner
+
         return build_spawner(
             "openshell",
             gateway_url=os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:17670"),
@@ -90,8 +97,12 @@ def _create_spawner():
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
         )
-    logger.info("No spawner configured — sandbox activity will use stub mode")
-    return None
+    if SPAWNER_TYPE == "":
+        logger.info("No spawner configured — sandbox activity will use stub mode")
+        return None
+    raise ValueError(
+        f"Unknown WORKFLOW_SPAWNER={SPAWNER_TYPE!r}; expected 'openshell' or unset (stub mode)"
+    )
 
 
 async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:

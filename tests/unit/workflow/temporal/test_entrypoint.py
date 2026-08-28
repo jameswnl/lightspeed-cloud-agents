@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pytest_mock import MockerFixture
 
 from cloud_agents.workflow.executor.temporal.entrypoint import build_temporal_app
@@ -157,7 +158,11 @@ class TestCreateSpawner:
     """Tests for _create_spawner's env-var dispatch (issue #198).
 
     OpenShellSpawner is the only supported ephemeral spawner -- kubernetes
-    and podman are no longer valid SPAWNER_TYPE values.
+    and podman are no longer valid SPAWNER_TYPE values. Dispatch is
+    fail-closed: any non-empty, non-"openshell" value raises rather than
+    silently falling back to stub mode (a leftover "kubernetes"/"podman"
+    value from an unmigrated deploy manifest, or a typo, must refuse to
+    start rather than silently disable ephemeral spawning).
     """
 
     def test_openshell_dispatches_to_build_spawner(self, mocker: MockerFixture) -> None:
@@ -174,21 +179,32 @@ class TestCreateSpawner:
         assert result == "a-spawner"
         assert mock_build_spawner.call_args[0][0] == "openshell"
 
-    def test_kubernetes_no_longer_dispatches(self, mocker: MockerFixture) -> None:
-        """SPAWNER_TYPE=kubernetes falls through to 'no spawner configured'."""
+    def test_kubernetes_raises(self, mocker: MockerFixture) -> None:
+        """SPAWNER_TYPE=kubernetes raises instead of silently disabling spawning."""
         import cloud_agents.workflow.executor.temporal.entrypoint as entrypoint_mod
 
         mocker.patch.object(entrypoint_mod, "SPAWNER_TYPE", "kubernetes")
 
-        assert entrypoint_mod._create_spawner() is None
+        with pytest.raises(ValueError, match="Unknown WORKFLOW_SPAWNER"):
+            entrypoint_mod._create_spawner()
 
-    def test_podman_no_longer_dispatches(self, mocker: MockerFixture) -> None:
-        """SPAWNER_TYPE=podman falls through to 'no spawner configured'."""
+    def test_podman_raises(self, mocker: MockerFixture) -> None:
+        """SPAWNER_TYPE=podman raises instead of silently disabling spawning."""
         import cloud_agents.workflow.executor.temporal.entrypoint as entrypoint_mod
 
         mocker.patch.object(entrypoint_mod, "SPAWNER_TYPE", "podman")
 
-        assert entrypoint_mod._create_spawner() is None
+        with pytest.raises(ValueError, match="Unknown WORKFLOW_SPAWNER"):
+            entrypoint_mod._create_spawner()
+
+    def test_typo_raises(self, mocker: MockerFixture) -> None:
+        """An unrecognized typo value also raises, not just the removed names."""
+        import cloud_agents.workflow.executor.temporal.entrypoint as entrypoint_mod
+
+        mocker.patch.object(entrypoint_mod, "SPAWNER_TYPE", "opnshell")
+
+        with pytest.raises(ValueError, match="Unknown WORKFLOW_SPAWNER"):
+            entrypoint_mod._create_spawner()
 
     def test_unset_spawner_type_returns_none(self, mocker: MockerFixture) -> None:
         """SPAWNER_TYPE unset (empty string default) means no spawner configured."""
