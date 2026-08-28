@@ -560,6 +560,44 @@ class TestTranscriptMiddleware:
         assert parsed["severity"] == "high"
 
     @pytest.mark.asyncio
+    async def test_after_normalizes_non_standard_event_types(self) -> None:
+        """after() saves transcripts containing DirectExecutor's "llm.call" events.
+
+        Regression test: StepResult.transcript can contain event dicts with
+        types outside TranscriptEvent's Literal (e.g. DirectExecutor emits
+        {"type": "llm.call", ...} with no "ts") -- constructing StepTranscript
+        from these raw dicts directly raises a pydantic ValidationError,
+        which after() previously let escape into its broad except-and-log,
+        silently dropping the transcript for every spawn:none/local step.
+        """
+        from cloud_agents.workflow.executor.middleware import TranscriptMiddleware
+
+        mock_store = AsyncMock()
+        mw = TranscriptMiddleware(mock_store)
+
+        step_input = _make_step_input()
+        result = _make_step_result(
+            transcript=[
+                {
+                    "type": "llm.call",
+                    "model": "gpt-4o",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "step_name": "step-1",
+                }
+            ],
+        )
+
+        await mw.after(step_input, result)
+
+        mock_store.save.assert_called_once()
+        transcript = mock_store.save.call_args[1]["transcript"]
+        assert len(transcript.events) == 1
+        assert transcript.events[0].type == "result"
+        assert transcript.events[0].ts == ""
+        assert transcript.events[0].data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
     async def test_after_no_output_only_user_message(self) -> None:
         """after() only saves user message when result.output is None."""
         from cloud_agents.workflow.executor.middleware import TranscriptMiddleware

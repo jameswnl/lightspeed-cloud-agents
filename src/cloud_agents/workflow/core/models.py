@@ -84,6 +84,38 @@ class TranscriptEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+_VALID_TRANSCRIPT_EVENT_TYPES = frozenset(
+    {"tool_call", "tool_result", "thinking", "result", "error"}
+)
+
+
+def normalize_transcript_events(raw_events: list[dict[str, Any]] | None) -> list[TranscriptEvent]:
+    """Convert raw executor transcript dicts into valid TranscriptEvent objects.
+
+    Executors (e.g. DirectExecutor) emit event dicts with executor-specific
+    types (e.g. "llm.call") and no "ts" key. TranscriptEvent only accepts a
+    fixed set of types and requires "ts", so raw events must be normalized
+    before constructing a StepTranscript -- otherwise validation raises and
+    the transcript silently fails to save (issue: transcript persistence
+    broken for spawn:none/local steps run through LocalWorkflowRunner).
+
+    Parameters:
+        raw_events: Raw transcript event dicts from a StepResult, or None.
+
+    Returns:
+        TranscriptEvent list with unrecognized types mapped to "result" and
+        a missing "ts" defaulted to "".
+    """
+    return [
+        TranscriptEvent(
+            ts=e.get("ts", ""),
+            type=e.get("type") if e.get("type") in _VALID_TRANSCRIPT_EVENT_TYPES else "result",
+            data={k: v for k, v in e.items() if k not in ("ts", "type")},
+        )
+        for e in (raw_events or [])
+    ]
+
+
 class StepTranscript(BaseModel):
     """Transcript of an agent step's multi-turn execution.
 
