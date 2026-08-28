@@ -603,6 +603,12 @@ class OpenShellSpawner(AgentSpawner):
         OpenShell policy YAML — the spawner derives it from existing
         provider and MCP config.
 
+        LIGHTSPEED_PROVIDER's default host and LIGHTSPEED_PROVIDER_URL are
+        mutually exclusive: when both are set, only LIGHTSPEED_PROVIDER_URL's
+        host gets an egress rule, so sandboxes routed through a custom
+        inference proxy don't also get direct egress to the vendor's public
+        API (issue #209).
+
         Args:
             spec: SandboxSpec to populate with network_policies.
             env: Environment variables for the step (contains provider
@@ -610,10 +616,17 @@ class OpenShellSpawner(AgentSpawner):
         """
         spec.policy.version = 1
 
-        # LLM provider egress
+        # LLM provider egress. Skipped when LIGHTSPEED_PROVIDER_URL is also
+        # set -- the two are mutually exclusive routing modes (either talk to
+        # the vendor's default public host, or talk to a configured override
+        # such as a gateway-internal inference proxy), not additive. Adding
+        # both would grant sandboxes direct internet egress to the vendor's
+        # API even when the deployment intends to route exclusively through
+        # the custom URL (issue #209).
+        provider_url = env.get("LIGHTSPEED_PROVIDER_URL", "")
         provider = env.get("LIGHTSPEED_PROVIDER", "")
         provider_host = OpenShellSpawner._PROVIDER_HOSTS.get(provider)
-        if provider_host:
+        if provider_host and not provider_url:
             np = spec.policy.network_policies["llm_provider"]
             np.name = "llm-provider"
             ep = np.endpoints.add()
@@ -623,7 +636,6 @@ class OpenShellSpawner(AgentSpawner):
             b.path = "**"
 
         # Custom provider URL egress
-        provider_url = env.get("LIGHTSPEED_PROVIDER_URL", "")
         if provider_url:
             from urllib.parse import urlparse
 
@@ -637,6 +649,15 @@ class OpenShellSpawner(AgentSpawner):
                 ep.port = parsed.port or default_port
                 b = np.binaries.add()
                 b.path = "**"
+            else:
+                logger.warning(
+                    "LIGHTSPEED_PROVIDER_URL=%r has no parseable hostname -- "
+                    "no custom_provider egress rule added, and the default "
+                    "%s egress rule is also suppressed since the URL is set. "
+                    "Sandbox will have no LLM provider network egress.",
+                    provider_url,
+                    provider or "provider",
+                )
 
         # MCP server egress (parsed from LIGHTSPEED_MCP_SERVERS JSON)
         mcp_json = env.get("LIGHTSPEED_MCP_SERVERS", "")
