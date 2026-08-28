@@ -26,7 +26,7 @@ flowchart TD
 | **Isolation** | None (in-process) | Process boundary (subprocess) | Container boundary (SecurityContext, NetworkPolicy) |
 | **Tool support** | `@step_tool` registered functions | `@step_tool` registered functions | MCP + Shell + Filesystem + Skills |
 | **MCP servers** | Remote (HTTP/SSE) | Remote (HTTP/SSE) | Local + remote (inside container) |
-| **Skills** | `CLOUD_AGENTS_SKILLS_PATHS` directories with `SKILL.md` | `CLOUD_AGENTS_SKILLS_PATHS` directories with `SKILL.md` | OCI image via init container |
+| **Skills** | `CLOUD_AGENTS_SKILLS_PATHS` directories, filtered by per-step `allowed_skills` (#204) | `CLOUD_AGENTS_SKILLS_PATHS` directories, filtered by per-step `allowed_skills` (#204) | Baked into sandbox image at `/skills`, scoped by per-step `allowed_skills` via Landlock (#202) |
 | **Tool source** | ToolRegistry + MCP + SkillsCapability | ToolRegistry + MCP + SkillsCapability | Sandbox image + MCP servers |
 | **Agent loop** | `Agent.run` if tools, MCP, or skills; `model_request` otherwise | `Agent.run` if tools, MCP, or skills; `model_request` otherwise | Yes (agent SDK in container) |
 | **LLM transport** | pydantic-ai `model_request` or `Agent.run` | pydantic-ai `model_request` or `Agent.run` (in subprocess) | Agent SDK in sandbox |

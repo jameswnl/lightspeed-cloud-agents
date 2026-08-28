@@ -408,6 +408,8 @@ steps:
 
 `KubernetesSpawner`/`PodmanSpawner` accept `allowed_skills` for interface consistency but have no Landlock equivalent, so they log a warning and do not restrict visibility.
 
+**`spawn: none`/`spawn: local` parity (issue #204):** these modes bypass the spawner (no Landlock, no container boundary), but they honor the same `allowed_skills` field. `DirectExecutor` and the `spawn: local` subprocess child both call `get_skills_capability(include=step_input.allowed_skills)` (`step/skills.py`), which loads directories from the operator-configured `CLOUD_AGENTS_SKILLS_PATHS` env var and passes `include=` straight through to `pydantic-ai-skills`' `SkillsCapability`, filtering by skill name. There is no per-request `skills_image`/OCI-image equivalent for these modes — pulling and running a caller-specified image with no sandbox/Landlock boundary was rejected as unsafe (see #204) — so the set of skills *available* to select from is still operator-curated via `CLOUD_AGENTS_SKILLS_PATHS`; `allowed_skills` only narrows which of those a given step can see. `None`/omitted `allowed_skills` means no skills, matching the ephemeral default.
+
 ### Credentials
 
 The spawner injects LLM credentials via the OpenShell Provider API:
