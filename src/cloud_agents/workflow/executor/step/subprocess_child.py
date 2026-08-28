@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -111,6 +112,27 @@ def _build_user_content(input_data: dict[str, Any]) -> str:
     return user_content
 
 
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_markdown_fence(content: str) -> str:
+    """Strip a wrapping ```json ... ``` / ``` ... ``` code fence, if present.
+
+    Mirrors direct.py#_strip_markdown_fence -- models asked for JSON via
+    prompt text alone (no provider-native JSON mode) commonly wrap it in
+    a markdown fence anyway, in this subprocess just as often as in the
+    in-process DirectExecutor path.
+
+    Parameters:
+        content: Raw LLM response text.
+
+    Returns:
+        Fence-stripped content, or the original string if no fence is found.
+    """
+    match = _MARKDOWN_FENCE_RE.match(content.strip())
+    return match.group(1).strip() if match else content
+
+
 def _parse_content(content: Any, output_schema: dict[str, Any] | None) -> dict[str, Any]:
     """Parse agent/LLM response content into a result dict.
 
@@ -141,7 +163,7 @@ def _parse_content(content: Any, output_schema: dict[str, Any] | None) -> dict[s
 
     output: dict[str, Any] | None
     try:
-        output = json.loads(content)
+        output = json.loads(_strip_markdown_fence(content))
     except (json.JSONDecodeError, TypeError):
         if output_schema:
             return {
