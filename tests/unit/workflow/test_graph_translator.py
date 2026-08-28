@@ -366,9 +366,14 @@ class TestGraphTranslator:
         graph, state = build_graph(defn, workflow_id="wf-1")
         await graph.run(state=state)
 
-        message = state.step_results["approval"]["output"]["message"]
-        assert "{{" not in message
-        assert "node-1" in message
+        # interpolate() wraps substituted values in <data>...</data> (shared
+        # prompt-injection boundary with LLM-facing prompts, incl. Temporal's
+        # approval notifications) -- asserting the exact string here, not
+        # just substring/absence checks, so a change to that wrapping shows
+        # up as a test failure in the human-facing approval message too.
+        assert state.step_results["approval"]["output"] == {
+            "message": 'Apply fix to <data>"node-1"</data>?'
+        }
 
     @pytest.mark.asyncio
     async def test_approval_message_absent_is_noop(self, mocker: MockerFixture) -> None:

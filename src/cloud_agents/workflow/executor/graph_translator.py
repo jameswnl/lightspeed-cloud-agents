@@ -371,7 +371,16 @@ def _build_approval_step(
         # has, since there's no notifier_config/send_approval_notification
         # equivalent here. A status/query endpoint already returns
         # WorkflowStatus.steps[output_key].output, so this reaches a UI or
-        # CLI without any new persistence or API surface (#197).
+        # CLI without any new persistence or API surface (#197). Like the
+        # rest of `interpolate()`'s callers (LLM prompts, Temporal's approval
+        # notifications), substituted values stay wrapped in <data>...</data>
+        # -- a UI/CLI rendering this for a human should account for that
+        # wrapper rather than displaying it raw. Only visible while this step
+        # is "awaiting_approval": _approve_inner() overwrites this output
+        # with {"approved": bool} once a decision is recorded, so it's not
+        # retained as an audit field after resume. An explicit empty-string
+        # `message` is treated the same as an omitted one (no message),
+        # consistent with how `instructions` is handled for agent steps.
         raw_message = step_def.get("message")
         message = (
             _interpolate_step_text(raw_message, _to_workflow_state(state))
@@ -386,6 +395,6 @@ def _build_approval_step(
             "status": "awaiting_approval",
             "output": {"message": message} if message else None,
         }
-        return {"status": "paused", "paused_at": step_name, "message": message}
+        return {"status": "paused", "paused_at": step_name}
 
     return approval_step
