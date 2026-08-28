@@ -2604,6 +2604,24 @@ class TestBuildNetworkPolicy:
 
         assert "llm_provider" not in spec.policy.network_policies
 
+    def test_provider_url_suppresses_default_provider_host(self, mocker: MockerFixture) -> None:
+        """LIGHTSPEED_PROVIDER_URL set alongside a known LIGHTSPEED_PROVIDER
+        routes exclusively through the custom URL -- no direct egress to the
+        vendor's public host (issue #209 gap 2)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {
+            "LIGHTSPEED_PROVIDER": "openai",
+            "LIGHTSPEED_PROVIDER_URL": "https://inference.local/v1",
+        }
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" not in spec.policy.network_policies
+        assert "custom_provider" in spec.policy.network_policies
+        np = spec.policy.network_policies["custom_provider"]
+        assert np._ep.host == "inference.local"
+
     def test_custom_provider_url_https(self, mocker: MockerFixture) -> None:
         """LIGHTSPEED_PROVIDER_URL with https defaults to port 443."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner

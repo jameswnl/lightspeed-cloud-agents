@@ -427,8 +427,8 @@ provider:
 
 The `OpenShellSpawner` automatically derives network policy from the step configuration:
 
-- **LLM provider egress**: Allows HTTPS to the provider host (e.g., `api.openai.com:443`)
-- **Custom provider URL**: Allows egress to any `LIGHTSPEED_PROVIDER_URL`
+- **LLM provider egress**: Allows HTTPS to the provider host (e.g., `api.openai.com:443`) when `LIGHTSPEED_PROVIDER` is a known name **and** `LIGHTSPEED_PROVIDER_URL` is not set.
+- **Custom provider URL**: Allows egress to `LIGHTSPEED_PROVIDER_URL`'s host only. Mutually exclusive with the default provider-host rule above — set to route sandboxes through a gateway-internal inference proxy without also granting direct egress to the vendor's public API (issue #209).
 - **MCP server egress**: Parses `LIGHTSPEED_MCP_SERVERS` JSON and allows egress to each server
 
 No manual network policy YAML is required.

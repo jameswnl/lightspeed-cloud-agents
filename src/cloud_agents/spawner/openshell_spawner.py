@@ -569,10 +569,17 @@ class OpenShellSpawner(AgentSpawner):
         """
         spec.policy.version = 1
 
-        # LLM provider egress
+        # LLM provider egress. Skipped when LIGHTSPEED_PROVIDER_URL is also
+        # set -- the two are mutually exclusive routing modes (either talk to
+        # the vendor's default public host, or talk to a configured override
+        # such as a gateway-internal inference proxy), not additive. Adding
+        # both would grant sandboxes direct internet egress to the vendor's
+        # API even when the deployment intends to route exclusively through
+        # the custom URL (issue #209).
+        provider_url = env.get("LIGHTSPEED_PROVIDER_URL", "")
         provider = env.get("LIGHTSPEED_PROVIDER", "")
         provider_host = OpenShellSpawner._PROVIDER_HOSTS.get(provider)
-        if provider_host:
+        if provider_host and not provider_url:
             np = spec.policy.network_policies["llm_provider"]
             np.name = "llm-provider"
             ep = np.endpoints.add()
@@ -582,7 +589,6 @@ class OpenShellSpawner(AgentSpawner):
             b.path = "**"
 
         # Custom provider URL egress
-        provider_url = env.get("LIGHTSPEED_PROVIDER_URL", "")
         if provider_url:
             from urllib.parse import urlparse
 
