@@ -2622,6 +2622,29 @@ class TestBuildNetworkPolicy:
         np = spec.policy.network_policies["custom_provider"]
         assert np._ep.host == "inference.local"
 
+    def test_provider_url_unparseable_warns_and_adds_no_egress(
+        self, mocker: MockerFixture, caplog: Any
+    ) -> None:
+        """An unparseable LIGHTSPEED_PROVIDER_URL fails closed: no default
+        provider egress (suppressed because the URL is set) and no
+        custom_provider egress (no hostname to route to) -- but a warning
+        is logged so the misconfiguration isn't silent."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {
+            "LIGHTSPEED_PROVIDER": "openai",
+            "LIGHTSPEED_PROVIDER_URL": "   ",
+        }
+        with caplog.at_level(logging.WARNING):
+            OpenShellSpawner._build_network_policy(spec, env)
+
+        assert "llm_provider" not in spec.policy.network_policies
+        assert "custom_provider" not in spec.policy.network_policies
+        assert "no parseable hostname" in caplog.text
+
     def test_custom_provider_url_https(self, mocker: MockerFixture) -> None:
         """LIGHTSPEED_PROVIDER_URL with https defaults to port 443."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner

@@ -562,6 +562,12 @@ class OpenShellSpawner(AgentSpawner):
         OpenShell policy YAML — the spawner derives it from existing
         provider and MCP config.
 
+        LIGHTSPEED_PROVIDER's default host and LIGHTSPEED_PROVIDER_URL are
+        mutually exclusive: when both are set, only LIGHTSPEED_PROVIDER_URL's
+        host gets an egress rule, so sandboxes routed through a custom
+        inference proxy don't also get direct egress to the vendor's public
+        API (issue #209).
+
         Args:
             spec: SandboxSpec to populate with network_policies.
             env: Environment variables for the step (contains provider
@@ -602,6 +608,15 @@ class OpenShellSpawner(AgentSpawner):
                 ep.port = parsed.port or default_port
                 b = np.binaries.add()
                 b.path = "**"
+            else:
+                logger.warning(
+                    "LIGHTSPEED_PROVIDER_URL=%r has no parseable hostname -- "
+                    "no custom_provider egress rule added, and the default "
+                    "%s egress rule is also suppressed since the URL is set. "
+                    "Sandbox will have no LLM provider network egress.",
+                    provider_url,
+                    provider or "provider",
+                )
 
         # MCP server egress (parsed from LIGHTSPEED_MCP_SERVERS JSON)
         mcp_json = env.get("LIGHTSPEED_MCP_SERVERS", "")
