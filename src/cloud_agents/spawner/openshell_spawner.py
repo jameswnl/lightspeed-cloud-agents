@@ -812,13 +812,16 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
                 exc_info=True,
             )
-            # If provider was created before sandbox creation and sandbox creation failed,
-            # the provider will be leaked since _cleanup_sandbox only detaches if sandbox exists.
-            # Clean up the provider explicitly if it was created.
-            if provider_id and agent_name in self._provider_ids:
+            # _cleanup_sandbox() detaches the provider from the sandbox (if
+            # still tracked) and deletes the sandbox. This must happen
+            # BEFORE deleting the provider itself -- the gateway refuses
+            # DeleteProvider while it's still attached to a sandbox
+            # (FAILED_PRECONDITION), which previously leaked the provider
+            # on every post-create failure (issue #214).
+            await self._cleanup_sandbox(agent_name, sandbox_name)
+            if provider_id:
                 try:
                     await self._delete_provider(provider_id)
-                    self._provider_ids.pop(agent_name, None)
                     logger.info(
                         "Cleaned up orphaned provider '%s' after failed create", provider_id
                     )
@@ -826,7 +829,6 @@ class OpenShellSpawner(AgentSpawner):
                     logger.warning(
                         "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
                     )
-            await self._cleanup_sandbox(agent_name, sandbox_name)
             raise
 
         logger.info(

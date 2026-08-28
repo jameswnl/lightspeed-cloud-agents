@@ -1338,6 +1338,68 @@ class TestOpenShellSpawnerPostCreateCleanup:
         assert "agent-1" not in spawner._sandbox_names
 
     @pytest.mark.asyncio
+    async def test_provider_deleted_after_sandbox_cleanup_not_before(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Regression test for issue #214.
+
+        Deleting the Provider before the sandbox is torn down hits
+        FAILED_PRECONDITION on a real gateway (the provider is still
+        attached to the not-yet-deleted sandbox). _cleanup_sandbox()
+        (which detaches the provider from the sandbox) must run first.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(OpenShellSpawner, "_build_baseline_filesystem_policy")
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(
+            spawner,
+            "start_server",
+            new_callable=mocker.AsyncMock,
+            side_effect=RuntimeError("exec failed"),
+        )
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        call_order: list[str] = []
+
+        async def fake_cleanup_sandbox(agent_name: str, sandbox_name: str) -> None:
+            call_order.append("cleanup_sandbox")
+
+        async def fake_delete_provider(provider_id: str) -> None:
+            call_order.append("delete_provider")
+
+        mocker.patch.object(spawner, "_cleanup_sandbox", side_effect=fake_cleanup_sandbox)
+        mocker.patch.object(spawner, "_delete_provider", side_effect=fake_delete_provider)
+
+        with pytest.raises(RuntimeError, match="exec failed"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"LIGHTSPEED_PROVIDER": "openai", "OPENAI_API_KEY": "sk-real-secret"},
+                credential_secret_name="openai-api-key",
+            )
+
+        assert call_order == ["cleanup_sandbox", "delete_provider"]
+
+    @pytest.mark.asyncio
     async def test_active_count_decremented_on_post_create_failure(
         self, mocker: MockerFixture
     ) -> None:
