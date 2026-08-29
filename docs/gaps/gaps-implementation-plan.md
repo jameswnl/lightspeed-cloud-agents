@@ -914,3 +914,17 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 4. Verified: `pytest --collect-only` on `tests/unit`+`tests/integration` finds no import errors or duplicate test IDs; full `tests/unit` (1819 passed, 5 skipped) and `tests/integration` (70 passed -- up from 61, the 9 moved tests; same 9 pre-existing Temporal-server-required failures) both green; both renamed real-LLM e2e files re-verified passing under their new names.
 
 **Effort**: 0.5 hour
+
+### T60-followup: Remaining `_integration` suffix cleanup + stale `test_list.txt` -- Done
+
+**Status**: Done
+
+**Problem**: beesarmy's review of T60's PR flagged two things left incomplete: `tests/integration/test_identity_integration.py`, `test_policy_integration.py`, and `test_rbac_integration.py` still carried the redundant `_integration` suffix T60 was meant to sweep, and `tests/e2e/test_list.txt` (excluded from the original cross-reference grep, which only covered `.py`/`.md`/`.yaml`) still pointed at the pre-T60 names `test_workflow_e2e.py`/`test_triggers_e2e.py`.
+
+**What was built**:
+1. `git mv` renamed the three remaining files: `test_identity.py`, `test_policy.py`, `test_rbac.py`.
+2. Fixed `test_list.txt`'s two stale filename references (landed directly on T60's branch before merge, so already reflected in `main`).
+3. Verified no other live references (checked `.github/workflows/*.yaml`, `CLAUDE.md`, this file) point at the old three names -- only frozen historical review docs under `docs/archived/`/`docs/gaps/phase-2-records/` still mention them, left as-is since those are point-in-time snapshots, not living docs.
+4. Verified: `pytest --collect-only` on the three renamed files finds all 17 tests with no import errors. Full `tests/unit`+`tests/integration` run on this branch matches the identical run on unmodified `main`: 1882 passed, 22 skipped, and the same 9 pre-existing `test_temporal_workflows.py` failures on both (require a live Temporal server; excluded from the "no regressions" claim, not fixed by this PR) -- no regressions introduced by the rename.
+
+**Effort**: 15 minutes
