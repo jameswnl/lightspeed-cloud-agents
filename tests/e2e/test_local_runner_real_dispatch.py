@@ -6,11 +6,11 @@ spawner test coverage:
 - Finding 2: `spawn: local` had no test that ran a real LLM call through
   `LocalWorkflowRunner`'s actual pydantic-graph state machine (approval
   gates, context threading, condition evaluation). Existing coverage was
-  either graph-construction-only (test_workflow_yaml_e2e.py, no
+  either graph-construction-only (test_workflow_yaml.py, no
   execution) or called SubprocessExecutor directly, bypassing
   graph_translator.py/LocalWorkflowRunner entirely
-  (test_allowed_skills_e2e.py).
-- Finding 3: test_local_executor_integration.py mocker-patches
+  (test_allowed_skills.py).
+- Finding 3: test_local_executor.py mocker-patches
   get_step_executor itself, so it never exercises real dispatch to
   DirectExecutor/SubprocessExecutor through the actual factory.
 
@@ -24,7 +24,7 @@ Prerequisites:
   - OPENAI_API_KEY set in environment
 
 Usage:
-  OPENAI_API_KEY=sk-... uv run pytest tests/e2e/test_local_runner_real_dispatch_e2e.py -v
+  OPENAI_API_KEY=sk-... uv run pytest tests/e2e/test_local_runner_real_dispatch.py -v
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class _InMemoryRunStateStore:
 
     Implements the subset of RunStateStore's contract that
     LocalWorkflowRunner calls, backed by a plain dict instead of
-    PostgreSQL. Using a mock here (as test_local_executor_integration.py
+    PostgreSQL. Using a mock here (as test_local_executor.py
     does) would only prove the runner *called* the store, not that its
     state ended up self-consistent -- this lets the test assert on the
     real post-execution status/steps via get_status(), the same surface

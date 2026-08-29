@@ -9,7 +9,7 @@ Requires a running Temporal Server. Set TEMPORAL_E2E_URL env var.
 Default: localhost:7233.
 
 Run:
-    TEMPORAL_E2E_URL=localhost:7233 uv run pytest tests/e2e/test_workflow_e2e.py -v
+    TEMPORAL_E2E_URL=localhost:7233 uv run pytest tests/e2e/test_workflow.py -v
 """
 
 from __future__ import annotations

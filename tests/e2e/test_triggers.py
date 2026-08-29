@@ -10,7 +10,7 @@ Prerequisites:
   - Running Temporal server (TEMPORAL_E2E_URL env var, default: localhost:7233)
 
 Usage:
-  TEMPORAL_E2E_URL=localhost:7233 uv run pytest tests/e2e/test_triggers_e2e.py -v
+  TEMPORAL_E2E_URL=localhost:7233 uv run pytest tests/e2e/test_triggers.py -v
 """
 
 from __future__ import annotations

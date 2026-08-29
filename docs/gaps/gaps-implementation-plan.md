@@ -775,7 +775,7 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 
 **What was built**:
 1. **Sandbox auth wiring** — `temporal_activities.py` now injects `AGENT_API_TOKEN` on sandbox containers and sends `Authorization: Bearer <token>` on httpx POST when `SANDBOX_AUTH_ENABLED=true`. Uses `get_runner_auth_token()` from `runtime/auth.py`. 7 unit tests + E2E test (`tests/e2e/test_sandbox_auth.py`).
-2. **Alert/schedule trigger E2E** — `tests/e2e/test_triggers_e2e.py`: full alert webhook flow (register def, POST webhook, verify workflow starts), dedup, missing-definition error. Schedule CRUD lifecycle (create, get, delete, verify gone), duplicate-ID rejection, nonexistent-workflow rejection. Runs against real Temporal in CI.
+2. **Alert/schedule trigger E2E** — `tests/e2e/test_triggers.py`: full alert webhook flow (register def, POST webhook, verify workflow starts), dedup, missing-definition error. Schedule CRUD lifecycle (create, get, delete, verify gone), duplicate-ID rejection, nonexistent-workflow rejection. Runs against real Temporal in CI.
 3. **Network egress E2E** — `tests/e2e/test_egress.py`: validates sandbox pods cannot reach external HTTP hosts, can resolve DNS, can reach in-cluster services. Requires Kind + Calico (local only, skips in CI). Created `deploy/kind/kind-config-calico.yaml`.
 4. **Full-stack workflow E2E** — `tests/e2e/test_full_stack.py`: real LLM output validation, sandbox cleanup verification. Requires LLM API key (local only, skips in CI).
 5. **CI updates** — `e2e_tests.yaml` now runs trigger E2E tests alongside existing workflow tests.
@@ -892,11 +892,25 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 **Status**: Done
 
 **Problem**: Surveying engine (`local`/`temporal`) x spawn-mode (`none`/`local`/`ephemeral`) x spawner test coverage found two gaps in the local engine's own orchestration path (a third finding, Temporal ignoring per-step `spawn`, was split out as #228/T58 above):
-- Finding 2: no test ran a real LLM call through `LocalWorkflowRunner`'s actual pydantic-graph state machine (approval gates, context threading, condition evaluation) for `spawn: local` -- existing coverage was either graph-construction-only (`test_workflow_yaml_e2e.py`, no execution) or called `SubprocessExecutor` directly, bypassing `graph_translator.py`/`LocalWorkflowRunner` entirely (`test_allowed_skills_e2e.py`).
-- Finding 3: `tests/integration/test_local_executor_integration.py` mocker-patches `get_step_executor` itself, so it never exercises real dispatch to `DirectExecutor`/`SubprocessExecutor` through the actual factory.
+- Finding 2: no test ran a real LLM call through `LocalWorkflowRunner`'s actual pydantic-graph state machine (approval gates, context threading, condition evaluation) for `spawn: local` -- existing coverage was either graph-construction-only (`test_workflow_yaml.py`, no execution) or called `SubprocessExecutor` directly, bypassing `graph_translator.py`/`LocalWorkflowRunner` entirely (`test_allowed_skills.py`).
+- Finding 3: `tests/integration/test_local_executor.py` mocker-patches `get_step_executor` itself, so it never exercises real dispatch to `DirectExecutor`/`SubprocessExecutor` through the actual factory.
 
 **What was built**:
-1. `tests/e2e/test_local_runner_real_dispatch_e2e.py`: drives `LocalWorkflowRunner.start()` end-to-end with `get_step_executor` unpatched (real factory dispatch), a real auto-approved approval gate, real `{{ steps.X.output.Y }}` context interpolation between steps, and a real LLM call for both `spawn: none` (`DirectExecutor`) and `spawn: local` (`SubprocessExecutor`, a real forked child process). Backed by a small in-memory `RunStateStore` stand-in (not a mock) so assertions run against `get_status()`'s real post-execution state, the same surface a caller of `LocalWorkflowRunner` actually uses.
+1. `tests/e2e/test_local_runner_real_dispatch.py`: drives `LocalWorkflowRunner.start()` end-to-end with `get_step_executor` unpatched (real factory dispatch), a real auto-approved approval gate, real `{{ steps.X.output.Y }}` context interpolation between steps, and a real LLM call for both `spawn: none` (`DirectExecutor`) and `spawn: local` (`SubprocessExecutor`, a real forked child process). Backed by a small in-memory `RunStateStore` stand-in (not a mock) so assertions run against `get_status()`'s real post-execution state, the same surface a caller of `LocalWorkflowRunner` actually uses.
 2. Real production bug found and fixed by this new test: `subprocess_child.py::_parse_content` never got the markdown-fence-stripping fix (`_strip_markdown_fence`) that `direct.py::_parse_output` received for #188 -- so any `spawn: local` step with `output_schema` failed whenever the model wrapped its JSON in a ```` ```json ```` fence (gpt-4o-mini does this reliably). Added the same `_MARKDOWN_FENCE_RE`/`_strip_markdown_fence` helper to `subprocess_child.py`, applied at the same call site. 6 new unit tests in `tests/unit/workflow/executor/test_subprocess_child.py::TestParseContent`, mirroring `test_direct_executor.py::TestParseOutput`'s fence-stripping coverage.
 
 **Effort**: 0.5 day
+
+### T60: Test file naming/reorg cleanup (follow-up to T59) -- Done
+
+**Status**: Done
+
+**Problem**: While reviewing T59's new test, noticed `tests/e2e/` and `tests/integration/` inconsistently suffix filenames with `_e2e`/`_integration` even though the containing directory already encodes the tier (about half the files in each had the suffix, half didn't). Worse than naming noise: `tests/unit/workflow/executor/test_direct_integration.py` was a real integration test (spawn: none through `build_graph`, mocked LLM boundary) mislabeled and misplaced inside `tests/unit/`, and `tests/integration/test_workflow_yaml_e2e.py` was named like a real-LLM e2e test but is actually mocked-LLM -- the "e2e" and "integration" tiers were bleeding across all three directories.
+
+**What was built**:
+1. Dropped the redundant `_e2e`/`_integration` filename suffix on 7 files whose directory already says the tier: `test_allowed_skills.py`, `test_local_runner_real_dispatch.py`, `test_structured_output.py`, `test_triggers.py`, `test_workflow.py` (all `tests/e2e/`), `test_local_executor.py`, `test_workflow_yaml.py` (both `tests/integration/`). Used `git mv` to preserve history.
+2. Moved `tests/unit/workflow/executor/test_direct_integration.py` -> `tests/integration/test_direct_executor_graph.py` (renamed for clarity in its new home, no content changes) -- it exercises `DirectExecutor` through the real `graph_translator.build_graph` with a mocked LLM, which is `tests/integration/`'s contract, not `tests/unit/`'s.
+3. Updated all cross-references: `.github/workflows/e2e_tests.yaml` (2 hardcoded filenames), docstring cross-references in `test_direct_executor.py`/`test_allowed_skills.py`/`test_local_runner_real_dispatch.py`, and this file's T59 entry.
+4. Verified: `pytest --collect-only` on `tests/unit`+`tests/integration` finds no import errors or duplicate test IDs; full `tests/unit` (1819 passed, 5 skipped) and `tests/integration` (70 passed -- up from 61, the 9 moved tests; same 9 pre-existing Temporal-server-required failures) both green; both renamed real-LLM e2e files re-verified passing under their new names.
+
+**Effort**: 0.5 hour
