@@ -12,7 +12,7 @@ Prerequisites:
   - OPENAI_API_KEY set in environment
 
 Usage:
-  OPENAI_API_KEY=sk-... uv run pytest tests/e2e/test_structured_output_e2e.py -v
+  OPENAI_API_KEY=sk-... uv run pytest tests/e2e/test_structured_output.py -v
 """
 
 from __future__ import annotations

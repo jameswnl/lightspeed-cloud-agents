@@ -575,7 +575,7 @@ class TestParseOutput:
 class TestCallLlmNativeStructuredOutput:
     """Tests for _call_llm's native structured-output attempt + fallback (#188).
 
-    See tests/e2e/test_structured_output_e2e.py for the real-LLM regression
+    See tests/e2e/test_structured_output.py for the real-LLM regression
     test this complements -- these are fast/deterministic coverage of the
     specific request-shaping and fallback logic.
     """
