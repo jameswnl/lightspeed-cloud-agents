@@ -886,3 +886,17 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 - Adding the circuit breaker to the local engine for consistency -- Temporal-only for this fix.
 
 **Effort**: 1 day (plus 3 rounds of design review before implementation, given replay-safety and behavioral-parity constraints)
+
+### T59: `spawn: local` under `LocalWorkflowRunner`'s real orchestration untested ([issue #227](https://github.com/jameswnl/lightspeed-cloud-agents/issues/227)) -- Done (PR #232)
+
+**Status**: Done
+
+**Problem**: Surveying engine (`local`/`temporal`) x spawn-mode (`none`/`local`/`ephemeral`) x spawner test coverage found two gaps in the local engine's own orchestration path (a third finding, Temporal ignoring per-step `spawn`, was split out as #228/T58 above):
+- Finding 2: no test ran a real LLM call through `LocalWorkflowRunner`'s actual pydantic-graph state machine (approval gates, context threading, condition evaluation) for `spawn: local` -- existing coverage was either graph-construction-only (`test_workflow_yaml_e2e.py`, no execution) or called `SubprocessExecutor` directly, bypassing `graph_translator.py`/`LocalWorkflowRunner` entirely (`test_allowed_skills_e2e.py`).
+- Finding 3: `tests/integration/test_local_executor_integration.py` mocker-patches `get_step_executor` itself, so it never exercises real dispatch to `DirectExecutor`/`SubprocessExecutor` through the actual factory.
+
+**What was built**:
+1. `tests/e2e/test_local_runner_real_dispatch_e2e.py`: drives `LocalWorkflowRunner.start()` end-to-end with `get_step_executor` unpatched (real factory dispatch), a real auto-approved approval gate, real `{{ steps.X.output.Y }}` context interpolation between steps, and a real LLM call for both `spawn: none` (`DirectExecutor`) and `spawn: local` (`SubprocessExecutor`, a real forked child process). Backed by a small in-memory `RunStateStore` stand-in (not a mock) so assertions run against `get_status()`'s real post-execution state, the same surface a caller of `LocalWorkflowRunner` actually uses.
+2. Real production bug found and fixed by this new test: `subprocess_child.py::_parse_content` never got the markdown-fence-stripping fix (`_strip_markdown_fence`) that `direct.py::_parse_output` received for #188 -- so any `spawn: local` step with `output_schema` failed whenever the model wrapped its JSON in a ```` ```json ```` fence (gpt-4o-mini does this reliably). Added the same `_MARKDOWN_FENCE_RE`/`_strip_markdown_fence` helper to `subprocess_child.py`, applied at the same call site. 6 new unit tests in `tests/unit/workflow/executor/test_subprocess_child.py::TestParseContent`, mirroring `test_direct_executor.py::TestParseOutput`'s fence-stripping coverage.
+
+**Effort**: 0.5 day

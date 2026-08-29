@@ -864,3 +864,78 @@ class TestSubprocessChildWithSkills:
 
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert call_kwargs.get("capabilities") is None
+
+
+class TestParseContent:
+    """Tests for _parse_content's markdown-fence stripping (parity with direct.py#_parse_output).
+
+    Regression coverage for issue #227: this parity gap was never
+    fixed for spawn: local's subprocess_child.py after #188 fixed it
+    for spawn: none's direct.py, so any spawn: local step with
+    output_schema failed whenever the model fenced its JSON response
+    (which gpt-4o-mini does reliably) -- surfaced by a real-LLM e2e
+    test driving SubprocessExecutor through LocalWorkflowRunner.
+    """
+
+    def test_json_fence_stripped_with_schema(self) -> None:
+        """```json ... ``` fenced JSON is parsed when output_schema is set."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = '```json\n{"severity": "high", "reason": "cpu spike"}\n```'
+        result = _parse_content(content, {"type": "object"})
+        assert result == {
+            "status": "completed",
+            "output": {"severity": "high", "reason": "cpu spike"},
+        }
+
+    def test_uppercase_json_tag_fence_stripped(self) -> None:
+        """```JSON ... ``` (uppercase tag) is also stripped, not just lowercase.
+
+        Parity with test_direct_executor.py's equivalent case -- the
+        regex already has re.IGNORECASE, this just closes the test
+        coverage loop to match.
+        """
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = '```JSON\n{"ok": true}\n```'
+        result = _parse_content(content, {"type": "object"})
+        assert result == {"status": "completed", "output": {"ok": True}}
+
+    def test_bare_fence_without_json_tag_stripped(self) -> None:
+        """``` ... ``` (no "json" tag) is also stripped."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = '```\n{"ok": true}\n```'
+        result = _parse_content(content, {"type": "object"})
+        assert result == {"status": "completed", "output": {"ok": True}}
+
+    def test_fence_stripped_without_schema_too(self) -> None:
+        """Fence-stripping also applies on the no-schema path."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = '```json\n{"ok": true}\n```'
+        result = _parse_content(content, None)
+        assert result == {"status": "completed", "output": {"ok": True}}
+
+    def test_non_fenced_json_unaffected(self) -> None:
+        """Plain (non-fenced) JSON still parses correctly."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        result = _parse_content('{"severity": "low"}', {"type": "object"})
+        assert result == {"status": "completed", "output": {"severity": "low"}}
+
+    def test_still_fails_for_genuinely_non_json_fenced_content(self) -> None:
+        """A fence wrapping non-JSON text still fails -- stripping isn't a cure-all."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        result = _parse_content("```\nnot actually json\n```", {"type": "object"})
+        assert result["status"] == "failed"
+        assert "non-json" in result["error"].lower()
+
+    def test_falls_back_to_original_content_on_unfenced_parse_failure(self) -> None:
+        """No-schema path preserves the original (unstripped) text on parse failure."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = "```\nnot json at all\n```"
+        result = _parse_content(content, None)
+        assert result == {"status": "completed", "output": {"response": content}}
