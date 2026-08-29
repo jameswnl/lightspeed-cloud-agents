@@ -925,6 +925,6 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 1. `git mv` renamed the three remaining files: `test_identity.py`, `test_policy.py`, `test_rbac.py`.
 2. Fixed `test_list.txt`'s two stale filename references (landed directly on T60's branch before merge, so already reflected in `main`).
 3. Verified no other live references (checked `.github/workflows/*.yaml`, `CLAUDE.md`, this file) point at the old three names -- only frozen historical review docs under `docs/archived/`/`docs/gaps/phase-2-records/` still mention them, left as-is since those are point-in-time snapshots, not living docs.
-4. Verified: `pytest --collect-only` on the three renamed files finds all 17 tests with no import errors; full `tests/unit`+`tests/integration` run green with no regressions.
+4. Verified: `pytest --collect-only` on the three renamed files finds all 17 tests with no import errors. Full `tests/unit`+`tests/integration` run on this branch matches the identical run on unmodified `main`: 1882 passed, 22 skipped, and the same 9 pre-existing `test_temporal_workflows.py` failures on both (require a live Temporal server; excluded from the "no regressions" claim, not fixed by this PR) -- no regressions introduced by the rename.
 
 **Effort**: 15 minutes
