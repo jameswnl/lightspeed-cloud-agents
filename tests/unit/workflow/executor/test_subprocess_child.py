@@ -888,6 +888,19 @@ class TestParseContent:
             "output": {"severity": "high", "reason": "cpu spike"},
         }
 
+    def test_uppercase_json_tag_fence_stripped(self) -> None:
+        """```JSON ... ``` (uppercase tag) is also stripped, not just lowercase.
+
+        Parity with test_direct_executor.py's equivalent case -- the
+        regex already has re.IGNORECASE, this just closes the test
+        coverage loop to match.
+        """
+        from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
+
+        content = '```JSON\n{"ok": true}\n```'
+        result = _parse_content(content, {"type": "object"})
+        assert result == {"status": "completed", "output": {"ok": True}}
+
     def test_bare_fence_without_json_tag_stripped(self) -> None:
         """``` ... ``` (no "json" tag) is also stripped."""
         from cloud_agents.workflow.executor.step.subprocess_child import _parse_content
