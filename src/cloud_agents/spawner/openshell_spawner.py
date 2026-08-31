@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import ssl
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
@@ -277,6 +278,7 @@ class OpenShellSpawner(AgentSpawner):
         tls_cert: str = "",
         tls_key: str = "",
         bearer_token: str = "",
+        bearer_token_provider: Callable[[], str] | None = None,
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
         **kwargs: Any,
@@ -299,6 +301,17 @@ class OpenShellSpawner(AgentSpawner):
             tls_key: Path to client key for mTLS.
             bearer_token: OIDC bearer token for gRPC auth. Applied to
                 raw gRPC channels via call credentials interceptor.
+            bearer_token_provider: Optional zero-arg callable returning a
+                fresh bearer token string. Mutually exclusive with
+                bearer_token. _create_grpc_channel() builds a new gRPC
+                channel on every call (not once at construction time), so
+                calling this provider there re-reads the current token on
+                every RPC -- letting a caller supply its own refreshing
+                token strategy (e.g. an OIDC client-credentials provider
+                with its own caching) without OpenShellSpawner needing to
+                know about OIDC/Keycloak specifics. Fixes short-lived
+                bearer tokens expiring mid-spawn with no way to refresh
+                (issue #236).
             extra_readable_paths: Additional absolute paths to grant
                 read-only Landlock access to, on top of OpenShell's own
                 default allowlist, for every non-advisory spawn. Defaults
@@ -323,6 +336,12 @@ class OpenShellSpawner(AgentSpawner):
         self._tls_cert = tls_cert
         self._tls_key = tls_key
         self._bearer_token = bearer_token
+        if bearer_token and bearer_token_provider is not None:
+            raise ValueError(
+                "bearer_token and bearer_token_provider are mutually exclusive -- "
+                "pass one or the other, not both"
+            )
+        self._bearer_token_provider = bearer_token_provider
         self._extra_readable_paths = self._validate_extra_readable_paths(
             extra_readable_paths
             if extra_readable_paths is not None
@@ -357,14 +376,23 @@ class OpenShellSpawner(AgentSpawner):
         secure channel with optional mTLS client certs and/or bearer
         token via composite_channel_credentials.
 
-        Raises ValueError if bearer_token is set without TLS — sending
-        OIDC tokens over plaintext is a credential leak.
+        Raises ValueError if a bearer token (static or provider-sourced) is
+        set without TLS — sending OIDC tokens over plaintext is a
+        credential leak.
+
+        Called fresh, inline, on every raw gRPC call (ExposeService,
+        Provider API) rather than once at spawner-construction time --
+        so when bearer_token_provider is set, this re-invokes it on every
+        call, picking up a refreshed token instead of reusing one that may
+        have expired mid-request (issue #236).
         """
         import grpc
 
         target = self._resolve_grpc_target()
 
-        if self._bearer_token and not self._tls_ca:
+        token = self._bearer_token_provider() if self._bearer_token_provider else self._bearer_token
+
+        if token and not self._tls_ca:
             raise ValueError(
                 "OPENSHELL_BEARER_TOKEN requires TLS (OPENSHELL_TLS_CA). "
                 "Refusing to send credentials over plaintext."
@@ -382,8 +410,8 @@ class OpenShellSpawner(AgentSpawner):
             certificate_chain=cert_chain,
         )
 
-        if self._bearer_token:
-            call_creds = grpc.access_token_call_credentials(self._bearer_token)
+        if token:
+            call_creds = grpc.access_token_call_credentials(token)
             channel_creds = grpc.composite_channel_credentials(channel_creds, call_creds)
 
         return grpc.secure_channel(target, channel_creds)

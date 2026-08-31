@@ -2999,6 +2999,42 @@ class TestResolveGrpcTarget:
         assert spawner._resolve_grpc_target() == "host:17670"
 
 
+class TestBearerTokenProviderConstruction:
+    """Tests for bearer_token_provider constructor wiring (issue #236)."""
+
+    def test_bearer_token_and_provider_mutually_exclusive(self) -> None:
+        """Passing both bearer_token and bearer_token_provider raises ValueError."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = MagicMock()
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            OpenShellSpawner(
+                openshell_client=mock_client,
+                bearer_token="my-token",
+                bearer_token_provider=lambda: "fresh-token",
+            )
+
+    def test_bearer_token_provider_stored(self) -> None:
+        """bearer_token_provider is stored on the spawner for later use."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = MagicMock()
+        provider = MagicMock(return_value="fresh-token")
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            bearer_token_provider=provider,
+        )
+        assert spawner._bearer_token_provider is provider
+
+    def test_bearer_token_provider_defaults_to_none(self) -> None:
+        """Without bearer_token_provider, the spawner stores None."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = MagicMock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        assert spawner._bearer_token_provider is None
+
+
 class TestCreateGrpcChannel:
     """Tests for _create_grpc_channel() TLS configuration."""
 
@@ -3116,6 +3152,55 @@ class TestCreateGrpcChannel:
             openshell_client=mock_client,
             endpoint="host:17670",
             bearer_token="my-token",
+        )
+
+        with pytest.raises(ValueError, match="requires TLS"):
+            spawner._create_grpc_channel()
+
+    def test_bearer_token_provider_used_for_fresh_token(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """A fresh token is fetched from the provider on every channel build,
+        not baked in once at construction time (issue #236)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_grpc = self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca")
+
+        provider = MagicMock(side_effect=["token-1", "token-2"])
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+            bearer_token_provider=provider,
+        )
+
+        mock_grpc.ssl_channel_credentials.return_value = "ssl-creds"
+        mock_grpc.access_token_call_credentials.return_value = "call-creds"
+        mock_grpc.composite_channel_credentials.return_value = "composite-creds"
+
+        spawner._create_grpc_channel()
+        spawner._create_grpc_channel()
+
+        assert provider.call_count == 2
+        mock_grpc.access_token_call_credentials.assert_has_calls(
+            [mocker.call("token-1"), mocker.call("token-2")]
+        )
+
+    def test_bearer_token_provider_without_tls_raises(self, mocker: MockerFixture) -> None:
+        """bearer_token_provider without TLS raises ValueError — fail closed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        self._mock_grpc(mocker)
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            bearer_token_provider=lambda: "fresh-token",
         )
 
         with pytest.raises(ValueError, match="requires TLS"):

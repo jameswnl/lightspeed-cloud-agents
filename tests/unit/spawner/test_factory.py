@@ -221,6 +221,61 @@ class TestBuildSpawnerOpenShell:
         }
 
 
+class TestBuildSpawnerOpenShellBearerTokenProvider:
+    """Tests for bearer_token_provider wiring (issue #236)."""
+
+    def test_provider_forwarded_to_sandbox_client_and_spawner(
+        self, mocker: MockerFixture
+    ) -> None:
+        """bearer_token_provider is forwarded as-is to both SandboxClient
+        (bearer_token=) and OpenShellSpawner (bearer_token_provider=)."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mock_client = mocker.patch("openshell.SandboxClient")
+        provider = mocker.Mock(return_value="fresh-token")
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url="gw:17670",
+            bearer_token_provider=provider,
+        )
+
+        assert mock_client.call_args.kwargs["bearer_token"] is provider
+        assert spawner._bearer_token_provider is provider
+        assert spawner._bearer_token == ""
+
+    def test_static_bearer_token_takes_precedence_over_provider(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If both are (mistakenly) passed, the factory prefers the static
+        token for SandboxClient wiring -- but OpenShellSpawner's own
+        constructor still raises ValueError for the ambiguous config."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+        provider = mocker.Mock(return_value="fresh-token")
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            build_spawner(
+                "openshell",
+                gateway_url="gw:17670",
+                bearer_token="static-token",
+                bearer_token_provider=provider,
+            )
+
+    def test_no_provider_no_bearer_token_kwarg(self, mocker: MockerFixture) -> None:
+        """Without bearer_token/bearer_token_provider, SandboxClient gets no
+        bearer_token kwarg at all."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mock_client = mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner("openshell", gateway_url="gw:17670")
+
+        assert "bearer_token" not in mock_client.call_args.kwargs
+        assert spawner._bearer_token_provider is None
+
+
 class TestBuildSpawnerUnknownType:
     """Tests for the error path on unrecognized spawner types."""
 
