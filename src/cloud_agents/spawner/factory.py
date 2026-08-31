@@ -15,6 +15,7 @@ implementations.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -53,9 +54,10 @@ def build_spawner(spawner_type: str, **params: Any) -> "AgentSpawner":
             spawner (issue #198).
         **params: Constructor parameters for OpenShellSpawner: gateway_url,
             workspace, http_endpoint, tls_ca, tls_cert, tls_key,
-            bearer_token, max_pods, extra_readable_paths, extra_env --
-            used to build the underlying SandboxClient (with TLS/bearer
-            auth) and then OpenShellSpawner.
+            bearer_token, bearer_token_provider, max_pods,
+            extra_readable_paths, extra_env -- used to build the
+            underlying SandboxClient (with TLS/bearer auth) and then
+            OpenShellSpawner.
             Callers may pass a broader dict (e.g. a Pydantic model_dump())
             containing extra keys -- unrecognized keys and explicit None
             values are dropped rather than forwarded, so passing an unset
@@ -88,6 +90,7 @@ def _build_openshell_spawner(
     tls_cert: str | None = None,
     tls_key: str | None = None,
     bearer_token: str | None = None,
+    bearer_token_provider: Callable[[], str] | None = None,
     **kwargs: Any,
 ) -> "AgentSpawner":
     """Build an OpenShellSpawner, including SandboxClient auth wiring.
@@ -96,6 +99,15 @@ def _build_openshell_spawner(
     entrypoint used to read from os.environ, so callers whose own config
     models default optional fields to None (e.g. Pydantic) behave the
     same as unset env vars.
+
+    bearer_token_provider is a zero-arg callable returning a fresh bearer
+    token string, forwarded as-is to both the underlying SandboxClient
+    (which already supports a callable `bearer_token`, re-invoking it per
+    RPC) and OpenShellSpawner (see its own bearer_token_provider docstring
+    for why this matters: a short-lived OIDC token would otherwise expire
+    mid-spawn with no way to refresh -- issue #236). Mutually exclusive
+    with bearer_token -- OpenShellSpawner's constructor raises ValueError
+    if both are set.
     """
     from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
     from openshell import SandboxClient
@@ -107,6 +119,16 @@ def _build_openshell_spawner(
     tls_cert = tls_cert or ""
     tls_key = tls_key or ""
     bearer_token = bearer_token or ""
+
+    if bearer_token and bearer_token_provider is not None:
+        # Fail closed before constructing SandboxClient -- a single
+        # fail-closed story, not "build a client with the static token,
+        # then discover the ambiguity only once OpenShellSpawner's own
+        # (otherwise-identical) constructor check raises."
+        raise ValueError(
+            "bearer_token and bearer_token_provider are mutually exclusive -- "
+            "pass one or the other, not both"
+        )
 
     # Strip http(s):// scheme -- SandboxClient uses gRPC, not HTTP
     grpc_endpoint = gateway_url.replace("http://", "").replace("https://", "")
@@ -126,6 +148,9 @@ def _build_openshell_spawner(
     if bearer_token:
         client_kwargs["bearer_token"] = bearer_token
         logger.info("OpenShell bearer token auth enabled")
+    elif bearer_token_provider is not None:
+        client_kwargs["bearer_token"] = bearer_token_provider
+        logger.info("OpenShell bearer token provider auth enabled (auto-refreshing)")
 
     client = SandboxClient(**client_kwargs)
     logger.info(
@@ -143,5 +168,6 @@ def _build_openshell_spawner(
         tls_cert=tls_cert,
         tls_key=tls_key,
         bearer_token=bearer_token,
+        bearer_token_provider=bearer_token_provider,
         **_filtered(kwargs, _OPENSHELL_EXTRA_PARAMS),
     )

@@ -928,3 +928,22 @@ PoC1 leftover. In the Temporal architecture, the activity calls the sandbox sync
 4. Verified: `pytest --collect-only` on the three renamed files finds all 17 tests with no import errors. Full `tests/unit`+`tests/integration` run on this branch matches the identical run on unmodified `main`: 1882 passed, 22 skipped, and the same 9 pre-existing `test_temporal_workflows.py` failures on both (require a live Temporal server; excluded from the "no regressions" claim, not fixed by this PR) -- no regressions introduced by the rename.
 
 **Effort**: 15 minutes
+
+### T61: `OpenShellSpawner` static bearer token can't refresh mid-spawn ([issue #236](https://github.com/jameswnl/lightspeed-cloud-agents/issues/236)) -- Done
+
+**Status**: Done
+
+**Problem**: `OpenShellSpawner._create_grpc_channel()` only ever accepted a static `bearer_token: str`, baked into the raw gRPC channel via `grpc.access_token_call_credentials(self._bearer_token)`. Reproduced live against a real OIDC-secured staging gateway (Keycloak, 300-second access-token TTL, confirmed by decoding the JWT's own `iat`/`exp` claims): the token expired mid-`spawn`, and cleanup (`_delete_provider`/`_detach_provider`/`_do_destroy`) then also failed reusing the same stale token, leaking both the sandbox and its attached credential provider. The issue was originally scoped around switching to the `openshell` SDK's `SandboxClient.from_active_cluster()` + `ClientCredentialsAuth` machinery, but investigation showed `_create_grpc_channel()` is already called fresh, inline, at every one of its ~5 call sites (never cached at spawner-construction time) -- so the actual gap was narrower: no *supported* way to swap in a fresh token per call, short of reaching into the private `_bearer_token` attribute directly.
+
+**What was built**:
+1. `OpenShellSpawner.__init__` gained `bearer_token_provider: Callable[[], str] | None = None`, mutually exclusive with the existing `bearer_token: str` (raises `ValueError` if both are set).
+2. `_create_grpc_channel()` resolves the token once per call via `self._bearer_token_provider() if self._bearer_token_provider else self._bearer_token`, and both the TLS-required fail-closed check and `grpc.access_token_call_credentials(...)` use that resolved value -- giving per-RPC refresh with no async/interceptor machinery needed, since the method already rebuilds the channel fresh every call. The static-string path (message text, `access_token_call_credentials`-based call) is unchanged byte-for-byte.
+3. `spawner/factory.py`'s `_build_openshell_spawner()` gained a matching `bearer_token_provider` param, forwarded to both `openshell.SandboxClient(bearer_token=...)` (already supports `str | Callable[[], str] | None` at the currently-pinned SDK version, `>=0.0.111` -- no dependency bump needed) and `OpenShellSpawner(bearer_token_provider=...)`.
+4. No changes to the Temporal entrypoint's env-var reading -- a Python callable can't come from an env var; the actual OIDC-minting provider will be built and wired by `lightspeed-stack` (tracked as a separate, dependent issue there), which calls `build_spawner(bearer_token_provider=<their provider>)` directly.
+5. 8 new tests: `tests/unit/spawner/test_openshell_spawner.py::TestBearerTokenProviderConstruction` (mutual exclusivity, storage, default) and 2 new methods on `TestCreateGrpcChannel` (`test_bearer_token_provider_used_for_fresh_token` -- a provider with `side_effect=["token-1","token-2"]` proves per-call refresh, not caching; `test_bearer_token_provider_without_tls_raises`); `tests/unit/spawner/test_factory.py::TestBuildSpawnerOpenShellBearerTokenProvider` (3 tests: forwarding, both-set-raises, neither-set-no-kwarg).
+6. Independent opus final-gate review: PASS (verified token-resolution consistency between the TLS gate and the credential call, backward compatibility of the static-token path, and confirmed no leftover code from an earlier, abandoned `ClientCredentialsAuth`/`metadata_call_credentials` design).
+
+**Explicitly out of scope, documented as follow-ups**:
+- The actual OIDC client-credentials token-minting/caching provider implementation -- lives in `lightspeed-stack`'s `SpawnerConfiguration`/`spawner_factory.py`, filed as a separate dependent issue there, blocked on this landing first.
+
+**Effort**: 0.5 day
