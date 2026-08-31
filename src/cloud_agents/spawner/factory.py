@@ -120,6 +120,16 @@ def _build_openshell_spawner(
     tls_key = tls_key or ""
     bearer_token = bearer_token or ""
 
+    if bearer_token and bearer_token_provider is not None:
+        # Fail closed before constructing SandboxClient -- a single
+        # fail-closed story, not "build a client with the static token,
+        # then discover the ambiguity only once OpenShellSpawner's own
+        # (otherwise-identical) constructor check raises."
+        raise ValueError(
+            "bearer_token and bearer_token_provider are mutually exclusive -- "
+            "pass one or the other, not both"
+        )
+
     # Strip http(s):// scheme -- SandboxClient uses gRPC, not HTTP
     grpc_endpoint = gateway_url.replace("http://", "").replace("https://", "")
 

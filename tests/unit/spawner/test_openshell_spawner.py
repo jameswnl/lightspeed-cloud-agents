@@ -3238,6 +3238,32 @@ class TestCreateGrpcChannel:
         with pytest.raises(ValueError, match="requires TLS"):
             spawner._create_grpc_channel()
 
+    def test_bearer_token_provider_returning_empty_raises(
+        self, mocker: MockerFixture, tmp_path
+    ) -> None:
+        """A configured provider returning an empty/falsy token is a
+        provider failure, not 'no auth configured' -- a wired provider is
+        a strong signal auth was intended, so silently building an
+        unauthenticated channel would be the wrong failure mode (review
+        nit from beesarmy, issue #236)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        self._mock_grpc(mocker)
+
+        ca_file = tmp_path / "ca.pem"
+        ca_file.write_bytes(b"fake-ca")
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            tls_ca=str(ca_file),
+            bearer_token_provider=lambda: "",
+        )
+
+        with pytest.raises(ValueError, match="empty token"):
+            spawner._create_grpc_channel()
+
 
 class TestExposeServiceEndpoint:
     """Tests for _expose_service() endpoint routing (#175)."""

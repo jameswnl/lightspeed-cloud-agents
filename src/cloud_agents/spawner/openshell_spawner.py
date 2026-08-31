@@ -396,10 +396,20 @@ class OpenShellSpawner(AgentSpawner):
             else self._bearer_token
         )
 
+        if self._bearer_token_provider is not None and not token:
+            raise ValueError(
+                "bearer_token_provider returned an empty token -- refusing to "
+                "build an unauthenticated gRPC channel. A configured provider "
+                "is a strong signal that auth was intended, so an empty "
+                "result is treated as a provider failure, not as 'no auth "
+                "configured'."
+            )
+
         if token and not self._tls_ca:
             raise ValueError(
-                "OPENSHELL_BEARER_TOKEN requires TLS (OPENSHELL_TLS_CA). "
-                "Refusing to send credentials over plaintext."
+                "OPENSHELL_BEARER_TOKEN or bearer_token_provider requires "
+                "TLS (OPENSHELL_TLS_CA). Refusing to send credentials over "
+                "plaintext."
             )
 
         if not self._tls_ca:

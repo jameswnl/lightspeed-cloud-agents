@@ -244,15 +244,17 @@ class TestBuildSpawnerOpenShellBearerTokenProvider:
         assert spawner._bearer_token_provider is provider
         assert spawner._bearer_token == ""
 
-    def test_static_bearer_token_takes_precedence_over_provider(
+    def test_both_bearer_token_and_provider_raises_before_sandbox_client(
         self, mocker: MockerFixture
     ) -> None:
-        """If both are (mistakenly) passed, the factory prefers the static
-        token for SandboxClient wiring -- but OpenShellSpawner's own
-        constructor still raises ValueError for the ambiguous config."""
+        """If both are (mistakenly) passed, the factory fails closed BEFORE
+        constructing SandboxClient -- a single fail-closed story, not
+        "build a client with the static token, then discover the ambiguity
+        only once OpenShellSpawner's own constructor raises" (review nit
+        from beesarmy, issue #236)."""
         from cloud_agents.spawner.factory import build_spawner
 
-        mocker.patch("openshell.SandboxClient")
+        mock_client = mocker.patch("openshell.SandboxClient")
         provider = mocker.Mock(return_value="fresh-token")
 
         with pytest.raises(ValueError, match="mutually exclusive"):
@@ -262,6 +264,8 @@ class TestBuildSpawnerOpenShellBearerTokenProvider:
                 bearer_token="static-token",
                 bearer_token_provider=provider,
             )
+
+        mock_client.assert_not_called()
 
     def test_no_provider_no_bearer_token_kwarg(self, mocker: MockerFixture) -> None:
         """Without bearer_token/bearer_token_provider, SandboxClient gets no
