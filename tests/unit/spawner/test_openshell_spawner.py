@@ -3206,6 +3206,38 @@ class TestCreateGrpcChannel:
         with pytest.raises(ValueError, match="requires TLS"):
             spawner._create_grpc_channel()
 
+    def test_falsy_callable_provider_still_used_and_requires_tls(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A falsy-but-not-None callable provider must still be used for the
+        token (and still enforce the TLS requirement) -- a truthiness check
+        on the provider itself would silently fall through to the empty
+        static bearer_token, skip the TLS guard, and build an insecure
+        channel with no auth at all (CodeRabbit review finding, issue #236)."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class _FalsyCallable:
+            def __call__(self) -> str:
+                return "falsy-but-valid-token"
+
+            def __bool__(self) -> bool:
+                return False
+
+        self._mock_grpc(mocker)
+
+        provider = _FalsyCallable()
+        assert not provider  # sanity: this really is falsy, just not None
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            endpoint="host:17670",
+            bearer_token_provider=provider,
+        )
+
+        with pytest.raises(ValueError, match="requires TLS"):
+            spawner._create_grpc_channel()
+
 
 class TestExposeServiceEndpoint:
     """Tests for _expose_service() endpoint routing (#175)."""

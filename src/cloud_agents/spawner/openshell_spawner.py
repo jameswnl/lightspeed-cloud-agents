@@ -390,7 +390,11 @@ class OpenShellSpawner(AgentSpawner):
 
         target = self._resolve_grpc_target()
 
-        token = self._bearer_token_provider() if self._bearer_token_provider else self._bearer_token
+        token = (
+            self._bearer_token_provider()
+            if self._bearer_token_provider is not None
+            else self._bearer_token
+        )
 
         if token and not self._tls_ca:
             raise ValueError(
