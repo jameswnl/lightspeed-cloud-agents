@@ -2666,7 +2666,12 @@ class TestSetInferenceRoute:
     async def test_set_inference_route_calls_grpc_with_correct_fields(
         self, mocker: MockerFixture
     ) -> None:
-        """_set_inference_route sends provider_name/model_id/workspace via SetInferenceRoute."""
+        """_set_inference_route sends provider_name/model_id/route_name/workspace.
+
+        route_name == provider_name (CodeRabbit review on #239): each
+        spawn gets its own named route instead of clobbering a single
+        shared workspace-default route.
+        """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_request_cls = mocker.patch("openshell._proto.inference_pb2.SetInferenceRouteRequest")
@@ -2686,6 +2691,7 @@ class TestSetInferenceRoute:
         mock_request_cls.assert_called_once_with(
             provider_name="provider-123",
             model_id="gpt-4o-mini",
+            route_name="provider-123",
             workspace="my-workspace",
         )
         mock_stub_cls.return_value.SetInferenceRoute.assert_called_once_with(
@@ -2715,6 +2721,61 @@ class TestSetInferenceRoute:
 
         with pytest.raises(RuntimeError, match="unsupported type"):
             await spawner._set_inference_route("provider-123", "gpt-4o-mini")
+
+    @pytest.mark.asyncio
+    async def test_delete_inference_route_calls_grpc_with_correct_fields(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_delete_inference_route sends route_name/workspace via DeleteInferenceRoute."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_request_cls = mocker.patch(
+            "openshell._proto.inference_pb2.DeleteInferenceRouteRequest"
+        )
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.inference_pb2_grpc.InferenceStub",
+        )
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+            workspace="my-workspace",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._delete_inference_route("provider-123")
+
+        mock_request_cls.assert_called_once_with(
+            route_name="provider-123",
+            workspace="my-workspace",
+        )
+        mock_stub_cls.return_value.DeleteInferenceRoute.assert_called_once_with(
+            mock_request_cls.return_value
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_inference_route_propagates_gateway_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A gateway failure propagates -- caller (destroy) decides how to handle it."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mocker.patch("openshell._proto.inference_pb2.DeleteInferenceRouteRequest")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.inference_pb2_grpc.InferenceStub",
+        )
+        mock_stub_cls.return_value.DeleteInferenceRoute.side_effect = RuntimeError(
+            "NOT_FOUND: route does not exist"
+        )
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        with pytest.raises(RuntimeError, match="does not exist"):
+            await spawner._delete_inference_route("provider-123")
 
 
 class TestDoSpawnInferenceRouteWiring:
@@ -2779,6 +2840,8 @@ class TestDoSpawnInferenceRouteWiring:
             provider_type="openai",
         )
         mock_set_route.assert_called_once_with("provider-123", "gpt-4o-mini")
+        # Tracked for destroy()-time cleanup (see TestDestroyWithProviderCleanup).
+        assert spawner._inference_route_names["agent-1"] == "provider-123"
 
     @pytest.mark.asyncio
     async def test_do_spawn_skips_inference_route_when_model_missing(
@@ -3068,6 +3131,84 @@ class TestDestroyWithProviderCleanup:
         await spawner._do_destroy("agent-1")
 
         mock_client.delete.assert_called_once_with("sb-1", workspace="default")
+
+    @pytest.mark.asyncio
+    async def test_deletes_inference_route_on_destroy(self, mocker: MockerFixture) -> None:
+        """Inference route is deleted during destroy, avoiding unbounded accumulation."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+        spawner._provider_ids["agent-1"] = "provider-123"
+        spawner._inference_route_names["agent-1"] = "provider-123"
+
+        mocker.patch.object(spawner, "_detach_provider")
+        mock_delete_route = mocker.patch.object(spawner, "_delete_inference_route")
+        mock_client.delete = mocker.Mock()
+
+        await spawner._do_destroy("agent-1")
+
+        mock_delete_route.assert_called_once_with("provider-123")
+        assert "agent-1" not in spawner._inference_route_names
+
+    @pytest.mark.asyncio
+    async def test_skips_inference_route_deletion_when_none_was_set(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No route deletion attempted for an agent that never got one set.
+
+        E.g. a spawn that only used credential injection ("cloud-agents"
+        provider type, no model) never called _set_inference_route, so
+        destroy shouldn't call DeleteInferenceRoute on a route that never
+        existed.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+        spawner._provider_ids["agent-1"] = "provider-123"
+        # No _inference_route_names entry -- this provider was created
+        # without a real provider_type/model_id (e.g. "cloud-agents" type).
+
+        mocker.patch.object(spawner, "_detach_provider")
+        mock_delete_route = mocker.patch.object(spawner, "_delete_inference_route")
+        mock_client.delete = mocker.Mock()
+
+        await spawner._do_destroy("agent-1")
+
+        mock_delete_route.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_destroy_tolerates_inference_route_deletion_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Destroy continues (and still deletes the sandbox) even if route deletion fails."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_names["agent-1"] = "sb-1"
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+        spawner._provider_ids["agent-1"] = "provider-123"
+        spawner._inference_route_names["agent-1"] = "provider-123"
+
+        mocker.patch.object(spawner, "_detach_provider")
+        mocker.patch.object(
+            spawner,
+            "_delete_inference_route",
+            side_effect=Exception("delete route failed"),
+        )
+        mock_client.delete = mocker.Mock()
+
+        await spawner._do_destroy("agent-1")
+
+        mock_client.delete.assert_called_once_with("sb-1", workspace="default")
+        # Retained for retry on next destroy, same as a failed provider detach.
+        assert spawner._inference_route_names["agent-1"] == "provider-123"
 
 
 class TestBuildNetworkPolicy:
