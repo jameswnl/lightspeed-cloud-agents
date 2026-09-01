@@ -85,7 +85,7 @@ All implemented guardrails have corresponding tests. When adding a new guardrail
 | Resource limits (SpawnConfig) | `spawner/base.py` | `spawner/test_base.py` |
 | Concurrency cap | `spawner/base.py` | `spawner/test_base.py` |
 | Filesystem policy (Landlock) | `openshell_spawner.py` | `spawner/test_openshell_spawner.py`, `e2e/test_guardrails.py::TestOpenShellGuardrails` |
-| Credential injection (Provider API) | `openshell_spawner.py` | `spawner/test_openshell_spawner.py` |
+| Credential injection (Provider API) | `openshell_spawner.py` | `spawner/test_openshell_spawner.py` -- includes `TestEnsureProviderProfile` (issue #244: OpenShell has no builtin `ProviderProfile` for "openai"/"anthropic", see `docs/testing-against-openshell-gateways.md` and `scripts/gateway-verification/verify_provider_profile_fix.py` for the full writeup and live-gateway proof) |
 | MCP secret allowlist | `temporal_activities.py` | `temporal/test_activities.py` |
 | Audit events | `audit.py` + `temporal_api.py` | `temporal/test_audit.py`, `temporal/test_api.py` |
 | RBAC (CallerIdentity + PolicyFile) | `authorization.py` + `policy_authorizer.py` + `temporal_api.py` | `test_authorization.py`, `test_policy_authorizer.py`, `temporal/test_api.py` |

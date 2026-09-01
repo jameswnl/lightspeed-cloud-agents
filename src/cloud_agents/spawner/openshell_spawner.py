@@ -749,6 +749,31 @@ class OpenShellSpawner(AgentSpawner):
             ep = np.endpoints.add()
             ep.host = provider_host
             ep.port = 443
+            # Real L7 inspection, not a bare L4 pin (issue #244 PR #246
+            # review, live-verified against a real gateway): once a
+            # ProviderProfile is registered for this host (see
+            # _ensure_provider_profile), the gateway stamps this endpoint
+            # provider_credentialed=true and its policy-authoring
+            # validation (openshell-server's
+            # validate_uninspected_credentialed_endpoints) rejects a plain
+            # L4-only rule for it outright -- CreateSandbox fails closed
+            # with FAILED_PRECONDITION for every spawn, not just this
+            # provider's credential injection. The fix is NOT the
+            # `allow_uninspected_credentials: true` escape hatch: per
+            # OpenShell's own architecture doc, that flag is
+            # security-flagged in policy approval flows and disables the
+            # proxy's per-request credential scoping/L7 rewriting for this
+            # endpoint. Every real credentialed LLM provider profile
+            # OpenShell ships (providers/claude-code.yaml,
+            # providers/codex.yaml -- which pins this exact host,
+            # providers/nvidia.yaml, providers/deepinfra.yaml) instead
+            # satisfies the check with real L7 inspection via these three
+            # fields; TLS termination for that inspection is automatic
+            # per-sandbox (ephemeral CA, no separate gateway-side
+            # provisioning), so this is fully within this method's control.
+            ep.protocol = "rest"
+            ep.access = "read-write"
+            ep.enforcement = "enforce"
             b = np.binaries.add()
             b.path = "**"
 
@@ -903,6 +928,7 @@ class OpenShellSpawner(AgentSpawner):
                         f"'{sandbox_name}': LIGHTSPEED_MODEL is not set."
                     )
                 provider_type = self._resolve_inference_provider_type(lightspeed_provider)
+                await self._ensure_provider_profile(provider_type)
                 provider_id = await self._create_provider(
                     credentials={env_cred_key: cred_value},
                     provider_type=provider_type,
@@ -1263,6 +1289,26 @@ class OpenShellSpawner(AgentSpawner):
                     provider=datamodel_pb2.Provider(
                         type=provider_type,
                         credentials=credentials,
+                        # Safe to set unconditionally for every provider_type,
+                        # not just ones _ensure_provider_profile() bundles a
+                        # profile for (openai/anthropic) -- confirmed against
+                        # openshell-server's actual profile-resolution source
+                        # (EffectiveProviderProfileCatalog::
+                        # scoped_type_profile_for_scope,
+                        # provider_profile_sources.rs): a builtin/static
+                        # profile (nvidia, deepinfra, google-vertex-ai,
+                        # aws-bedrock) is returned unconditionally BEFORE
+                        # profile_workspace is even examined, so it can never
+                        # interfere with their resolution. profile_workspace
+                        # only matters for a non-static (imported) profile,
+                        # which is exactly the openai/anthropic case this
+                        # scopes to a workspace instead of requiring platform
+                        # admin (PR #246 review -- a static-analysis tool
+                        # flagged this as a "Major" regression risk citing
+                        # generic web search results, not this repo's actual
+                        # source; verified false against the real gateway
+                        # source before dismissing it).
+                        profile_workspace=self._workspace,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
@@ -1282,6 +1328,113 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         return await asyncio.to_thread(_sync_create)
+
+    async def _ensure_provider_profile(self, provider_type: str) -> None:
+        """Import a bundled ProviderProfile for provider_type if the gateway has none.
+
+        OpenShell's builtin profile catalog ships profiles for
+        aws/aws-bedrock/aws-s3/claude-code/codex/copilot/cursor/deepinfra/
+        github/google-cloud/google-vertex-ai/nvidia/pypi, but NOT for
+        "openai" or "anthropic" (issue #244) -- confirmed against the
+        gateway's own source: normalize_provider_type() recognizes both as
+        valid inference provider types, but no matching ProviderProfile
+        YAML ships as a builtin. CreateProvider() still succeeds for these
+        types with no error, but the gateway logs "provider type has no
+        profile; skipping provider policy layer" and silently skips both
+        credential-env-var injection and network-egress policy for that
+        provider -- the sandboxed agent process then fails with "Missing
+        credentials" even though the Provider object exists.
+
+        Scoped to this spawner's own workspace (matching the
+        profile_workspace set on the Provider in _create_provider) so this
+        does not require platform/global admin permissions on the gateway.
+        Idempotent: a no-op if a profile with this id is already
+        registered (workspace or platform scoped) or if provider_type has
+        no bundled default (i.e. it's expected to already have a builtin
+        profile, e.g. "nvidia" or "google-vertex-ai").
+
+        Raises if the gateway's ImportProviderProfiles RPC returns
+        imported=False with anything other than an already-exists
+        diagnostic (e.g. a lint failure) -- a successful gRPC call is not
+        the same thing as a successful import (PR #246 review): the
+        gateway reports import failures as an HTTP-200 response with
+        imported=false and error diagnostics, not as a raised gRPC error.
+        Silently treating that as success would leave _create_provider()
+        proceeding under the exact same silent-skip condition this method
+        exists to close.
+
+        Args:
+            provider_type: Gateway-validated provider type string, e.g.
+                the return value of _resolve_inference_provider_type().
+        """
+        from cloud_agents.spawner.provider_profiles import bundled_provider_profiles
+
+        bundled = bundled_provider_profiles().get(provider_type)
+        if bundled is None:
+            return
+
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_ensure() -> None:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                existing = stub.ListProviderProfiles(
+                    openshell_pb2.ListProviderProfilesRequest(
+                        workspace=self._workspace, limit=1000
+                    )
+                )
+                if any(profile.id == provider_type for profile in existing.profiles):
+                    return
+                import_resp = stub.ImportProviderProfiles(
+                    openshell_pb2.ImportProviderProfilesRequest(
+                        profiles=[
+                            openshell_pb2.ProviderProfileImportItem(
+                                profile=bundled,
+                                source="cloud-agents-bundled-defaults",
+                            )
+                        ],
+                        workspace=self._workspace,
+                    )
+                )
+                if import_resp.imported:
+                    logger.info(
+                        "Imported bundled ProviderProfile '%s' into workspace '%s' "
+                        "(gateway had none)",
+                        provider_type,
+                        self._workspace,
+                    )
+                    return
+                diagnostic_messages = [d.message for d in import_resp.diagnostics]
+                # Exact-match the gateway's own already-exists string (not a
+                # substring match) and require EVERY diagnostic to be that
+                # case -- a substring match, or treating a mixed
+                # lint-failure-plus-conflict response as benign, would let a
+                # real rejection slip through disguised as a harmless race
+                # (PR #246 review nit).
+                already_exists_message = (
+                    f"custom provider profile '{provider_type}' already exists"
+                )
+                if diagnostic_messages and all(
+                    msg == already_exists_message for msg in diagnostic_messages
+                ):
+                    # Lost a race against a concurrent spawn's import of the
+                    # same provider_type -- the profile is there either way.
+                    logger.info(
+                        "Bundled ProviderProfile '%s' import raced with a "
+                        "concurrent import (already exists) -- treating as success",
+                        provider_type,
+                    )
+                    return
+                raise RuntimeError(
+                    f"Gateway rejected bundled ProviderProfile import for "
+                    f"'{provider_type}' (imported=False): "
+                    f"{'; '.join(diagnostic_messages) or 'no diagnostics returned'}"
+                )
+            finally:
+                channel.close()
+
+        await asyncio.to_thread(_sync_ensure)
 
     async def _set_inference_route(self, provider_name: str, model_id: str) -> None:
         """Register a provider as an inference route, scoped to this provider.
