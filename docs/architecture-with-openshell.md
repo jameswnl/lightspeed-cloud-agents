@@ -181,7 +181,7 @@ port-forwarded local port for Kind):
 export OPENSHELL_GATEWAY_URL=localhost:17670
 export OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1   # no TLS in dev
 
-# Kind (after `kubectl port-forward svc/openshell-gateway 9090:8080 &`)
+# Kind (after `kubectl port-forward svc/openshell-gateway 9090:17670 &`)
 export OPENSHELL_GATEWAY_URL=localhost:9090
 export OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1   # no TLS in dev
 ```
@@ -623,12 +623,12 @@ steps, all run before the sandbox is created:
    a value with no known mapping fails the spawn immediately, before any
    gRPC call, rather than silently creating an unusable provider.
 2. **Ensure a provider profile exists** (`_ensure_provider_profile()`,
-   issue #244): the gateway ships builtin credential-injection/network-egress
+   issue #244): the gateway ships built-in credential-injection/network-egress
    profiles for most vendor types, but not `openai` or `anthropic` -- a
    `Provider` of either type would otherwise be created successfully but
    have its credential-env-var injection and network policy silently
    skipped by the gateway. This step idempotently imports a bundled profile
-   for those two types (no-op for types with an existing builtin) into the
+   for those two types (no-op for types with an existing built-in) into the
    spawner's own workspace.
 3. **Create the Provider** (`_create_provider()`) with the credential
    key-value pair and the resolved vendor type, then attach it via
