@@ -106,6 +106,12 @@ SERVER_CMD = [
 
 def _fetch_oidc_token() -> str:
     """Mint a single access token via the OIDC client-credentials grant."""
+    if not OIDC_CLIENT_ID or not OIDC_CLIENT_SECRET:
+        raise SystemExit(
+            "GATEWAY_OIDC_ISSUER is set but GATEWAY_OIDC_CLIENT_ID/"
+            "GATEWAY_OIDC_CLIENT_SECRET are missing -- all three are required "
+            "together for the client-credentials grant."
+        )
     token_endpoint = OIDC_ISSUER.rstrip("/") + "/protocol/openid-connect/token"
     data = {
         "grant_type": "client_credentials",
@@ -211,12 +217,13 @@ async def main() -> None:
     if verify is None:
         verify = True
 
+    labels = ["correct Host", "wrong Host", "no Host"]
     results: dict[str, httpx.Response] = {}
     async with httpx.AsyncClient(timeout=5.0, verify=verify) as client:
         for label, host in [
-            ("correct Host", virtual_host),
-            ("wrong Host", "default--nonexistent-sandbox.openshell.localhost"),
-            ("no Host", None),
+            (labels[0], virtual_host),
+            (labels[1], "default--nonexistent-sandbox.openshell.localhost"),
+            (labels[2], None),
         ]:
             headers = {"Host": host} if host else {}
             try:
@@ -238,14 +245,25 @@ async def main() -> None:
             and "content-type" not in resp.headers
         )
 
+    # A missing entry means that request raised (e.g. TLS handshake or
+    # connection failure) rather than got a real HTTP response -- treat that
+    # as inconclusive rather than letting all() over a partial dict silently
+    # count it as a "bare 404" match.
+    all_requests_completed = all(label in results for label in labels)
     correct_ok = (
         results.get("correct Host") is not None and results["correct Host"].status_code == 200
     )
-    all_bare_404 = all(_is_bare_404(r) for r in results.values())
+    all_bare_404 = all_requests_completed and all(_is_bare_404(r) for r in results.values())
 
     print()
     if correct_ok:
         print("VERDICT: Host-header routing is WORKING -- correct Host reached the app.")
+    elif not all_requests_completed:
+        print(
+            "VERDICT: Inconclusive -- one or more requests failed outright (see above) "
+            "rather than returning an HTTP response. Inspect the failure(s) before "
+            "drawing a conclusion about Host-header routing."
+        )
     elif all_bare_404:
         print(
             "VERDICT: Host-header routing is NOT functioning on this gateway's main "

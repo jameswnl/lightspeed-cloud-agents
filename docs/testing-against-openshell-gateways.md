@@ -245,6 +245,11 @@ become ready" but the manual exec in §5 shows a healthy local `/health`,
 this is the same gap — don't waste time re-debugging the app or provider
 config.
 
+To confirm whether a given gateway currently has this gap (correct vs.
+wrong vs. missing `Host` header, after independently confirming the app is
+healthy in-sandbox), see
+[`scripts/gateway-verification/diagnose_host_header_routing.py`](../scripts/gateway-verification/diagnose_host_header_routing.py).
+
 ## 7. Verify `allowed_skills` scoping once the sandbox is up
 
 Whether via full `spawn()` or the manual path in §5, the same three checks
