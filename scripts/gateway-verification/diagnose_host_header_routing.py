@@ -47,7 +47,7 @@ Optional env vars:
   GATEWAY_VERIFY_SANDBOX_NAME   default: "diagnose-host-header-routing"
 
 Usage (hosted staging, OIDC client-credentials):
-  GATEWAY_URL=gw-openshell-....openshell.stage.devshift.net:443 \\
+  GATEWAY_URL=<your-hosted-gateway-host>:443 \\
   GATEWAY_TLS_CA=$(uv run python3 -c 'import certifi; print(certifi.where())') \\
   GATEWAY_OIDC_ISSUER=https://keycloak.../realms/ambient-code \\
   GATEWAY_OIDC_CLIENT_ID=... GATEWAY_OIDC_CLIENT_SECRET=... GATEWAY_OIDC_AUDIENCE=... \\
