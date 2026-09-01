@@ -445,4 +445,4 @@ Assessment of each production feature's robustness, what we've done, and known g
 | `tests/unit/spawner/test_openshell_spawner.py` | Unit tests |
 | `docs/spikes/openshell-standalone-setup.md` | Standalone gateway setup guide |
 | `pyproject.toml` | `openshell` optional dependency |
-| `docs/gaps/gaps-implementation-plan.md` | T53 entry |
+| `docs/archived/gaps-implementation-plan.md` | T53 entry (archived doc) |
