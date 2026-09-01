@@ -819,8 +819,21 @@ class OpenShellSpawner(AgentSpawner):
                 # (e.g., OPENAI_API_KEY) since the agent reads that env var
                 # and the placeholder is openshell:resolve:env:OPENAI_API_KEY
                 env_cred_key = credential_secret_name.upper().replace("-", "_")
+                # LIGHTSPEED_PROVIDER/LIGHTSPEED_MODEL are always set by
+                # every caller that passes credential_secret_name
+                # (step_runner.run_step() and the Temporal executor's
+                # activities.py both build this env dict the same way) --
+                # using them as the real provider type instead of the
+                # generic "cloud-agents" default is what makes the result
+                # usable with _set_inference_route() (issue #238). Falls
+                # back to "cloud-agents" if absent (e.g. a test or caller
+                # that only wants credential injection, not inference
+                # routing).
+                provider_type = env.get("LIGHTSPEED_PROVIDER") or "cloud-agents"
+                model_id = env.get("LIGHTSPEED_MODEL")
                 provider_id = await self._create_provider(
                     credentials={env_cred_key: cred_value},
+                    provider_type=provider_type,
                 )
                 self._provider_ids[agent_name] = provider_id
                 logger.info(
@@ -828,9 +841,17 @@ class OpenShellSpawner(AgentSpawner):
                     provider_id,
                     sandbox_name,
                 )
+                if model_id and provider_type != "cloud-agents":
+                    await self._set_inference_route(provider_id, model_id)
+                    logger.info(
+                        "Set inference route for provider '%s' -> model '%s'",
+                        provider_id,
+                        model_id,
+                    )
             except Exception:
                 logger.warning(
-                    "Provider creation failed for '%s' — failing spawn (no file fallback)",
+                    "Provider creation or inference route setup failed for "
+                    "'%s' — failing spawn (no file fallback)",
                     sandbox_name,
                     exc_info=True,
                 )
@@ -1153,6 +1174,7 @@ class OpenShellSpawner(AgentSpawner):
     async def _create_provider(
         self,
         credentials: dict[str, str],
+        provider_type: str = "cloud-agents",
     ) -> str:
         """Create an OpenShell provider and return its name.
 
@@ -1170,6 +1192,16 @@ class OpenShellSpawner(AgentSpawner):
         Requires TLS (tls_ca) to avoid sending credentials over cleartext
         gRPC (issue #199 review). In-cluster service URL with disable_tls
         is not considered secure for credential transmission.
+
+        Args:
+            credentials: Credential key-value pairs (e.g. {"OPENAI_API_KEY": ...}).
+            provider_type: OpenShell provider type. Must be one of the
+                gateway's supported inference types ("openai", "anthropic",
+                "nvidia", "deepinfra", "google-vertex-ai", "aws-bedrock")
+                for the result to be usable with _set_inference_route() --
+                the generic "cloud-agents" default is NOT inference-routable
+                (issue #238) and should only be used for non-inference
+                credential injection.
         """
         if not self._tls_ca:
             import os as _os
@@ -1197,7 +1229,7 @@ class OpenShellSpawner(AgentSpawner):
                 create_req = openshell_pb2.CreateProviderRequest(
                     workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
-                        type="cloud-agents",
+                        type=provider_type,
                         credentials=credentials,
                     ),
                 )
@@ -1218,6 +1250,49 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         return await asyncio.to_thread(_sync_create)
+
+    async def _set_inference_route(self, provider_name: str, model_id: str) -> None:
+        """Register a provider as the workspace's active inference route.
+
+        A Provider alone (see _create_provider) is not enough for a
+        sandboxed agent to actually make an LLM call -- the sandbox's own
+        supervisor process resolves its LLM connection details via
+        GetInferenceBundle, which only returns anything for providers that
+        have been registered via SetInferenceRoute (issue #238). Without
+        this call, GetInferenceBundle returns NOT_FOUND indefinitely and
+        the agent fails with no diagnostic detail.
+
+        Requires provider_name to reference a provider created with an
+        inference-supported type (not the generic "cloud-agents" type) --
+        the gateway rejects SetInferenceRoute otherwise with
+        INVALID_ARGUMENT.
+
+        Args:
+            provider_name: Name of an already-created provider (see
+                _create_provider's return value).
+            model_id: Model identifier to route to (e.g. "gpt-4o-mini").
+
+        Raises:
+            Exception: If the gateway rejects the route (e.g. unsupported
+                provider type, or a transport/auth failure).
+        """
+        from openshell._proto import inference_pb2, inference_pb2_grpc
+
+        def _sync_set() -> None:
+            channel = self._create_grpc_channel()
+            try:
+                stub = inference_pb2_grpc.InferenceStub(channel)
+                stub.SetInferenceRoute(
+                    inference_pb2.SetInferenceRouteRequest(
+                        provider_name=provider_name,
+                        model_id=model_id,
+                        workspace=self._workspace,
+                    )
+                )
+            finally:
+                channel.close()
+
+        await asyncio.to_thread(_sync_set)
 
     async def _create_and_attach_provider(
         self,
@@ -1718,9 +1793,7 @@ class OpenShellSpawner(AgentSpawner):
                 await asyncio.to_thread(
                     self._client.delete, sandbox_name, workspace=self._workspace
                 )
-                logger.info(
-                    "Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name
-                )
+                logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
             except Exception:
                 logger.warning(
                     "Failed to destroy sandbox '%s' (agent=%s) — "

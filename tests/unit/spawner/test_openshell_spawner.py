@@ -521,8 +521,11 @@ class TestOpenShellSpawnerSpawn:
 
         assert endpoint == "http://gateway:17670"
         # Provider should be created with the real credential (env var name, uppercased)
+        # and the real provider type from LIGHTSPEED_PROVIDER (issue #238 --
+        # required for the result to be usable with _set_inference_route()).
         mock_create_provider.assert_called_once_with(
-            credentials={"OPENAI_API_KEY": "sk-real-secret"}
+            credentials={"OPENAI_API_KEY": "sk-real-secret"},
+            provider_type="openai",
         )
         # Check that spec.environment does NOT contain the real credential
         create_kwargs = mock_client.create.call_args[1]
@@ -1123,9 +1126,7 @@ class TestOpenShellSpawnerListActive:
             self.labels = labels or {}
 
     @pytest.mark.asyncio
-    async def test_list_active_queries_gateway_not_local_state(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_list_active_queries_gateway_not_local_state(self, mocker: MockerFixture) -> None:
         """A freshly-constructed spawner (no local tracking) still discovers
         sandboxes a *previous* process created, by querying the gateway and
         reading each sandbox's cloud-agents/agent-name label -- the gateway
@@ -2518,6 +2519,72 @@ class TestProviderResponseMessages:
 
         assert result == "provider-name-should-be-returned"
 
+    @pytest.mark.asyncio
+    async def test_create_provider_uses_real_provider_type(self, mocker: MockerFixture) -> None:
+        """_create_provider() sends the caller-supplied provider_type, not a hardcoded one.
+
+        Regression test for issue #238: the gateway's SetInferenceRoute
+        rejects the generic "cloud-agents" type with INVALID_ARGUMENT, so
+        _create_provider must actually forward a real inference-supported
+        type (e.g. "openai") when the caller passes one.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_provider_cls = mocker.patch("openshell._proto.datamodel_pb2.Provider")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.CreateProvider.return_value.provider.metadata.name = (
+            "provider-name"
+        )
+        mocker.patch("openshell._proto.openshell_pb2.CreateProviderRequest")
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._create_provider(
+            credentials={"OPENAI_API_KEY": "sk-test"}, provider_type="openai"
+        )
+
+        mock_provider_cls.assert_called_once_with(
+            type="openai", credentials={"OPENAI_API_KEY": "sk-test"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_provider_defaults_to_cloud_agents_type(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_create_provider() defaults to "cloud-agents" when no type is given.
+
+        Backward compat: callers that only want generic credential
+        injection (not inference routing) keep the old behavior unchanged.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_provider_cls = mocker.patch("openshell._proto.datamodel_pb2.Provider")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.openshell_pb2_grpc.OpenShellStub",
+        )
+        mock_stub_cls.return_value.CreateProvider.return_value.provider.metadata.name = (
+            "provider-name"
+        )
+        mocker.patch("openshell._proto.openshell_pb2.CreateProviderRequest")
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._create_provider(credentials={"OPENAI_API_KEY": "sk-test"})
+
+        mock_provider_cls.assert_called_once_with(
+            type="cloud-agents", credentials={"OPENAI_API_KEY": "sk-test"}
+        )
+
     def test_provider_request_has_workspace_field(self) -> None:
         """Regression: CreateProviderRequest must include workspace parameter.
 
@@ -2590,6 +2657,253 @@ class TestProviderResponseMessages:
                 assert req.workspace == "test-workspace"
         except (ImportError, ModuleNotFoundError):
             pytest.skip("openshell not installed")
+
+
+class TestSetInferenceRoute:
+    """Tests for _set_inference_route() (issue #238)."""
+
+    @pytest.mark.asyncio
+    async def test_set_inference_route_calls_grpc_with_correct_fields(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_set_inference_route sends provider_name/model_id/workspace via SetInferenceRoute."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_request_cls = mocker.patch("openshell._proto.inference_pb2.SetInferenceRouteRequest")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.inference_pb2_grpc.InferenceStub",
+        )
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+            workspace="my-workspace",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._set_inference_route("provider-123", "gpt-4o-mini")
+
+        mock_request_cls.assert_called_once_with(
+            provider_name="provider-123",
+            model_id="gpt-4o-mini",
+            workspace="my-workspace",
+        )
+        mock_stub_cls.return_value.SetInferenceRoute.assert_called_once_with(
+            mock_request_cls.return_value
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_inference_route_propagates_gateway_rejection(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A gateway rejection (e.g. unsupported provider type) propagates, not swallowed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mocker.patch("openshell._proto.inference_pb2.SetInferenceRouteRequest")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.inference_pb2_grpc.InferenceStub",
+        )
+        mock_stub_cls.return_value.SetInferenceRoute.side_effect = RuntimeError(
+            "INVALID_ARGUMENT: provider has unsupported type"
+        )
+
+        spawner = OpenShellSpawner(
+            openshell_client=mocker.Mock(),
+            tls_ca="/tmp/fake-ca.pem",
+        )
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        with pytest.raises(RuntimeError, match="unsupported type"):
+            await spawner._set_inference_route("provider-123", "gpt-4o-mini")
+
+
+class TestDoSpawnInferenceRouteWiring:
+    """Tests for _do_spawn's provider-type + inference-route wiring (issue #238)."""
+
+    def _make_spawner_and_client(self, mocker: MockerFixture) -> tuple[Any, Any]:
+        """Build a minimally-mocked OpenShellSpawner + client for a _do_spawn call."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream.return_value = iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+
+        async def mock_ready(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(OpenShellSpawner, "_build_baseline_filesystem_policy")
+        mocker.patch.object(spawner, "start_server", return_value=None)
+        return spawner, mock_client
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_sets_inference_route_when_provider_and_model_present(
+        self, mocker: MockerFixture
+    ) -> None:
+        """spawn() with LIGHTSPEED_PROVIDER + LIGHTSPEED_MODEL sets an inference route."""
+        spawner, _ = self._make_spawner_and_client(mocker)
+        mock_create_provider = mocker.patch.object(
+            spawner, "_create_provider", return_value="provider-123"
+        )
+        mock_set_route = mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={
+                "LIGHTSPEED_PROVIDER": "openai",
+                "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                "OPENAI_API_KEY": "sk-real-secret",
+            },
+            credential_secret_name="openai-api-key",
+        )
+
+        mock_create_provider.assert_called_once_with(
+            credentials={"OPENAI_API_KEY": "sk-real-secret"},
+            provider_type="openai",
+        )
+        mock_set_route.assert_called_once_with("provider-123", "gpt-4o-mini")
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_skips_inference_route_when_model_missing(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No LIGHTSPEED_MODEL -- _set_inference_route is not called.
+
+        Matches existing behavior for callers/tests that only exercise
+        credential injection and don't set a model.
+        """
+        spawner, _ = self._make_spawner_and_client(mocker)
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mock_set_route = mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"LIGHTSPEED_PROVIDER": "openai", "OPENAI_API_KEY": "sk-real-secret"},
+            credential_secret_name="openai-api-key",
+        )
+
+        mock_set_route.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_skips_inference_route_when_provider_type_defaults(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No LIGHTSPEED_PROVIDER (falls back to "cloud-agents") -- route setting is skipped.
+
+        A "cloud-agents"-typed provider would be rejected by
+        SetInferenceRoute anyway (issue #238) -- skip the doomed call
+        rather than fail the spawn on an entirely predictable rejection.
+        """
+        spawner, _ = self._make_spawner_and_client(mocker)
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mock_set_route = mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"LIGHTSPEED_MODEL": "gpt-4o-mini", "OPENAI_API_KEY": "sk-real-secret"},
+            credential_secret_name="openai-api-key",
+        )
+
+        mock_set_route.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_fails_when_inference_route_setup_fails(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_set_inference_route failure fails the whole spawn, same as provider creation failure.
+
+        A spawn that can't get a working inference route is guaranteed to
+        fail the moment the sandboxed agent tries to call its LLM -- fail
+        fast and loud here instead of the sandbox discovering it 30+
+        seconds later via repeated GetInferenceBundle NOT_FOUND polling.
+        """
+        spawner, _ = self._make_spawner_and_client(mocker)
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(
+            spawner,
+            "_set_inference_route",
+            side_effect=RuntimeError("INVALID_ARGUMENT: unsupported type"),
+        )
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        with pytest.raises(RuntimeError, match="unsupported type"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={
+                    "LIGHTSPEED_PROVIDER": "openai",
+                    "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                    "OPENAI_API_KEY": "sk-real-secret",
+                },
+                credential_secret_name="openai-api-key",
+            )
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_fails_loudly_for_gateway_unsupported_provider_type(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A real (not "cloud-agents") but gateway-unsupported provider type still routes.
+
+        Regression/design-intent test: lightspeed-stack accepts provider
+        names the gateway's SetInferenceRoute doesn't support (e.g.
+        "azure" -- gateway only supports openai/anthropic/nvidia/
+        deepinfra/google-vertex-ai/aws-bedrock). Any real provider_type
+        (not the "cloud-agents" fallback) must still attempt
+        _set_inference_route rather than being silently skipped the same
+        way "cloud-agents" is -- an unsupported-type rejection should
+        surface as a loud spawn failure, not a silent no-op that leaves
+        the sandbox to discover it later via GetInferenceBundle polling.
+        Exercises the real _set_inference_route (only the gRPC stub is
+        mocked), not a mocked _set_inference_route, to prove the
+        provider_type != "cloud-agents" branch is actually taken for
+        "azure".
+        """
+        spawner, _ = self._make_spawner_and_client(mocker)
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(spawner, "_create_grpc_channel")
+        mocker.patch("openshell._proto.inference_pb2.SetInferenceRouteRequest")
+        mock_stub_cls = mocker.patch(
+            "openshell._proto.inference_pb2_grpc.InferenceStub",
+        )
+        mock_stub_cls.return_value.SetInferenceRoute.side_effect = RuntimeError(
+            "INVALID_ARGUMENT: provider 'provider-123' has unsupported type 'azure' "
+            "for cluster inference (supported: openai, anthropic, nvidia, deepinfra, "
+            "google-vertex-ai, aws-bedrock)"
+        )
+        mocker.patch.dict("os.environ", {"AZURE_API_KEY": "sk-real-secret"}, clear=False)
+
+        with pytest.raises(RuntimeError, match="unsupported type 'azure'"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={
+                    "LIGHTSPEED_PROVIDER": "azure",
+                    "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                    "AZURE_API_KEY": "sk-real-secret",
+                },
+                credential_secret_name="azure-api-key",
+            )
 
 
 class TestMCPSecretInjection:
