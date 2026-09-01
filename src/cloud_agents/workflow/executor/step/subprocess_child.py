@@ -19,8 +19,10 @@ from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.direct import model_request
+from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
+from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
 from cloud_agents.workflow.executor.step.provider import (
     ensure_credentials_env,
@@ -110,6 +112,23 @@ def _build_user_content(input_data: dict[str, Any]) -> str:
         user_content += f"\n\nRespond with valid JSON matching this schema:\n{schema_text}"
 
     return user_content
+
+
+def _supports_native_output(output_schema: dict[str, Any]) -> bool:
+    """Whether output_schema's root shape is safe to send via native structured output.
+
+    Mirrors direct.py#_supports_native_output -- output_schema is
+    user-authored workflow YAML, not internally guaranteed to be an
+    object-rooted JSON Schema, and OpenAI's Structured Outputs (what
+    output_mode="native" maps to) requires an object root.
+
+    Parameters:
+        output_schema: The step's requested JSON Schema.
+
+    Returns:
+        True if output_schema has an object root.
+    """
+    return output_schema.get("type") == "object"
 
 
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
@@ -271,6 +290,12 @@ async def _run_with_agent(
 async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
     """Execute using model_request (no tools, single LLM call).
 
+    When output_schema is object-rooted, first tries native structured
+    output (output_mode="native"), mirroring direct.py's _call_llm --
+    falls back to the plain (schema-hint-only) call if native mode isn't
+    supported for this provider/model or the provider rejects the schema
+    itself (400).
+
     Parameters:
         input_data: Deserialized step input dict.
 
@@ -288,11 +313,32 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
     user_content = _build_user_content(input_data)
 
     request = ModelRequest.user_text_prompt(user_content, instructions=system_prompt)
-    response = await model_request(
-        model_string,
-        [request],
-        model_settings={"timeout": timeout_seconds},
-    )
+
+    response = None
+    if output_schema and _supports_native_output(output_schema):
+        try:
+            native_params = ModelRequestParameters(
+                output_mode="native",
+                output_object=OutputObjectDefinition(json_schema=output_schema),
+            )
+            response = await model_request(
+                model_string,
+                [request],
+                model_settings={"timeout": timeout_seconds},
+                model_request_parameters=native_params,
+            )
+        except UserError:
+            pass
+        except ModelHTTPError as exc:
+            if exc.status_code != 400:
+                raise
+
+    if response is None:
+        response = await model_request(
+            model_string,
+            [request],
+            model_settings={"timeout": timeout_seconds},
+        )
 
     content = response.text
     usage = response.usage

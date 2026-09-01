@@ -939,3 +939,190 @@ class TestParseContent:
         content = "```\nnot json at all\n```"
         result = _parse_content(content, None)
         assert result == {"status": "completed", "output": {"response": content}}
+
+
+class TestRunModelRequestNativeStructuredOutput:
+    """Tests for _run_model_request's native structured-output attempt + fallback (#235).
+
+    Mirrors test_direct_executor.py's TestCallLlmNativeStructuredOutput --
+    subprocess_child.py's spawn: local model_request path previously had no
+    equivalent to direct.py's _call_llm native-mode attempt, so a mock/test
+    LLM that only honors a native json_schema response format (as opposed to
+    a plain-text schema hint) would satisfy spawn: none but not spawn: local
+    for the identical request.
+    """
+
+    def _base_input(self, output_schema: dict[str, Any] | None) -> dict[str, Any]:
+        return {
+            "prompt": "hi",
+            "provider": {"name": "openai", "model": "gpt-4o-mini", "credentials_secret": "k"},
+            "output_schema": output_schema,
+            "context": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_output_schema_triggers_native_mode_request(self, mocker: MockerFixture) -> None:
+        """When output_schema is object-rooted, model_request is called with native output_mode."""
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+
+        await _run_model_request(self._base_input({"type": "object"}))
+
+        mock_fn.assert_called_once()
+        params = mock_fn.call_args.kwargs["model_request_parameters"]
+        assert params.output_mode == "native"
+        assert params.output_object.json_schema == {"type": "object"}
+
+    @pytest.mark.asyncio
+    async def test_no_output_schema_skips_native_mode(self, mocker: MockerFixture) -> None:
+        """Without output_schema, model_request is called without model_request_parameters."""
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = "plain text"
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+
+        await _run_model_request(self._base_input(None))
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("model_request_parameters") is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_native_mode_raises_user_error(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If native mode isn't supported (UserError), retries without it."""
+        from pydantic_ai.exceptions import UserError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=[UserError("native mode not supported"), mock_response],
+        )
+
+        result = await _run_model_request(self._base_input({"type": "object"}))
+
+        assert mock_fn.call_count == 2
+        assert mock_fn.call_args_list[0].kwargs.get("model_request_parameters") is not None
+        assert mock_fn.call_args_list[1].kwargs.get("model_request_parameters") is None
+        assert result["output"] == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_non_object_root_schema_skips_native_mode(self, mocker: MockerFixture) -> None:
+        """A non-object-root output_schema (e.g. top-level array) skips native mode.
+
+        Mirrors direct.py's _supports_native_output guard: OpenAI's
+        Structured Outputs requires an object-rooted JSON Schema, and
+        output_schema is user-authored workflow YAML with no such guarantee.
+        """
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '["a", "b"]'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+
+        result = await _run_model_request(
+            self._base_input({"type": "array", "items": {"type": "string"}})
+        )
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("model_request_parameters") is None
+        assert result["output"] == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_non_user_error_propagates_without_fallback(self, mocker: MockerFixture) -> None:
+        """A non-UserError exception (e.g. a real API failure) propagates -- no silent retry."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network exploded"),
+        )
+
+        with pytest.raises(RuntimeError, match="network exploded"):
+            await _run_model_request(self._base_input({"type": "object"}))
+
+        assert mock_fn.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_400_model_http_error(self, mocker: MockerFixture) -> None:
+        """A 400 ModelHTTPError (provider rejected the native schema) triggers fallback."""
+        from pydantic_ai.exceptions import ModelHTTPError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=[
+                ModelHTTPError(status_code=400, model_name="gpt-4o-mini", body="bad schema"),
+                mock_response,
+            ],
+        )
+
+        result = await _run_model_request(self._base_input({"type": "object"}))
+
+        assert mock_fn.call_count == 2
+        assert mock_fn.call_args_list[0].kwargs.get("model_request_parameters") is not None
+        assert mock_fn.call_args_list[1].kwargs.get("model_request_parameters") is None
+        assert result["output"] == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_5xx_model_http_error_propagates_without_fallback(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A 5xx ModelHTTPError (provider/infra failure, not a schema issue) propagates."""
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=ModelHTTPError(status_code=503, model_name="gpt-4o-mini", body="down"),
+        )
+
+        with pytest.raises(ModelHTTPError):
+            await _run_model_request(self._base_input({"type": "object"}))
+
+        assert mock_fn.call_count == 1
