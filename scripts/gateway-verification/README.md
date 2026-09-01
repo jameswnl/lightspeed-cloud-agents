@@ -18,6 +18,7 @@ from the repo root.
 | `verify_provider_cleanup_on_failure.py` | The #214 fix — a post-create spawn failure (forced deterministically via an image with no server on it) does not orphan the credential Provider on the gateway. |
 | `verify_orphan_reconciliation.py` | The #224 fix — a fresh `OpenShellSpawner` instance (simulating a restarted process, empty `_sandbox_names`) discovers and destroys a sandbox via the gateway's durable `spawned-by`/`cloud-agents/agent-name` labels, not in-memory state. |
 | `diagnose_sandbox.py` | General-purpose diagnostic when a spawn fails post-create — creates a sandbox and stops short of the failure-prone steps so it survives for inspection (normally `spawner.spawn()` auto-deletes on failure). |
+| `diagnose_host_header_routing.py` | Issue #209/#249 — confirms whether a gateway's ingress supports Host-header-based HTTP routing to sandbox ports on its main TLS port, by comparing a correct vs. wrong vs. missing `Host` header after confirming the app itself is healthy via a direct in-sandbox curl. Also surfaces `SandboxStatus.conditions` (issue #248) while polling for readiness, which the SDK's `SandboxStatusRef` silently drops. |
 
 Get a bearer token for an OIDC-registered gateway with
 [`scripts/openshell-refresh-token.sh`](../openshell-refresh-token.sh).
