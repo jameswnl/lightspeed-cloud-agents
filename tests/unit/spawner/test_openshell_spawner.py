@@ -510,6 +510,7 @@ class TestOpenShellSpawnerSpawn:
         )
         mock_start_server = mocker.patch.object(spawner, "start_server", return_value=None)
         mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
         # Ensure credential value is available via os.environ
         mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
 
@@ -1604,6 +1605,7 @@ class TestOpenShellSpawnerPostCreateCleanup:
         mocker.patch.object(OpenShellSpawner, "_build_baseline_filesystem_policy")
         mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
         mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
         mocker.patch.object(
             spawner,
             "start_server",
@@ -2320,9 +2322,15 @@ class TestCredentialInjection:
             "Expected exactly 1 use of datamodel_pb2.Provider (in _create_provider), "
             "found %d" % src.count("datamodel_pb2.Provider")
         )
+        # Anchored on "(" so this doesn't false-positive on legitimate,
+        # unrelated openshell_pb2 symbols that happen to start with
+        # "Provider" (e.g. ProviderProfile/ProviderProfileImportItem,
+        # added for issue #244) -- only a literal Provider(...)
+        # construction from openshell_pb2 would indicate the issue #211
+        # regression.
         assert (
-            "openshell_pb2.Provider" not in src
-        ), "Found stale openshell_pb2.Provider -- should be datamodel_pb2.Provider (issue #211)"
+            "openshell_pb2.Provider(" not in src
+        ), "Found stale openshell_pb2.Provider(...) -- should be datamodel_pb2.Provider (issue #211)"
         # Also verify the import is present
         assert "from openshell._proto import datamodel_pb2" in src
 
@@ -2500,7 +2508,9 @@ class TestProviderResponseMessages:
         )
 
         mock_provider_cls.assert_called_once_with(
-            type="openai", credentials={"OPENAI_API_KEY": "sk-test"}
+            type="openai",
+            credentials={"OPENAI_API_KEY": "sk-test"},
+            profile_workspace="default",
         )
 
     @pytest.mark.asyncio
@@ -2716,6 +2726,99 @@ class TestSetInferenceRoute:
             await spawner._set_inference_route("provider-123", "gpt-4o-mini")
 
 
+class TestEnsureProviderProfile:
+    """Tests for _ensure_provider_profile() (issue #244).
+
+    OpenShell has no builtin ProviderProfile for "openai"/"anthropic" --
+    CreateProvider() succeeds regardless, but the gateway silently skips
+    both credential-env-var injection and network-egress policy for a
+    provider with no matching profile. _ensure_provider_profile() must
+    idempotently import a bundled default before _create_provider() runs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_imports_bundled_profile_when_gateway_has_none(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Asserts on constructor call args, not attributes of the constructed
+        object -- this test module auto-stubs openshell_pb2 with a MagicMock
+        when the real `openshell` extra isn't importable (see module-level
+        comment near the top of this file), and a MagicMock class call
+        ignores constructor kwargs when producing its return value, so
+        reading e.g. `request.workspace` back off a mocked-class instance
+        would just be a fresh, unrelated auto-mock attribute -- not the
+        value actually passed in. Matches the established pattern in
+        test_create_provider_uses_real_provider_type above.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+        from cloud_agents.spawner.provider_profiles import bundled_provider_profiles
+
+        expected_profile = bundled_provider_profiles()["openai"]
+
+        mock_import_item_cls = mocker.patch(
+            "openshell._proto.openshell_pb2.ProviderProfileImportItem"
+        )
+        mock_import_req_cls = mocker.patch(
+            "openshell._proto.openshell_pb2.ImportProviderProfilesRequest"
+        )
+        mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
+        mock_stub_cls.return_value.ListProviderProfiles.return_value.profiles = []
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._ensure_provider_profile("openai")
+
+        mock_stub_cls.return_value.ListProviderProfiles.assert_called_once()
+        mock_import_item_cls.assert_called_once_with(
+            profile=expected_profile, source="cloud-agents-bundled-defaults"
+        )
+        mock_import_req_cls.assert_called_once_with(
+            profiles=[mock_import_item_cls.return_value],
+            workspace="default",
+        )
+        mock_stub_cls.return_value.ImportProviderProfiles.assert_called_once_with(
+            mock_import_req_cls.return_value
+        )
+
+    @pytest.mark.asyncio
+    async def test_noop_when_profile_already_exists(self, mocker: MockerFixture) -> None:
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
+        # A plain mocker.Mock(id=...) -- unlike a MagicMock *class* call,
+        # instantiating Mock directly with kwargs does set them as real
+        # attributes, so `.id` reads back correctly regardless of whether
+        # the real openshell package or this file's stub is in play.
+        mock_stub_cls.return_value.ListProviderProfiles.return_value.profiles = [
+            mocker.Mock(id="openai")
+        ]
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._ensure_provider_profile("openai")
+
+        mock_stub_cls.return_value.ImportProviderProfiles.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_noop_for_provider_type_without_bundled_default(
+        self, mocker: MockerFixture
+    ) -> None:
+        """"nvidia" already has a real OpenShell builtin profile -- no action needed."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._ensure_provider_profile("nvidia")
+
+        mock_stub_cls.return_value.ListProviderProfiles.assert_not_called()
+        mock_stub_cls.return_value.ImportProviderProfiles.assert_not_called()
+
+
 class TestDoSpawnInferenceRouteWiring:
     """Tests for _do_spawn's provider-type + inference-route wiring (issue #238)."""
 
@@ -2760,6 +2863,7 @@ class TestDoSpawnInferenceRouteWiring:
             spawner, "_create_provider", return_value="provider-123"
         )
         mock_set_route = mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
         mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
 
         await spawner.spawn(
@@ -2778,6 +2882,43 @@ class TestDoSpawnInferenceRouteWiring:
             provider_type="openai",
         )
         mock_set_route.assert_called_once_with("provider-123", "gpt-4o-mini")
+
+    @pytest.mark.asyncio
+    async def test_do_spawn_ensures_provider_profile_before_create_provider(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_ensure_provider_profile() must run before _create_provider() (issue #244) --
+
+        the profile it (idempotently) imports is what Provider.profile_workspace
+        resolves against, so it has to exist by the time the Provider is created.
+        """
+        spawner, _ = self._make_spawner_and_client(mocker)
+        call_order: list[str] = []
+
+        async def fake_ensure_profile(provider_type: str) -> None:
+            call_order.append("ensure_provider_profile")
+
+        async def fake_create_provider(**kwargs: Any) -> str:
+            call_order.append("create_provider")
+            return "provider-123"
+
+        mocker.patch.object(spawner, "_ensure_provider_profile", side_effect=fake_ensure_profile)
+        mocker.patch.object(spawner, "_create_provider", side_effect=fake_create_provider)
+        mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={
+                "LIGHTSPEED_PROVIDER": "openai",
+                "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                "OPENAI_API_KEY": "sk-real-secret",
+            },
+            credential_secret_name="openai-api-key",
+        )
+
+        assert call_order == ["ensure_provider_profile", "create_provider"]
 
     @pytest.mark.asyncio
     async def test_do_spawn_fails_loudly_when_model_missing(self, mocker: MockerFixture) -> None:
@@ -2856,6 +2997,7 @@ class TestDoSpawnInferenceRouteWiring:
             "_set_inference_route",
             side_effect=RuntimeError("INVALID_ARGUMENT: unsupported type"),
         )
+        mocker.patch.object(spawner, "_ensure_provider_profile")
         mock_delete_provider = mocker.patch.object(spawner, "_delete_provider")
         mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
 
@@ -2886,6 +3028,7 @@ class TestDoSpawnInferenceRouteWiring:
             "_set_inference_route",
             side_effect=RuntimeError("INVALID_ARGUMENT: unsupported type"),
         )
+        mocker.patch.object(spawner, "_ensure_provider_profile")
         mocker.patch.object(
             spawner, "_delete_provider", side_effect=Exception("delete also failed")
         )

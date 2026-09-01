@@ -97,6 +97,30 @@ OpenShell source for the full list (`openai`, `anthropic`, `nvidia`,
 `copilot`, `google-vertex-ai`/`vertex`, `gitlab`, `github`, `claude-code`,
 `generic`).
 
+**Known gap (fixed by issue #244 when going through `OpenShellSpawner`,
+still a manual step for raw `openshell` CLI use above): OpenShell ships no
+builtin `ProviderProfile` for `openai`/`anthropic`.** Only
+aws/aws-bedrock/aws-s3/claude-code/codex/copilot/cursor/deepinfra/github/
+google-cloud/google-vertex-ai/nvidia/pypi have a builtin profile
+(`crates/openshell-providers/src/profiles.rs`) -- confirmed by reading the
+gateway source, not by guessing from the vendored proto stubs. A `Provider`
+created with `type=openai` (via the CLI above, or a raw `CreateProvider`
+gRPC call) still "succeeds" with no error, but the gateway silently skips
+both credential-env-var injection and network-egress policy for it,
+logging `"provider type has no profile; skipping provider policy layer"` --
+the symptom is a sandboxed agent reporting `Missing credentials` even
+though `GetInferenceBundle`/routing resolves fine. `OpenShellSpawner`
+(Python, this repo) now calls `_ensure_provider_profile()` before
+`_create_provider()` to idempotently import a bundled profile
+(`spawner/provider_profiles.py`) scoped to its own workspace, so this is
+transparent when spawning through `cloud_agents`. If you hit this symptom
+driving the gateway directly via the `openshell` CLI (not through
+`cloud_agents`), register one yourself first:
+`openshell -g <name> provider profile import -f openai.yaml` (no bundled
+`openai.yaml`/`anthropic.yaml` ships with OpenShell either -- write one
+matching the shape of `providers/nvidia.yaml` in the OpenShell source,
+substituting the host and env var).
+
 Then spawn sandboxes with:
 
 ```python

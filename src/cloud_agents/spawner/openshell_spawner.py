@@ -903,6 +903,7 @@ class OpenShellSpawner(AgentSpawner):
                         f"'{sandbox_name}': LIGHTSPEED_MODEL is not set."
                     )
                 provider_type = self._resolve_inference_provider_type(lightspeed_provider)
+                await self._ensure_provider_profile(provider_type)
                 provider_id = await self._create_provider(
                     credentials={env_cred_key: cred_value},
                     provider_type=provider_type,
@@ -1263,6 +1264,7 @@ class OpenShellSpawner(AgentSpawner):
                     provider=datamodel_pb2.Provider(
                         type=provider_type,
                         credentials=credentials,
+                        profile_workspace=self._workspace,
                     ),
                 )
                 create_resp = stub.CreateProvider(create_req)
@@ -1282,6 +1284,73 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         return await asyncio.to_thread(_sync_create)
+
+    async def _ensure_provider_profile(self, provider_type: str) -> None:
+        """Import a bundled ProviderProfile for provider_type if the gateway has none.
+
+        OpenShell's builtin profile catalog ships profiles for
+        aws/aws-bedrock/aws-s3/claude-code/codex/copilot/cursor/deepinfra/
+        github/google-cloud/google-vertex-ai/nvidia/pypi, but NOT for
+        "openai" or "anthropic" (issue #244) -- confirmed against the
+        gateway's own source: normalize_provider_type() recognizes both as
+        valid inference provider types, but no matching ProviderProfile
+        YAML ships as a builtin. CreateProvider() still succeeds for these
+        types with no error, but the gateway logs "provider type has no
+        profile; skipping provider policy layer" and silently skips both
+        credential-env-var injection and network-egress policy for that
+        provider -- the sandboxed agent process then fails with "Missing
+        credentials" even though the Provider object exists.
+
+        Scoped to this spawner's own workspace (matching the
+        profile_workspace set on the Provider in _create_provider) so this
+        does not require platform/global admin permissions on the gateway.
+        Idempotent: a no-op if a profile with this id is already
+        registered (workspace or platform scoped) or if provider_type has
+        no bundled default (i.e. it's expected to already have a builtin
+        profile, e.g. "nvidia" or "google-vertex-ai").
+
+        Args:
+            provider_type: Gateway-validated provider type string, e.g.
+                the return value of _resolve_inference_provider_type().
+        """
+        from cloud_agents.spawner.provider_profiles import bundled_provider_profiles
+
+        bundled = bundled_provider_profiles().get(provider_type)
+        if bundled is None:
+            return
+
+        from openshell._proto import openshell_pb2, openshell_pb2_grpc
+
+        def _sync_ensure() -> None:
+            channel = self._create_grpc_channel()
+            try:
+                stub = openshell_pb2_grpc.OpenShellStub(channel)
+                existing = stub.ListProviderProfiles(
+                    openshell_pb2.ListProviderProfilesRequest(workspace=self._workspace)
+                )
+                if any(profile.id == provider_type for profile in existing.profiles):
+                    return
+                stub.ImportProviderProfiles(
+                    openshell_pb2.ImportProviderProfilesRequest(
+                        profiles=[
+                            openshell_pb2.ProviderProfileImportItem(
+                                profile=bundled,
+                                source="cloud-agents-bundled-defaults",
+                            )
+                        ],
+                        workspace=self._workspace,
+                    )
+                )
+                logger.info(
+                    "Imported bundled ProviderProfile '%s' into workspace '%s' "
+                    "(gateway had none)",
+                    provider_type,
+                    self._workspace,
+                )
+            finally:
+                channel.close()
+
+        await asyncio.to_thread(_sync_ensure)
 
     async def _set_inference_route(self, provider_name: str, model_id: str) -> None:
         """Register a provider as an inference route, scoped to this provider.
