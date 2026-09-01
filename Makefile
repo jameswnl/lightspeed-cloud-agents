@@ -137,11 +137,12 @@ KIND_CLUSTER ?= cloud-agents
 
 # NOTE: this target deploys workflow-runner with WORKFLOW_SPAWNER=openshell
 # (OpenShellSpawner is the only ephemeral spawner, issue #198) but does not
-# itself deploy an OpenShell gateway -- without one, ephemeral steps will
-# fail to spawn at runtime (the app still starts fine; build_spawner()
-# doesn't eagerly connect). For a verified, working Kind + OpenShell gateway
-# setup, use deploy/kind/setup-openshell.sh instead, or see
-# docs/testing-against-openshell-gateways.md.
+# itself deploy an OpenShell gateway -- deploying one is a separate concern,
+# out of scope for this repo, and invisible to workflow-runner beyond
+# OPENSHELL_GATEWAY_URL. Without a real gateway reachable at that address,
+# ephemeral steps will fail to spawn at runtime (the app still starts fine;
+# build_spawner() doesn't eagerly connect). See
+# docs/testing-against-openshell-gateways.md for setting one up.
 kind-up: build-demo  ## Create Kind cluster and deploy cloud agents (WORKFLOW_ENGINE=local|temporal)
 	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name $(KIND_CLUSTER) --wait 60s
 	podman save localhost/workflow-runner:latest -o /tmp/workflow-runner.tar
@@ -196,9 +197,9 @@ endif
 	@echo ""
 	@echo "*** WARNING: ephemeral steps will NOT spawn. ***"
 	@echo "workflow-runner is configured with WORKFLOW_SPAWNER=openshell, but this"
-	@echo "target does not deploy an OpenShell gateway or mount the Podman socket"
-	@echo "this Kind cluster would need for one. Use ./deploy/kind/setup-openshell.sh"
-	@echo "instead for a working Kind + OpenShell gateway setup."
+	@echo "target does not deploy an OpenShell gateway -- that's a separate concern,"
+	@echo "out of scope for this repo. Point OPENSHELL_GATEWAY_URL at your own"
+	@echo "gateway; see docs/testing-against-openshell-gateways.md for setting one up."
 
 kind-down:  ## Delete Kind cluster
 	KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name $(KIND_CLUSTER)

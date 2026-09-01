@@ -1,5 +1,12 @@
-# Workflow runner configured for OpenShell spawner
-# Points to the openshell-gateway service for sandbox creation.
+# Workflow runner configured for OpenShell spawner.
+#
+# OPENSHELL_GATEWAY_URL below is a placeholder -- this manifest does not
+# deploy an OpenShell gateway itself (that's a separate concern, issue
+# #198: OpenShellSpawner is the only ephemeral spawner, but where/how the
+# gateway runs is invisible to workflow-runner beyond this URL). Replace
+# the placeholder with your own, separately-deployed gateway's address
+# before applying. See docs/testing-against-openshell-gateways.md for
+# setting one up.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,7 +45,7 @@ spec:
             - name: WORKFLOW_SPAWNER
               value: "openshell"
             - name: OPENSHELL_GATEWAY_URL
-              value: "openshell-gateway:17670"
+              value: "CHANGEME.example.com:17670"  # your OpenShell gateway address
             - name: AUTH_REQUIRED
               value: "false"
             - name: OPENAI_API_KEY

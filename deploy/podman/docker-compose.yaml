@@ -2,12 +2,22 @@
 #
 # Usage:
 #   export OPENAI_API_KEY="sk-..."
+#   export OPENSHELL_GATEWAY_URL="<host>:<port>"  # your own, separately-deployed OpenShell gateway
 #   podman compose -f deploy/podman/docker-compose.yaml up -d
 #   podman compose -f deploy/podman/docker-compose.yaml down
 #
 # Workflow runner API: http://localhost:8080
 # Temporal UI:        http://localhost:8233
 # Temporal gRPC:      localhost:7233
+#
+# This stack does not deploy an OpenShell gateway -- that's a separate
+# concern (issue #198: OpenShellSpawner is the only ephemeral spawner, but
+# where/how the gateway itself runs is invisible to workflow-runner beyond
+# OPENSHELL_GATEWAY_URL). See docs/testing-against-openshell-gateways.md
+# for setting one up. If the gateway runs on the host itself (not another
+# container), OPENSHELL_GATEWAY_URL needs a container-reachable host from
+# workflow-runner's perspective (e.g. host.containers.internal:<port>),
+# not localhost.
 
 services:
   temporal-db:
@@ -47,37 +57,15 @@ services:
     ports:
       - "8233:8080"
 
-  openshell-gateway:
-    image: ghcr.io/nvidia/openshell/gateway:latest
-    restart: unless-stopped
-    # Required for Podman socket access (DooD pattern -- the gateway spawns
-    # sibling sandbox containers via the host Podman socket). Now the only
-    # thing in this stack that needs it, since OpenShellSpawner talks to
-    # the gateway over gRPC instead of the socket directly (issue #198).
-    user: "0"
-    ports:
-      - "127.0.0.1:17670:8080"
-      - "127.0.0.1:17671:8081"
-    volumes:
-      - ${PODMAN_SOCK}:/run/podman/podman.sock
-      - openshell-data:/var/lib/openshell
-      - ../openshell/gateway.toml:/etc/openshell/gateway.toml:ro
-    environment:
-      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
-      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
-      XDG_DATA_HOME: /var/lib/openshell
-      HOME: /var/lib/openshell
-
   workflow-runner:
     image: localhost/workflow-runner:latest
     depends_on:
       - temporal-server
-      - openshell-gateway
     environment:
       TEMPORAL_URL: temporal-server:7233
       TEMPORAL_NAMESPACE: default
       WORKFLOW_SPAWNER: openshell
-      OPENSHELL_GATEWAY_URL: openshell-gateway:8080
+      OPENSHELL_GATEWAY_URL: ${OPENSHELL_GATEWAY_URL:?set to your separately-deployed OpenShell gateway address}
       AUTH_REQUIRED: "false"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -88,4 +76,3 @@ services:
 
 volumes:
   temporal-db-data:
-  openshell-data:
