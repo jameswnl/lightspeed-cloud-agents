@@ -649,6 +649,65 @@ class OpenShellSpawner(AgentSpawner):
         "azure_openai": "*.openai.azure.com",
     }
 
+    # Maps lightspeed-agentic-sandbox's LIGHTSPEED_PROVIDER vendor
+    # identifiers (lightspeed-agentic-sandbox/src/lightspeed_agentic/config.py:
+    # anthropic, openai, vertex, azure, bedrock, watsonx) to OpenShell's
+    # SetInferenceRoute-accepted provider type strings (openai, anthropic,
+    # nvidia, deepinfra, google-vertex-ai, aws-bedrock). The two vocabularies
+    # diverge (issue #238): "vertex"->"google-vertex-ai" and
+    # "bedrock"->"aws-bedrock" need real translation; "openai"/"anthropic"
+    # happen to already match. OpenShell's own "nvidia"/"deepinfra" spellings
+    # identity-map in case a caller already passes the OpenShell spelling
+    # directly. "azure" and "watsonx" are valid sandbox-side vendors but have
+    # no OpenShell inference-route equivalent at all -- intentionally left
+    # out of this map so _resolve_inference_provider_type() fails loudly for
+    # them instead of guessing or falling back to a placeholder type with no
+    # defined meaning (the previous "cloud-agents" default, which nothing in
+    # this codebase or OpenShell itself ever defines).
+    _INFERENCE_PROVIDER_TYPE_MAP: ClassVar[dict[str, str]] = {
+        "openai": "openai",
+        "anthropic": "anthropic",
+        "vertex": "google-vertex-ai",
+        "bedrock": "aws-bedrock",
+        "nvidia": "nvidia",
+        "deepinfra": "deepinfra",
+        "google-vertex-ai": "google-vertex-ai",
+        "aws-bedrock": "aws-bedrock",
+    }
+
+    @staticmethod
+    def _resolve_inference_provider_type(lightspeed_provider: str) -> str:
+        """Translate a LIGHTSPEED_PROVIDER vendor identifier to an OpenShell
+        SetInferenceRoute-accepted provider type string.
+
+        There is no generic fallback: a vendor identifier with no known
+        OpenShell inference-route equivalent (either genuinely unmapped, or
+        a real vendor -- e.g. "azure", "watsonx" -- that OpenShell simply
+        doesn't support for cluster inference) fails the spawn immediately
+        instead of silently creating a provider under a placeholder type
+        that GetInferenceBundle could never resolve (issue #238).
+
+        Args:
+            lightspeed_provider: The raw LIGHTSPEED_PROVIDER value (e.g.
+                "openai", "vertex").
+
+        Returns:
+            The corresponding OpenShell provider type string.
+
+        Raises:
+            ValueError: If lightspeed_provider has no known OpenShell
+                inference-route equivalent.
+        """
+        provider_type = OpenShellSpawner._INFERENCE_PROVIDER_TYPE_MAP.get(lightspeed_provider)
+        if provider_type is None:
+            raise ValueError(
+                f"LIGHTSPEED_PROVIDER={lightspeed_provider!r} has no known "
+                "OpenShell inference-route-compatible provider type (supported: "
+                f"{sorted(OpenShellSpawner._INFERENCE_PROVIDER_TYPE_MAP)}). "
+                "Cannot create a credential provider for this spawn."
+            )
+        return provider_type
+
     @staticmethod
     def _build_network_policy(
         spec: "openshell_pb2.SandboxSpec",
@@ -819,8 +878,34 @@ class OpenShellSpawner(AgentSpawner):
                 # (e.g., OPENAI_API_KEY) since the agent reads that env var
                 # and the placeholder is openshell:resolve:env:OPENAI_API_KEY
                 env_cred_key = credential_secret_name.upper().replace("-", "_")
+                # LIGHTSPEED_PROVIDER/LIGHTSPEED_MODEL are always set by
+                # every caller that passes credential_secret_name
+                # (step_runner.run_step() and the Temporal executor's
+                # activities.py both build this env dict the same way).
+                # There is no generic fallback type: OpenShell's Provider.type
+                # is a real, gateway-validated vendor category (see
+                # SetInferenceRoute), not a free-form label, so a missing
+                # value -- or one with no known OpenShell equivalent, see
+                # _resolve_inference_provider_type() -- fails the spawn
+                # immediately instead of silently creating a provider under
+                # a placeholder type that GetInferenceBundle could never
+                # resolve (issue #238).
+                lightspeed_provider = env.get("LIGHTSPEED_PROVIDER")
+                model_id = env.get("LIGHTSPEED_MODEL")
+                if not lightspeed_provider:
+                    raise ValueError(
+                        f"Cannot create credential provider for sandbox "
+                        f"'{sandbox_name}': LIGHTSPEED_PROVIDER is not set."
+                    )
+                if not model_id:
+                    raise ValueError(
+                        f"Cannot create credential provider for sandbox "
+                        f"'{sandbox_name}': LIGHTSPEED_MODEL is not set."
+                    )
+                provider_type = self._resolve_inference_provider_type(lightspeed_provider)
                 provider_id = await self._create_provider(
                     credentials={env_cred_key: cred_value},
+                    provider_type=provider_type,
                 )
                 self._provider_ids[agent_name] = provider_id
                 logger.info(
@@ -828,9 +913,39 @@ class OpenShellSpawner(AgentSpawner):
                     provider_id,
                     sandbox_name,
                 )
+                try:
+                    await self._set_inference_route(provider_id, model_id)
+                except Exception:
+                    # This runs before the sandbox exists, so the post-create
+                    # failure path below (_cleanup_sandbox + _delete_provider)
+                    # never gets a chance to run -- delete the now-orphaned,
+                    # credential-bearing provider directly instead of leaking
+                    # it (found in PR #239 review).
+                    self._provider_ids.pop(agent_name, None)
+                    try:
+                        await self._delete_provider(provider_id)
+                        logger.info(
+                            "Cleaned up provider '%s' after inference route " "setup failed",
+                            provider_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to delete provider '%s' after inference "
+                            "route setup failed -- provider leaked, needs "
+                            "manual cleanup",
+                            provider_id,
+                            exc_info=True,
+                        )
+                    raise
+                logger.info(
+                    "Set inference route for provider '%s' -> model '%s'",
+                    provider_id,
+                    model_id,
+                )
             except Exception:
                 logger.warning(
-                    "Provider creation failed for '%s' — failing spawn (no file fallback)",
+                    "Provider creation or inference route setup failed for "
+                    "'%s' — failing spawn (no file fallback)",
                     sandbox_name,
                     exc_info=True,
                 )
@@ -1084,75 +1199,10 @@ class OpenShellSpawner(AgentSpawner):
         # live-verified fix YAML in issue #189 exactly.
         spec.policy.landlock.compatibility = "best_effort"
 
-    async def _inject_credentials(
-        self,
-        agent_name: str,
-        sandbox_name: str,
-        credential_secret_name: str,
-        env: dict[str, str],
-    ) -> None:
-        """Inject LLM credentials into the sandbox via Provider API.
-
-        .. deprecated:: This post-create path is deprecated. Credentials
-            are now injected via spec.providers at sandbox creation time
-            (see _do_spawn). This method is retained for backwards
-            compatibility in tests but should not be used for new code.
-            It no longer falls back to file injection with real values.
-        """
-        # credential_secret_name may be K8s-normalized (e.g. "openai-api-key")
-        # while the env dict has the original key (e.g. "OPENAI_API_KEY").
-        # Try both forms.
-        cred_value = env.get(credential_secret_name)
-        if not cred_value:
-            original_key = credential_secret_name.upper().replace("-", "_")
-            cred_value = env.get(original_key)
-        if not cred_value:
-            raise RuntimeError(
-                f"Credential '{credential_secret_name}' not found in env "
-                f"for sandbox '{sandbox_name}' — cannot start agent without credentials"
-            )
-
-        try:
-            provider_id = await self._create_and_attach_provider(
-                sandbox_name,
-                credentials={credential_secret_name: cred_value},
-            )
-            self._provider_ids[agent_name] = provider_id
-            logger.info(
-                "Attached credential provider '%s' to sandbox '%s'",
-                provider_id,
-                sandbox_name,
-            )
-        except Exception:
-            logger.error(
-                "Provider API failed for '%s' — not falling back to file injection "
-                "(file fallback would expose real credential; failing spawn)",
-                sandbox_name,
-                exc_info=True,
-            )
-            raise
-
-    async def _inject_credentials_via_files(
-        self,
-        agent_name: str,
-        credential_secret_name: str,
-        cred_value: str,
-    ) -> None:
-        """Write credential files to the sandbox filesystem.
-
-        .. deprecated:: This method would write the raw credential value
-            directly into a sandbox-readable file, exposing it to the
-            sandboxed process (issue #199). It is retained for backwards
-            compatibility but now raises instead of writing.
-        """
-        raise RuntimeError(
-            "_inject_credentials_via_files is deprecated -- credentials are now "
-            "injected via Provider placeholder, not via files with real values"
-        )
-
     async def _create_provider(
         self,
         credentials: dict[str, str],
+        provider_type: str,
     ) -> str:
         """Create an OpenShell provider and return its name.
 
@@ -1170,6 +1220,20 @@ class OpenShellSpawner(AgentSpawner):
         Requires TLS (tls_ca) to avoid sending credentials over cleartext
         gRPC (issue #199 review). In-cluster service URL with disable_tls
         is not considered secure for credential transmission.
+
+        Args:
+            credentials: Credential key-value pairs (e.g. {"OPENAI_API_KEY": ...}).
+            provider_type: One of the gateway's supported inference types
+                ("openai", "anthropic", "nvidia", "deepinfra",
+                "google-vertex-ai", "aws-bedrock") for the result to be
+                usable with _set_inference_route() -- see
+                _resolve_inference_provider_type() for translating a
+                LIGHTSPEED_PROVIDER vendor identifier into one of these.
+                Required; there is no generic default. OpenShell's
+                Provider.type is a real, gateway-validated vendor category,
+                not a free-form label -- a made-up value would create a
+                provider that's never usable for inference routing
+                (issue #238).
         """
         if not self._tls_ca:
             import os as _os
@@ -1197,7 +1261,7 @@ class OpenShellSpawner(AgentSpawner):
                 create_req = openshell_pb2.CreateProviderRequest(
                     workspace=self._workspace,
                     provider=datamodel_pb2.Provider(
-                        type="cloud-agents",
+                        type=provider_type,
                         credentials=credentials,
                     ),
                 )
@@ -1219,73 +1283,66 @@ class OpenShellSpawner(AgentSpawner):
 
         return await asyncio.to_thread(_sync_create)
 
-    async def _create_and_attach_provider(
-        self,
-        sandbox_name: str,
-        credentials: dict[str, str],
-    ) -> str:
-        """Create an OpenShell provider and attach it to a sandbox.
+    async def _set_inference_route(self, provider_name: str, model_id: str) -> None:
+        """Register a provider as an inference route, scoped to this provider.
 
-        .. deprecated:: Use _create_provider with spec.providers instead.
-            This post-create attach path is retained for backwards
-            compatibility but now also requires TLS.
+        A Provider alone (see _create_provider) is not enough for a
+        sandboxed agent to actually make an LLM call -- the sandbox's own
+        supervisor process resolves its LLM connection details via
+        GetInferenceBundle, which only returns anything for providers that
+        have been registered via SetInferenceRoute (issue #238). Without
+        this call, GetInferenceBundle returns NOT_FOUND indefinitely and
+        the agent fails with no diagnostic detail.
 
-        Returns the provider's name for later cleanup (see the matching
-        note in _create_provider() -- called "id" at most call sites for
-        historical reasons; it's actually the name).
+        Deliberately omits route_name -- confirmed live against a real
+        (Kind) gateway that route_name is NOT a free-form per-spawn
+        identifier: the gateway rejects anything other than its two fixed
+        system route names with
+        `INVALID_ARGUMENT: unknown route_name '<x>'; expected
+        'inference.local' or 'sandbox-system'`. A prior revision of this
+        method passed route_name=provider_name (to try to give concurrent
+        spawns distinct routes, per a CodeRabbit review comment on PR #239)
+        -- that broke every single spawn outright, since a gateway-assigned
+        provider name is never one of the two valid route names. Reverted
+        once live-verified. This means there is exactly one
+        (workspace-scoped, "inference.local") route for real per-sandbox
+        credentials: concurrent ephemeral spawns in the same workspace
+        *do* clobber each other's route, and there is currently no
+        client-side fix for that -- it is a real limitation of this
+        gateway version's inference-routing API, not something a naming
+        scheme can work around. See issue #238's follow-up discussion.
+
+        Requires provider_name to reference a provider created with an
+        inference-supported type (see _resolve_inference_provider_type()) --
+        the gateway rejects SetInferenceRoute otherwise with
+        INVALID_ARGUMENT.
+
+        Args:
+            provider_name: Name of an already-created provider (see
+                _create_provider's return value).
+            model_id: Model identifier to route to (e.g. "gpt-4o-mini").
+
+        Raises:
+            Exception: If the gateway rejects the route (e.g. unsupported
+                provider type, or a transport/auth failure).
         """
-        if not self._tls_ca:
-            import os as _os
+        from openshell._proto import inference_pb2, inference_pb2_grpc
 
-            # Fail-closed by default: credentials must not be sent over
-            # cleartext gRPC. Opt *in* to insecure for local Kind via
-            # OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 (not the reverse).
-            if _os.environ.get("OPENSHELL_ALLOW_INSECURE_CREDENTIALS") != "1":
-                raise ValueError(
-                    "Provider creation requires TLS (OPENSHELL_TLS_CA) -- "
-                    "refusing to send credentials over insecure channel. "
-                    "Set OPENSHELL_TLS_CA for TLS, or "
-                    "OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1 for local Kind (insecure)."
-                )
-            logger.warning(
-                "Creating provider without TLS (OPENSHELL_TLS_CA not set) -- "
-                "credential will be sent over insecure channel (OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1)."
-            )
-        from openshell._proto import datamodel_pb2, openshell_pb2, openshell_pb2_grpc
-
-        def _sync_provider() -> str:
+        def _sync_set() -> None:
             channel = self._create_grpc_channel()
             try:
-                stub = openshell_pb2_grpc.OpenShellStub(channel)
-
-                create_req = openshell_pb2.CreateProviderRequest(
-                    workspace=self._workspace,
-                    provider=datamodel_pb2.Provider(
-                        type="cloud-agents",
-                        credentials=credentials,
-                    ),
-                )
-                create_resp = stub.CreateProvider(create_req)
-                # See the matching comment in _create_provider() -- attach/detach
-                # resolve providers by name, not id.
-                provider_id = create_resp.provider.metadata.name
-                if not provider_id:
-                    raise RuntimeError(
-                        "Gateway returned an empty provider name from CreateProvider "
-                        "-- cannot attach this provider to the sandbox"
+                stub = inference_pb2_grpc.InferenceStub(channel)
+                stub.SetInferenceRoute(
+                    inference_pb2.SetInferenceRouteRequest(
+                        provider_name=provider_name,
+                        model_id=model_id,
+                        workspace=self._workspace,
                     )
-
-                attach_req = openshell_pb2.AttachSandboxProviderRequest(
-                    sandbox_name=sandbox_name,
-                    provider_name=provider_id,
-                    workspace=self._workspace,
                 )
-                stub.AttachSandboxProvider(attach_req)
-                return provider_id
             finally:
                 channel.close()
 
-        return await asyncio.to_thread(_sync_provider)
+        await asyncio.to_thread(_sync_set)
 
     async def _delete_provider(
         self,
@@ -1713,14 +1770,20 @@ class OpenShellSpawner(AgentSpawner):
                         sandbox_name,
                         exc_info=True,
                     )
+            # No per-sandbox inference route to clean up here: confirmed
+            # live against a real gateway that SetInferenceRoute only
+            # accepts its two fixed system route names ("inference.local",
+            # "sandbox-system"), not a caller-chosen per-provider name --
+            # see _set_inference_route()'s docstring. There is exactly one
+            # shared workspace-level route, which destroying any single
+            # sandbox does not own and must not delete out from under
+            # other concurrently active sandboxes.
 
             try:
                 await asyncio.to_thread(
                     self._client.delete, sandbox_name, workspace=self._workspace
                 )
-                logger.info(
-                    "Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name
-                )
+                logger.info("Destroyed OpenShell sandbox '%s' (agent=%s)", sandbox_name, agent_name)
             except Exception:
                 logger.warning(
                     "Failed to destroy sandbox '%s' (agent=%s) — "
