@@ -2763,6 +2763,7 @@ class TestEnsureProviderProfile:
         )
         mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
         mock_stub_cls.return_value.ListProviderProfiles.return_value.profiles = []
+        mock_stub_cls.return_value.ImportProviderProfiles.return_value.imported = True
 
         spawner = OpenShellSpawner(openshell_client=mocker.Mock())
         mocker.patch.object(spawner, "_create_grpc_channel")
@@ -2817,6 +2818,56 @@ class TestEnsureProviderProfile:
 
         mock_stub_cls.return_value.ListProviderProfiles.assert_not_called()
         mock_stub_cls.return_value.ImportProviderProfiles.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_gateway_rejects_import(self, mocker: MockerFixture) -> None:
+        """imported=False (e.g. a lint failure) must raise, not be treated as success.
+
+        Regression for PR #246 review: ImportProviderProfiles can return
+        HTTP-200/imported=False with error diagnostics -- a successful gRPC
+        call is not the same thing as a successful import. Silently
+        proceeding here would leave _create_provider() running under the
+        exact silent-skip condition issue #244 was about.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
+        mock_stub_cls.return_value.ListProviderProfiles.return_value.profiles = []
+        mock_stub_cls.return_value.ImportProviderProfiles.return_value.imported = False
+        mock_stub_cls.return_value.ImportProviderProfiles.return_value.diagnostics = [
+            mocker.Mock(message="field 'credentials[0].env_vars' must not be empty")
+        ]
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        with pytest.raises(RuntimeError, match="env_vars"):
+            await spawner._ensure_provider_profile("openai")
+
+    @pytest.mark.asyncio
+    async def test_tolerates_already_exists_race_on_import(
+        self, mocker: MockerFixture
+    ) -> None:
+        """imported=False with an "already exists" diagnostic is a benign race, not an error.
+
+        Two concurrent first-time spawns for the same provider_type can both
+        see an empty ListProviderProfiles and both call ImportProviderProfiles
+        -- the loser gets imported=False with an already-exists diagnostic,
+        but the profile is registered either way.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
+        mock_stub_cls.return_value.ListProviderProfiles.return_value.profiles = []
+        mock_stub_cls.return_value.ImportProviderProfiles.return_value.imported = False
+        mock_stub_cls.return_value.ImportProviderProfiles.return_value.diagnostics = [
+            mocker.Mock(message="custom provider profile 'openai' already exists")
+        ]
+
+        spawner = OpenShellSpawner(openshell_client=mocker.Mock())
+        mocker.patch.object(spawner, "_create_grpc_channel")
+
+        await spawner._ensure_provider_profile("openai")  # must not raise
 
 
 class TestDoSpawnInferenceRouteWiring:

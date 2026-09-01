@@ -15,11 +15,14 @@ this workspace actually returns a profile with id "openai" -- proving the
 import round-tripped through the real gRPC service, not just that the
 client-side call didn't raise.
 
-Uses a fake credential value (not a real API key) -- this only verifies
-profile registration and that a spawn with LIGHTSPEED_PROVIDER=openai
-succeeds, not that a real LLM call succeeds end-to-end (that requires a
-real OPENAI_API_KEY; see docs/testing-against-openshell-gateways.md
-section 3 for that separate, manual check).
+Uses a fake credential value (not a real API key) -- this verifies profile
+registration AND that the fake credential actually lands in a sandboxed
+process's real env (scraping /proc/*/environ, same technique as
+verify_credential_provider_fix.py), proving profile-gated injection
+worked. It does not verify a real LLM call succeeds end-to-end (that
+requires a real OPENAI_API_KEY; see
+docs/testing-against-openshell-gateways.md section 3 for that separate,
+manual check).
 
 Required env vars:
   GATEWAY_URL      host:port of the OpenShell gateway (e.g. localhost:8080)
@@ -108,7 +111,18 @@ async def check_ensure_provider_profile_registers_openai() -> None:
     print("PASS (2): second call is a no-op (idempotent)")
 
 
-async def check_spawn_with_openai_provider_succeeds() -> None:
+async def check_credential_actually_injected() -> None:
+    """Prove the credential lands in a sandboxed process's env, not just that spawn() succeeds.
+
+    spawn() succeeding is NOT proof of the #244 fix -- CreateProvider() has
+    always "succeeded" even with no matching profile (that's the whole bug:
+    success-with-silent-skip). The actual symptom was the sandboxed agent
+    reporting "Missing credentials" because the placeholder env var was
+    never resolved. This scrapes every process's real environment inside
+    the sandbox (same technique as verify_credential_provider_fix.py, but
+    checking for PRESENCE of the value instead of its absence) to prove
+    injection actually happened.
+    """
     os.environ.setdefault("OPENSHELL_ALLOW_INSECURE_CREDENTIALS", "1")
     os.environ["OPENAI_API_KEY"] = FAKE_SECRET
 
@@ -123,6 +137,23 @@ async def check_spawn_with_openai_provider_succeeds() -> None:
             credential_secret_name="openai-api-key",
         )
         print("PASS (3): spawn with LIGHTSPEED_PROVIDER=openai succeeded. endpoint:", endpoint)
+
+        sandbox_id = spawner.get_sandbox_id(name)
+        r = spawner._client.exec(
+            sandbox_id,
+            ["sh", "-c", "for p in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $p 2>/dev/null; done"],
+            timeout_seconds=15,
+        )
+        assert FAKE_SECRET in r.stdout, (
+            "OPENAI_API_KEY was NOT found in any sandboxed process's env -- "
+            "the #244 bug (profile-gated credential injection silently "
+            "skipped) is still present, even though spawn() itself succeeded"
+        )
+        print(
+            "PASS (4): OPENAI_API_KEY IS present in a sandboxed process's env "
+            "-- proves profile-gated injection actually worked, not just "
+            "that spawn() succeeded"
+        )
         print("\nALL CHECKS PASSED")
     finally:
         await spawner.destroy(name)
@@ -131,7 +162,7 @@ async def check_spawn_with_openai_provider_succeeds() -> None:
 
 async def main() -> None:
     await check_ensure_provider_profile_registers_openai()
-    await check_spawn_with_openai_provider_succeeds()
+    await check_credential_actually_injected()
 
 
 if __name__ == "__main__":

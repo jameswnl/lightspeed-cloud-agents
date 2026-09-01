@@ -1309,6 +1309,16 @@ class OpenShellSpawner(AgentSpawner):
         no bundled default (i.e. it's expected to already have a builtin
         profile, e.g. "nvidia" or "google-vertex-ai").
 
+        Raises if the gateway's ImportProviderProfiles RPC returns
+        imported=False with anything other than an already-exists
+        diagnostic (e.g. a lint failure) -- a successful gRPC call is not
+        the same thing as a successful import (PR #246 review): the
+        gateway reports import failures as an HTTP-200 response with
+        imported=false and error diagnostics, not as a raised gRPC error.
+        Silently treating that as success would leave _create_provider()
+        proceeding under the exact same silent-skip condition this method
+        exists to close.
+
         Args:
             provider_type: Gateway-validated provider type string, e.g.
                 the return value of _resolve_inference_provider_type().
@@ -1326,11 +1336,13 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 existing = stub.ListProviderProfiles(
-                    openshell_pb2.ListProviderProfilesRequest(workspace=self._workspace)
+                    openshell_pb2.ListProviderProfilesRequest(
+                        workspace=self._workspace, limit=1000
+                    )
                 )
                 if any(profile.id == provider_type for profile in existing.profiles):
                     return
-                stub.ImportProviderProfiles(
+                import_resp = stub.ImportProviderProfiles(
                     openshell_pb2.ImportProviderProfilesRequest(
                         profiles=[
                             openshell_pb2.ProviderProfileImportItem(
@@ -1341,11 +1353,28 @@ class OpenShellSpawner(AgentSpawner):
                         workspace=self._workspace,
                     )
                 )
-                logger.info(
-                    "Imported bundled ProviderProfile '%s' into workspace '%s' "
-                    "(gateway had none)",
-                    provider_type,
-                    self._workspace,
+                if import_resp.imported:
+                    logger.info(
+                        "Imported bundled ProviderProfile '%s' into workspace '%s' "
+                        "(gateway had none)",
+                        provider_type,
+                        self._workspace,
+                    )
+                    return
+                diagnostic_messages = [d.message for d in import_resp.diagnostics]
+                if any("already exists" in msg for msg in diagnostic_messages):
+                    # Lost a race against a concurrent spawn's import of the
+                    # same provider_type -- the profile is there either way.
+                    logger.info(
+                        "Bundled ProviderProfile '%s' import raced with a "
+                        "concurrent import (already exists) -- treating as success",
+                        provider_type,
+                    )
+                    return
+                raise RuntimeError(
+                    f"Gateway rejected bundled ProviderProfile import for "
+                    f"'{provider_type}' (imported=False): "
+                    f"{'; '.join(diagnostic_messages) or 'no diagnostics returned'}"
                 )
             finally:
                 channel.close()
