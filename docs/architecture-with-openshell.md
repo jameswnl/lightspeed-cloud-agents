@@ -121,6 +121,92 @@ graph TD
     style SB fill:#161b22,stroke:#238636
 ```
 
+### Local Development: Kind vs Podman
+
+Two local dev topologies are in real use. Both point `OpenShellSpawner` at
+an already-deployed gateway -- the client-side config is what differs, not
+the spawner's behavior.
+
+| | **Podman** | **Kind** |
+|---|---|---|
+| Gateway deployment | `podman run` directly on the dev machine (see [Gateway Setup](#gateway-setup) below) | Gateway runs *inside* the cluster as a K8s workload (e.g. a StatefulSet); not covered by this doc -- deploying the gateway onto a cluster is a separate concern from configuring a client to reach one |
+| Reaching the gateway | Direct: gateway listens on a host port (`17670` in the examples above) | Indirect: `kubectl port-forward svc/<gateway-service> <local-port>:<gateway-port>` -- the gateway's in-cluster port is never directly reachable from the host |
+| TLS | `--disable-tls` + `allow_unauthenticated_users` for dev (see [Gateway Setup](#gateway-setup)) | Same -- plaintext gRPC over the port-forward is typical for a local Kind gateway with no external exposure |
+| Compute driver | `podman` (gateway execs into containers via the mounted Podman socket) | `kubernetes` (gateway creates Sandbox CRs / pods in-cluster) |
+| Sandbox image architecture | Matches the dev machine's native arch (e.g. `arm64` on Apple Silicon) | **Must be multi-arch** if the Kind cluster's nodes don't match the image-build machine's arch (common in CI or on a shared cluster) -- see the callout below |
+
+```mermaid
+graph TD
+    subgraph host["Dev Machine"]
+        WR["Workflow Runner<br/><i>local process</i>"]
+        subgraph podman_case["Podman case"]
+            GW_P["OpenShell Gateway<br/><i>podman run, host port 17670</i>"]
+            SOCK["Podman socket"]
+            GW_P -.- SOCK
+        end
+        PF["kubectl port-forward<br/><i>local-port:gateway-port</i>"]
+    end
+    subgraph kind["Kind cluster (Kind case)"]
+        GW_K["OpenShell Gateway<br/><i>in-cluster Service</i>"]
+        SB_K["Sandbox pods"]
+        GW_K --> SB_K
+    end
+
+    WR -- "gRPC: localhost:17670" --> GW_P
+    WR -- "gRPC: localhost:<local-port>" --> PF
+    PF -- "tunneled" --> GW_K
+
+    style GW_P fill:#1c2128,stroke:#a371f7
+    style GW_K fill:#1c2128,stroke:#a371f7
+```
+
+Client config is otherwise identical between the two -- only
+`OPENSHELL_GATEWAY_URL` changes (a host port for Podman, the
+port-forwarded local port for Kind):
+
+```bash
+# Podman
+export OPENSHELL_GATEWAY_URL=localhost:17670
+export OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1   # no TLS in dev
+
+# Kind (after `kubectl port-forward svc/openshell-gateway 9090:8080 &`)
+export OPENSHELL_GATEWAY_URL=localhost:9090
+export OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1   # no TLS in dev
+```
+
+> **`OPENSHELL_ALLOW_INSECURE_CREDENTIALS`**: `_create_provider()` fails
+> closed by default -- it refuses to send LLM credentials over a plaintext
+> channel (issue #199 review) unless `OPENSHELL_TLS_CA` is set. Since a
+> local dev gateway (either topology) typically runs without TLS, this env
+> var is the explicit opt-in to accept that tradeoff locally. It has no
+> effect if `OPENSHELL_TLS_CA` is set -- TLS is used whenever configured,
+> regardless of this flag.
+
+> **Gotcha: the `openshell` CLI manages its own tunnel, separate from any
+> port-forward you start.** Running `openshell gateway add --driver
+> kubernetes ...` against a Kind cluster has the CLI set up (and cache) its
+> *own* connection, independent of any `kubectl port-forward` you run
+> yourself. These are two unrelated tunnels to the same underlying gateway
+> Service, often on different local ports. `OpenShellSpawner`'s raw gRPC
+> client (used by `cloud_agents`, not the CLI) only ever talks to whatever
+> `OPENSHELL_GATEWAY_URL` points at -- it does not discover or reuse the
+> CLI's tunnel. If `openshell gateway info` reports a different port than
+> the one you're port-forwarding, that's expected, not a bug; just make
+> sure `OPENSHELL_GATEWAY_URL` matches your own port-forward, not whatever
+> the CLI prints.
+
+> **Gotcha: single-arch sandbox images hang, not fail, on the wrong
+> architecture.** A sandbox image built and pushed from an Apple Silicon
+> Mac (`arm64`) works fine against a local Kind cluster on that same Mac,
+> but gets stuck in `Provisioning` indefinitely -- no clear error, just a
+> timeout -- when the same image is used against `amd64` nodes (a CI
+> runner, a shared cluster, most cloud K8s node pools). The fix is
+> publishing a proper multi-arch manifest list (both `amd64` and `arm64`)
+> under the tag being used, not a single-arch image per tag. This is easy
+> to misdiagnose as generic cluster flakiness since the failure mode
+> (indefinite `Provisioning`) looks identical to unrelated scheduling/
+> capacity issues on a shared cluster.
+
 ### Request Lifecycle
 
 ```mermaid
@@ -370,7 +456,7 @@ export OPENSHELL_TLS_CERT=/certs/client.crt
 export OPENSHELL_TLS_KEY=/certs/client.key
 ```
 
-Example (external gateway with OIDC):
+Example (external gateway with a pre-minted OIDC token, e.g. a short manual test session):
 
 ```bash
 export WORKFLOW_SPAWNER=openshell
@@ -380,6 +466,102 @@ export OPENSHELL_BEARER_TOKEN="$(get-oidc-token)"
 ```
 
 > **Security**: `OPENSHELL_BEARER_TOKEN` requires `OPENSHELL_TLS_CA` to be set. The spawner refuses to send credentials over plaintext.
+
+For anything longer-lived than a manual test, use client-credentials
+auto-refresh instead (below) -- a static token minted once and passed via
+`OPENSHELL_BEARER_TOKEN` will expire mid-run on any real deployment, since
+OIDC access tokens are deliberately short-lived (typically 5 minutes).
+
+### OIDC Client-Credentials Auto-Refresh
+
+**Why this exists**: `OPENSHELL_BEARER_TOKEN` is a single, static string set
+once at process startup. A long-running workflow runner (or any spawn that
+takes longer than the token's lifetime) will have that token expire mid-way
+through, and every subsequent gRPC call fails with `UNAUTHENTICATED`. A
+gateway secured with OIDC needs the client to keep minting fresh tokens for
+as long as the process runs -- issue
+[#236](https://github.com/jameswnl/lightspeed-cloud-agents/issues/236).
+
+**The mechanism**: `OpenShellSpawner` accepts a `bearer_token_provider`
+constructor argument -- a zero-arg callable returning a token string --
+as an alternative to the static `bearer_token` string (the two are mutually
+exclusive; passing both raises `ValueError`). Nothing about `OpenShellSpawner`
+or `SandboxClient` itself is OIDC-aware: `_create_grpc_channel()` builds a
+**new gRPC channel on every raw call** (`ExposeService`, `CreateProvider`,
+`SetInferenceRoute`, ...), not once at construction time, and simply invokes
+`bearer_token_provider()` each time it needs a token for that channel. This
+is what makes auto-refresh possible without teaching the spawner anything
+about OIDC, Keycloak, or token formats -- it just calls a function and gets
+a string back; whether that string is freshly minted, refreshed, or served
+from a cache is entirely the provider's problem.
+
+```mermaid
+sequenceDiagram
+    participant CFG as spawner_factory
+    participant OSS as OpenShellSpawner
+    participant TP as OidcClientCredentialsTokenProvider
+    participant IDP as OIDC Issuer (Keycloak)
+    participant GW as OpenShell Gateway
+
+    CFG->>TP: construct(issuer, client_id, client_secret, audience)
+    CFG->>OSS: construct(bearer_token_provider=TP.get_token)
+
+    Note over OSS: Every raw gRPC call builds a fresh channel
+    OSS->>TP: get_token()
+    alt cached token valid (>30s left)
+        TP-->>OSS: cached token
+    else expired or no cached token
+        TP->>IDP: POST /protocol/openid-connect/token<br/>grant_type=client_credentials
+        IDP-->>TP: access_token, expires_in
+        TP-->>OSS: fresh token
+    end
+    OSS->>GW: gRPC call with Bearer token
+```
+
+`OidcClientCredentialsTokenProvider`
+(`lightspeed-stack`'s `src/workflow/openshell_oidc_token_provider.py` --
+this class lives in the calling application, not in `cloud_agents`, since
+minting tokens is an application concern, not a spawner one) implements
+`get_token()`:
+
+- Caches the token and its expiry (`expires_in` from the token response).
+- Re-mints only when the cached token is within 30 seconds of expiry
+  (`_EXPIRY_SAFETY_MARGIN_SECONDS`) -- not on every call, since minting a
+  token is a real network round-trip and `get_token()` is called before
+  *every* gRPC operation.
+- Guards the check-then-fetch with a lock: `get_token()` is invoked from
+  multiple threads under one spawner instance (`asyncio.to_thread` workers
+  each doing their own raw gRPC calls), so an unguarded race right at the
+  expiry boundary could mint redundant tokens or, worse, interleave badly.
+- Derives the token endpoint as `{issuer}/protocol/openid-connect/token`
+  (Keycloak's standard client-credentials grant path) and fails loudly
+  (`OidcTokenFetchError`) on a non-2xx response, a non-JSON body, a missing
+  `access_token`, or a non-numeric `expires_in` -- there is no silent
+  fallback to an empty or stale token.
+
+**Wiring** (`lightspeed-stack`'s `workflow/spawner_factory.py`): presence of
+`OPENSHELL_OIDC_CLIENT_ID` in config is what triggers constructing the
+provider at all (issuer and client secret are required alongside it by
+config validation); when set, `bearer_token_provider=provider.get_token` is
+passed to `cloud_agents`' `build_spawner()` instead of a static
+`bearer_token`.
+
+```bash
+export WORKFLOW_SPAWNER=openshell
+export OPENSHELL_GATEWAY_URL=gateway.example.com:17670
+export OPENSHELL_TLS_CA=/certs/ca.crt
+export OPENSHELL_OIDC_ISSUER=https://keycloak.example.com/realms/agents
+export OPENSHELL_OIDC_CLIENT_ID=my-service-account
+export OPENSHELL_OIDC_CLIENT_SECRET=***
+export OPENSHELL_OIDC_AUDIENCE=my-service-account   # optional
+```
+
+> **Security**: same TLS requirement as a static bearer token --
+> `OpenShellSpawner` refuses to build a channel that sends *any* bearer
+> token (static or provider-sourced) without `OPENSHELL_TLS_CA` configured.
+> An OIDC provider returning an empty token is also treated as a hard
+> failure (not "no auth configured") -- a configured provider is a strong
+> signal that auth was intended.
 
 ### Workflow Definitions
 
