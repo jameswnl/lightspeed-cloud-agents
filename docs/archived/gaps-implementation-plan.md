@@ -1,4 +1,17 @@
-# Implementation Plan
+# Implementation Plan (Archived 2026-09)
+
+**This document is frozen and no longer maintained.** New work is tracked directly as GitHub issues (matching how #236, #238, #239, and #240 were already handled) rather than as entries in this file. Of the 61 distinct T-numbered items below, 44 were already Done/Removed/Obsolete/Resolved at archival time (including a few whose resolution was recorded only as a "— Done"/"— DONE" title suffix rather than a `**Status**` line — double-check both when reading this file); the remaining 17 were resolved as follows:
+
+- **14 unscheduled, no-owner ideas** consolidated into one roundup issue: [#242](https://github.com/jameswnl/lightspeed-cloud-agents/issues/242) (T8, T9, T11, T12, T16, T25, T26, T27, T30, T31, T32, T33, T40, T41).
+- **T36** (progress streaming), which carried a full design draft and two rounds of reviewer feedback, got its own issue to preserve that context: [#241](https://github.com/jameswnl/lightspeed-cloud-agents/issues/241).
+- **T15** was actually already fully resolved (its one open follow-up shipped via T56/PR #69/issue #66) — corrected in place below rather than re-filed.
+- **T29** and **T35** were marked Obsolete in place (both predate the OpenShell-only consolidation in issue #198) rather than carried forward.
+- **T55** was already tracked as [issue #65](https://github.com/jameswnl/lightspeed-cloud-agents/issues/65) — left as-is.
+- **T53** was already "Substantially done" — left as-is.
+
+This file is preserved for historical context (effort estimates, design rationale, "Done" narratives with test coverage detail) — see `docs/archived/prod/implementation-plan.md` and `docs/gaps/phase-1-records/`/`phase-2-records/` for the same archival pattern applied to earlier phases of this same document.
+
+---
 
 Single source of truth for all planned work. ARCHITECTURE.md TODO tags link here.
 
@@ -233,7 +246,7 @@ Items are organized by area. Each has a status: **Open**, **Decided**, **Closed*
 
 ### T15: Interactive CLI handoff (R5, R17) [Phase 4]
 
-**Status**: Partial (Phase 1 + Phase 2 done, follow-ups pending)
+**Status**: Done -- Phase 1 + Phase 2 below, plus the one deferred follow-up (bi-directional communication), fully landed via [T56](#t56-bi-directional-cli-session-communication-phase-5) (Done, PR #69, issue #66). Corrected during the 2026-09 archival pass -- previously read "Partial (follow-ups pending)" even though the only follow-up was already resolved.
 **ARCHITECTURE.md ref**: Requirements table R17 — TODO; Design Principle R5 — TODO
 
 **What was built** (Phase 1 — context serialization + launch command):
@@ -504,7 +517,7 @@ Persisted event replay via `Last-Event-ID`.
 
 ### T29: Native K8s image volumes for skills [Phase 4]
 
-**Status**: Open (from operator comparison Gap 6)
+**Status**: Obsolete -- predates the OpenShell-only consolidation ([issue #198](https://github.com/jameswnl/lightspeed-cloud-agents/issues/198)). `KubernetesSpawner` was deleted entirely; there is no client-side K8s pod spec for cloud-agents to add image volumes to anymore. Skills are baked into the sandbox image at build time instead ([issue #202](https://github.com/jameswnl/lightspeed-cloud-agents/issues/202)). Not carried forward into a GitHub issue.
 
 K8s 1.31+ image volumes instead of init container. Fallback for older versions.
 
@@ -575,7 +588,7 @@ Image signing attestation and software bill of materials.
 
 ### T35: CRD-based K8s operator [Phase 5]
 
-**Status**: Open (from kubeclaw comparison)
+**Status**: Obsolete -- predates the OpenShell-only consolidation ([issue #198](https://github.com/jameswnl/lightspeed-cloud-agents/issues/198)). A CRD/operator bridge onto a client-side K8s spawner no longer fits the architecture -- K8s-specific compute is now solely OpenShell gateway's own concern, not something cloud-agents implements. Not carried forward into a GitHub issue.
 
 **Effort**: 6-8 weeks (revised up — "thin bridge" is an iceberg)
 

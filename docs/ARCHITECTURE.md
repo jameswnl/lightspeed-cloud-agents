@@ -38,7 +38,7 @@ Each agent step with `spawn: ephemeral` spawns a sandbox container with isolated
 Diagnose → Propose → Gate → Execute → Verify. Structured output with risk levels. Approval gates pause workflows for human review.
 
 ### R5. Human-out-of-the-loop [G2, G4]
-When retries exhaust, escalation packages full context — diagnosis, steps taken, failure history. *(TODO: interactive CLI handoff — see [T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17))*
+When retries exhaust, escalation packages full context — diagnosis, steps taken, failure history. Interactive CLI handoff is done (issues [#59](https://github.com/jameswnl/lightspeed-cloud-agents/issues/59), [#66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66)) — see [T15](archived/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17) for history.
 
 ### R6. Retry with escalation [G2, G4]
 Each retry sees full failure history. Exhausted retries route to R4 (approval) or R5 (escalation handoff).
@@ -54,12 +54,12 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 | R9 | Runtime | Done | FastAPI + Temporal Worker + sandbox HTTP contract |
 | R10 | Deployment | Done | K8s Jobs, Podman containers, Helm chart |
 | R11 | Persistence | Done | Temporal Server provides durable execution and state |
-| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering: runner-side forwarding done ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)), sandbox-side enforcement pending |
+| R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering: runner-side forwarding done ([T1](archived/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)), sandbox-side enforcement pending |
 | R13 | Access control | Done | Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). See [rbac.md](rbac.md) |
 | R14 | Observability | Done | OTel tracing, Prometheus metrics, structured logging, health probes, audit events |
-| R15 | Triggers | Partial | API, alert ([T13](gaps/gaps-implementation-plan.md#t13-alert-trigger-r15)), and schedule ([T14](gaps/gaps-implementation-plan.md#t14-schedule-trigger-r15)) triggers done. Chatbot ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15)) TODO |
-| R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions ([T11](gaps/gaps-implementation-plan.md#t11-agents-as-tools-r16)) |
-| R17 | Escalation | Partial | Context packaging + delivery done. CLI handoff TODO ([T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17)) |
+| R15 | Triggers | Partial | API, alert ([T13](archived/gaps-implementation-plan.md#t13-alert-trigger-r15)), and schedule ([T14](archived/gaps-implementation-plan.md#t14-schedule-trigger-r15)) triggers done. Chatbot TODO ([issue #242](https://github.com/jameswnl/lightspeed-cloud-agents/issues/242)) |
+| R16 | Agents-as-tools | TODO | Registry auto-generates LLM tools from workflow definitions ([issue #242](https://github.com/jameswnl/lightspeed-cloud-agents/issues/242)) |
+| R17 | Escalation | Done | Context packaging + delivery + interactive CLI handoff all done (issues [#59](https://github.com/jameswnl/lightspeed-cloud-agents/issues/59), [#66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66)) |
 
 ---
 
@@ -141,7 +141,7 @@ The architecture treats the runtime interface generically: the workflow engine s
 Temporal provides durable execution for workflow runs:
 
 - **Workflow state** — step results, approval decisions, and event history are stored as workflow state within Temporal, not in an external database.
-- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. Heartbeat-based cancellation detection ensures sandbox cleanup on timeout ([T2](gaps/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation)).
+- **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. Heartbeat-based cancellation detection ensures sandbox cleanup on timeout ([T2](archived/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation)).
 - **Approval signals** — human approval is implemented as a Temporal signal (`AgentWorkflow.approve`), with `wait_condition` blocking until the signal arrives or times out.
 - **Parallel execution** — steps sharing a `parallel_group` are dispatched via `asyncio.gather` within the workflow.
 - **Crash recovery** — content-hash pod naming for idempotent retries + startup orphan reconciliation for leaked containers.
@@ -176,12 +176,12 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **App-level TLS** — ephemeral self-signed CA + per-sandbox certs generated at spawn time (`SANDBOX_TLS_MODE=app`). K8s: cert Secret mount. Podman: temp dir bind mount. Service mesh deployments (`SANDBOX_TLS_MODE=mesh`) skip app-level TLS.
 - **Sandbox heartbeat + timeout** — `activity.heartbeat()` during sandbox HTTP calls with 180s timeout. Cancellation detected via `asyncio.CancelledError`, ensures `destroy()` runs. `ls_sandbox_timeout_total` metric.
 
-**Partial** (see [implementation plan](gaps/gaps-implementation-plan.md)):
-- Per-step tool filtering ([T1](gaps/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) — runner-side forwarding of `allowedTools`/`deniedTools` to the sandbox POST body is done. Sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox).
+**Partial** (see [archived implementation plan](archived/gaps-implementation-plan.md) for history; open items now tracked as GitHub issues):
+- Per-step tool filtering ([T1](archived/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)) — runner-side forwarding of `allowedTools`/`deniedTools` to the sandbox POST body is done. Sandbox-side enforcement is pending (separate repo: lightspeed-agentic-sandbox).
 - Advisory mode tool filtering (blocked on T1 sandbox-side)
 
 **TODO**:
-- Dynamic RBAC from agent output ([T9](gaps/gaps-implementation-plan.md#t9-dynamic-rbac-from-agent-output))
+- Dynamic RBAC from agent output ([issue #242](https://github.com/jameswnl/lightspeed-cloud-agents/issues/242))
 
 ### Authorization (RBAC)
 
@@ -207,7 +207,7 @@ Workflows can be started from multiple entry points:
 - **API trigger** — `POST /v1/workflows/run` with embedded or stored definition. Primary trigger for programmatic and UI-driven workflows.
 - **Alert trigger** — `POST /v1/webhooks/alertmanager` accepts Alertmanager webhook payloads and maps alerts to workflow definitions. Configurable via `ALERT_TRIGGER_ENABLED`, `ALERT_TRIGGER_DEFAULT_WORKFLOW`. Includes dedup, RBAC enforcement, content policy validation, and prompt sanitization.
 - **Schedule trigger** — `POST /v1/schedules` CRUD endpoints backed by Temporal's native Schedules API. Supports standard 5-field cron and shorthands (`@daily`, `@hourly`, `@every 5m`). Configurable via `SCHEDULE_TRIGGER_ENABLED`.
-- **Chatbot trigger** — TODO ([T12](gaps/gaps-implementation-plan.md#t12-chatbot-trigger-r15))
+- **Chatbot trigger** — TODO ([issue #242](https://github.com/jameswnl/lightspeed-cloud-agents/issues/242))
 
 ### Observability
 
@@ -267,7 +267,7 @@ Agents return structured output defined by `output_schema` in the workflow step.
 
 ## Retry with Context
 
-Failed steps retry with full failure history. Each attempt sees what was tried before and why it failed. Temporal's `RetryPolicy` controls the retry count, and the activity timeout enforces hard deadlines per attempt. After exhausting retries, the framework generates an **escalation handoff** — delivered via configurable channels (log, webhook). *(TODO: interactive CLI handoff — see [T15](gaps/gaps-implementation-plan.md#t15-interactive-cli-handoff-r5-r17))*
+Failed steps retry with full failure history. Each attempt sees what was tried before and why it failed. Temporal's `RetryPolicy` controls the retry count, and the activity timeout enforces hard deadlines per attempt. After exhausting retries, the framework generates an **escalation handoff** — delivered via configurable channels (log, webhook), including interactive CLI handoff (issues [#59](https://github.com/jameswnl/lightspeed-cloud-agents/issues/59), [#66](https://github.com/jameswnl/lightspeed-cloud-agents/issues/66)).
 
 ## Phase History
 
