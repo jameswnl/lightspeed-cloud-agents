@@ -654,6 +654,65 @@ class OpenShellSpawner(AgentSpawner):
         "azure_openai": "*.openai.azure.com",
     }
 
+    # Maps lightspeed-agentic-sandbox's LIGHTSPEED_PROVIDER vendor
+    # identifiers (lightspeed-agentic-sandbox/src/lightspeed_agentic/config.py:
+    # anthropic, openai, vertex, azure, bedrock, watsonx) to OpenShell's
+    # SetInferenceRoute-accepted provider type strings (openai, anthropic,
+    # nvidia, deepinfra, google-vertex-ai, aws-bedrock). The two vocabularies
+    # diverge (issue #238): "vertex"->"google-vertex-ai" and
+    # "bedrock"->"aws-bedrock" need real translation; "openai"/"anthropic"
+    # happen to already match. OpenShell's own "nvidia"/"deepinfra" spellings
+    # identity-map in case a caller already passes the OpenShell spelling
+    # directly. "azure" and "watsonx" are valid sandbox-side vendors but have
+    # no OpenShell inference-route equivalent at all -- intentionally left
+    # out of this map so _resolve_inference_provider_type() fails loudly for
+    # them instead of guessing or falling back to a placeholder type with no
+    # defined meaning (the previous "cloud-agents" default, which nothing in
+    # this codebase or OpenShell itself ever defines).
+    _INFERENCE_PROVIDER_TYPE_MAP: ClassVar[dict[str, str]] = {
+        "openai": "openai",
+        "anthropic": "anthropic",
+        "vertex": "google-vertex-ai",
+        "bedrock": "aws-bedrock",
+        "nvidia": "nvidia",
+        "deepinfra": "deepinfra",
+        "google-vertex-ai": "google-vertex-ai",
+        "aws-bedrock": "aws-bedrock",
+    }
+
+    @staticmethod
+    def _resolve_inference_provider_type(lightspeed_provider: str) -> str:
+        """Translate a LIGHTSPEED_PROVIDER vendor identifier to an OpenShell
+        SetInferenceRoute-accepted provider type string.
+
+        There is no generic fallback: a vendor identifier with no known
+        OpenShell inference-route equivalent (either genuinely unmapped, or
+        a real vendor -- e.g. "azure", "watsonx" -- that OpenShell simply
+        doesn't support for cluster inference) fails the spawn immediately
+        instead of silently creating a provider under a placeholder type
+        that GetInferenceBundle could never resolve (issue #238).
+
+        Args:
+            lightspeed_provider: The raw LIGHTSPEED_PROVIDER value (e.g.
+                "openai", "vertex").
+
+        Returns:
+            The corresponding OpenShell provider type string.
+
+        Raises:
+            ValueError: If lightspeed_provider has no known OpenShell
+                inference-route equivalent.
+        """
+        provider_type = OpenShellSpawner._INFERENCE_PROVIDER_TYPE_MAP.get(lightspeed_provider)
+        if provider_type is None:
+            raise ValueError(
+                f"LIGHTSPEED_PROVIDER={lightspeed_provider!r} has no known "
+                "OpenShell inference-route-compatible provider type (supported: "
+                f"{sorted(OpenShellSpawner._INFERENCE_PROVIDER_TYPE_MAP)}). "
+                "Cannot create a credential provider for this spawn."
+            )
+        return provider_type
+
     @staticmethod
     def _build_network_policy(
         spec: "openshell_pb2.SandboxSpec",
@@ -827,15 +886,28 @@ class OpenShellSpawner(AgentSpawner):
                 # LIGHTSPEED_PROVIDER/LIGHTSPEED_MODEL are always set by
                 # every caller that passes credential_secret_name
                 # (step_runner.run_step() and the Temporal executor's
-                # activities.py both build this env dict the same way) --
-                # using them as the real provider type instead of the
-                # generic "cloud-agents" default is what makes the result
-                # usable with _set_inference_route() (issue #238). Falls
-                # back to "cloud-agents" if absent (e.g. a test or caller
-                # that only wants credential injection, not inference
-                # routing).
-                provider_type = env.get("LIGHTSPEED_PROVIDER") or "cloud-agents"
+                # activities.py both build this env dict the same way).
+                # There is no generic fallback type: OpenShell's Provider.type
+                # is a real, gateway-validated vendor category (see
+                # SetInferenceRoute), not a free-form label, so a missing
+                # value -- or one with no known OpenShell equivalent, see
+                # _resolve_inference_provider_type() -- fails the spawn
+                # immediately instead of silently creating a provider under
+                # a placeholder type that GetInferenceBundle could never
+                # resolve (issue #238).
+                lightspeed_provider = env.get("LIGHTSPEED_PROVIDER")
                 model_id = env.get("LIGHTSPEED_MODEL")
+                if not lightspeed_provider:
+                    raise ValueError(
+                        f"Cannot create credential provider for sandbox "
+                        f"'{sandbox_name}': LIGHTSPEED_PROVIDER is not set."
+                    )
+                if not model_id:
+                    raise ValueError(
+                        f"Cannot create credential provider for sandbox "
+                        f"'{sandbox_name}': LIGHTSPEED_MODEL is not set."
+                    )
+                provider_type = self._resolve_inference_provider_type(lightspeed_provider)
                 provider_id = await self._create_provider(
                     credentials={env_cred_key: cred_value},
                     provider_type=provider_type,
@@ -846,14 +918,13 @@ class OpenShellSpawner(AgentSpawner):
                     provider_id,
                     sandbox_name,
                 )
-                if model_id and provider_type != "cloud-agents":
-                    await self._set_inference_route(provider_id, model_id)
-                    self._inference_route_names[agent_name] = provider_id
-                    logger.info(
-                        "Set inference route for provider '%s' -> model '%s'",
-                        provider_id,
-                        model_id,
-                    )
+                await self._set_inference_route(provider_id, model_id)
+                self._inference_route_names[agent_name] = provider_id
+                logger.info(
+                    "Set inference route for provider '%s' -> model '%s'",
+                    provider_id,
+                    model_id,
+                )
             except Exception:
                 logger.warning(
                     "Provider creation or inference route setup failed for "
@@ -1180,7 +1251,7 @@ class OpenShellSpawner(AgentSpawner):
     async def _create_provider(
         self,
         credentials: dict[str, str],
-        provider_type: str = "cloud-agents",
+        provider_type: str,
     ) -> str:
         """Create an OpenShell provider and return its name.
 
@@ -1201,13 +1272,17 @@ class OpenShellSpawner(AgentSpawner):
 
         Args:
             credentials: Credential key-value pairs (e.g. {"OPENAI_API_KEY": ...}).
-            provider_type: OpenShell provider type. Must be one of the
-                gateway's supported inference types ("openai", "anthropic",
-                "nvidia", "deepinfra", "google-vertex-ai", "aws-bedrock")
-                for the result to be usable with _set_inference_route() --
-                the generic "cloud-agents" default is NOT inference-routable
-                (issue #238) and should only be used for non-inference
-                credential injection.
+            provider_type: One of the gateway's supported inference types
+                ("openai", "anthropic", "nvidia", "deepinfra",
+                "google-vertex-ai", "aws-bedrock") for the result to be
+                usable with _set_inference_route() -- see
+                _resolve_inference_provider_type() for translating a
+                LIGHTSPEED_PROVIDER vendor identifier into one of these.
+                Required; there is no generic default. OpenShell's
+                Provider.type is a real, gateway-validated vendor category,
+                not a free-form label -- a made-up value would create a
+                provider that's never usable for inference routing
+                (issue #238).
         """
         if not self._tls_ca:
             import os as _os
@@ -1283,7 +1358,7 @@ class OpenShellSpawner(AgentSpawner):
         follow-up discussion.
 
         Requires provider_name to reference a provider created with an
-        inference-supported type (not the generic "cloud-agents" type) --
+        inference-supported type (see _resolve_inference_provider_type()) --
         the gateway rejects SetInferenceRoute otherwise with
         INVALID_ARGUMENT.
 
