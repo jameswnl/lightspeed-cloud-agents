@@ -28,13 +28,14 @@ auth:
   required: false
 
 # openshell is the only supported ephemeral spawner (issue #198). The
-# gateway itself must be deployed separately -- see deploy/kind/openshell-gateway.yaml
-# for a reference K8s manifest -- and its own compute driver config must
-# match its deployment target (kubernetes for K8s/OCP, podman for Podman);
-# that pairing is invisible to workflowRunner/spawner values here.
+# gateway itself must be deployed separately -- deploying and operating it
+# is out of scope for this repo, and its own compute driver config
+# (kubernetes for K8s/OCP, podman for Podman) is invisible to
+# workflowRunner/spawner values here. See
+# docs/testing-against-openshell-gateways.md for setting one up.
 spawner:
   type: "openshell"
-  gatewayUrl: "openshell-gateway:17670"
+  gatewayUrl: "CHANGEME.example.com:17670"  # your OpenShell gateway address
   workspace: "default"
 
 sandboxImage: "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"

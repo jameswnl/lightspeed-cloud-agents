@@ -59,10 +59,10 @@ helm install cloud-agents deploy/helm/ \
   --set workflowRunner.image.repository=quay.io/openshift-lightspeed/workflow-runner \
   --set workflowRunner.image.tag=latest \
   --set temporal.url=temporal-server:7233 \
-  --set spawner.gatewayUrl=openshell-gateway:17670
+  --set spawner.gatewayUrl=<your-openshell-gateway-host>:17670
 ```
 
-`spawner.type` defaults to `openshell` -- the only supported ephemeral spawner (issue #198). It requires a separately-deployed OpenShell gateway (see `deploy/kind/openshell-gateway.yaml` for a reference manifest); the gateway's own compute driver must match its own deployment target (`kubernetes` for OCP/K8s/Kind, `podman` for Podman), but that pairing is invisible to `spawner.gatewayUrl`/`workflowRunner` values here.
+`spawner.type` defaults to `openshell` -- the only supported ephemeral spawner (issue #198). It requires a separately-deployed OpenShell gateway; deploying and operating that gateway is out of scope for this repo (see `docs/testing-against-openshell-gateways.md` for setting one up). The gateway's own compute driver (`kubernetes` for OCP/K8s/Kind, `podman` for Podman) must match its deployment target, but that pairing is invisible to `spawner.gatewayUrl`/`workflowRunner` values here -- this repo only needs the address to reach it.
 
 ---
 
