@@ -749,6 +749,31 @@ class OpenShellSpawner(AgentSpawner):
             ep = np.endpoints.add()
             ep.host = provider_host
             ep.port = 443
+            # Real L7 inspection, not a bare L4 pin (issue #244 PR #246
+            # review, live-verified against a real gateway): once a
+            # ProviderProfile is registered for this host (see
+            # _ensure_provider_profile), the gateway stamps this endpoint
+            # provider_credentialed=true and its policy-authoring
+            # validation (openshell-server's
+            # validate_uninspected_credentialed_endpoints) rejects a plain
+            # L4-only rule for it outright -- CreateSandbox fails closed
+            # with FAILED_PRECONDITION for every spawn, not just this
+            # provider's credential injection. The fix is NOT the
+            # `allow_uninspected_credentials: true` escape hatch: per
+            # OpenShell's own architecture doc, that flag is
+            # security-flagged in policy approval flows and disables the
+            # proxy's per-request credential scoping/L7 rewriting for this
+            # endpoint. Every real credentialed LLM provider profile
+            # OpenShell ships (providers/claude-code.yaml,
+            # providers/codex.yaml -- which pins this exact host,
+            # providers/nvidia.yaml, providers/deepinfra.yaml) instead
+            # satisfies the check with real L7 inspection via these three
+            # fields; TLS termination for that inspection is automatic
+            # per-sandbox (ephemeral CA, no separate gateway-side
+            # provisioning), so this is fully within this method's control.
+            ep.protocol = "rest"
+            ep.access = "read-write"
+            ep.enforcement = "enforce"
             b = np.binaries.add()
             b.path = "**"
 
@@ -1362,7 +1387,18 @@ class OpenShellSpawner(AgentSpawner):
                     )
                     return
                 diagnostic_messages = [d.message for d in import_resp.diagnostics]
-                if any("already exists" in msg for msg in diagnostic_messages):
+                # Exact-match the gateway's own already-exists string (not a
+                # substring match) and require EVERY diagnostic to be that
+                # case -- a substring match, or treating a mixed
+                # lint-failure-plus-conflict response as benign, would let a
+                # real rejection slip through disguised as a harmless race
+                # (PR #246 review nit).
+                already_exists_message = (
+                    f"custom provider profile '{provider_type}' already exists"
+                )
+                if diagnostic_messages and all(
+                    msg == already_exists_message for msg in diagnostic_messages
+                ):
                     # Lost a race against a concurrent spawn's import of the
                     # same provider_type -- the profile is there either way.
                     logger.info(

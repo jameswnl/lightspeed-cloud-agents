@@ -3339,6 +3339,52 @@ class TestBuildNetworkPolicy:
         assert np._ep.host == "api.openai.com"
         assert np._ep.port == 443
 
+    def test_llm_provider_endpoint_configures_l7_inspection(
+        self, mocker: MockerFixture
+    ) -> None:
+        """The llm_provider endpoint must request real L7 inspection, not a bare L4 pin.
+
+        Regression for issue #244 PR #246 review: once a ProviderProfile is
+        registered for this host (_ensure_provider_profile), the gateway
+        stamps this endpoint provider_credentialed=true and rejects a plain
+        L4-only rule outright at CreateSandbox time (FAILED_PRECONDITION,
+        confirmed live). The fix is real L7 inspection (protocol/access/
+        enforcement), matching every real credentialed LLM provider profile
+        OpenShell ships (providers/codex.yaml, claude-code.yaml, nvidia.yaml,
+        deepinfra.yaml) -- NOT the allow_uninspected_credentials escape
+        hatch, which is security-flagged in OpenShell's own policy-approval
+        flows and disables per-request credential scoping for the endpoint.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "openai"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["llm_provider"]
+        assert np._ep.protocol == "rest"
+        assert np._ep.access == "read-write"
+        assert np._ep.enforcement == "enforce"
+
+    def test_llm_provider_endpoint_does_not_use_uninspected_credentials_escape_hatch(
+        self,
+    ) -> None:
+        """Source-level guard: never reach for allow_uninspected_credentials here.
+
+        A bare Mock() auto-vivifies any attribute access, so asserting
+        non-presence against the mock spec above would be meaningless --
+        check the actual source instead. Real L7 inspection (see the test
+        above) is the correct fix; this flag is a security-flagged escape
+        hatch in OpenShell's own policy-approval flows (PR #246 review).
+        Checks for an assignment specifically, not the bare substring --
+        this method's own explanatory comment legitimately names the flag
+        when describing why it's NOT used.
+        """
+        from pathlib import Path
+
+        src = Path("src/cloud_agents/spawner/openshell_spawner.py").read_text()
+        assert ".allow_uninspected_credentials =" not in src
+
     def test_azure_provider(self, mocker: MockerFixture) -> None:
         """Azure provider adds *.openai.azure.com egress rule."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
