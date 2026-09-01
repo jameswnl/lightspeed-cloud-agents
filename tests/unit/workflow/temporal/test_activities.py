@@ -13,7 +13,6 @@ from pytest_mock import MockerFixture
 from cloud_agents.workflow.executor.temporal.activities import (
     _collect_transcript,
     _normalize_config_ref,
-    _to_k8s_secret_name,
     _truncate_heartbeat_payload,
     build_escalation_activity,
     compute_pod_name,
@@ -953,34 +952,18 @@ class TestNormalizeConfigRef:
         assert _normalize_config_ref("my.config.ref") == "MY_CONFIG_REF"
 
 
-class TestToK8sSecretName:
-    """Tests for credentials_secret to K8s Secret name conversion."""
+class TestCredentialSecretNameResolution:
+    """Tests for credential_secret_name resolution before passing to the spawner.
 
-    def test_uppercase_with_underscores(self) -> None:
-        """OPENAI_API_KEY becomes openai-api-key."""
-        assert _to_k8s_secret_name("OPENAI_API_KEY") == "openai-api-key"
+    Uses resolve_credential_env_key() (step/provider.py) since issue #240 --
+    previously this file computed a K8s-secret-style name via a local
+    _to_k8s_secret_name() with no fallback when credentials_secret was
+    unset, unlike spawn: none/local's existing provider-default fallback.
+    """
 
-    def test_anthropic_key(self) -> None:
-        """ANTHROPIC_API_KEY becomes anthropic-api-key."""
-        assert _to_k8s_secret_name("ANTHROPIC_API_KEY") == "anthropic-api-key"
-
-    def test_already_lowercase(self) -> None:
-        """Already lowercase with hyphens passes through."""
-        assert _to_k8s_secret_name("my-secret") == "my-secret"
-
-    def test_none_returns_none(self) -> None:
-        """None input returns None."""
-        assert _to_k8s_secret_name(None) is None
-
-    def test_empty_returns_none(self) -> None:
-        """Empty string returns None."""
-        assert _to_k8s_secret_name("") is None
-
-    @pytest.mark.asyncio
-    async def test_credential_secret_name_converted_for_spawner(
-        self, mocker: MockerFixture
-    ) -> None:
-        """credentials_secret is converted to K8s-valid name before passing to spawner."""
+    async def _run_with_provider(
+        self, mocker: MockerFixture, provider: dict[str, Any]
+    ) -> Any:
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -1003,19 +986,43 @@ class TestToK8sSecretName:
             {
                 "step": {"name": "s1", "prompt": "check", "output_key": "r1"},
                 "workflow_id": "wf-1",
-                "provider": {
-                    "name": "openai",
-                    "model": "gpt-4",
-                    "credentials_secret": "OPENAI_API_KEY",
-                },
+                "provider": provider,
                 "sandbox_image": "sandbox:latest",
                 "context": {},
             },
             spawner=mock_spawner,
         )
+        return mock_spawner.spawn.call_args
 
-        spawn_call = mock_spawner.spawn.call_args
-        assert spawn_call[1].get("credential_secret_name") == "openai-api-key"
+    @pytest.mark.asyncio
+    async def test_credential_secret_name_resolved_for_spawner(
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """credentials_secret resolves to its currently-set env var key."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        spawn_call = await self._run_with_provider(
+            mocker,
+            {"name": "openai", "model": "gpt-4", "credentials_secret": "openai-api-key"},
+        )
+
+        assert spawn_call[1].get("credential_secret_name") == "OPENAI_API_KEY"
+
+    @pytest.mark.asyncio
+    async def test_credential_secret_unset_falls_back_to_provider_default(
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No credentials_secret configured -- still resolves via the
+        provider's default env var, matching spawn: none/local's existing
+        behavior (regression test for issue #240)."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-default")
+
+        spawn_call = await self._run_with_provider(
+            mocker,
+            {"name": "anthropic", "model": "claude-sonnet-5"},
+        )
+
+        assert spawn_call[1].get("credential_secret_name") == "ANTHROPIC_API_KEY"
 
 
 class TestNotificationConfigResolution:

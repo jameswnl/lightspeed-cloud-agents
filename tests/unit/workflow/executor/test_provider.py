@@ -61,6 +61,88 @@ class TestToModelString:
             to_model_string({"name": "llama", "model": "llama-3"})
 
 
+class TestResolveCredentialEnvKey:
+    """Tests for resolve_credential_env_key() (issue #240).
+
+    Same precedence resolve_api_key() already uses, but returns the env
+    var KEY name (not the value) -- so callers that need to reference the
+    var by name (e.g. OpenShellSpawner's server-side placeholder) don't
+    have to re-derive it independently, and so the ephemeral-spawn path
+    (step_runner.py/activities.py) can share this exact fallback chain
+    instead of reimplementing a narrower one with no provider-default
+    fallback.
+    """
+
+    def test_credentials_secret_key_normalized_and_returned(
+        self, mocker: MockerFixture
+    ) -> None:
+        """credentials_secret is normalized to UPPER_SNAKE and returned as the key."""
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"}, clear=False)
+
+        key = resolve_credential_env_key({"name": "openai", "credentials_secret": "openai-api-key"})
+        assert key == "OPENAI_API_KEY"
+
+    def test_falls_back_to_provider_default_key(self, mocker: MockerFixture) -> None:
+        """No credentials_secret -- falls back to the provider's default env var name.
+
+        This is the regression case for issue #240: this fallback previously
+        only existed for resolve_api_key() (spawn: none/local), not for the
+        ephemeral-spawn path, which had no default at all.
+        """
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-default"}, clear=False)
+
+        key = resolve_credential_env_key({"name": "openai"})
+        assert key == "OPENAI_API_KEY"
+
+    def test_credentials_secret_unset_env_falls_through_to_default(
+        self, mocker: MockerFixture
+    ) -> None:
+        """credentials_secret set but its env var isn't -- falls through to the default."""
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant"}, clear=False)
+        os.environ.pop("MY_KEY", None)
+
+        key = resolve_credential_env_key({"name": "anthropic", "credentials_secret": "my-key"})
+        assert key == "ANTHROPIC_API_KEY"
+
+    def test_credentials_secret_takes_priority(self, mocker: MockerFixture) -> None:
+        """credentials_secret's env var takes priority over the provider default."""
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        mocker.patch.dict(
+            os.environ,
+            {"MY_KEY": "sk-custom", "OPENAI_API_KEY": "sk-default"},
+            clear=False,
+        )
+
+        key = resolve_credential_env_key({"name": "openai", "credentials_secret": "my-key"})
+        assert key == "MY_KEY"
+
+    def test_returns_none_if_nothing_set(self, mocker: MockerFixture) -> None:
+        """Returns None if neither credentials_secret nor a provider default is set."""
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        env_copy = {
+            k: v for k, v in os.environ.items() if "OPENAI" not in k and "ANTHROPIC" not in k
+        }
+        mocker.patch.dict(os.environ, env_copy, clear=True)
+
+        key = resolve_credential_env_key({"name": "openai"})
+        assert key is None
+
+    def test_unknown_provider_no_default(self, mocker: MockerFixture) -> None:
+        """Unknown provider name has no default env key -- returns None."""
+        from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
+
+        key = resolve_credential_env_key({"name": "unknown-vendor"})
+        assert key is None
+
+
 class TestResolveApiKey:
     """Tests for resolve_api_key() credential resolution."""
 

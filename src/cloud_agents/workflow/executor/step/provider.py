@@ -53,6 +53,37 @@ def to_model_string(provider: dict[str, Any]) -> str:
     return f"{pai_provider}:{model}"
 
 
+def resolve_credential_env_key(provider: dict[str, Any]) -> str | None:
+    """Resolve which currently-set env var holds this provider's credential.
+
+    Same precedence as resolve_api_key():
+    1. credentials_secret normalized to UPPER_SNAKE env var, if that's actually set
+    2. Provider-specific default env var (e.g., OPENAI_API_KEY), if that's actually set
+
+    Returns the env var KEY name, not the value -- for callers that need to
+    reference the variable by name rather than read it themselves (e.g.
+    OpenShellSpawner's credential_secret_name, which is used to build a
+    server-side `openshell:resolve:env:<KEY>` placeholder).
+
+    Parameters:
+        provider: Provider config dict.
+
+    Returns:
+        Env var key name, or None if neither resolves to a currently-set var.
+    """
+    cred = provider.get("credentials_secret")
+    if cred:
+        env_key = cred.upper().replace("-", "_")
+        if os.environ.get(env_key):
+            return env_key
+
+    default_key = _PROVIDER_ENV_KEYS.get(provider.get("name", ""))
+    if default_key and os.environ.get(default_key):
+        return default_key
+
+    return None
+
+
 def resolve_api_key(provider: dict[str, Any]) -> str | None:
     """Resolve API key from provider config and environment.
 
@@ -66,19 +97,8 @@ def resolve_api_key(provider: dict[str, Any]) -> str | None:
     Returns:
         API key string, or None if not found.
     """
-    cred = provider.get("credentials_secret")
-    if cred:
-        env_key = cred.upper().replace("-", "_")
-        val = os.environ.get(env_key)
-        if val:
-            return val
-
-    name = provider.get("name", "")
-    default_key = _PROVIDER_ENV_KEYS.get(name)
-    if default_key:
-        return os.environ.get(default_key)
-
-    return None
+    key = resolve_credential_env_key(provider)
+    return os.environ.get(key) if key else None
 
 
 def ensure_credentials_env(provider: dict[str, Any]) -> None:

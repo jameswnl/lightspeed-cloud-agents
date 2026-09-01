@@ -448,4 +448,46 @@ class TestRunStep:
         env = call_kwargs["env"]
         assert "OPENAI_API_KEY" not in env
         assert "openai-api-key" not in env
-        assert call_kwargs["credential_secret_name"] == "openai-api-key"
+        # credential_secret_name now carries the resolved env var KEY
+        # (via resolve_credential_env_key()), not the raw K8s-secret-style
+        # credentials_secret string -- see issue #240. OpenShellSpawner's
+        # own credential_secret_name.upper().replace("-", "_") re-derivation
+        # is idempotent on an already-uppercase key, so behavior is
+        # unchanged; only the representation is.
+        assert call_kwargs["credential_secret_name"] == "OPENAI_API_KEY"
+
+    @pytest.mark.asyncio
+    async def test_run_step_credential_secret_unset_falls_back_to_provider_default(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No credentials_secret configured -- ephemeral spawn still gets a
+        credential_secret_name via the provider's default env var, matching
+        spawn: none/local's existing fallback behavior (regression test for
+        issue #240: previously, an unset credentials_secret meant
+        credential_secret_name was always None for spawn: ephemeral, so the
+        sandbox spawned with zero LLM credentials and no error until the
+        agent's first LLM call failed)."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-default")
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        input_data = {
+            "step": {"name": "s1", "prompt": "test", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4o",
+                # credentials_secret intentionally omitted
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+        await run_step(input_data, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["credential_secret_name"] == "OPENAI_API_KEY"
