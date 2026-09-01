@@ -98,17 +98,30 @@ class TestResolveCredentialEnvKey:
         key = resolve_credential_env_key({"name": "openai"})
         assert key == "OPENAI_API_KEY"
 
-    def test_credentials_secret_unset_env_falls_through_to_default(
+    def test_explicit_credentials_secret_does_not_fall_through_when_unresolvable(
         self, mocker: MockerFixture
     ) -> None:
-        """credentials_secret set but its env var isn't -- falls through to the default."""
+        """credentials_secret set but its env var isn't -- does NOT silently fall
+        through to the provider default.
+
+        An explicit credentials_secret is a deliberate signal from the caller;
+        silently substituting an unrelated provider-default credential when the
+        named one can't be found would mask a real misconfiguration (e.g. a
+        typo'd secret name) behind a wrong-but-present credential, or -- for
+        callers like OpenShellSpawner that pass this key straight to
+        _do_spawn() -- would suppress the RuntimeError that used to fire when
+        an explicitly-named credential wasn't found. Reviewed on PR #245
+        (beesarmy): only the "credentials_secret omitted entirely" case should
+        use the provider-default fallback, not "credentials_secret set to
+        something that doesn't resolve."
+        """
         from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
 
         mocker.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant"}, clear=False)
         os.environ.pop("MY_KEY", None)
 
         key = resolve_credential_env_key({"name": "anthropic", "credentials_secret": "my-key"})
-        assert key == "ANTHROPIC_API_KEY"
+        assert key == "MY_KEY"
 
     def test_credentials_secret_takes_priority(self, mocker: MockerFixture) -> None:
         """credentials_secret's env var takes priority over the provider default."""

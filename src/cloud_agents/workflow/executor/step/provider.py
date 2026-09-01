@@ -54,11 +54,21 @@ def to_model_string(provider: dict[str, Any]) -> str:
 
 
 def resolve_credential_env_key(provider: dict[str, Any]) -> str | None:
-    """Resolve which currently-set env var holds this provider's credential.
+    """Resolve which env var holds this provider's credential.
 
-    Same precedence as resolve_api_key():
-    1. credentials_secret normalized to UPPER_SNAKE env var, if that's actually set
-    2. Provider-specific default env var (e.g., OPENAI_API_KEY), if that's actually set
+    Precedence:
+    1. credentials_secret normalized to UPPER_SNAKE, if credentials_secret
+       was explicitly set -- returned unconditionally, even if that env var
+       isn't currently set. An explicit credentials_secret is a deliberate
+       signal from the caller; silently substituting the provider-default
+       fallback when the named one can't be found would mask a real
+       misconfiguration (e.g. a typo'd secret name) behind a wrong-but-
+       present credential, and would suppress OpenShellSpawner's own
+       RuntimeError for "credential not found" when this key is passed
+       through as credential_secret_name (reviewed on PR #245).
+    2. Provider-specific default env var (e.g., OPENAI_API_KEY), only when
+       credentials_secret was omitted entirely, and only if that default is
+       actually currently set.
 
     Returns the env var KEY name, not the value -- for callers that need to
     reference the variable by name rather than read it themselves (e.g.
@@ -69,13 +79,12 @@ def resolve_credential_env_key(provider: dict[str, Any]) -> str | None:
         provider: Provider config dict.
 
     Returns:
-        Env var key name, or None if neither resolves to a currently-set var.
+        Env var key name, or None if credentials_secret is unset and no
+        provider default resolves.
     """
     cred = provider.get("credentials_secret")
     if cred:
-        env_key = cred.upper().replace("-", "_")
-        if os.environ.get(env_key):
-            return env_key
+        return cred.upper().replace("-", "_")
 
     default_key = _PROVIDER_ENV_KEYS.get(provider.get("name", ""))
     if default_key and os.environ.get(default_key):

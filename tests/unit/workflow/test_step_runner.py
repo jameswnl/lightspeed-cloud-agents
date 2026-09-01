@@ -491,3 +491,43 @@ class TestRunStep:
 
         call_kwargs = mock_spawner.spawn.call_args[1]
         assert call_kwargs["credential_secret_name"] == "OPENAI_API_KEY"
+
+    @pytest.mark.asyncio
+    async def test_run_step_unresolvable_credentials_secret_still_signals_for_fail_loud(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """credentials_secret explicitly set but not resolvable (typo'd secret
+        name, no matching env var, no provider default either) -- still
+        passes the normalized (unresolvable) key through as
+        credential_secret_name, rather than None.
+
+        OpenShellSpawner._do_spawn() raises RuntimeError when a non-None
+        credential_secret_name doesn't resolve to a real credential -- that
+        fail-loud behavior only fires if this layer forwards a real
+        (if unresolvable) key instead of silently substituting None or a
+        provider default (reviewed on PR #245)."""
+        monkeypatch.delenv("MY_TYPOD_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        input_data = {
+            "step": {"name": "s1", "prompt": "test", "output_key": "r1"},
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4o",
+                "credentials_secret": "my-typod-key",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+        await run_step(input_data, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["credential_secret_name"] == "MY_TYPOD_KEY"

@@ -1024,6 +1024,24 @@ class TestCredentialSecretNameResolution:
 
         assert spawn_call[1].get("credential_secret_name") == "ANTHROPIC_API_KEY"
 
+    @pytest.mark.asyncio
+    async def test_unresolvable_credentials_secret_still_signals_for_fail_loud(
+        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """credentials_secret explicitly set but not resolvable -- still passes
+        the normalized (unresolvable) key through as credential_secret_name,
+        rather than None, so OpenShellSpawner._do_spawn()'s own RuntimeError
+        for "credential not found" still fires (reviewed on PR #245)."""
+        monkeypatch.delenv("MY_TYPOD_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        spawn_call = await self._run_with_provider(
+            mocker,
+            {"name": "openai", "model": "gpt-4", "credentials_secret": "my-typod-key"},
+        )
+
+        assert spawn_call[1].get("credential_secret_name") == "MY_TYPOD_KEY"
+
 
 class TestNotificationConfigResolution:
     """Tests for notifier config-ref env var resolution."""
