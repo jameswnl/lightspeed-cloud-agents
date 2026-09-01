@@ -121,6 +121,17 @@ driving the gateway directly via the `openshell` CLI (not through
 matching the shape of `providers/nvidia.yaml` in the OpenShell source,
 substituting the host and env var).
 
+Live-verified end-to-end against a real Kind gateway (PR #246): registering
+the profile also requires the sandbox's own network-policy endpoint for
+that host to declare real L7 inspection (`protocol: "rest"`,
+`access: "read-write"`, `enforcement: "enforce"`), not a bare L4 host:port
+pin -- once a credentialed `ProviderProfile` exists, the gateway's
+policy-authoring validation rejects an L4-only rule for that host outright
+(`FAILED_PRECONDITION`, not a silent skip). `OpenShellSpawner._build_network_policy()`
+sets these fields on the `llm_provider` rule for exactly this reason. With
+both pieces in place, a real spawn + `/v1/agent/run` call with a real
+`OPENAI_API_KEY` succeeds end-to-end.
+
 Then spawn sandboxes with:
 
 ```python

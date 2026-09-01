@@ -1289,6 +1289,25 @@ class OpenShellSpawner(AgentSpawner):
                     provider=datamodel_pb2.Provider(
                         type=provider_type,
                         credentials=credentials,
+                        # Safe to set unconditionally for every provider_type,
+                        # not just ones _ensure_provider_profile() bundles a
+                        # profile for (openai/anthropic) -- confirmed against
+                        # openshell-server's actual profile-resolution source
+                        # (EffectiveProviderProfileCatalog::
+                        # scoped_type_profile_for_scope,
+                        # provider_profile_sources.rs): a builtin/static
+                        # profile (nvidia, deepinfra, google-vertex-ai,
+                        # aws-bedrock) is returned unconditionally BEFORE
+                        # profile_workspace is even examined, so it can never
+                        # interfere with their resolution. profile_workspace
+                        # only matters for a non-static (imported) profile,
+                        # which is exactly the openai/anthropic case this
+                        # scopes to a workspace instead of requiring platform
+                        # admin (PR #246 review -- a static-analysis tool
+                        # flagged this as a "Major" regression risk citing
+                        # generic web search results, not this repo's actual
+                        # source; verified false against the real gateway
+                        # source before dismissing it).
                         profile_workspace=self._workspace,
                     ),
                 )

@@ -97,7 +97,7 @@ def _list_profile_ids(spawner) -> set[str]:
     try:
         stub = openshell_pb2_grpc.OpenShellStub(channel)
         resp = stub.ListProviderProfiles(
-            openshell_pb2.ListProviderProfilesRequest(workspace=WORKSPACE)
+            openshell_pb2.ListProviderProfilesRequest(workspace=WORKSPACE, limit=1000)
         )
         return {p.id for p in resp.profiles}
     finally:
