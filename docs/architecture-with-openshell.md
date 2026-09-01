@@ -4,7 +4,16 @@ This guide covers the architecture, setup, and operation of the OpenShell gatewa
 
 ## Architecture
 
-### Direct Spawner vs OpenShell
+### Component Architecture
+
+> **`OpenShellSpawner` is the only ephemeral spawner.** Earlier versions of
+> `cloud_agents` also supported spawning containers directly against the
+> Podman/Kubernetes APIs, bypassing the gateway. That path was removed
+> entirely in issue [#198](https://github.com/jameswnl/lightspeed-cloud-agents/issues/198)
+> (PR #223) -- `build_spawner()` only accepts `"openshell"` as a
+> `spawner_type` today; anything else raises `ValueError`. The diagram and
+> comparison below describe OpenShell's own architecture and what it
+> provides, not a still-available choice between it and something else.
 
 ```mermaid
 graph TD
@@ -56,9 +65,12 @@ graph TD
     style sandbox fill:#161b22,stroke:#238636
 ```
 
-### What OpenShell Adds
+### What OpenShell Provides
 
-| Aspect | Direct Spawner | OpenShell |
+For context, this is what direct Podman/K8s API access (removed in #198)
+lacked, and what routing everything through the gateway buys instead:
+
+| Aspect | Without OpenShell (pre-#198, removed) | OpenShell (current, only option) |
 |--------|---------------|-----------|
 | **Container creation** | K8s API / Podman API directly | Gateway abstracts runtime |
 | **Sandbox isolation** | Container securityContext | Landlock + seccomp + network namespace |
@@ -600,11 +612,39 @@ steps:
 
 ### Credentials
 
-The spawner injects LLM credentials via the OpenShell Provider API:
+The spawner injects LLM credentials via the OpenShell Provider API, in four
+steps, all run before the sandbox is created:
 
-1. Creates a Provider with the credential key-value pair
-2. Attaches the Provider to the sandbox
-3. Falls back to file injection (`/var/run/secrets/llm-credentials/`) if the Provider API fails
+1. **Resolve a real vendor type** (`_resolve_inference_provider_type()`,
+   issue #238): `LIGHTSPEED_PROVIDER`'s value (e.g. `openai`, `vertex`,
+   `bedrock`) is mapped to one of the gateway's own recognized inference
+   vendor types (`openai`, `anthropic`, `nvidia`, `deepinfra`,
+   `google-vertex-ai`, `aws-bedrock`). There is no generic fallback type --
+   a value with no known mapping fails the spawn immediately, before any
+   gRPC call, rather than silently creating an unusable provider.
+2. **Ensure a provider profile exists** (`_ensure_provider_profile()`,
+   issue #244): the gateway ships builtin credential-injection/network-egress
+   profiles for most vendor types, but not `openai` or `anthropic` -- a
+   `Provider` of either type would otherwise be created successfully but
+   have its credential-env-var injection and network policy silently
+   skipped by the gateway. This step idempotently imports a bundled profile
+   for those two types (no-op for types with an existing builtin) into the
+   spawner's own workspace.
+3. **Create the Provider** (`_create_provider()`) with the credential
+   key-value pair and the resolved vendor type, then attach it via
+   `spec.providers` at sandbox-*create* time (not a separate post-create
+   attach call).
+4. **Register an inference route** (`_set_inference_route()`, issue #238):
+   the sandbox's own supervisor process resolves its LLM connection details
+   via `GetInferenceBundle`, which returns nothing for a provider that was
+   never registered as a route -- without this call the agent fails with
+   no diagnostic detail, even though the Provider object exists.
+
+A failure at any of these four steps fails the spawn immediately -- there
+is no fallback to writing the credential to a file
+(`/var/run/secrets/llm-credentials/` was a real fallback path once, removed
+by issue #199's security review since it would expose the real credential
+value directly to the sandboxed process).
 
 ```yaml
 provider:
@@ -636,7 +676,6 @@ async def test():
     client = SandboxClient(endpoint="localhost:17670")
     spawner = OpenShellSpawner(
         openshell_client=client,
-        driver="podman",
         workspace="default",
     )
 
