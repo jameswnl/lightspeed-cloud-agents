@@ -357,11 +357,6 @@ class OpenShellSpawner(AgentSpawner):
         # Despite the name, stores each provider's *name* (metadata.name),
         # not its metadata.id -- see _create_provider()'s docstring.
         self._provider_ids: dict[str, str] = {}
-        # Only populated for agents that actually got a real inference
-        # route set (see _do_spawn()'s model_id/provider_type check) --
-        # value == the corresponding _provider_ids entry, since
-        # _set_inference_route() reuses provider_name as route_name.
-        self._inference_route_names: dict[str, str] = {}
 
     def _resolve_grpc_target(self) -> str:
         """Return the bare host:port gRPC target for raw channel creation."""
@@ -918,8 +913,30 @@ class OpenShellSpawner(AgentSpawner):
                     provider_id,
                     sandbox_name,
                 )
-                await self._set_inference_route(provider_id, model_id)
-                self._inference_route_names[agent_name] = provider_id
+                try:
+                    await self._set_inference_route(provider_id, model_id)
+                except Exception:
+                    # This runs before the sandbox exists, so the post-create
+                    # failure path below (_cleanup_sandbox + _delete_provider)
+                    # never gets a chance to run -- delete the now-orphaned,
+                    # credential-bearing provider directly instead of leaking
+                    # it (found in PR #239 review).
+                    self._provider_ids.pop(agent_name, None)
+                    try:
+                        await self._delete_provider(provider_id)
+                        logger.info(
+                            "Cleaned up provider '%s' after inference route " "setup failed",
+                            provider_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to delete provider '%s' after inference "
+                            "route setup failed -- provider leaked, needs "
+                            "manual cleanup",
+                            provider_id,
+                            exc_info=True,
+                        )
+                    raise
                 logger.info(
                     "Set inference route for provider '%s' -> model '%s'",
                     provider_id,
@@ -1343,19 +1360,23 @@ class OpenShellSpawner(AgentSpawner):
         this call, GetInferenceBundle returns NOT_FOUND indefinitely and
         the agent fails with no diagnostic detail.
 
-        Passes route_name=provider_name (rather than omitting it and
-        taking the gateway's implicit default route name) so concurrent
-        ephemeral spawns in the same workspace get distinct routes instead
-        of clobbering a single shared one -- provider_name is already
-        gateway-assigned and unique per spawn, so reusing it as the route
-        name needs no extra state. NOTE: this only prevents the *write*
-        side from overwriting another spawn's route; whether
-        GetInferenceBundle's per-sandbox caller correctly picks out its
-        own named route among however many now exist in the workspace
-        (vs. e.g. always resolving the most-recently-set one) is not
-        verified here -- that logic lives in OpenShell's own closed-source
-        supervisor process, not anything in this repo. See issue #238's
-        follow-up discussion.
+        Deliberately omits route_name -- confirmed live against a real
+        (Kind) gateway that route_name is NOT a free-form per-spawn
+        identifier: the gateway rejects anything other than its two fixed
+        system route names with
+        `INVALID_ARGUMENT: unknown route_name '<x>'; expected
+        'inference.local' or 'sandbox-system'`. A prior revision of this
+        method passed route_name=provider_name (to try to give concurrent
+        spawns distinct routes, per a CodeRabbit review comment on PR #239)
+        -- that broke every single spawn outright, since a gateway-assigned
+        provider name is never one of the two valid route names. Reverted
+        once live-verified. This means there is exactly one
+        (workspace-scoped, "inference.local") route for real per-sandbox
+        credentials: concurrent ephemeral spawns in the same workspace
+        *do* clobber each other's route, and there is currently no
+        client-side fix for that -- it is a real limitation of this
+        gateway version's inference-routing API, not something a naming
+        scheme can work around. See issue #238's follow-up discussion.
 
         Requires provider_name to reference a provider created with an
         inference-supported type (see _resolve_inference_provider_type()) --
@@ -1364,8 +1385,7 @@ class OpenShellSpawner(AgentSpawner):
 
         Args:
             provider_name: Name of an already-created provider (see
-                _create_provider's return value). Doubles as this route's
-                route_name.
+                _create_provider's return value).
             model_id: Model identifier to route to (e.g. "gpt-4o-mini").
 
         Raises:
@@ -1382,7 +1402,6 @@ class OpenShellSpawner(AgentSpawner):
                     inference_pb2.SetInferenceRouteRequest(
                         provider_name=provider_name,
                         model_id=model_id,
-                        route_name=provider_name,
                         workspace=self._workspace,
                     )
                 )
@@ -1390,40 +1409,6 @@ class OpenShellSpawner(AgentSpawner):
                 channel.close()
 
         await asyncio.to_thread(_sync_set)
-
-    async def _delete_inference_route(self, route_name: str) -> None:
-        """Delete an inference route (cleanup counterpart to _set_inference_route).
-
-        Without this, every ephemeral spawn's route (named after its
-        provider, see _set_inference_route) accumulates indefinitely in
-        the workspace, growing GetInferenceBundle's response forever.
-        Best-effort: caller should log-and-continue on failure the same
-        way _delete_provider/_detach_provider failures are handled, rather
-        than blocking sandbox teardown on a routing-cleanup RPC.
-
-        Args:
-            route_name: The route_name passed to the matching
-                _set_inference_route call (== that call's provider_name).
-
-        Raises:
-            Exception: If the gateway rejects or fails the delete call.
-        """
-        from openshell._proto import inference_pb2, inference_pb2_grpc
-
-        def _sync_delete() -> None:
-            channel = self._create_grpc_channel()
-            try:
-                stub = inference_pb2_grpc.InferenceStub(channel)
-                stub.DeleteInferenceRoute(
-                    inference_pb2.DeleteInferenceRouteRequest(
-                        route_name=route_name,
-                        workspace=self._workspace,
-                    )
-                )
-            finally:
-                channel.close()
-
-        await asyncio.to_thread(_sync_delete)
 
     async def _create_and_attach_provider(
         self,
@@ -1919,20 +1904,14 @@ class OpenShellSpawner(AgentSpawner):
                         sandbox_name,
                         exc_info=True,
                     )
-
-            route_name = self._inference_route_names.get(agent_name)
-            if route_name:
-                try:
-                    await self._delete_inference_route(route_name)
-                    self._inference_route_names.pop(agent_name, None)
-                except Exception:
-                    logger.warning(
-                        "Failed to delete inference route '%s' for sandbox '%s' — "
-                        "retained for retry on next destroy",
-                        route_name,
-                        sandbox_name,
-                        exc_info=True,
-                    )
+            # No per-sandbox inference route to clean up here: confirmed
+            # live against a real gateway that SetInferenceRoute only
+            # accepts its two fixed system route names ("inference.local",
+            # "sandbox-system"), not a caller-chosen per-provider name --
+            # see _set_inference_route()'s docstring. There is exactly one
+            # shared workspace-level route, which destroying any single
+            # sandbox does not own and must not delete out from under
+            # other concurrently active sandboxes.
 
             try:
                 await asyncio.to_thread(
