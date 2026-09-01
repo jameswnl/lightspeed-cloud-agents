@@ -25,6 +25,7 @@ from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
 from cloud_agents.workflow.core.models import StepResult, StepTranscript, TranscriptEvent
@@ -50,13 +51,6 @@ _circuit_breaker = ProviderCircuitBreaker(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _to_k8s_secret_name(name: str | None) -> str | None:
-    """Convert a credentials_secret value to a valid K8s Secret name."""
-    if not name:
-        return None
-    return name.lower().replace("_", "-")
 
 
 def compute_pod_name(workflow_id: str, step_name: str, attempt: int) -> str:
@@ -204,10 +198,14 @@ async def _run_step_inner(
 
     secret_values: set[str] = set()
 
-    cred_secret = provider.get("credentials_secret", "")
-    if cred_secret:
-        env_key = cred_secret.upper().replace("-", "_")
-        cred_val = os.environ.get(env_key) or os.environ.get(cred_secret)
+    # resolve_credential_env_key() falls back to the provider's default env
+    # var (e.g. ANTHROPIC_API_KEY) when credentials_secret is unset or
+    # doesn't resolve -- matching spawn: none/local's existing fallback
+    # (ensure_credentials_env()), which spawn: ephemeral previously lacked
+    # entirely (issue #240).
+    credential_env_key = resolve_credential_env_key(provider)
+    if credential_env_key:
+        cred_val = os.environ.get(credential_env_key)
         if cred_val:
             secret_values.add(cred_val)
             # Do NOT add to env_vars -- OpenShell's Provider system injects
@@ -337,8 +335,7 @@ async def _run_step_inner(
                 allowed_skills=step.get("allowed_skills"),
                 service_account=sa,
                 read_only=advisory,
-                credential_secret_name=_to_k8s_secret_name(provider.get("credentials_secret"))
-                or None,
+                credential_secret_name=credential_env_key,
                 mcp_secret_mounts=mcp_secret_mounts or None,
                 tls_certs=tls_certs,
             )

@@ -144,8 +144,17 @@ class AgentSpawner(ABC):
                 (no-write) boundary there, not a confidentiality one.
             service_account: Override ServiceAccount for this pod.
             read_only: Run container with read-only filesystem (advisory mode).
-            credential_secret_name: K8s Secret to mount as volume and envFrom
-                for file-based credential providers (e.g. Vertex, Bedrock).
+            credential_secret_name: Env var key name holding the resolved
+                LLM credential value (e.g. "OPENAI_API_KEY"), already
+                fallback-resolved by the caller from the workflow
+                provider's `credentials_secret` config or the provider's
+                own default env var name (see
+                step/provider.py::resolve_credential_env_key(), issue
+                #240). OpenShellSpawner reads the named env var and injects
+                it into the sandbox via OpenShell's Provider API rather
+                than a K8s Secret volume mount/envFrom -- KubernetesSpawner,
+                which this parameter's name originally described, was
+                deleted entirely in issue #198.
             mcp_secret_mounts: List of (secret_name, key, mount_path) tuples
                 for MCP server Secret-backed auth headers.
             tls_certs: Optional ephemeral TLS certs to inject into sandbox.
