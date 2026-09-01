@@ -2302,75 +2302,7 @@ class TestExtraEnvMergedIntoServerExec:
 
 
 class TestCredentialInjection:
-    """Tests for _inject_credentials() and Provider API integration."""
-
-    @pytest.mark.asyncio
-    async def test_creates_and_attaches_provider(self, mocker: MockerFixture) -> None:
-        """Credentials are injected via Provider API when available."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "uuid-1"
-
-        mock_create = mocker.patch.object(
-            spawner,
-            "_create_and_attach_provider",
-            return_value="provider-123",
-        )
-
-        await spawner._inject_credentials(
-            "agent-1",
-            "sb-1",
-            "OPENAI_API_KEY",
-            {"OPENAI_API_KEY": "sk-test"},
-        )
-
-        mock_create.assert_called_once_with(
-            "sb-1",
-            credentials={"OPENAI_API_KEY": "sk-test"},
-        )
-        assert spawner._provider_ids["agent-1"] == "provider-123"
-
-    @pytest.mark.asyncio
-    async def test_provider_failure_does_not_fallback_to_file(self, mocker: MockerFixture) -> None:
-        """Provider failure no longer falls back to file injection (issue #199)."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client)
-        spawner._sandbox_ids["agent-1"] = "uuid-1"
-
-        mocker.patch.object(
-            spawner,
-            "_create_and_attach_provider",
-            side_effect=Exception("gRPC unavailable"),
-        )
-        mock_file_inject = mocker.patch.object(
-            spawner,
-            "_inject_credentials_via_files",
-        )
-
-        with pytest.raises(Exception, match="gRPC unavailable"):
-            await spawner._inject_credentials(
-                "agent-1",
-                "sb-1",
-                "OPENAI_API_KEY",
-                {"OPENAI_API_KEY": "sk-test"},
-            )
-
-        mock_file_inject.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raises_when_credential_not_in_env(self, mocker: MockerFixture) -> None:
-        """Raises RuntimeError when credential key not found in env."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        mock_client = mocker.Mock()
-        spawner = OpenShellSpawner(openshell_client=mock_client)
-
-        with pytest.raises(RuntimeError, match="not found in env"):
-            await spawner._inject_credentials("agent-1", "sb-1", "MISSING_KEY", {})
+    """Tests for Provider API integration (issue #211)."""
 
     def test_provider_uses_datamodel_module(self):
         """Regression for issue #211: Provider lives in datamodel_pb2, not openshell_pb2."""
@@ -2379,10 +2311,14 @@ class TestCredentialInjection:
         # Check the source file directly -- avoids MagicMock stub in this test module
         # (which replaces openshell with a mock when the extra is not installed)
         src = Path("src/cloud_agents/spawner/openshell_spawner.py").read_text()
-        # Both provider creation sites must use datamodel_pb2.Provider
-        assert src.count("datamodel_pb2.Provider") == 2, (
-            "Expected 2 uses of datamodel_pb2.Provider (for _create_provider and "
-            "_create_and_attach_provider), found %d" % src.count("datamodel_pb2.Provider")
+        # The sole provider creation site (_create_provider -- the deprecated
+        # post-create _create_and_attach_provider path was removed entirely,
+        # not just its "cloud-agents" literal, once it was flagged as the
+        # last remaining copy of issue #238's fake-type bug) must use
+        # datamodel_pb2.Provider.
+        assert src.count("datamodel_pb2.Provider") == 1, (
+            "Expected exactly 1 use of datamodel_pb2.Provider (in _create_provider), "
+            "found %d" % src.count("datamodel_pb2.Provider")
         )
         assert (
             "openshell_pb2.Provider" not in src
