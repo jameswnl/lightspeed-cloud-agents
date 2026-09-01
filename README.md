@@ -12,6 +12,7 @@ AI agent workflow platform. Define multi-step agent workflows in YAML, run them 
 
 - **Podman** with Podman Desktop or `podman machine start`
 - **LLM API key** — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+- **An OpenShell gateway you can reach** — deploying/operating the gateway is outside this repo's scope; see [docs/testing-against-openshell-gateways.md](docs/testing-against-openshell-gateways.md) for setting one up. You just need its address.
 - **Linux only**: if `make up` fails with a socket error, set `export PODMAN_SOCK=/run/user/$(id -u)/podman/podman.sock`
 
 
@@ -20,7 +21,8 @@ AI agent workflow platform. Define multi-step agent workflows in YAML, run them 
 
 
 ```bash
-export OPENAI_API_KEY="sk-..."    # or ANTHROPIC_API_KEY
+export OPENAI_API_KEY="sk-..."             # or ANTHROPIC_API_KEY
+export OPENSHELL_GATEWAY_URL="<host>:<port>"  # your OpenShell gateway address
 
 make build      # build 2 images (runner + sandbox)
 make up         # start the platform (Temporal + runner)
@@ -114,13 +116,14 @@ Run the workflow runner locally (without containers) for development and debuggi
 # Install dependencies
 uv sync --group dev --extra openshell
 
-# Start Temporal and the OpenShell gateway (still needs containers)
-podman compose -f deploy/podman/docker-compose.yaml up -d temporal-db temporal-server openshell-gateway
+# Start Temporal (still needs containers) -- point OPENSHELL_GATEWAY_URL
+# below at your own, separately-deployed OpenShell gateway
+podman compose -f deploy/podman/docker-compose.yaml up -d temporal-db temporal-server
 
 # Run the workflow runner on the host
 TEMPORAL_URL=localhost:7233 \
 WORKFLOW_SPAWNER=openshell \
-OPENSHELL_GATEWAY_URL=localhost:17670 \
+OPENSHELL_GATEWAY_URL=<host>:<port> \
 AUTH_REQUIRED=false \
 uv run uvicorn cloud_agents.workflow.executor.temporal.entrypoint:app --host 0.0.0.0 --port 8080
 ```

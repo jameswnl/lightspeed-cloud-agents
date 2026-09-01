@@ -14,7 +14,10 @@
 # concern (issue #198: OpenShellSpawner is the only ephemeral spawner, but
 # where/how the gateway itself runs is invisible to workflow-runner beyond
 # OPENSHELL_GATEWAY_URL). See docs/testing-against-openshell-gateways.md
-# for setting one up.
+# for setting one up. If the gateway runs on the host itself (not another
+# container), OPENSHELL_GATEWAY_URL needs a container-reachable host from
+# workflow-runner's perspective (e.g. host.containers.internal:<port>),
+# not localhost.
 
 services:
   temporal-db:

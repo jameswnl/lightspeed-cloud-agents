@@ -5,5 +5,3 @@ __pycache__/
 # Local Netlify folder
 .netlify
 .claude/worktrees/
-deploy/openshell/jwt-*.pem
-deploy/openshell/jwt-kid.txt
