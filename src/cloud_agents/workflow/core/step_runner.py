@@ -22,7 +22,7 @@ from typing import Any, Optional
 import httpx
 
 from cloud_agents.runtime.auth import get_runner_auth_token
-from cloud_agents.runtime.tracing import get_tracer
+from cloud_agents.runtime.tracing import get_tracer, inject_traceparent
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
@@ -195,6 +195,19 @@ async def _run_step_inner(
     ):
         if val := os.environ.get(deploy_var):
             env_vars[deploy_var] = val
+
+    # Forward OTEL config and the current traceparent so the sandbox's
+    # own OTEL-aware agent process (a separate pod/network) can export to
+    # the same collector and nest its root span under sandbox.step
+    # (issue #263). No-op when tracing is disabled (init_tracing NoOp).
+    for otel_var in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL"):
+        if val := os.environ.get(otel_var):
+            env_vars[otel_var] = val
+
+    trace_headers: dict[str, str] = {}
+    inject_traceparent(trace_headers)
+    if "traceparent" in trace_headers:
+        env_vars["TRACEPARENT"] = trace_headers["traceparent"]
 
     secret_values: set[str] = set()
 

@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from pydantic_ai import Agent
+from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pydantic_ai.direct import model_request
 from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
@@ -167,6 +168,7 @@ async def _call_llm(
                 [request],
                 model_settings={"timeout": timeout_seconds},
                 model_request_parameters=native_params,
+                instrument=True,
             )
         except UserError as exc:
             logger.warning(
@@ -201,6 +203,7 @@ async def _call_llm(
             model_string,
             [request],
             model_settings={"timeout": timeout_seconds},
+            instrument=True,
         )
 
     usage = response.usage
@@ -419,7 +422,7 @@ class DirectExecutor(StepExecutor):
                     active_ts = await stack.enter_async_context(ts)
                     active_toolsets.append(active_ts)
 
-                capabilities = []
+                capabilities = [Instrumentation()]
                 skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
                 if skills_cap:
                     capabilities.append(skills_cap)
@@ -429,7 +432,7 @@ class DirectExecutor(StepExecutor):
                     instructions=step_input.system_prompt,
                     tools=tools,
                     toolsets=active_toolsets if active_toolsets else None,
-                    capabilities=capabilities if capabilities else None,
+                    capabilities=capabilities,
                 )
 
                 async with agent.run_stream(
@@ -539,7 +542,7 @@ class DirectExecutor(StepExecutor):
                 active_toolsets.append(active_ts)
 
             # Build capabilities
-            capabilities = []
+            capabilities = [Instrumentation()]
             if skills_cap is None:
                 skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
             if skills_cap:
@@ -550,7 +553,7 @@ class DirectExecutor(StepExecutor):
                 instructions=step_input.system_prompt,
                 tools=tools,
                 toolsets=active_toolsets if active_toolsets else None,
-                capabilities=capabilities if capabilities else None,
+                capabilities=capabilities,
             )
 
             result = await agent.run(

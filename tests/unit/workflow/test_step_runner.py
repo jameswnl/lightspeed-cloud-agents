@@ -115,6 +115,104 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
+    async def test_run_step_forwards_otel_endpoint_to_sandbox(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """OTEL_EXPORTER_OTLP_ENDPOINT/PROTOCOL are forwarded into sandbox env_vars (issue #263)."""
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "sk-test",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.otel.svc:4317",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+            },
+            clear=False,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector.otel.svc:4317"
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_PROTOCOL"] == "grpc"
+
+    @pytest.mark.asyncio
+    async def test_run_step_omits_otel_endpoint_when_unset(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No OTEL env vars are forwarded when the runner itself has none set."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_PROTOCOL", raising=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call_kwargs["env"]
+        assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
+
+    @pytest.mark.asyncio
+    async def test_run_step_injects_traceparent_into_sandbox(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """A traceparent header is injected into sandbox env_vars for span nesting (issue #263)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        def _fake_inject(headers: dict[str, str]) -> dict[str, str]:
+            headers["traceparent"] = "00-aaaa-bbbb-01"
+            return headers
+
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=_fake_inject,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["env"]["TRACEPARENT"] == "00-aaaa-bbbb-01"
+
+    @pytest.mark.asyncio
+    async def test_run_step_no_traceparent_when_absent(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """No TRACEPARENT env var is set when tracing is disabled (NoOp inject)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=lambda headers: headers,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert "TRACEPARENT" not in call_kwargs["env"]
+
+    @pytest.mark.asyncio
     async def test_run_step_forwards_allowed_skills_to_spawner(
         self,
         mock_spawner: AsyncMock,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pytest_mock import MockerFixture
 
 
@@ -1837,7 +1838,8 @@ class TestDirectExecutorWithSkills:
 
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
-        assert call_kwargs["capabilities"] == [mock_cap]
+        assert mock_cap in call_kwargs["capabilities"]
+        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
 
     @pytest.mark.asyncio
     async def test_skills_only_uses_agent_path(self, mocker: MockerFixture) -> None:
@@ -1883,13 +1885,14 @@ class TestDirectExecutorWithSkills:
         mock_agent_cls.assert_called_once()
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
-        assert call_kwargs["capabilities"] == [mock_cap]
+        assert mock_cap in call_kwargs["capabilities"]
+        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
 
     @pytest.mark.asyncio
-    async def test_agent_no_capabilities_when_skills_path_unset(
+    async def test_agent_only_instrumentation_capability_when_skills_path_unset(
         self, mocker: MockerFixture
     ) -> None:
-        """Agent has no capabilities when CLOUD_AGENTS_SKILLS_PATHS is unset."""
+        """Agent has only the Instrumentation capability when CLOUD_AGENTS_SKILLS_PATHS is unset."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
         from cloud_agents.workflow.executor.step.tools import register_tool
@@ -1931,7 +1934,10 @@ class TestDirectExecutorWithSkills:
         )
 
         call_kwargs = mock_agent_cls.call_args.kwargs
-        assert call_kwargs.get("capabilities") is None
+        capabilities = call_kwargs.get("capabilities")
+        assert capabilities is not None
+        assert len(capabilities) == 1
+        assert isinstance(capabilities[0], Instrumentation)
 
     @pytest.mark.asyncio
     async def test_skills_capability_alongside_tools_and_mcp(self, mocker: MockerFixture) -> None:
@@ -1999,7 +2005,67 @@ class TestDirectExecutorWithSkills:
         assert "toolsets" in call_kwargs
         assert len(call_kwargs["toolsets"]) == 1
         assert "capabilities" in call_kwargs
-        assert call_kwargs["capabilities"] == [mock_cap]
+        assert mock_cap in call_kwargs["capabilities"]
+        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+
+
+class TestDirectExecutorInstrumentation:
+    """spawn: none emits pydantic-ai agent/model spans nested under step.execute (issue #263)."""
+
+    @pytest.mark.asyncio
+    async def test_model_request_path_is_instrumented(self, mocker: MockerFixture) -> None:
+        """The plain model_request call (_call_llm) is instrumented."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+
+        mocker.patch("cloud_agents.workflow.executor.step.direct.ensure_credentials_env")
+        mock_fn = _mock_model_response(mocker, text='{"ok": true}', input_tokens=1, output_tokens=1)
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        mock_fn.assert_called_once()
+        assert mock_fn.call_args.kwargs.get("instrument") is True
+
+    @pytest.mark.asyncio
+    async def test_agent_run_path_is_instrumented(self, mocker: MockerFixture) -> None:
+        """The Agent (tools/MCP/skills) path gets the Instrumentation capability."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import DirectExecutor
+        from cloud_agents.workflow.executor.step.tools import register_tool
+
+        register_tool("kubectl_get", _dummy_tool)
+
+        mocker.patch("cloud_agents.workflow.executor.step.direct.ensure_credentials_env")
+
+        mock_usage = mocker.MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 5
+        mock_result = mocker.MagicMock()
+        mock_result.output = '{"ok": true}'
+        mock_result.usage = mock_usage
+
+        mock_agent_cls = mocker.patch("cloud_agents.workflow.executor.step.direct.Agent")
+        mock_agent_instance = mocker.AsyncMock()
+        mock_agent_instance.run.return_value = mock_result
+        mock_agent_cls.return_value = mock_agent_instance
+
+        executor = DirectExecutor()
+        await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                tools=["kubectl_get"],
+            )
+        )
+
+        call_kwargs = mock_agent_cls.call_args.kwargs
+        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
 
 
 class TestDirectExecutorAllowedSkillsDefaults:
@@ -2101,7 +2167,8 @@ class TestDirectExecutorAllowedSkillsDefaults:
 
         mock_get_skills.assert_called_once_with(include=["k8s-diag"])
         call_kwargs = mock_agent_cls.call_args.kwargs
-        assert call_kwargs["capabilities"] == [mock_cap]
+        assert mock_cap in call_kwargs["capabilities"]
+        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
 
 
 class TestMessageHistory:
