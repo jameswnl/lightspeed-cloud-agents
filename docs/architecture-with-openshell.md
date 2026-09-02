@@ -88,12 +88,7 @@ No manual network policy YAML is required from workflow authors.
 
 ### Skills Access
 
-How skills are configured and scoped across all three spawn modes is documented in [tool-registry-architecture.md](tool-registry-architecture.md#tool-systems-by-spawn-mode). This section covers only how `OpenShellSpawner` enforces `allowed_skills` against the gateway for `spawn: ephemeral`.
-
-Skills are baked into the sandbox image under `/skills/<name>/...`. The spawner enforces the per-step `allowed_skills` allowlist with the gateway two ways, since a Landlock `PathBeneath` grant on `/skills/<name>` doesn't grant directory *listing* on the parent `/skills`:
-
-1. A Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills`, sent as part of the sandbox's filesystem policy at `CreateSandbox` time (non-advisory spawns only -- advisory/`read_only=True` spawns grant blanket read access for investigation).
-2. Before starting the agent server, the spawner execs the sandbox's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv (a gRPC `ExecSandbox` call), which copies just those names from `/skills` into `/app/skills`. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` so the agent's own skill discovery only sees the scoped subset.
+Skills are baked into the sandbox image under `/skills/<name>/...`, and which of those a step's agent may read is scoped by `allowed_skills` (part of the `ExecSandbox` call for `materialize-skills.sh` in the lifecycle above). For exactly how `OpenShellSpawner` enforces that against the gateway (Landlock grant + `materialize-skills.sh`), and how skill scoping compares across `spawn: none`/`local`/`ephemeral`, see [tool-registry-architecture.md](tool-registry-architecture.md#skill-enforcement-for-spawn-ephemeral).
 
 ## Configuring OpenShellSpawner
 
