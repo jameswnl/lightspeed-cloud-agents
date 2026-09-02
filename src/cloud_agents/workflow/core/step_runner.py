@@ -196,18 +196,20 @@ async def _run_step_inner(
         if val := os.environ.get(deploy_var):
             env_vars[deploy_var] = val
 
-    # Forward OTEL config and the current traceparent so the sandbox's
-    # own OTEL-aware agent process (a separate pod/network) can export to
-    # the same collector and nest its root span under sandbox.step
-    # (issue #263). No-op when tracing is disabled (init_tracing NoOp).
+    # Forward OTEL export config so the sandbox's own OTEL-aware agent
+    # process (a separate pod/network) can export to the same collector
+    # (issue #263). This is export config only -- it does NOT establish the
+    # parent-child span link; the sandbox parses `traceparent` from the
+    # /v1/agent/run request header (see http_headers below), not from env.
+    # No-op when tracing is disabled (init_tracing NoOp).
+    #
+    # KNOWN LIMITATION: the OpenShell network policy currently only allows
+    # egress to LLM/MCP hosts. Unless the collector host is already
+    # allowlisted, Landlock will block the sandbox's export traffic even
+    # though this env var is set.
     for otel_var in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL"):
         if val := os.environ.get(otel_var):
             env_vars[otel_var] = val
-
-    trace_headers: dict[str, str] = {}
-    inject_traceparent(trace_headers)
-    if "traceparent" in trace_headers:
-        env_vars["TRACEPARENT"] = trace_headers["traceparent"]
 
     secret_values: set[str] = set()
 
@@ -394,6 +396,14 @@ async def _run_step_inner(
             http_headers: dict[str, str] = {}
             if sandbox_auth_enabled and sandbox_auth_token:
                 http_headers["Authorization"] = f"Bearer {sandbox_auth_token}"
+
+            # lightspeed-agentic-sandbox parses `traceparent` from the
+            # incoming request header (query.py), not from env -- this is
+            # what actually nests the sandbox's root span under
+            # sandbox.step (issue #263). No-op when tracing is disabled
+            # (init_tracing NoOp). _collect_transcript() reuses this same
+            # dict below, so its GET call is linked too.
+            inject_traceparent(http_headers)
 
             # OpenShell-specific: merge gateway routing headers
             progress_task: asyncio.Task | None = None

@@ -164,14 +164,15 @@ class TestRunStep:
         assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
 
     @pytest.mark.asyncio
-    async def test_run_step_injects_traceparent_into_sandbox(
+    async def test_run_step_does_not_put_traceparent_in_sandbox_env(
         self,
         mock_spawner: AsyncMock,
         mock_http_success: None,
         step_input: dict[str, Any],
         mocker: MockerFixture,
     ) -> None:
-        """A traceparent header is injected into sandbox env_vars for span nesting (issue #263)."""
+        """TRACEPARENT is never put in sandbox env_vars -- the sandbox reads it from the
+        /v1/agent/run request header, not env (issue #263 review)."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
         def _fake_inject(headers: dict[str, str]) -> dict[str, str]:
@@ -188,17 +189,60 @@ class TestRunStep:
         await run_step(step_input, spawner=mock_spawner, attempt=1)
 
         call_kwargs = mock_spawner.spawn.call_args[1]
-        assert call_kwargs["env"]["TRACEPARENT"] == "00-aaaa-bbbb-01"
+        assert "TRACEPARENT" not in call_kwargs["env"]
 
     @pytest.mark.asyncio
-    async def test_run_step_no_traceparent_when_absent(
+    async def test_run_step_injects_traceparent_into_agent_run_request_headers(
+        self,
+        mock_spawner: AsyncMock,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """traceparent is sent as an HTTP header on the /v1/agent/run POST -- this is what
+        lightspeed-agentic-sandbox actually parses to parent its root span (query.py reads
+        request.headers.get("traceparent")), not env (issue #263 review)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {"summary": "done"}}
+        mock_transcript_response = mocker.MagicMock()
+        mock_transcript_response.status_code = 404
+
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        def _fake_inject(headers: dict[str, str]) -> dict[str, str]:
+            headers["traceparent"] = "00-aaaa-bbbb-01"
+            return headers
+
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=_fake_inject,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        mock_client.post.assert_called_once()
+        post_headers = mock_client.post.call_args.kwargs["headers"]
+        assert post_headers["traceparent"] == "00-aaaa-bbbb-01"
+
+    @pytest.mark.asyncio
+    async def test_run_step_no_traceparent_header_when_tracing_disabled(
         self,
         mock_spawner: AsyncMock,
         mock_http_success: None,
         step_input: dict[str, Any],
         mocker: MockerFixture,
     ) -> None:
-        """No TRACEPARENT env var is set when tracing is disabled (NoOp inject)."""
+        """No traceparent header is added when tracing is disabled (NoOp inject)."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
         mocker.patch(
             "cloud_agents.workflow.core.step_runner.inject_traceparent",
