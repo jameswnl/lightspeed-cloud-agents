@@ -3,7 +3,7 @@
 `spawn: ephemeral` steps run inside an OpenShell sandbox. `OpenShellSpawner` (`src/cloud_agents/spawner/openshell_spawner.py`) is the client that talks to an OpenShell gateway to create, drive, and tear down that sandbox. This doc covers the protocol between `OpenShellSpawner` and the gateway, and how to configure the client for the two auth setups in real use: **without OIDC** (dev) and **with OIDC** (prod).
 
 ```mermaid
-graph LR
+graph TD
     WR["Cloud Agents<br/><i>OpenShellSpawner (gRPC client)</i>"]
     GW["OpenShell Gateway"]
     SB["Sandbox<br/><i>Supervisor + agent runtime</i>"]
@@ -88,7 +88,9 @@ No manual network policy YAML is required from workflow authors.
 
 ### Skills Access
 
-Skills are baked into the sandbox image under `/skills/<name>/...`. Which of those a given step's agent can read is scoped per-step via `allowed_skills`. The spawner enforces this with the gateway two ways, since a Landlock `PathBeneath` grant on `/skills/<name>` doesn't grant directory *listing* on the parent `/skills`:
+The general skills model (`CLOUD_AGENTS_SKILLS_PATHS`, `allowed_skills` semantics, `spawn: none`/`local` parity, trust model) is documented in [CLAUDE.md's Skills section](../CLAUDE.md#skills). This section covers only how `OpenShellSpawner` enforces `allowed_skills` against the gateway for `spawn: ephemeral`.
+
+Skills are baked into the sandbox image under `/skills/<name>/...`. The spawner enforces the per-step `allowed_skills` allowlist with the gateway two ways, since a Landlock `PathBeneath` grant on `/skills/<name>` doesn't grant directory *listing* on the parent `/skills`:
 
 1. A Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills`, sent as part of the sandbox's filesystem policy at `CreateSandbox` time (non-advisory spawns only -- advisory/`read_only=True` spawns grant blanket read access for investigation).
 2. Before starting the agent server, the spawner execs the sandbox's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv (a gRPC `ExecSandbox` call), which copies just those names from `/skills` into `/app/skills`. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` so the agent's own skill discovery only sees the scoped subset.
