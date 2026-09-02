@@ -32,7 +32,7 @@ The framework provides the workflow engine, spawner, and observability. Product 
 Chain agents with conditions, retry, approval gates, escalation. Low-risk steps auto-approve; high-risk steps require human review.
 
 ### R3. Ephemeral-by-default [G2]
-Each agent step with `spawn: ephemeral` spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. `human-approval` steps do not spawn containers. Steps dispatch through a `StepExecutor` interface based on `spawn` mode: `ephemeral` (default) runs in sandbox containers, `local` runs pydantic-ai LLM calls in forked subprocesses for process-level isolation, `none` makes direct pydantic-ai LLM calls in-process. Tool support for `none` and `local` is planned (#131 PR B).
+Each agent step with `spawn: ephemeral` spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. `human-approval` steps do not spawn containers. Steps dispatch through a `StepExecutor` interface based on `spawn` mode: `ephemeral` (default) runs in sandbox containers, `local` runs pydantic-ai LLM calls in forked subprocesses for process-level isolation, `none` makes direct pydantic-ai LLM calls in-process. `none` and `local` both get tool support (`@step_tool` functions, MCP, and skills via `SkillsCapability`) when the step's `Agent.run()` path is used — see [tool-registry-architecture.md](tool-registry-architecture.md) for the full comparison across spawn modes.
 
 ### R4. Human-in-the-loop [G2]
 Diagnose → Propose → Gate → Execute → Verify. Structured output with risk levels. Approval gates pause workflows for human review.
@@ -69,27 +69,31 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 
 ```mermaid
 graph TD
-    subgraph cluster["K8s Cluster / Podman Host"]
-        subgraph platform["Platform Framework"]
-            WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
-            WR --- TW["Temporal Worker"]
-            WR --- SP["Spawner<br/><i>K8s Jobs / Podman</i>"]
-            WR --- DS["Definition Store"]
-        end
-
-        subgraph sandbox["Sandbox Container <i>(per step)</i>"]
-            RT["Runtime HTTP contract"]
-            AG["Agent runtime + tools"]
-            SK["/app/skills/ <i>(optional)</i>"]
-        end
-
+    subgraph runner_deploy["Workflow Runner Deployment <i>(K8s or Podman, dual target)</i>"]
+        WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
+        WR --- TW["Temporal Worker"]
+        WR --- SP["OpenShellSpawner<br/><i>gRPC client -- sole ephemeral spawner</i>"]
+        WR --- DS["Definition Store"]
         TS["Temporal Server<br/><i>durable execution + state</i>"]
-        LLM["LLM Provider<br/><i>OpenAI / Vertex / other</i>"]
     end
 
-    WR -- "spawn / destroy" --> sandbox
+    subgraph external["Externally-Supplied OpenShell Gateway <i>(see architecture-with-openshell.md)</i>"]
+        GW["OpenShell Gateway"]
+        subgraph sandbox["Sandbox <i>(per step)</i>"]
+            RT["Runtime HTTP contract"]
+            AG["Agent runtime + tools"]
+            SK["/skills/ <i>(baked into image, allowed_skills-scoped)</i>"]
+        end
+    end
+
+    LLM["LLM Provider<br/><i>OpenAI / Vertex / other</i>"]
+
+    WR -- "gRPC: spawn / destroy" --> GW
+    GW -- "spawn + inject supervisor" --> sandbox
     WR -- "gRPC" --> TS
-    sandbox -- "HTTPS" --> LLM
+    sandbox -- "HTTPS<br/>(gateway egress policy)" --> LLM
+
+    style external fill:#1c2128,stroke:#a371f7,stroke-dasharray: 5 5
 ```
 
 ### Workflow Runner
@@ -124,15 +128,15 @@ The sandbox is an HTTP service that receives a step request from the workflow en
 | `LIGHTSPEED_PROVIDER` env var | LLM provider identifier (claude, openai, gemini) |
 | `LIGHTSPEED_MODEL` env var | Model name or ID |
 | `LIGHTSPEED_MODEL_PROVIDER` env var (optional) | LLM provider type for SDK routing (e.g. azure_openai). Set from workflow `provider.model_provider` or inherited from runner env |
-| Credential Secret (via `credentials_secret`) | Provider credentials (K8s Secret volume mount or env var) |
+| Credential Secret (via `credentials_secret`) | Resolved to a provider env var (e.g. `OPENAI_API_KEY`) before the spawn call. For `spawn: ephemeral`, `OpenShellSpawner` delivers it to the sandbox via the gateway's Provider API, not a K8s Secret volume mount -- see [architecture-with-openshell.md](architecture-with-openshell.md#credential-injection) |
 | `LIGHTSPEED_MCP_SERVERS` env var (optional) | MCP server configs with file-reference secret headers |
-| `LIGHTSPEED_SERVICE_ACCOUNT` env var (optional) | Kubernetes ServiceAccount name from step `permissions.service_account` |
+| `LIGHTSPEED_SERVICE_ACCOUNT` env var (optional) | Dead under `OpenShellSpawner`, the sole ephemeral spawner -- it logs a warning ("OpenShell manages identity") and does not apply the override. Only meaningful for a hypothetical Kubernetes-native spawner |
 | Deployment provider env vars (optional) | `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION` |
-| `SANDBOX_TLS_CERT_PATH` / `SANDBOX_TLS_KEY_PATH` env vars (optional) | Paths to ephemeral TLS cert and key injected by the spawner when `SANDBOX_TLS_MODE=app` |
-| `AGENT_API_TOKEN` env var (optional) | Runner-to-sandbox bearer auth token. Injected when `SANDBOX_AUTH_ENABLED=true`. Sandbox validates via `BearerAuthMiddleware` |
+| `SANDBOX_TLS_CERT_PATH` / `SANDBOX_TLS_KEY_PATH` env vars (optional) | App-level ephemeral mTLS cert/key when `SANDBOX_TLS_MODE=app` -- for a hypothetical Kubernetes-native spawner only; `OpenShellSpawner` doesn't use `SANDBOX_TLS_MODE` (its query-time TLS trust comes from the gateway instead, see `workflow/security/tls.py`) |
+| `AGENT_API_TOKEN` env var (optional) | Runner-to-sandbox bearer auth token. Injected when `SANDBOX_AUTH_ENABLED=true`. Sandbox validates via `BearerAuthMiddleware`. Independent of and in addition to the gateway's own per-sandbox JWT auth for `spawn: ephemeral` |
 | `AGENT_EVENT_LOG` env var | Path where the sandbox writes structured JSONL events (`/tmp/agent-events.jsonl`). Activates the EventLogger file sink for transcript collection |
-| `/app/skills/` (optional) | Domain knowledge packages from skills OCI image |
-| `LIGHTSPEED_SKILLS_DIR` env var (optional) | Path where the skills OCI image content is mounted in the sandbox (default `/app/skills`) |
+| `/skills/<name>/` (optional) | Skills baked into the sandbox image at build time (not mounted at runtime), scoped per-step via `allowed_skills`. See [tool-registry-architecture.md](tool-registry-architecture.md#skill-enforcement-for-spawn-ephemeral) for the `spawn: ephemeral` Landlock/`materialize-skills.sh` enforcement mechanism |
+| `LIGHTSPEED_SKILLS_DIR` env var (optional, `spawn: ephemeral` only) | Set by `OpenShellSpawner` to `/app/skills`, the Landlock-scoped subset `materialize-skills.sh` copies over. `spawn: none`/`local` use a separate mechanism -- the operator-configured `CLOUD_AGENTS_SKILLS_PATHS` env var, read directly by `SkillsCapability` |
 
 The architecture treats the runtime interface generically: the workflow engine sends a prompt plus workflow context and receives structured output. Exact route shapes and runtime adapters are implementation details.
 
@@ -148,16 +152,19 @@ Temporal provides durable execution for workflow runs:
 
 ### Dual Deployment
 
+G5's "Kubernetes and Podman Deployment Targets" is about how the **workflow runner itself** (plus Temporal and its own state) is deployed -- it doesn't describe ephemeral sandbox spawning, which is uniformly gateway-mediated through `OpenShellSpawner` regardless of which target the runner runs on (see [architecture-with-openshell.md](architecture-with-openshell.md)):
+
 | Capability | Kubernetes | Podman |
 |-----------|-----------|--------|
-| Ephemeral spawning | K8s Jobs + Services | Podman containers + port mapping |
-| Networking | K8s Services + ClusterIP DNS | Podman network + container DNS |
-| RBAC | ServiceAccounts + RoleBindings | OS-level access control |
-| NetworkPolicy | Enforced by CNI (enabled by default) | Host firewall rules ([docs](DEPLOYMENT.md#podman)) |
+| Workflow runner + Temporal + PostgreSQL | K8s Deployments/StatefulSets (Helm) | Podman containers (`podman compose`) |
+| Networking (runner ↔ Temporal/Postgres/gateway) | K8s Services + ClusterIP DNS | Podman network + container DNS |
+| Runner API auth/RBAC | ServiceAccounts + RoleBindings (see [rbac.md](rbac.md)) | OS-level access control |
+| Runner's own NetworkPolicy | Enforced by CNI, scoped to the `workflow-runner` pod's ingress/egress (enabled by default) | Host firewall rules ([docs](DEPLOYMENT.md#podman)) |
 | Durable execution | Temporal deployment | Temporal deployment |
 | Config distribution | Env vars + K8s Secrets | Env vars |
+| Ephemeral spawning (`spawn: ephemeral`) | Identical either way -- gRPC to an externally-supplied OpenShell gateway; not provisioned by this repo's own manifests | Identical either way -- gRPC to an externally-supplied OpenShell gateway; not provisioned by this repo's own manifests |
 
-The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent while allowing deployment-specific controls.
+The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent while allowing deployment-specific controls for the runner itself.
 
 ### Security
 
@@ -171,9 +178,9 @@ The spawner abstraction (`AgentSpawner`) keeps workflow behavior consistent whil
 - **Concurrency cap** — `MAX_SPAWNED_PODS` prevents resource exhaustion
 - **MCP secret allowlist** — `MCP_ALLOWED_SECRETS` restricts which secrets can be mounted; file-reference headers keep secrets out of env vars
 - **Resource limits** — `SpawnConfig` enforces CPU (max 4 cores) and memory (max 4Gi) bounds with Pydantic validators
-- **Network egress enforcement** — NetworkPolicy restricts sandbox egress to DNS and explicitly configured LLM provider CIDRs (`llmCidrs`). Enabled by default in Helm. Podman deployments use host firewall rules. See [DEPLOYMENT.md](DEPLOYMENT.md#network-egress-policy).
+- **Network egress enforcement (workflow runner)** — NetworkPolicy restricts the `workflow-runner` pod's own egress to Temporal, the OpenShell gateway, DNS, and explicitly configured LLM provider CIDRs (`llmCidrs`) -- the latter matters for `spawn: none`/`local`'s direct in-process/subprocess LLM calls, which egress from the runner pod itself. Enabled by default in Helm. Podman deployments use host firewall rules. See [DEPLOYMENT.md](DEPLOYMENT.md#network-egress-policy). The Helm chart also ships a `*-sandbox-egress` NetworkPolicy selecting pods labeled `spawned-by: workflow-runner`, dating from a pre-OpenShell (issue #198) direct-spawning model -- it's unlikely to match anything under `OpenShellSpawner`, since sandbox pods are created by the externally-supplied gateway's own compute driver, which has no reason to apply that label. `spawn: ephemeral` sandbox egress is instead enforced entirely by the OpenShell gateway's own L7 policy, derived per-spawn by `OpenShellSpawner` -- see [architecture-with-openshell.md](architecture-with-openshell.md#network-policy).
 - **Per-user rate limiting** — token bucket middleware (`RATE_LIMIT_ENABLED`) with sha256-hashed bearer token keys, 429 + Retry-After header, Prometheus counter. Health/metrics endpoints exempt.
-- **App-level TLS** — ephemeral self-signed CA + per-sandbox certs generated at spawn time (`SANDBOX_TLS_MODE=app`). K8s: cert Secret mount. Podman: temp dir bind mount. Service mesh deployments (`SANDBOX_TLS_MODE=mesh`) skip app-level TLS.
+- **App-level TLS** — ephemeral self-signed CA + per-sandbox certs generated at spawn time (`SANDBOX_TLS_MODE=app`). K8s: cert Secret mount. Podman: temp dir bind mount. Service mesh deployments (`SANDBOX_TLS_MODE=mesh`) skip app-level TLS. Only meaningful for a hypothetical Kubernetes-native spawner -- `OpenShellSpawner`, the sole ephemeral spawner, doesn't use `SANDBOX_TLS_MODE`; its query-time TLS trust comes from the gateway's own TLS termination instead.
 - **Sandbox heartbeat + timeout** — `activity.heartbeat()` during sandbox HTTP calls with 180s timeout. Cancellation detected via `asyncio.CancelledError`, ensures `destroy()` runs. `ls_sandbox_timeout_total` metric.
 
 **Partial** (see [archived implementation plan](archived/gaps-implementation-plan.md) for history; open items now tracked as GitHub issues):
