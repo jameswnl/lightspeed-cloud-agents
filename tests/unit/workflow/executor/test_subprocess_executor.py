@@ -482,8 +482,10 @@ class TestSubprocessChildStderrSurfacing:
                     json.dumps(
                         {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
                     ).encode(),
-                    b"WARNING:cloud_agents.workflow.executor.step.subprocess_child:"
-                    b"Native structured output not supported, falling back\n",
+                    (
+                        b"WARNING:cloud_agents.workflow.executor.step.subprocess_child:"
+                        b"Native structured output not supported, falling back\n"
+                    ),
                 )
             )
             proc.returncode = 0
@@ -528,6 +530,44 @@ class TestSubprocessChildStderrSurfacing:
             await _run_in_subprocess({"prompt": "hi", "step_name": "triage"})
 
         assert caplog.records == []
+
+    @pytest.mark.asyncio
+    async def test_stdout_preserved_when_stderr_has_invalid_utf8(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Non-UTF-8 stderr on a successful run doesn't crash the result.
+
+        Regression test for a CodeRabbit finding on #256: `stderr.decode()`
+        without an explicit error policy defaults to strict UTF-8, so a
+        returncode-0 child that happens to write invalid UTF-8 bytes to
+        stderr would raise UnicodeDecodeError here and turn an otherwise
+        successful run into a hard failure.
+        """
+        from cloud_agents.workflow.executor.step.subprocess_exec import _run_in_subprocess
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> Any:
+            proc = mocker.AsyncMock()
+            proc.communicate = mocker.AsyncMock(
+                return_value=(
+                    json.dumps(
+                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                    ).encode(),
+                    b"\xff\xfe not valid utf-8",
+                )
+            )
+            proc.returncode = 0
+            return proc
+
+        mocker.patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess)
+
+        with caplog.at_level(
+            "WARNING", logger="cloud_agents.workflow.executor.step.subprocess_exec"
+        ):
+            result = await _run_in_subprocess({"prompt": "hi", "step_name": "triage"})
+
+        assert result["status"] == "completed"
+        assert result["output"] == {"ok": True}
+        assert any("triage" in record.message for record in caplog.records)
 
 
 class TestSubprocessChildModuleInvocation:
