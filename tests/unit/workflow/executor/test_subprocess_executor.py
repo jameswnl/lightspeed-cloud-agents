@@ -455,6 +455,81 @@ class TestSubprocessTraceparentPropagation:
         assert "TRACEPARENT" not in captured_env
 
 
+class TestSubprocessChildStderrSurfacing:
+    """Tests for surfacing child stderr on a successful run (#235 follow-up).
+
+    subprocess_child.py logs a warning to stderr when native structured
+    output falls back to the prompt-text schema hint (see
+    test_subprocess_child.py's TestRunModelRequestNativeStructuredOutput
+    fallback-logging tests). Previously stderr was only read and used to
+    build an error message when the child exited non-zero -- on success
+    (returncode 0) it was silently discarded, so that warning never
+    reached the workflow runner's logs. This surfaces non-empty stderr
+    from a successful child run via the parent's own logger.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stderr_logged_on_successful_run(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Non-empty stderr from a returncode-0 child is logged as a warning."""
+        from cloud_agents.workflow.executor.step.subprocess_exec import _run_in_subprocess
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> Any:
+            proc = mocker.AsyncMock()
+            proc.communicate = mocker.AsyncMock(
+                return_value=(
+                    json.dumps(
+                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                    ).encode(),
+                    b"WARNING:cloud_agents.workflow.executor.step.subprocess_child:"
+                    b"Native structured output not supported, falling back\n",
+                )
+            )
+            proc.returncode = 0
+            return proc
+
+        mocker.patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess)
+
+        with caplog.at_level(
+            "WARNING", logger="cloud_agents.workflow.executor.step.subprocess_exec"
+        ):
+            result = await _run_in_subprocess({"prompt": "hi", "step_name": "triage"})
+
+        assert result["status"] == "completed"
+        assert any("falling back" in record.message for record in caplog.records)
+        assert any("triage" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_no_log_when_stderr_empty(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Empty stderr on a successful run produces no warning log."""
+        from cloud_agents.workflow.executor.step.subprocess_exec import _run_in_subprocess
+
+        async def mock_create_subprocess(*args: Any, **kwargs: Any) -> Any:
+            proc = mocker.AsyncMock()
+            proc.communicate = mocker.AsyncMock(
+                return_value=(
+                    json.dumps(
+                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                    ).encode(),
+                    b"",
+                )
+            )
+            proc.returncode = 0
+            return proc
+
+        mocker.patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess)
+
+        with caplog.at_level(
+            "WARNING", logger="cloud_agents.workflow.executor.step.subprocess_exec"
+        ):
+            await _run_in_subprocess({"prompt": "hi", "step_name": "triage"})
+
+        assert caplog.records == []
+
+
 class TestSubprocessChildModuleInvocation:
     """Tests verifying subprocess uses module invocation."""
 

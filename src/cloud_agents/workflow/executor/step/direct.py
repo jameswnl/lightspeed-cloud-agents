@@ -37,6 +37,9 @@ from cloud_agents.workflow.executor.step.base import (
     StepResult,
     StreamEvent,
 )
+from cloud_agents.workflow.executor.step.native_output import (
+    supports_native_output as _supports_native_output,
+)
 from cloud_agents.workflow.executor.step.provider import ensure_credentials_env, to_model_string
 from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools
@@ -109,29 +112,6 @@ def _build_user_prompt(step_input: StepInput) -> str:
         user_content = f"{user_content}\n\nRespond with JSON matching this schema:\n{schema_str}"
 
     return user_content
-
-
-def _supports_native_output(output_schema: dict[str, Any]) -> bool:
-    """Whether output_schema's root shape is safe to send via native structured output.
-
-    output_schema is user-authored workflow YAML, not internally
-    guaranteed to be an object-rooted JSON Schema. OpenAI's Structured
-    Outputs (what output_mode="native" maps to) requires an object root
-    -- a top-level array or anyOf/oneOf/allOf union can be rejected by
-    the provider. That rejection isn't a pydantic-ai UserError, so it
-    wouldn't be caught by the existing native-mode fallback (which
-    intentionally only retries on UserError and lets genuine API errors
-    propagate, see test_non_user_error_propagates_without_fallback) --
-    the schema shape has to be checked before attempting native mode,
-    not recovered from after.
-
-    Parameters:
-        output_schema: The step's requested JSON Schema.
-
-    Returns:
-        True if output_schema has an object root.
-    """
-    return output_schema.get("type") == "object"
 
 
 async def _call_llm(

@@ -115,6 +115,14 @@ async def _run_in_subprocess(
         error_msg = stderr.decode().strip() if stderr else "Unknown error"
         raise RuntimeError(f"Child process exited with code {proc.returncode}: {error_msg}")
 
+    stderr_text = stderr.decode().strip() if stderr else ""
+    if stderr_text:
+        logger.warning(
+            "SubprocessExecutor child stderr for step '%s': %s",
+            step_input_dict.get("step_name", "unknown"),
+            stderr_text,
+        )
+
     try:
         return json.loads(stdout.decode())
     except json.JSONDecodeError as exc:
