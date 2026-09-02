@@ -9,6 +9,15 @@ from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pytest_mock import MockerFixture
 
 
+def _assert_redacted_instrumentation(capabilities: list) -> None:
+    """Assert capabilities include an Instrumentation cap with content redacted (issue #263)."""
+    instrumentation_caps = [c for c in capabilities if isinstance(c, Instrumentation)]
+    assert len(instrumentation_caps) == 1
+    settings = instrumentation_caps[0].settings
+    assert settings.include_content is False
+    assert settings.include_binary_content is False
+
+
 class TestDirectExecutorInstantiation:
     """Tests for DirectExecutor creation."""
 
@@ -1839,7 +1848,7 @@ class TestDirectExecutorWithSkills:
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
         assert mock_cap in call_kwargs["capabilities"]
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
     @pytest.mark.asyncio
     async def test_skills_only_uses_agent_path(self, mocker: MockerFixture) -> None:
@@ -1886,7 +1895,7 @@ class TestDirectExecutorWithSkills:
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
         assert mock_cap in call_kwargs["capabilities"]
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
     @pytest.mark.asyncio
     async def test_agent_only_instrumentation_capability_when_skills_path_unset(
@@ -1936,8 +1945,7 @@ class TestDirectExecutorWithSkills:
         call_kwargs = mock_agent_cls.call_args.kwargs
         capabilities = call_kwargs.get("capabilities")
         assert capabilities is not None
-        assert len(capabilities) == 1
-        assert isinstance(capabilities[0], Instrumentation)
+        _assert_redacted_instrumentation(capabilities)
 
     @pytest.mark.asyncio
     async def test_skills_capability_alongside_tools_and_mcp(self, mocker: MockerFixture) -> None:
@@ -2006,7 +2014,7 @@ class TestDirectExecutorWithSkills:
         assert len(call_kwargs["toolsets"]) == 1
         assert "capabilities" in call_kwargs
         assert mock_cap in call_kwargs["capabilities"]
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
 
 class TestDirectExecutorInstrumentation:
@@ -2030,7 +2038,10 @@ class TestDirectExecutorInstrumentation:
         )
 
         mock_fn.assert_called_once()
-        assert mock_fn.call_args.kwargs.get("instrument") is True
+        instrument = mock_fn.call_args.kwargs.get("instrument")
+        assert instrument is not None
+        assert instrument.include_content is False
+        assert instrument.include_binary_content is False
 
     @pytest.mark.asyncio
     async def test_agent_run_path_is_instrumented(self, mocker: MockerFixture) -> None:
@@ -2065,7 +2076,7 @@ class TestDirectExecutorInstrumentation:
         )
 
         call_kwargs = mock_agent_cls.call_args.kwargs
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
 
 class TestDirectExecutorAllowedSkillsDefaults:
@@ -2168,7 +2179,7 @@ class TestDirectExecutorAllowedSkillsDefaults:
         mock_get_skills.assert_called_once_with(include=["k8s-diag"])
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert mock_cap in call_kwargs["capabilities"]
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
 
 class TestMessageHistory:

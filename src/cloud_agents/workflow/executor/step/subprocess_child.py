@@ -27,7 +27,11 @@ from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
-from cloud_agents.runtime.tracing import extract_traceparent, init_tracing
+from cloud_agents.runtime.tracing import (
+    extract_traceparent,
+    get_instrumentation_settings,
+    init_tracing,
+)
 from cloud_agents.workflow.executor.step.native_output import (
     supports_native_output as _supports_native_output,
 )
@@ -248,7 +252,7 @@ async def _run_with_agent(
             active_toolsets.append(active_ts)
 
         # Build capabilities (already resolved in _run; passed through to avoid double call)
-        capabilities = [Instrumentation()]
+        capabilities = [Instrumentation(settings=get_instrumentation_settings())]
         if skills_cap is None and input_data.get("allowed_skills") is not None:
             # Fallback for direct _run_with_agent calls in tests that bypass _run
             skills_cap = get_skills_capability(include=input_data.get("allowed_skills"))
@@ -327,7 +331,7 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
                 [request],
                 model_settings={"timeout": timeout_seconds},
                 model_request_parameters=native_params,
-                instrument=True,
+                instrument=get_instrumentation_settings(),
             )
         except UserError as exc:
             logger.warning(
@@ -351,7 +355,7 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
             model_string,
             [request],
             model_settings={"timeout": timeout_seconds},
-            instrument=True,
+            instrument=get_instrumentation_settings(),
         )
 
     content = response.text

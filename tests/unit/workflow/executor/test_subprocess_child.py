@@ -12,6 +12,15 @@ from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pytest_mock import MockerFixture
 
 
+def _assert_redacted_instrumentation(capabilities: list) -> None:
+    """Assert capabilities include an Instrumentation cap with content redacted (issue #263)."""
+    instrumentation_caps = [c for c in capabilities if isinstance(c, Instrumentation)]
+    assert len(instrumentation_caps) == 1
+    settings = instrumentation_caps[0].settings
+    assert settings.include_content is False
+    assert settings.include_binary_content is False
+
+
 class TestSubprocessChildMain:
     """Tests for subprocess_child.main() function."""
 
@@ -810,7 +819,7 @@ class TestSubprocessChildWithSkills:
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
         assert mock_cap in call_kwargs["capabilities"]
-        assert any(isinstance(c, Instrumentation) for c in call_kwargs["capabilities"])
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
     def test_child_agent_only_instrumentation_capability_when_env_unset(
         self, mocker: MockerFixture
@@ -869,8 +878,7 @@ class TestSubprocessChildWithSkills:
         call_kwargs = mock_agent_cls.call_args.kwargs
         capabilities = call_kwargs.get("capabilities")
         assert capabilities is not None
-        assert len(capabilities) == 1
-        assert isinstance(capabilities[0], Instrumentation)
+        _assert_redacted_instrumentation(capabilities)
 
 
 class TestSubprocessChildInstrumentation:
@@ -918,7 +926,10 @@ class TestSubprocessChildInstrumentation:
         main()
 
         mock_fn.assert_called_once()
-        assert mock_fn.call_args.kwargs.get("instrument") is True
+        instrument = mock_fn.call_args.kwargs.get("instrument")
+        assert instrument is not None
+        assert instrument.include_content is False
+        assert instrument.include_binary_content is False
 
     def test_main_initializes_tracing(self, mocker: MockerFixture) -> None:
         """main() calls init_tracing() at startup so pydantic-ai spans can export."""

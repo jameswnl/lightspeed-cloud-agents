@@ -32,6 +32,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
+from cloud_agents.runtime.tracing import get_instrumentation_settings
 from cloud_agents.workflow.executor.step.base import (
     StepExecutor,
     StepInput,
@@ -168,7 +169,7 @@ async def _call_llm(
                 [request],
                 model_settings={"timeout": timeout_seconds},
                 model_request_parameters=native_params,
-                instrument=True,
+                instrument=get_instrumentation_settings(),
             )
         except UserError as exc:
             logger.warning(
@@ -203,7 +204,7 @@ async def _call_llm(
             model_string,
             [request],
             model_settings={"timeout": timeout_seconds},
-            instrument=True,
+            instrument=get_instrumentation_settings(),
         )
 
     usage = response.usage
@@ -422,7 +423,7 @@ class DirectExecutor(StepExecutor):
                     active_ts = await stack.enter_async_context(ts)
                     active_toolsets.append(active_ts)
 
-                capabilities = [Instrumentation()]
+                capabilities = [Instrumentation(settings=get_instrumentation_settings())]
                 skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
                 if skills_cap:
                     capabilities.append(skills_cap)
@@ -542,7 +543,7 @@ class DirectExecutor(StepExecutor):
                 active_toolsets.append(active_ts)
 
             # Build capabilities
-            capabilities = [Instrumentation()]
+            capabilities = [Instrumentation(settings=get_instrumentation_settings())]
             if skills_cap is None:
                 skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
             if skills_cap:
