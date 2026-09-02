@@ -30,6 +30,7 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
         description: str,
         env_var: str,
         host: str,
+        allowed_requests: list[tuple[str, str]],
     ) -> "openshell_pb2.ProviderProfile":
         return openshell_pb2.ProviderProfile(
             id=profile_id,
@@ -53,8 +54,20 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
                     host=host,
                     port=443,
                     protocol="rest",
-                    access="read-write",
                     enforcement="enforce",
+                    # Explicit L7 allowlist (issue #247), not the broad
+                    # `access: "read-write"` preset -- that permitted
+                    # unrestricted POST/PUT/PATCH to any path on this host,
+                    # not just the inference endpoints the sandboxed LLM
+                    # client actually calls (CodeRabbit finding on PR #246).
+                    # `access` and `rules` are mutually exclusive
+                    # (proto/sandbox.proto), so this omits `access` entirely.
+                    rules=[
+                        sandbox_pb2.L7Rule(
+                            allow=sandbox_pb2.L7Allow(method=method, path=path)
+                        )
+                        for method, path in allowed_requests
+                    ],
                 )
             ],
             binaries=[
@@ -67,9 +80,25 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
         "openai": _profile(
             "openai", "OpenAI", "OpenAI inference endpoints",
             "OPENAI_API_KEY", "api.openai.com",
+            # pydantic-ai's OpenAIChatModel (default for a bare "openai:..."
+            # model string) posts to /v1/chat/completions; OpenAIResponsesModel
+            # (only used if a step explicitly configures "openai-responses:...")
+            # posts to /v1/responses. Both are allowed since either could be
+            # configured.
+            allowed_requests=[
+                ("POST", "/v1/chat/completions"),
+                ("POST", "/v1/responses"),
+            ],
         ),
         "anthropic": _profile(
             "anthropic", "Anthropic", "Anthropic inference endpoints",
             "ANTHROPIC_API_KEY", "api.anthropic.com",
+            # pydantic-ai's AnthropicModel posts to /v1/messages (via
+            # client.beta.messages.create -- "beta" is a `?beta=true` query
+            # param on that same path, not a different route). Does not
+            # cover /v1/messages/count_tokens: that's only hit if a step
+            # sets UsageLimits.count_tokens_before_request=True, which
+            # defaults to False and isn't used anywhere in this codebase.
+            allowed_requests=[("POST", "/v1/messages")],
         ),
     }
