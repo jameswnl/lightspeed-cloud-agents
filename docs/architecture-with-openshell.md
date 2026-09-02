@@ -88,7 +88,7 @@ No manual network policy YAML is required from workflow authors.
 
 ### Skills Access
 
-The general skills model (`CLOUD_AGENTS_SKILLS_PATHS`, `allowed_skills` semantics, `spawn: none`/`local` parity, trust model) is documented in [CLAUDE.md's Skills section](../CLAUDE.md#skills). This section covers only how `OpenShellSpawner` enforces `allowed_skills` against the gateway for `spawn: ephemeral`.
+How skills are configured and scoped across all three spawn modes is documented in [tool-registry-architecture.md](tool-registry-architecture.md#tool-systems-by-spawn-mode). This section covers only how `OpenShellSpawner` enforces `allowed_skills` against the gateway for `spawn: ephemeral`.
 
 Skills are baked into the sandbox image under `/skills/<name>/...`. The spawner enforces the per-step `allowed_skills` allowlist with the gateway two ways, since a Landlock `PathBeneath` grant on `/skills/<name>` doesn't grant directory *listing* on the parent `/skills`:
 
