@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
 import sys
@@ -24,12 +25,17 @@ from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
+from cloud_agents.workflow.executor.step.native_output import (
+    supports_native_output as _supports_native_output,
+)
 from cloud_agents.workflow.executor.step.provider import (
     ensure_credentials_env,
     to_model_string,
 )
 from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
+
+logger = logging.getLogger(__name__)
 
 _TOOLS_MODULE_ENV = "CLOUD_AGENTS_TOOLS_MODULE"
 
@@ -112,23 +118,6 @@ def _build_user_content(input_data: dict[str, Any]) -> str:
         user_content += f"\n\nRespond with valid JSON matching this schema:\n{schema_text}"
 
     return user_content
-
-
-def _supports_native_output(output_schema: dict[str, Any]) -> bool:
-    """Whether output_schema's root shape is safe to send via native structured output.
-
-    Mirrors direct.py#_supports_native_output -- output_schema is
-    user-authored workflow YAML, not internally guaranteed to be an
-    object-rooted JSON Schema, and OpenAI's Structured Outputs (what
-    output_mode="native" maps to) requires an object root.
-
-    Parameters:
-        output_schema: The step's requested JSON Schema.
-
-    Returns:
-        True if output_schema has an object root.
-    """
-    return output_schema.get("type") == "object"
 
 
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
@@ -327,11 +316,22 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
                 model_settings={"timeout": timeout_seconds},
                 model_request_parameters=native_params,
             )
-        except UserError:
-            pass
+        except UserError as exc:
+            logger.warning(
+                "Native structured output not supported for %s, falling back to "
+                "prompt-based schema hint: %s",
+                model_string,
+                exc,
+            )
         except ModelHTTPError as exc:
             if exc.status_code != 400:
                 raise
+            logger.warning(
+                "Native structured output rejected (400) for %s, falling back to "
+                "prompt-based schema hint: %s",
+                model_string,
+                exc,
+            )
 
     if response is None:
         response = await model_request(

@@ -1126,3 +1126,61 @@ class TestRunModelRequestNativeStructuredOutput:
             await _run_model_request(self._base_input({"type": "object"}))
 
         assert mock_fn.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_user_error_fallback_logs_warning(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """UserError fallback is logged, so a silent native-mode degradation is
+        visible in SubprocessExecutor's surfaced stderr (#235 follow-up)."""
+        from pydantic_ai.exceptions import UserError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=[UserError("native mode not supported"), mock_response],
+        )
+
+        with caplog.at_level(
+            "WARNING", logger="cloud_agents.workflow.executor.step.subprocess_child"
+        ):
+            await _run_model_request(self._base_input({"type": "object"}))
+
+        assert any("falling back" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_400_fallback_logs_warning(
+        self, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 400 ModelHTTPError fallback is also logged."""
+        from pydantic_ai.exceptions import ModelHTTPError
+        from pydantic_ai.usage import RequestUsage
+
+        from cloud_agents.workflow.executor.step.subprocess_child import _run_model_request
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=5, output_tokens=5)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            side_effect=[
+                ModelHTTPError(status_code=400, model_name="gpt-4o-mini", body="bad schema"),
+                mock_response,
+            ],
+        )
+
+        with caplog.at_level(
+            "WARNING", logger="cloud_agents.workflow.executor.step.subprocess_child"
+        ):
+            await _run_model_request(self._base_input({"type": "object"}))
+
+        assert any("falling back" in record.message for record in caplog.records)
