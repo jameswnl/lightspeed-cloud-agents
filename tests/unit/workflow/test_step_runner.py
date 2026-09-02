@@ -115,6 +115,181 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
+    async def test_run_step_forwards_otel_endpoint_to_sandbox(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """OTEL_EXPORTER_OTLP_ENDPOINT/PROTOCOL are forwarded into sandbox env_vars (issue #263)."""
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "sk-test",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.otel.svc:4317",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+            },
+            clear=False,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector.otel.svc:4317"
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_PROTOCOL"] == "grpc"
+
+    @pytest.mark.asyncio
+    async def test_run_step_omits_otel_endpoint_when_unset(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No OTEL env vars are forwarded when the runner itself has none set."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_PROTOCOL", raising=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in call_kwargs["env"]
+        assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
+
+    @pytest.mark.asyncio
+    async def test_run_step_does_not_forward_unsupported_otel_protocol_to_sandbox(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """http/protobuf is not forwarded -- the current sandbox image only honors gRPC
+        export, so silently forwarding an unsupported protocol would break export
+        without anyone noticing (issue #263 review)."""
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "sk-test",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.otel.svc:4318",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            },
+            clear=False,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        with caplog.at_level("WARNING"):
+            await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        # Endpoint still forwarded (export config), protocol is not.
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector.otel.svc:4318"
+        assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
+        assert "http/protobuf" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_run_step_does_not_put_traceparent_in_sandbox_env(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """TRACEPARENT is never put in sandbox env_vars -- the sandbox reads it from the
+        /v1/agent/run request header, not env (issue #263 review)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        def _fake_inject(headers: dict[str, str]) -> dict[str, str]:
+            headers["traceparent"] = "00-aaaa-bbbb-01"
+            return headers
+
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=_fake_inject,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert "TRACEPARENT" not in call_kwargs["env"]
+
+    @pytest.mark.asyncio
+    async def test_run_step_injects_traceparent_into_agent_run_request_headers(
+        self,
+        mock_spawner: AsyncMock,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """traceparent is sent as an HTTP header on the /v1/agent/run POST -- this is what
+        lightspeed-agentic-sandbox actually parses to parent its root span (query.py reads
+        request.headers.get("traceparent")), not env (issue #263 review)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {"summary": "done"}}
+        mock_transcript_response = mocker.MagicMock()
+        mock_transcript_response.status_code = 404
+
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        def _fake_inject(headers: dict[str, str]) -> dict[str, str]:
+            headers["traceparent"] = "00-aaaa-bbbb-01"
+            return headers
+
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=_fake_inject,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        mock_client.post.assert_called_once()
+        post_headers = mock_client.post.call_args.kwargs["headers"]
+        assert post_headers["traceparent"] == "00-aaaa-bbbb-01"
+
+    @pytest.mark.asyncio
+    async def test_run_step_no_traceparent_header_when_tracing_disabled(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """No traceparent header is added when tracing is disabled (NoOp inject)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mocker.patch(
+            "cloud_agents.workflow.core.step_runner.inject_traceparent",
+            side_effect=lambda headers: headers,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert "TRACEPARENT" not in call_kwargs["env"]
+
+    @pytest.mark.asyncio
     async def test_run_step_forwards_allowed_skills_to_spawner(
         self,
         mock_spawner: AsyncMock,

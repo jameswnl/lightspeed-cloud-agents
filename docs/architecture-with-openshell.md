@@ -86,6 +86,8 @@ provider:
 
 No manual network policy YAML is required from workflow authors.
 
+**Known limitation (issue #263):** `step_runner.py` forwards `OTEL_EXPORTER_OTLP_ENDPOINT` into the sandbox's `env_vars` when set on the runner, so the sandbox's own OTEL-aware process knows where to export spans. This env forwarding does **not** add an egress rule for the collector host -- none of the three rules above cover it. Unless the collector happens to be reachable via an already-allowed host (or the sandbox's network policy is otherwise permissive), Landlock will block the export traffic even though the env var is set. The sandbox image's own tracer currently always uses the gRPC exporter regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`, so `step_runner.py` only forwards that variable when it's `grpc` -- an `http/protobuf` runner config is left unforwarded (with a warning logged) rather than silently forwarded and ignored, until the sandbox image itself (a separate repo, `lightspeed-agentic-sandbox`) adds protocol-aware exporter selection.
+
 ### Skills Access
 
 Skills are baked into the sandbox image under `/skills/<name>/...`, and which of those a step's agent may read is scoped by `allowed_skills` (part of the `ExecSandbox` call for `materialize-skills.sh` in the lifecycle above). For exactly how `OpenShellSpawner` enforces that against the gateway (Landlock grant + `materialize-skills.sh`), and how skill scoping compares across `spawn: none`/`local`/`ephemeral`, see [tool-registry-architecture.md](tool-registry-architecture.md#skill-enforcement-for-spawn-ephemeral).

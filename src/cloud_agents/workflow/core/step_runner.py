@@ -22,7 +22,7 @@ from typing import Any, Optional
 import httpx
 
 from cloud_agents.runtime.auth import get_runner_auth_token
-from cloud_agents.runtime.tracing import get_tracer
+from cloud_agents.runtime.tracing import get_tracer, inject_traceparent
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
@@ -195,6 +195,35 @@ async def _run_step_inner(
     ):
         if val := os.environ.get(deploy_var):
             env_vars[deploy_var] = val
+
+    # Forward OTEL export config so the sandbox's own OTEL-aware agent
+    # process (a separate pod/network) can export to the same collector
+    # (issue #263). This is export config only -- it does NOT establish the
+    # parent-child span link; the sandbox parses `traceparent` from the
+    # /v1/agent/run request header (see http_headers below), not from env.
+    # No-op when tracing is disabled (init_tracing NoOp).
+    #
+    # KNOWN LIMITATION: the OpenShell network policy currently only allows
+    # egress to LLM/MCP hosts. Unless the collector host is already
+    # allowlisted, Landlock will block the sandbox's export traffic even
+    # though this env var is set.
+    if endpoint_val := os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        env_vars["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint_val
+
+    # The current sandbox image's own tracer unconditionally uses the gRPC
+    # exporter (a separate repo, lightspeed-agentic-sandbox) -- forwarding
+    # any other protocol would silently break export rather than switch
+    # transports, so only the supported value is forwarded.
+    if protocol_val := os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL"):
+        if protocol_val == "grpc":
+            env_vars["OTEL_EXPORTER_OTLP_PROTOCOL"] = protocol_val
+        else:
+            logger.warning(
+                "OTEL_EXPORTER_OTLP_PROTOCOL=%r not forwarded to sandbox for step "
+                "'%s' -- the current sandbox image only supports gRPC export",
+                protocol_val,
+                step_name,
+            )
 
     secret_values: set[str] = set()
 
@@ -381,6 +410,14 @@ async def _run_step_inner(
             http_headers: dict[str, str] = {}
             if sandbox_auth_enabled and sandbox_auth_token:
                 http_headers["Authorization"] = f"Bearer {sandbox_auth_token}"
+
+            # lightspeed-agentic-sandbox parses `traceparent` from the
+            # incoming request header (query.py), not from env -- this is
+            # what actually nests the sandbox's root span under
+            # sandbox.step (issue #263). No-op when tracing is disabled
+            # (init_tracing NoOp). _collect_transcript() reuses this same
+            # dict below, so its GET call is linked too.
+            inject_traceparent(http_headers)
 
             # OpenShell-specific: merge gateway routing headers
             progress_task: asyncio.Task | None = None

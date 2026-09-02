@@ -8,7 +8,17 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pytest_mock import MockerFixture
+
+
+def _assert_redacted_instrumentation(capabilities: list) -> None:
+    """Assert capabilities include an Instrumentation cap with content redacted (issue #263)."""
+    instrumentation_caps = [c for c in capabilities if isinstance(c, Instrumentation)]
+    assert len(instrumentation_caps) == 1
+    settings = instrumentation_caps[0].settings
+    assert settings.include_content is False
+    assert settings.include_binary_content is False
 
 
 class TestSubprocessChildMain:
@@ -808,10 +818,13 @@ class TestSubprocessChildWithSkills:
 
         call_kwargs = mock_agent_cls.call_args.kwargs
         assert "capabilities" in call_kwargs
-        assert call_kwargs["capabilities"] == [mock_cap]
+        assert mock_cap in call_kwargs["capabilities"]
+        _assert_redacted_instrumentation(call_kwargs["capabilities"])
 
-    def test_child_agent_no_capabilities_when_env_unset(self, mocker: MockerFixture) -> None:
-        """Child Agent has no capabilities when CLOUD_AGENTS_SKILLS_PATHS is unset."""
+    def test_child_agent_only_instrumentation_capability_when_env_unset(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Child Agent has only the Instrumentation capability when CLOUD_AGENTS_SKILLS_PATHS is unset."""
         from cloud_agents.workflow.executor.step.tools import register_tool
 
         register_tool("kubectl_get", _dummy_tool)
@@ -863,7 +876,193 @@ class TestSubprocessChildWithSkills:
         main()
 
         call_kwargs = mock_agent_cls.call_args.kwargs
-        assert call_kwargs.get("capabilities") is None
+        capabilities = call_kwargs.get("capabilities")
+        assert capabilities is not None
+        _assert_redacted_instrumentation(capabilities)
+
+
+class TestSubprocessChildInstrumentation:
+    """spawn: local emits pydantic-ai agent/model spans nested under the propagated parent (issue #263)."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self) -> None:
+        """Clear tool registry before each test."""
+        from cloud_agents.workflow.executor.step.tools import clear_tools
+
+        clear_tools()
+        yield  # type: ignore[misc]
+        clear_tools()
+
+    def test_model_request_path_is_instrumented(self, mocker: MockerFixture) -> None:
+        """The plain model_request call (_run_model_request) is instrumented."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=1, output_tokens=1)
+
+        mock_fn = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        mock_fn.assert_called_once()
+        instrument = mock_fn.call_args.kwargs.get("instrument")
+        assert instrument is not None
+        assert instrument.include_content is False
+        assert instrument.include_binary_content is False
+
+    def test_main_initializes_tracing(self, mocker: MockerFixture) -> None:
+        """main() calls init_tracing() at startup so pydantic-ai spans can export."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=1, output_tokens=1)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+        mock_init_tracing = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.init_tracing",
+        )
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        mock_init_tracing.assert_called_once_with("workflow-runner")
+
+    def test_main_attaches_traceparent_context_when_present(self, mocker: MockerFixture) -> None:
+        """main() extracts and attaches the parent trace context from TRACEPARENT env (issue #263)."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=1, output_tokens=1)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.init_tracing",
+        )
+        fake_ctx = object()
+        mock_extract = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.extract_traceparent",
+            return_value=fake_ctx,
+        )
+        mock_attach = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.otel_context.attach",
+        )
+
+        mocker.patch.dict(
+            "os.environ", {"TRACEPARENT": "00-aaaa-bbbb-01"}, clear=False
+        )
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        mock_extract.assert_called_once_with({"traceparent": "00-aaaa-bbbb-01"})
+        mock_attach.assert_called_once_with(fake_ctx)
+
+    def test_main_skips_context_attach_when_traceparent_absent(
+        self, mocker: MockerFixture
+    ) -> None:
+        """main() does not attempt context propagation when TRACEPARENT is unset."""
+        from pydantic_ai.usage import RequestUsage
+
+        mock_response = mocker.MagicMock()
+        mock_response.text = '{"ok": true}'
+        mock_response.usage = RequestUsage(input_tokens=1, output_tokens=1)
+
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.model_request",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.ensure_credentials_env",
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.init_tracing",
+        )
+        mock_extract = mocker.patch(
+            "cloud_agents.workflow.executor.step.subprocess_child.extract_traceparent",
+        )
+        mocker.patch.dict("os.environ", {}, clear=False)
+        import os as _os
+
+        _os.environ.pop("TRACEPARENT", None)
+
+        input_data = {
+            "prompt": "test",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "context": {},
+        }
+
+        stdin_mock = StringIO(json.dumps(input_data))
+        stdout_mock = StringIO()
+        mocker.patch("sys.stdin", stdin_mock)
+        mocker.patch("sys.stdout", stdout_mock)
+
+        from cloud_agents.workflow.executor.step.subprocess_child import main
+
+        main()
+
+        mock_extract.assert_not_called()
 
 
 class TestParseContent:
