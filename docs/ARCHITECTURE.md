@@ -52,7 +52,7 @@ Workflow state lives in Temporal Server, not in the runner process. Scales horiz
 |-----|------|--------|-------------|
 | R8 | Execution engine | Done | Temporal workflow engine + sandbox containers |
 | R9 | Runtime | Done | FastAPI + Temporal Worker + sandbox HTTP contract |
-| R10 | Deployment | Done | K8s Jobs, Podman containers, Helm chart |
+| R10 | Deployment | Done | K8s (Helm chart) and Podman deployment targets for the workflow runner itself; ephemeral spawning is uniformly gateway-mediated regardless of target (see [Dual Deployment](#dual-deployment)) |
 | R11 | Persistence | Done | Temporal Server provides durable execution and state |
 | R12 | Security | Partial | Secrets, auth, risk_level, securityContext done. Per-step tool filtering: runner-side forwarding done ([T1](archived/gaps-implementation-plan.md#t1-forward-permissionscope-to-sandbox-contract)), sandbox-side enforcement pending |
 | R13 | Access control | Done | Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile). See [rbac.md](rbac.md) |
