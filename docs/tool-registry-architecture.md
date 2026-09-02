@@ -63,6 +63,15 @@ flowchart TD
     agent --> subprocess_exec["spawn: local<br/>Agent runs in subprocess"]
 ```
 
+## Skill Enforcement for spawn: ephemeral
+
+The "Skills" row above says `allowed_skills` is enforced "via Landlock" for `spawn: ephemeral` -- concretely, `OpenShellSpawner` (`spawner/openshell_spawner.py`) enforces it against the OpenShell gateway two ways, since a Landlock `PathBeneath` grant on `/skills/<name>` doesn't grant directory *listing* on the parent `/skills`:
+
+1. A Landlock read-only grant on `/skills/<name>` for each name in `allowed_skills`, sent as part of the sandbox's filesystem policy at `CreateSandbox` time (non-advisory spawns only -- advisory/`read_only=True` spawns grant blanket read access for investigation).
+2. Before starting the agent server, the spawner execs the sandbox's baked-in `/usr/local/bin/materialize-skills.sh` with the `allowed_skills` names as argv (a gRPC `ExecSandbox` call), which copies just those names from `/skills` into `/app/skills`. `LIGHTSPEED_SKILLS_DIR` is set to `/app/skills` so the agent's own skill discovery only sees the scoped subset.
+
+For the gateway-protocol context this sits in (where this fits among the other `CreateSandbox`/`ExecSandbox` calls), see [architecture-with-openshell.md](architecture-with-openshell.md#sandbox-lifecycle).
+
 ## Data Flow: Step Execution Across Spawn Modes
 
 ```mermaid
