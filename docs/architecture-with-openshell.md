@@ -80,7 +80,7 @@ provider:
 
 `OpenShellSpawner` derives the sandbox's egress policy from step configuration and sends it as part of `CreateSandbox`'s `spec`:
 
-- **LLM provider egress**: HTTPS to the provider host (e.g. `api.openai.com:443`) when `LIGHTSPEED_PROVIDER` is a known name **and** `LIGHTSPEED_PROVIDER_URL` is not set.
+- **LLM provider egress**: HTTPS to the provider host (e.g. `api.openai.com:443`) when `LIGHTSPEED_PROVIDER` is a known name **and** `LIGHTSPEED_PROVIDER_URL` is not set. For hosts with a bundled `ProviderProfile` (`openai`, `anthropic` -- see Credential Injection above), this endpoint gets the same explicit L7 method/path allowlist as the profile (e.g. `POST /v1/chat/completions`) instead of a bare `access="read-write"`, because the gateway's policy merge unions two endpoints pinning the same host rather than letting the narrower one win -- leaving this sandbox-owned rule at `read-write` would silently widen the profile's allowlist back to everything. Hosts with no bundled profile (`gemini`, `azure`) keep the broad `read-write` preset.
 - **Custom provider URL**: egress to `LIGHTSPEED_PROVIDER_URL`'s host only -- mutually exclusive with the rule above, used to route sandboxes through a gateway-internal inference proxy instead of the vendor's public API.
 - **MCP server egress**: parses `LIGHTSPEED_MCP_SERVERS` JSON and allows egress to each server's host.
 
