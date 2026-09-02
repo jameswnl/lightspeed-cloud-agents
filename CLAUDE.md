@@ -157,11 +157,13 @@ uv run pytest tests/e2e/temporal/test_temporal_e2e.py -v
 
 ## Documentation
 
-- `docs/design/cloud-agents/ARCHITECTURE.md` — system architecture (keep in sync with code)
-- `docs/design/cloud-agents/DEPLOYMENT.md` — deployment guide + diagnostic workflow example
-- `docs/design/cloud-agents/architecture-visualization.html` — interactive visualization (passcode: lcs)
-- `docs/design/cloud-agents/productization-roadmap.md` — P0/P1/backlog gap analysis
-- `docs/design/cloud-agents/prod/implementation-plan.md` — productization task breakdown
+- `docs/ARCHITECTURE.md` — system architecture (keep in sync with code)
+- `docs/DEPLOYMENT.md` — deployment guide + diagnostic workflow example
+- `docs/architecture-visualization.html` — interactive visualization (passcode: lcs)
+- `docs/architecture-with-openshell.md` — the Cloud Agents ↔ OpenShell gateway protocol (sandbox lifecycle, credential injection, network policy, skills enforcement) and how to configure `OpenShellSpawner` for dev (no OIDC) vs prod (OIDC) auth
+- `docs/tool-registry-architecture.md` — tool/skill systems compared across `spawn: none`/`local`/`ephemeral`, plus the `spawn: ephemeral` skill-enforcement mechanism (Landlock + `materialize-skills.sh`)
+- `docs/sandbox-contract.md` — the HTTP contract (`POST /v1/agent/run`, event streaming) between the workflow runner and `lightspeed-agentic-sandbox` pods
+- `docs/CODE-REVIEW.md` / `docs/CODE-REVIEW-PLAN.md` — full-codebase security/quality/functional review and its remediation plan; check before assuming a guardrail gap is unknown
 - `docs/testing-against-openshell-gateways.md` — how to verify `OpenShellSpawner` changes against real gateways (local-infra, Kind, real OCP, hosted staging); load before trusting any spawner change that only passed mocked tests
 - `docs/archived/openshell-resolved-issues-catalog.md` — catalog of real `OpenShellSpawner` bugs mocks couldn't catch (protobuf module split between `openshell_pb2`/`datamodel_pb2`, id-vs-name cross-reference semantics, the #199 credential-exposure fix chain, the #202 Landlock materialize-skills permission bug); load if debugging a similar-looking `OpenShellSpawner` failure
 
