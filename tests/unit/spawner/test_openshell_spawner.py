@@ -3348,12 +3348,22 @@ class TestBuildNetworkPolicy:
         registered for this host (_ensure_provider_profile), the gateway
         stamps this endpoint provider_credentialed=true and rejects a plain
         L4-only rule outright at CreateSandbox time (FAILED_PRECONDITION,
-        confirmed live). The fix is real L7 inspection (protocol/access/
-        enforcement), matching every real credentialed LLM provider profile
-        OpenShell ships (providers/codex.yaml, claude-code.yaml, nvidia.yaml,
+        confirmed live). The fix is real L7 inspection (protocol/enforcement,
+        plus either access or explicit rules -- see below), matching every
+        real credentialed LLM provider profile OpenShell ships
+        (providers/codex.yaml, claude-code.yaml, nvidia.yaml,
         deepinfra.yaml) -- NOT the allow_uninspected_credentials escape
         hatch, which is security-flagged in OpenShell's own policy-approval
         flows and disables per-request credential scoping for the endpoint.
+
+        Does not assert `access` here (issue #247 review): for openai this
+        endpoint now carries explicit `rules` instead, asserted for real
+        against the real protobuf classes in
+        test_llm_provider_endpoint_real_protobuf_narrows_openai_anthropic
+        below -- asserting access=="read-write" against this mocked spec
+        would only hold because the mocked `openshell` module's `.endpoints`
+        attribute happens to iterate empty, not because that's still the
+        real behavior for this host.
         """
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
@@ -3363,7 +3373,6 @@ class TestBuildNetworkPolicy:
 
         np = spec.policy.network_policies["llm_provider"]
         assert np._ep.protocol == "rest"
-        assert np._ep.access == "read-write"
         assert np._ep.enforcement == "enforce"
 
     def test_llm_provider_endpoint_does_not_use_uninspected_credentials_escape_hatch(

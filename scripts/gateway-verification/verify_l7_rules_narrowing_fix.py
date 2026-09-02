@@ -73,7 +73,12 @@ def _build_spawner():
 
 
 async def main() -> None:
-    os.environ.setdefault("OPENSHELL_ALLOW_INSECURE_CREDENTIALS", "1")
+    # Deliberately no setdefault() for OPENSHELL_ALLOW_INSECURE_CREDENTIALS
+    # (CodeRabbit review, PR #257): _create_provider() fails closed with
+    # RuntimeError if it's unset and GATEWAY_TLS_CA is absent -- a caller
+    # who skips the documented `OPENSHELL_ALLOW_INSECURE_CREDENTIALS=1`
+    # usage prefix should hit that failure, not silently get plaintext
+    # credential transport by default.
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
     spawner = _build_spawner()
