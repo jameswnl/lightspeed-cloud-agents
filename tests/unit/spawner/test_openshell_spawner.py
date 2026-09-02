@@ -3535,6 +3535,128 @@ class TestBuildNetworkPolicy:
 
         assert len(spec.policy.network_policies) == 0
 
+    def test_bundled_l7_rules_for_host_matches_by_host_not_provider_string(
+        self, mocker: MockerFixture
+    ) -> None:
+        """_bundled_l7_rules_for_host looks up by host, so LIGHTSPEED_PROVIDER
+        spellings that don't match a bundled_provider_profiles() key directly
+        (e.g. "claude", which maps to the same host as "anthropic") still get
+        the narrowed rules -- this must not regress to matching by provider
+        string, which would silently miss "claude"."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        sentinel_rules = ["rule-a", "rule-b"]
+        mocker.patch(
+            "cloud_agents.spawner.provider_profiles.bundled_provider_profiles",
+            return_value={
+                "anthropic": mocker.Mock(
+                    endpoints=[mocker.Mock(host="api.anthropic.com", rules=sentinel_rules)]
+                ),
+            },
+        )
+
+        assert (
+            OpenShellSpawner._bundled_l7_rules_for_host("api.anthropic.com") == sentinel_rules
+        )
+        assert OpenShellSpawner._bundled_l7_rules_for_host("api.openai.com") == []
+
+    def test_llm_provider_endpoint_uses_bundled_rules_when_available(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When a bundled ProviderProfile targets this host, the sandbox-owned
+        llm_provider rule mirrors its explicit rules instead of the bare
+        access="read-write" preset.
+
+        Regression for issue #247: OpenShell's policy merge (merge_endpoint()
+        in openshell-policy) unions a bare `access` preset with the other
+        side's `rules` rather than letting the narrower side win -- leaving
+        this sandbox-owned rule broad would silently defeat
+        provider_profiles.py's narrowed allowlist for the same host once
+        _ensure_provider_profile() registers it.
+        """
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        sentinel_rules = ["rule-a", "rule-b"]
+        mocker.patch.object(
+            OpenShellSpawner, "_bundled_l7_rules_for_host", return_value=sentinel_rules
+        )
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "openai"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["llm_provider"]
+        np._ep.rules.extend.assert_called_once_with(sentinel_rules)
+
+    def test_llm_provider_endpoint_keeps_read_write_when_no_bundled_profile(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Hosts with no bundled ProviderProfile (e.g. gemini, azure) aren't
+        credentialed via a ProviderProfile, so the merge-union risk doesn't
+        apply -- they keep the broad access="read-write" preset."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mocker.patch.object(OpenShellSpawner, "_bundled_l7_rules_for_host", return_value=[])
+
+        spec = self._make_mock_spec(mocker)
+        env = {"LIGHTSPEED_PROVIDER": "azure"}
+        OpenShellSpawner._build_network_policy(spec, env)
+
+        np = spec.policy.network_policies["llm_provider"]
+        assert np._ep.access == "read-write"
+        np._ep.rules.extend.assert_not_called()
+
+    def test_llm_provider_endpoint_real_protobuf_narrows_openai_anthropic(self) -> None:
+        """End-to-end sanity check against the real openshell protobuf classes
+        and the real bundled_provider_profiles(): the llm_provider endpoint
+        for api.openai.com/api.anthropic.com must carry the same explicit
+        rules as the bundled ProviderProfile, with no `access` set (mutually
+        exclusive with `rules` per proto/sandbox.proto), while a host with no
+        bundled profile (azure) is unaffected.
+
+        Skipped if the `openshell` extra isn't installed.
+        """
+        import importlib
+
+        import pytest
+
+        with _real_openshell_modules():
+            try:
+                openshell_pb2 = importlib.import_module("openshell._proto.openshell_pb2")
+            except ImportError:
+                pytest.skip("openshell extra not installed")
+            if isinstance(openshell_pb2, MagicMock):
+                pytest.skip("openshell extra not installed (stubbed in sys.modules)")
+
+            import cloud_agents.spawner.openshell_spawner as openshell_spawner_module
+            import cloud_agents.spawner.provider_profiles as provider_profiles_module
+
+            bundled = provider_profiles_module.bundled_provider_profiles()
+
+            openai_spec = openshell_pb2.SandboxSpec()
+            openshell_spawner_module.OpenShellSpawner._build_network_policy(
+                openai_spec, {"LIGHTSPEED_PROVIDER": "openai"}
+            )
+            openai_ep = openai_spec.policy.network_policies["llm_provider"].endpoints[0]
+            assert openai_ep.access == ""
+            assert list(openai_ep.rules) == list(bundled["openai"].endpoints[0].rules)
+
+            anthropic_spec = openshell_pb2.SandboxSpec()
+            openshell_spawner_module.OpenShellSpawner._build_network_policy(
+                anthropic_spec, {"LIGHTSPEED_PROVIDER": "claude"}
+            )
+            anthropic_ep = anthropic_spec.policy.network_policies["llm_provider"].endpoints[0]
+            assert anthropic_ep.access == ""
+            assert list(anthropic_ep.rules) == list(bundled["anthropic"].endpoints[0].rules)
+
+            azure_spec = openshell_pb2.SandboxSpec()
+            openshell_spawner_module.OpenShellSpawner._build_network_policy(
+                azure_spec, {"LIGHTSPEED_PROVIDER": "azure"}
+            )
+            azure_ep = azure_spec.policy.network_policies["llm_provider"].endpoints[0]
+            assert azure_ep.access == "read-write"
+            assert list(azure_ep.rules) == []
+
 
 class TestResolveGrpcTarget:
     """Tests for _resolve_grpc_target() endpoint resolution."""
