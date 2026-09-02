@@ -709,6 +709,29 @@ class OpenShellSpawner(AgentSpawner):
         return provider_type
 
     @staticmethod
+    def _bundled_l7_rules_for_host(host: str) -> list:
+        """Return the bundled ProviderProfile's L7Rules for a given host, if any.
+
+        Matches by host rather than by LIGHTSPEED_PROVIDER/provider_type
+        string since _PROVIDER_HOSTS and bundled_provider_profiles() key on
+        different vocabularies (e.g. LIGHTSPEED_PROVIDER="claude" and
+        "anthropic" both resolve to api.anthropic.com, but only "anthropic"
+        is a bundled_provider_profiles() key) -- both of this host's
+        NetworkEndpoints (this sandbox-owned rule and the ProviderProfile's
+        own) need identical rules for OpenShell's policy merge to actually
+        narrow the effective permission set (issue #247).
+
+        Returns an empty list if no bundled profile targets this host.
+        """
+        from cloud_agents.spawner.provider_profiles import bundled_provider_profiles
+
+        for profile in bundled_provider_profiles().values():
+            for endpoint in profile.endpoints:
+                if endpoint.host == host:
+                    return list(endpoint.rules)
+        return []
+
+    @staticmethod
     def _build_network_policy(
         spec: "openshell_pb2.SandboxSpec",
         env: dict[str, str],
@@ -772,8 +795,26 @@ class OpenShellSpawner(AgentSpawner):
             # per-sandbox (ephemeral CA, no separate gateway-side
             # provisioning), so this is fully within this method's control.
             ep.protocol = "rest"
-            ep.access = "read-write"
             ep.enforcement = "enforce"
+            # This sandbox-owned rule and _ensure_provider_profile()'s
+            # bundled ProviderProfile endpoint both pin this same host, and
+            # OpenShell's gateway-side policy merge (merge_endpoint() in
+            # openshell-policy) unions the two rather than letting the
+            # narrower one win: a bare `access` preset here gets expanded
+            # to explicit "**"-wildcard L7Rules and the other side's rules
+            # are appended on top, so leaving this at access="read-write"
+            # would silently defeat provider_profiles.py's narrowed
+            # allowlist for openai/anthropic (issue #247) -- confirmed
+            # against openshell-policy's merge.rs. Mirror the same
+            # explicit rules here for hosts with a bundled profile so both
+            # sides of the merge stay narrow; hosts with no bundled
+            # profile (gemini, azure) aren't credentialed via a
+            # ProviderProfile and keep the broad preset.
+            bundled_rules = OpenShellSpawner._bundled_l7_rules_for_host(provider_host)
+            if bundled_rules:
+                ep.rules.extend(bundled_rules)
+            else:
+                ep.access = "read-write"
             b = np.binaries.add()
             b.path = "**"
 
