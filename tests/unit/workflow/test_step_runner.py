@@ -164,6 +164,39 @@ class TestRunStep:
         assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
 
     @pytest.mark.asyncio
+    async def test_run_step_does_not_forward_unsupported_otel_protocol_to_sandbox(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """http/protobuf is not forwarded -- the current sandbox image only honors gRPC
+        export, so silently forwarding an unsupported protocol would break export
+        without anyone noticing (issue #263 review)."""
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "sk-test",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.otel.svc:4318",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            },
+            clear=False,
+        )
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        with caplog.at_level("WARNING"):
+            await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        # Endpoint still forwarded (export config), protocol is not.
+        assert call_kwargs["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector.otel.svc:4318"
+        assert "OTEL_EXPORTER_OTLP_PROTOCOL" not in call_kwargs["env"]
+        assert "http/protobuf" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_run_step_does_not_put_traceparent_in_sandbox_env(
         self,
         mock_spawner: AsyncMock,

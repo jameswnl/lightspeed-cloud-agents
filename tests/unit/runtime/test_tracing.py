@@ -85,8 +85,37 @@ class TestInitTracingProtocolSelection:
 
         init_tracing("test-service")
 
-        mock_http_exporter.assert_called_once_with(endpoint="http://collector:4318")
+        # A bare base URL must get /v1/traces appended -- the HTTP exporter
+        # uses an explicit `endpoint=` kwarg as-is with no auto-append
+        # (unlike its env-var-only resolution path), so passing the base
+        # URL straight through would silently POST to the wrong path.
+        mock_http_exporter.assert_called_once_with(endpoint="http://collector:4318/v1/traces")
         mock_grpc_exporter.assert_not_called()
+
+    def test_http_protobuf_protocol_does_not_double_append_trace_path(
+        self, mocker: MockerFixture
+    ) -> None:
+        """An endpoint that already ends in /v1/traces is left unchanged."""
+        mocker.patch.dict(
+            os.environ,
+            {
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318/v1/traces",
+                "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            },
+            clear=False,
+        )
+
+        mocker.patch("cloud_agents.runtime.tracing.trace.set_tracer_provider")
+        mocker.patch("opentelemetry.sdk.trace.export.BatchSpanProcessor")
+        mock_http_exporter = mocker.patch(
+            "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter"
+        )
+
+        from cloud_agents.runtime.tracing import init_tracing
+
+        init_tracing("test-service")
+
+        mock_http_exporter.assert_called_once_with(endpoint="http://collector:4318/v1/traces")
 
     def test_unsupported_protocol_disables_tracing(self, mocker: MockerFixture) -> None:
         """An unrecognized protocol fails safe to NoOp instead of using the wrong transport."""

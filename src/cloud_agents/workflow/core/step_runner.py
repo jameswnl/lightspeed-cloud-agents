@@ -207,9 +207,23 @@ async def _run_step_inner(
     # egress to LLM/MCP hosts. Unless the collector host is already
     # allowlisted, Landlock will block the sandbox's export traffic even
     # though this env var is set.
-    for otel_var in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL"):
-        if val := os.environ.get(otel_var):
-            env_vars[otel_var] = val
+    if endpoint_val := os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        env_vars["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint_val
+
+    # The current sandbox image's own tracer unconditionally uses the gRPC
+    # exporter (a separate repo, lightspeed-agentic-sandbox) -- forwarding
+    # any other protocol would silently break export rather than switch
+    # transports, so only the supported value is forwarded.
+    if protocol_val := os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL"):
+        if protocol_val == "grpc":
+            env_vars["OTEL_EXPORTER_OTLP_PROTOCOL"] = protocol_val
+        else:
+            logger.warning(
+                "OTEL_EXPORTER_OTLP_PROTOCOL=%r not forwarded to sandbox for step "
+                "'%s' -- the current sandbox image only supports gRPC export",
+                protocol_val,
+                step_name,
+            )
 
     secret_values: set[str] = set()
 

@@ -52,6 +52,13 @@ def init_tracing(service_name: str) -> None:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     elif protocol == "http/protobuf":
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        # An explicit endpoint= kwarg is used as-is by this exporter (no
+        # auto-append of the OTLP signal path, unlike its env-var-only
+        # resolution path) -- append it ourselves so a bare base URL
+        # doesn't silently POST spans to the collector's root path.
+        if not endpoint.rstrip("/").endswith("/v1/traces"):
+            endpoint = f"{endpoint.rstrip('/')}/v1/traces"
     else:
         logger.warning(
             "Unsupported OTEL_EXPORTER_OTLP_PROTOCOL=%r (expected one of %s) "
