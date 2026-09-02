@@ -1,6 +1,8 @@
 # OpenShell Integration for Cloud Agents
 
-This guide covers the architecture, setup, and operation of the OpenShell gateway with Cloud Agents. OpenShell provides hardened sandbox isolation (Landlock, seccomp, network namespaces) on top of the standard container runtime, replacing direct spawner access with a gateway-mediated architecture.
+This guide covers how Cloud Agents' `OpenShellSpawner` talks to an OpenShell gateway, and what that gateway buys over direct spawner access (Landlock, seccomp, network namespaces on top of the standard container runtime).
+
+> **Bring your own gateway.** Deploying and operating an OpenShell gateway is outside this repo's scope (issue [#254](https://github.com/jameswnl/lightspeed-cloud-agents/issues/254)) -- `OpenShellSpawner` is a gRPC client that only needs a reachable address (`OPENSHELL_GATEWAY_URL` and friends), regardless of whether the gateway runs as a bare Podman container, inside Kind, on real K8s/OCP, or as a native host process. This repo does not ship gateway deployment manifests. If you need a gateway to develop or test against, see [docs/testing-against-openshell-gateways.md](testing-against-openshell-gateways.md).
 
 ## Architecture
 
@@ -17,7 +19,7 @@ This guide covers the architecture, setup, and operation of the OpenShell gatewa
 
 ```mermaid
 graph TD
-    subgraph cluster["K8s Cluster / Podman Host"]
+    subgraph repo["This Repo's Deployment"]
         subgraph platform["Platform Framework"]
             WR["Workflow Runner<br/><i>FastAPI + Temporal Worker</i>"]
             WR --- TW["Temporal Worker"]
@@ -26,6 +28,12 @@ graph TD
             WR --- TS_STORE["Transcript Store<br/><i>PostgreSQL</i>"]
         end
 
+        TS["Temporal Server"]
+        PG["PostgreSQL<br/><i>Temporal state + transcripts</i>"]
+        MCP_S["MCP Servers<br/><i>kubectl / RHDH / filesystem</i>"]
+    end
+
+    subgraph external["Externally-Supplied OpenShell Gateway <i>(you deploy + operate this -- see testing-against-openshell-gateways.md)</i>"]
         subgraph openshell["OpenShell Gateway"]
             GW["Gateway Service<br/><i>gRPC + REST</i>"]
             GW --- DRIVER["Compute Driver<br/><i>K8s CRD / Podman / Docker</i>"]
@@ -41,14 +49,11 @@ graph TD
             SUP --- AG["Agent runtime + tools"]
             SUP --- MCP_C["MCP client connections"]
         end
-
-        TS["Temporal Server"]
-        PG["PostgreSQL<br/><i>Temporal state + transcripts</i>"]
-        MCP_S["MCP Servers<br/><i>kubectl / RHDH / filesystem</i>"]
-        LLM["LLM Provider<br/><i>OpenAI / Vertex / Anthropic</i>"]
     end
 
-    WR -- "gRPC: CreateSandbox /<br/>ExecSandbox / DeleteSandbox" --> GW
+    LLM["LLM Provider<br/><i>OpenAI / Vertex / Anthropic</i>"]
+
+    WR -- "gRPC: CreateSandbox /<br/>ExecSandbox / DeleteSandbox<br/>(OPENSHELL_GATEWAY_URL)" --> GW
     GW -- "spawn + inject supervisor" --> sandbox
     GW -- "JWT token" --> SUP
     WR -- "ExposeService → HTTP" --> RT
@@ -60,6 +65,7 @@ graph TD
     sandbox -- "HTTPS<br/>(egress policy)" --> LLM
 
     style OSS fill:#2d333b,stroke:#a371f7
+    style external fill:#1c2128,stroke:#a371f7,stroke-dasharray: 5 5
     style openshell fill:#1c2128,stroke:#a371f7
     style SUP fill:#2d333b,stroke:#f85149
     style sandbox fill:#161b22,stroke:#238636
@@ -85,50 +91,60 @@ lacked, and what routing everything through the gateway buys instead:
 
 ### Deployment Topologies
 
-**Podman (RHEL production)**:
+This repo's own deployment manifests (`deploy/podman/`, `deploy/kind/`, `deploy/helm/`) only ever stand up Temporal, PostgreSQL, the workflow runner, and MCP servers -- never a gateway. `OPENSHELL_GATEWAY_URL` is a required, externally-supplied value in all of them (issue [#254](https://github.com/jameswnl/lightspeed-cloud-agents/issues/254)); the two diagrams below just illustrate two example ways an operator might run the gateway they're pointing at, not something this repo provisions.
+
+**Podman (example gateway topology)**:
 
 ```mermaid
 graph TD
-    subgraph host["RHEL Host"]
+    subgraph host["Host running this repo's stack"]
         TS["Temporal Server<br/><i>container</i>"]
         PG["PostgreSQL<br/><i>container</i>"]
         WR["Workflow Runner<br/><i>container</i>"]
+        MCP["MCP Servers<br/><i>containers</i>"]
+    end
+
+    subgraph external["Externally-supplied (you deploy)"]
         GW["OpenShell Gateway<br/><i>container, Podman driver</i>"]
         GW -.- SOCK["Podman socket mount<br/><i>DooD</i>"]
-        MCP["MCP Servers<br/><i>containers</i>"]
         SB["Sandbox containers<br/><i>spawned by Gateway</i>"]
     end
 
     WR --> TS
     WR --> PG
-    WR --> GW
+    WR -- "OPENSHELL_GATEWAY_URL" --> GW
     GW --> SB
     SB --> MCP
 
+    style external fill:#1c2128,stroke:#a371f7,stroke-dasharray: 5 5
     style GW fill:#1c2128,stroke:#a371f7
     style SB fill:#161b22,stroke:#238636
 ```
 
-**Kubernetes (production)**:
+**Kubernetes (example gateway topology)**:
 
 ```mermaid
 graph TD
-    subgraph cluster["K8s Cluster"]
+    subgraph cluster["Cluster running this repo's stack"]
         TS["Temporal Server<br/><i>Deployment</i>"]
         PG["PostgreSQL<br/><i>StatefulSet</i>"]
         WR["Workflow Runner<br/><i>Deployment</i>"]
+        MCP["MCP Servers<br/><i>Deployments</i>"]
+    end
+
+    subgraph external["Externally-supplied (you deploy, in-cluster or elsewhere)"]
         GW["OpenShell Gateway<br/><i>Deployment, K8s driver</i>"]
         GW -.- CRD["Sandbox CRD controller"]
-        MCP["MCP Servers<br/><i>Deployments</i>"]
         SB["Sandbox pods<br/><i>created as Sandbox CRs</i>"]
     end
 
     WR --> TS
     WR --> PG
-    WR --> GW
+    WR -- "OPENSHELL_GATEWAY_URL" --> GW
     GW --> SB
     SB --> MCP
 
+    style external fill:#1c2128,stroke:#a371f7,stroke-dasharray: 5 5
     style GW fill:#1c2128,stroke:#a371f7
     style SB fill:#161b22,stroke:#238636
 ```
@@ -141,9 +157,9 @@ the spawner's behavior.
 
 | | **Podman** | **Kind** |
 |---|---|---|
-| Gateway deployment | `podman run` directly on the dev machine (see [Gateway Setup](#gateway-setup) below) | Gateway runs *inside* the cluster as a K8s workload (e.g. a StatefulSet); not covered by this doc -- deploying the gateway onto a cluster is a separate concern from configuring a client to reach one |
+| Gateway deployment | `podman run` directly on the dev machine (deploying it is outside this repo's scope -- see [docs/testing-against-openshell-gateways.md](testing-against-openshell-gateways.md) for one way to bring one up) | Gateway runs *inside* the cluster as a K8s workload (e.g. a StatefulSet); not covered by this doc -- deploying the gateway onto a cluster is a separate concern from configuring a client to reach one |
 | Reaching the gateway | Direct: gateway listens on a host port (`17670` in the examples above) | Indirect: `kubectl port-forward svc/<gateway-service> <local-port>:<gateway-port>` -- the gateway's in-cluster port is never directly reachable from the host |
-| TLS | `--disable-tls` + `allow_unauthenticated_users` for dev (see [Gateway Setup](#gateway-setup)) | Same -- plaintext gRPC over the port-forward is typical for a local Kind gateway with no external exposure |
+| TLS | `--disable-tls` + `allow_unauthenticated_users` for dev, set on the gateway itself | Same -- plaintext gRPC over the port-forward is typical for a local Kind gateway with no external exposure |
 | Compute driver | `podman` (gateway execs into containers via the mounted Podman socket) | `kubernetes` (gateway creates Sandbox CRs / pods in-cluster) |
 | Sandbox image architecture | Matches the dev machine's native arch (e.g. `arm64` on Apple Silicon) | **Must be multi-arch** if the Kind cluster's nodes don't match the image-build machine's arch (common in CI or on a shared cluster) -- see the callout below |
 
@@ -255,8 +271,7 @@ The sandbox container's CMD (from the image) is passed to the supervisor as `OPE
 
 ## Prerequisites
 
-- **Podman** (macOS: `podman machine start`) or **Kubernetes**
-- **OpenShell gateway image**: `localhost/openshell-gateway:latest`
+- **An OpenShell gateway you can reach** -- deploying/operating it is outside this repo's scope; see [docs/testing-against-openshell-gateways.md](testing-against-openshell-gateways.md) for setting one up. You just need its address.
 - **Sandbox image**: built from [jameswnl/lightspeed-agentic-sandbox @ lcs-main](https://github.com/jameswnl/lightspeed-agentic-sandbox/tree/lcs-main)
 - **openshell SDK**: `pip install openshell>=0.0.111` (installed via `[openshell]` extra)
 
@@ -278,142 +293,17 @@ cd ~/ws/lightspeed-agentic-sandbox
 podman build -f Containerfile.dev -t localhost/sandbox-openshell:dev .
 ```
 
-## Gateway Setup
+## Getting a Gateway to Point At
 
-### Step 1: Generate JWT Signing Keys
+Standing up an OpenShell gateway (JWT signing keys, TOML config, TLS/OIDC, choosing a compute driver) is entirely your gateway deployment's concern, not this repo's -- see the note at the top of this doc. [docs/testing-against-openshell-gateways.md](testing-against-openshell-gateways.md) covers one concrete path (a local `~/ws/local-infra` Podman-driver gateway, Kind, real OCP, and a hosted staging gateway) if you need one to develop or test against.
 
-The gateway mints per-sandbox JWTs so the supervisor can authenticate back. Generate the Ed25519 key pair:
-
-```bash
-podman run --rm --user 0 --security-opt label=disable \
-  localhost/openshell-gateway:latest \
-  sh -c 'openshell-gateway generate-certs --output-dir /tmp/certs 2>/dev/null && \
-    echo "---SIGNING---" && cat /tmp/certs/jwt/signing.pem && \
-    echo "---PUBLIC---" && cat /tmp/certs/jwt/public.pem && \
-    echo "---KID---" && cat /tmp/certs/jwt/kid && echo ""'
-```
-
-Save the output to three files:
-
-```
-/path/to/jwt/
-  signing.pem     # Ed25519 private key
-  public.pem      # Ed25519 public key
-  kid             # Key ID (hex string)
-```
-
-On macOS with Podman machine, copy the files into the VM:
-
-```bash
-mkdir -p /tmp/openshell-jwt
-# ... write signing.pem, public.pem, kid to /tmp/openshell-jwt/
-# Copy into VM (podman volumes mount from the VM, not macOS host)
-cat /tmp/openshell-jwt/signing.pem | podman machine ssh -- "mkdir -p /tmp/openshell-jwt && cat > /tmp/openshell-jwt/signing.pem"
-cat /tmp/openshell-jwt/public.pem  | podman machine ssh -- "cat > /tmp/openshell-jwt/public.pem"
-cat /tmp/openshell-jwt/kid         | podman machine ssh -- "cat > /tmp/openshell-jwt/kid"
-```
-
-### Step 2: Write Gateway Config
-
-Create a TOML config file:
-
-```toml
-# gateway.toml
-[openshell.gateway.gateway_jwt]
-signing_key_path = "/jwt/signing.pem"
-public_key_path = "/jwt/public.pem"
-kid_path = "/jwt/kid"
-
-[openshell.gateway.auth]
-allow_unauthenticated_users = true
-```
-
-> **Production**: Remove `allow_unauthenticated_users` and configure OIDC or mTLS instead. See [TLS mode](#tls-mode) below.
-
-On macOS:
-
-```bash
-podman machine ssh -- "cat > /tmp/openshell-gateway.toml" << 'EOF'
-[openshell.gateway.gateway_jwt]
-signing_key_path = "/jwt/signing.pem"
-public_key_path = "/jwt/public.pem"
-kid_path = "/jwt/kid"
-
-[openshell.gateway.auth]
-allow_unauthenticated_users = true
-EOF
-```
-
-### Step 3: Start the Gateway
-
-#### macOS (Podman machine)
-
-The Podman socket lives inside the VM. Mount it from the VM-internal path:
-
-```bash
-podman run -d --name openshell-gw \
-  --security-opt label=disable \
-  -p 17670:17670 \
-  -v /run/user/501/podman/podman.sock:/run/podman/podman.sock \
-  -v /tmp/openshell-jwt:/jwt:ro \
-  -v /tmp/openshell-gateway.toml:/etc/openshell/gateway.toml:ro \
-  -e OPENSHELL_PODMAN_SOCKET=/run/podman/podman.sock \
-  localhost/openshell-gateway:latest \
-  openshell-gateway --disable-tls --drivers podman --bind-address 0.0.0.0 \
-  --config /etc/openshell/gateway.toml
-```
-
-> **Note**: The Podman socket UID (`/run/user/<UID>/podman/podman.sock`) varies. Find yours with:
-> ```bash
-> podman machine inspect 2>&1 | grep -A2 PodmanSocket
-> ```
-
-#### Linux (native Podman)
-
-```bash
-podman run -d --name openshell-gw \
-  -p 17670:17670 \
-  -v /run/user/$(id -u)/podman/podman.sock:/run/podman/podman.sock \
-  -v /path/to/jwt:/jwt:ro \
-  -v /path/to/gateway.toml:/etc/openshell/gateway.toml:ro \
-  -e OPENSHELL_PODMAN_SOCKET=/run/podman/podman.sock \
-  localhost/openshell-gateway:latest \
-  openshell-gateway --disable-tls --drivers podman --bind-address 0.0.0.0 \
-  --config /etc/openshell/gateway.toml
-```
-
-#### Native Binary (no container)
-
-If you've built the gateway from source:
-
-```bash
-OPENSHELL_DRIVERS=podman \
-OPENSHELL_LOG_LEVEL=info \
-openshell-gateway \
-  --disable-tls \
-  --config /path/to/gateway.toml \
-  --bind-address 0.0.0.0 \
-  --port 17670
-```
-
-### Step 4: Verify
-
-Check the gateway logs for these lines:
-
-```
-Connected to Podman                 cgroup_version=v2 rootless=true
-Bridge network ready                network=openshell gateway_ip=Some("10.89.5.1")
-gateway-minted sandbox JWT enabled  gateway_id=openshell ttl_secs=0
-Server listening                    address=0.0.0.0:17670
-```
-
-Quick smoke test:
+Once you have a gateway address, a quick smoke test that it's reachable and can spawn a sandbox:
 
 ```python
 from openshell import SandboxClient
 from openshell._proto import openshell_pb2
 
-client = SandboxClient(endpoint="localhost:17670")
+client = SandboxClient(endpoint="<gateway-host>:<gateway-port>")
 spec = openshell_pb2.SandboxSpec(
     template=openshell_pb2.SandboxTemplate(image="localhost/sandbox-openshell:dev")
 )
@@ -443,12 +333,12 @@ Set the following environment variables on the workflow runner container:
 | `OPENSHELL_BEARER_TOKEN` | | OIDC bearer token (requires TLS) |
 
 > **Compute driver is not a client setting.** The gateway's own compute
-> driver (`podman` vs `kubernetes`, see "Gateway Environment Reference"
-> below) must match *the gateway's* deployment target, but that's a
-> gateway-side deployment detail, invisible to callers -- there is no
-> client-side driver env var and no client-side driver detection.
-> `OpenShellSpawner`'s entire lifecycle (create/exec/expose/query/destroy)
-> is fully gateway-mediated regardless of driver.
+> driver (`podman` vs `kubernetes`) must match *the gateway's* deployment
+> target, but that's a gateway-side deployment detail, invisible to
+> callers -- there is no client-side driver env var and no client-side
+> driver detection. `OpenShellSpawner`'s entire lifecycle
+> (create/exec/expose/query/destroy) is fully gateway-mediated regardless
+> of driver.
 
 Example (local dev, no auth):
 
@@ -700,30 +590,7 @@ asyncio.run(test())
 
 ## TLS Mode
 
-For production, configure mTLS on the gateway:
-
-```bash
-openshell-gateway generate-certs --output-dir /tmp/openshell-certs
-```
-
-Gateway config:
-
-```toml
-[openshell.gateway.tls]
-cert_path = "/certs/server/tls.crt"
-key_path = "/certs/server/tls.key"
-client_ca_path = "/certs/ca.crt"
-
-[openshell.gateway.mtls_auth]
-enabled = true
-
-[openshell.gateway.gateway_jwt]
-signing_key_path = "/certs/jwt/signing.pem"
-public_key_path = "/certs/jwt/public.pem"
-kid_path = "/certs/jwt/kid"
-```
-
-Python client with mTLS:
+Whether and how the gateway itself terminates TLS/mTLS (certs, `gateway.toml`, `--disable-tls`) is your gateway deployment's concern -- see the note at the top of this doc. On the client side, `OpenShellSpawner`/`build_spawner()` just need the matching config to talk to whatever the gateway exposes:
 
 ```python
 from pathlib import Path
@@ -739,7 +606,9 @@ client = SandboxClient(
 )
 ```
 
-> **Known limitation**: The Podman driver auto-detects the supervisor endpoint as `http://host.containers.internal:17670` regardless of TLS config. Use `--disable-tls` with `allow_unauthenticated_users` for Podman-based development.
+See "Cloud Agents Configuration" above for the equivalent `OPENSHELL_TLS_CA`/`OPENSHELL_TLS_CERT`/`OPENSHELL_TLS_KEY`/`OPENSHELL_BEARER_TOKEN` env vars used by `build_spawner()`.
+
+> **Known limitation**: The Podman driver auto-detects the supervisor endpoint as `http://host.containers.internal:17670` regardless of TLS config -- a gateway operator running the Podman driver typically needs `--disable-tls` with `allow_unauthenticated_users` for local development as a result.
 
 ## Troubleshooting
 
@@ -747,31 +616,23 @@ client = SandboxClient(
 
 **Symptom**: `SandboxError: sandbox X entered error phase` within seconds of creation.
 
-**Check gateway logs**:
-
-```bash
-podman logs openshell-gw 2>&1 | grep -i 'error\|fail\|warn'
-```
+**Check your gateway's logs** (however it's deployed -- `podman logs`, `kubectl logs`, etc.) for the underlying error.
 
 **Common causes**:
 
 | Cause | Log message | Fix |
 |---|---|---|
-| Missing JWT config | `no sandbox token source available` | Add `[openshell.gateway.gateway_jwt]` to config |
-| Image has custom ENTRYPOINT | `Container exited with code 1` | Remove ENTRYPOINT from image; OpenShell injects its own supervisor |
-| Missing `iproute2` | `ip: command not found` | Install `iproute2` in the sandbox image |
-| Missing `sandbox` user | `user sandbox not found` | Add `useradd sandbox` to Dockerfile |
-| Wrong Podman socket path | `Podman socket not found` | Set `OPENSHELL_PODMAN_SOCKET` to the correct path |
+| Missing JWT config on the gateway | `no sandbox token source available` | Gateway operator needs to add `[openshell.gateway.gateway_jwt]` to its config |
+| Sandbox image has custom ENTRYPOINT | `Container exited with code 1` | Remove ENTRYPOINT from image; OpenShell injects its own supervisor |
+| Sandbox image missing `iproute2` | `ip: command not found` | Install `iproute2` in the sandbox image |
+| Sandbox image missing `sandbox` user | `user sandbox not found` | Add `useradd sandbox` to Dockerfile |
+| Gateway misconfigured for its compute driver (e.g. wrong Podman socket path) | `Podman socket not found` | Gateway operator needs to fix its own driver config (e.g. `OPENSHELL_PODMAN_SOCKET`) |
 
 ### Sandbox gets stuck in Provisioning
 
 **Symptom**: `wait_ready` hangs and eventually times out.
 
-The supervisor may be retrying policy fetch. Check:
-
-```bash
-podman logs $(podman ps -a --filter "name=openshell-sandbox" --format "{{.Names}}" | head -1) 2>&1
-```
+The supervisor may be retrying policy fetch. Check the sandbox container/pod's own logs via whatever your gateway's compute driver exposes (e.g. `podman logs`/`kubectl logs` against the sandbox container/pod name, or your gateway's own sandbox-log API if it has one).
 
 ### Health check passes but HTTP requests fail
 
@@ -791,15 +652,4 @@ resp = await client.get(f"{endpoint}/health", headers=headers)
 
 This is expected when the sandbox is destroyed while a background exec (like `start_server`) is still running. The spawner's `_do_destroy` cancels the server task before deleting the sandbox, but the cancellation races with the gRPC stream teardown.
 
-## Gateway Environment Reference
-
-| Env Var | Default | Description |
-|---|---|---|
-| `OPENSHELL_DRIVERS` | *(auto-detect)* | Compute driver: `podman`, `kubernetes`, `docker` |
-| `OPENSHELL_PODMAN_SOCKET` | `/run/user/<uid>/podman/podman.sock` | Podman API socket path |
-| `OPENSHELL_BIND_ADDRESS` | `127.0.0.1` | Bind address for gRPC/HTTP |
-| `OPENSHELL_SERVER_PORT` | `17670` | gRPC/HTTP port |
-| `OPENSHELL_LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
-| `OPENSHELL_GATEWAY_CONFIG` | | Path to TOML config file |
-| `OPENSHELL_DISABLE_TLS` | `false` | Disable TLS (dev only) |
-| `OPENSHELL_DB_URL` | | PostgreSQL URL for durable sandbox state |
+> Gateway-side env vars (compute driver selection, bind address/port, TLS, its own database URL, etc.) are your gateway deployment's concern, not this repo's -- see the note at the top of this doc. This repo's client-side env vars are covered under "Cloud Agents Configuration" above.
