@@ -1,5 +1,54 @@
 {
   "$defs": {
+    "MCPServerConfig": {
+      "description": "MCP server configuration to inject into sandbox pods.\n\nAttributes:\n    name: Unique name identifying this MCP server.\n    url: SSE endpoint URL of the MCP server.\n    headers: Optional plain-text headers to send with requests.\n    secret_headers: Optional Secret-backed headers encoded as file references.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "secret_headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/SecretHeaderRef"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secret Headers"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "MCPServerConfig",
+      "type": "object"
+    },
     "PermissionScope": {
       "description": "Permission constraints for a workflow step.\n\nAttributes:\n    service_account: K8s ServiceAccount for spawned pods.\n    allowed_tools: Whitelist of tool names the agent may use.\n    denied_tools: Blacklist of tool names to exclude.\n    max_tokens: Maximum token budget for this step.\n    timeout_seconds: Maximum duration for this step.",
       "properties": {
@@ -97,6 +146,25 @@
         "credentials_secret"
       ],
       "title": "ProviderSpec",
+      "type": "object"
+    },
+    "SecretHeaderRef": {
+      "description": "Reference to a K8s Secret key for an MCP auth header.\n\nAttributes:\n    secret_name: Name of the K8s Secret containing the header value.\n    key: Key within the Secret to use as the header value.",
+      "properties": {
+        "secret_name": {
+          "title": "Secret Name",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret_name",
+        "key"
+      ],
+      "title": "SecretHeaderRef",
       "type": "object"
     },
     "SkillsSpec": {
@@ -308,7 +376,14 @@
           "anyOf": [
             {
               "items": {
-                "type": "string"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/MCPServerConfig"
+                  }
+                ]
               },
               "type": "array"
             },

@@ -4292,11 +4292,9 @@ class TestSpawnModeDispatch:
 
     @pytest.mark.asyncio
     async def test_full_unfiltered_mcp_catalog_passed_for_none(self, mocker: MockerFixture) -> None:
-        """spawn: none passes the full MCP catalog, matching local engine's
+        """spawn: none respects per-step mcp_servers filtering (unified resolver).
 
-        actual current behavior -- NOT the ephemeral path's per-step-name
-        filtering (step-level mcp_servers is a no-op for none/local today,
-        same as under the local engine's DirectExecutor).
+        After issue #265, all spawn modes filter via resolve_mcp_servers.
         """
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
@@ -4323,7 +4321,7 @@ class TestSpawnModeDispatch:
         await run_sandbox_step(input_dict, spawner=None)
 
         server_names = {s["name"] for s in captured["step_input"].mcp_servers}
-        assert server_names == {"only-this-one", "other-server"}
+        assert server_names == {"only-this-one"}
 
     @pytest.mark.asyncio
     async def test_transcript_persisted_for_spawn_none_when_store_configured(

@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from cloud_agents.spawner.base import SpawnConfig
+from cloud_agents.workflow.core.models import MCPServerConfig
 from cloud_agents.workflow.core.permissions import PermissionScope
 
 
@@ -54,7 +55,7 @@ class WorkflowStepSpec(BaseModel):
     risk_level: Optional[Literal["low", "medium", "high", "critical"]] = None
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
-    mcp_servers: Optional[list[str]] = None
+    mcp_servers: Optional[list[str | MCPServerConfig]] = None
     spawn_config: Optional[SpawnConfig] = None
     runtime: Literal["sandbox", "generic"] = "sandbox"
     role: Optional[Literal["analysis", "execution", "verification"]] = None

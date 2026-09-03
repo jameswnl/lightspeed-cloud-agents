@@ -29,6 +29,7 @@ from cloud_agents.workflow.executor.middleware import (
     TracingMiddleware,
     TranscriptMiddleware,
 )
+from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
 from cloud_agents.workflow.executor.step.base import StepInput, StepMetadata
 from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
@@ -279,7 +280,9 @@ def _build_agent_step(
             skills_image=state.skills_image,
             skills_paths=state.skills_paths,
             allowed_skills=step_def.get("allowed_skills"),
-            mcp_servers=state.mcp_servers,
+            mcp_servers=resolve_mcp_servers(
+                step_def.get("mcp_servers"), state.mcp_servers
+            ),
             workflow_id=state.workflow_id,
             raw_step=step_def,
             step_name=step_name,
