@@ -120,7 +120,7 @@ svg { width: 100%; height: auto; display: block; }
 <div id="tab-goals" class="tab-content active">
 <div class="static-content">
 <div style="background: #1c2333; border-left: 3px solid #58a6ff; padding: 12px 16px; margin: 0 0 20px 0; border-radius: 4px;">
-  <span style="color: #f0f6fc; font-size: 14px; line-height: 1.6;">This is a PoC (<a href="https://redhat.atlassian.net/browse/LCORE-2602" style="color: #58a6ff; text-decoration: none;">LCORE-2602</a>) to explore the needs and requirements for Lightspeed product teams' agentic workloads &mdash; AI agents that assist their product users and administrators with operational tasks. The goals and requirements below are derived from conversations with product teams, Jira tickets, requirement documents, and learnings from early prototyping across teams.</span>
+  <span style="color: #f0f6fc; font-size: 14px; line-height: 1.6;">This started as a PoC (<a href="https://redhat.atlassian.net/browse/LCORE-2602" style="color: #58a6ff; text-decoration: none;">LCORE-2602</a>) exploring the needs and requirements for Lightspeed product teams' agentic workloads &mdash; AI agents that assist their product users and administrators with operational tasks. The goals and requirements below reflect the current implementation; see <a href="ARCHITECTURE.md" style="color: #58a6ff; text-decoration: none;">docs/ARCHITECTURE.md</a> for full technical detail.</span>
 </div>
 <div class="goal-grid">
   <div class="goal-card" id="goal-G1">
@@ -141,7 +141,7 @@ svg { width: 100%; height: auto; display: block; }
   <div class="goal-card" id="goal-G4">
     <div class="goal-id">G4</div>
     <div class="goal-title">Human Follow-up with Preserved Context</div>
-    <div class="goal-desc">When automation reaches its limit, the framework packages workflow context for review, escalation, and operator follow-up.</div>
+    <div class="goal-desc">When automation reaches its limit, the framework packages workflow context for review, escalation, and operator follow-up — including handoff to interactive AI CLI sessions.</div>
   </div>
   <div class="goal-card" id="goal-G5">
     <div class="goal-id">G5</div>
@@ -157,11 +157,11 @@ svg { width: 100%; height: auto; display: block; }
 <!-- ============================================================ -->
 <div id="tab-dp" class="tab-content">
 <div class="static-content">
-<div class="req-section-title">Requirements</div>
+<div class="req-section-title">Design Principles</div>
 
 <div class="req-card">
   <div class="req-header"><span><span class="req-id">R1</span> <span class="req-name">Framework, not pre-built agents</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a></span></div>
-  <div class="req-desc">Examples ship as examples. Framework provides the workflow engine, spawner, and observability. Teams provide workflow definitions, skills OCI images (optional), and MCP server config (optional).</div>
+  <div class="req-desc">The framework provides the workflow engine, spawner, and observability. Product teams provide workflow definitions, skills, and MCP server configs.</div>
 </div>
 
 <div class="req-card">
@@ -170,54 +170,45 @@ svg { width: 100%; height: auto; display: block; }
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history &mdash; and hands off to a human operator. Each retry sees prior failure history so the agent can adapt before escalating.</div>
+  <div class="req-header"><span><span class="req-id">R3</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Each <code>spawn: ephemeral</code> step spawns a sandbox via an externally-supplied OpenShell gateway (<code>OpenShellSpawner</code>), with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. <code>human-approval</code> steps don't spawn anything. <code>spawn: local</code> runs LLM calls in a forked subprocess; <code>spawn: none</code> runs them in-process. All three modes support tools, MCP, and skills.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R4</span> <span class="req-name">Ephemeral-by-default</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Each agent step spawns a sandbox container with isolated runtime state, bounded timeouts, and best-effort cleanup with orphan reconciliation. Human-approval steps do not spawn containers.</div>
+  <div class="req-header"><span><span class="req-id">R4</span> <span class="req-name">Human-in-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
+  <div class="req-desc">Diagnose &rarr; Propose &rarr; Gate &rarr; Execute &rarr; Verify. Structured output with risk levels. Approval gates pause workflows for human review.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
-  <div class="req-desc">Workflow state lives in Temporal Server, not in the runner process. Scales horizontally; replica crashes don't lose workflows.</div>
+  <div class="req-header"><span><span class="req-id">R5</span> <span class="req-name">Human-out-of-the-loop</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Human Follow-up with Preserved Context">G4</a></span></div>
+  <div class="req-desc">When retries exhaust, escalation packages full context &mdash; diagnosis, steps taken, failure history. Interactive CLI handoff is done.</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R6</span> <span class="req-name">Agent memory across steps</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G4')" title="G4: Seamless Human-Agent Handoff">G4</a></span></div>
-  <div class="req-desc">Full agent event history (tool calls, reasoning, results) persisted across all workflow steps. Later steps and human reviewers have full visibility into prior agent work.</div>
+  <div class="req-header"><span><span class="req-id">R6</span> <span class="req-name">Retry with escalation</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a> <a onclick="goToGoal('G4')" title="G4: Human Follow-up with Preserved Context">G4</a></span></div>
+  <div class="req-desc">Each retry sees full failure history. Exhausted retries route to R4 (approval) or R5 (escalation handoff).</div>
 </div>
 
 <div class="req-card">
-  <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Cross-platform deployment</span></span> <span class="req-goals"><a onclick="goToGoal('G5')" title="G5: Dual Deployment: Kubernetes + Podman">G5</a></span></div>
-  <div class="req-desc">Shared abstract spawner interface with platform-specific implementations. Must support both Kubernetes and Podman deployment targets.</div>
+  <div class="req-header"><span><span class="req-id">R7</span> <span class="req-name">Stateless runner, durable state</span></span> <span class="req-goals"><a onclick="goToGoal('G1')" title="G1: Bring Your Own Agents &amp; Workflows">G1</a> <a onclick="goToGoal('G5')" title="G5: Kubernetes and Podman Deployment Targets">G5</a></span></div>
+  <div class="req-desc">Workflow state lives in Temporal Server, not in the runner process. Scales horizontally behind a load balancer. Replica crashes don't lose workflows.</div>
 </div>
 
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R8</span> <span class="req-name">Security</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Credentials never exposed to agent processes. Authenticated access on all endpoints. Encrypted runner-to-sandbox communication. Per-step permission scoping (allowed/denied tools). Structured audit trail.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R9</span> <span class="req-name">Access control</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Per-user/team RBAC with pluggable authorization. Fail-closed when enabled.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R10</span> <span class="req-name">Observability</span></span> <span class="req-goals"><a onclick="goToGoal('G2')" title="G2: Secured &amp; Governed Execution">G2</a></span></div>
-  <div class="req-desc">Distributed tracing across workflow steps. Metrics for workflow execution. Structured logging. Audit events for all security-relevant actions.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R11</span> <span class="req-name">Triggers</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc">Workflows invocable via API, alert-based triggers, and schedule-based triggers.</div>
-</div>
-
-<div class="req-card">
-  <div class="req-header"><span><span class="req-id">R12</span> <span class="req-name">Agents-as-tools</span></span> <span class="req-goals"><a onclick="goToGoal('G3')" title="G3: Composable Agent Ecosystem">G3</a></span></div>
-  <div class="req-desc">Agents composable as tools for other agents or chatbots, enabling conversational workflow invocation.</div>
-</div>
+<div class="req-section-title">Requirements (Implementation Status)</div>
+<table class="faq-table">
+  <tr><th>Req</th><th>Area</th><th>Status</th><th>Description</th></tr>
+  <tr><td>R8</td><td>Execution engine</td><td>Done</td><td>Temporal workflow engine + sandbox containers</td></tr>
+  <tr><td>R9</td><td>Runtime</td><td>Done</td><td>FastAPI + Temporal Worker + sandbox HTTP contract</td></tr>
+  <tr><td>R10</td><td>Deployment</td><td>Done</td><td>K8s (Helm chart) and Podman deployment targets for the workflow runner itself; ephemeral spawning is uniformly gateway-mediated regardless of target</td></tr>
+  <tr><td>R11</td><td>Persistence</td><td>Done</td><td>Temporal Server provides durable execution and state</td></tr>
+  <tr><td>R12</td><td>Security</td><td>Partial</td><td>Secrets, auth, risk_level, securityContext done. Per-step tool filtering: runner-side forwarding done, sandbox-side enforcement pending</td></tr>
+  <tr><td>R13</td><td>Access control</td><td>Done</td><td>Per-user/team RBAC via pluggable authorizer (Noop / PolicyFile)</td></tr>
+  <tr><td>R14</td><td>Observability</td><td>Done</td><td>OTel tracing, Prometheus metrics, structured logging, health probes, audit events</td></tr>
+  <tr><td>R15</td><td>Triggers</td><td>Partial</td><td>API, alert, and schedule triggers done. Chatbot trigger TODO</td></tr>
+  <tr><td>R16</td><td>Agents-as-tools</td><td>TODO</td><td>Registry auto-generates LLM tools from workflow definitions</td></tr>
+  <tr><td>R17</td><td>Escalation</td><td>Done</td><td>Context packaging + delivery + interactive CLI handoff all done</td></tr>
+</table>
+<div class="req-desc" style="margin-top:10px;">Full detail: <a href="ARCHITECTURE.md" style="color:#58a6ff;">docs/ARCHITECTURE.md</a> (source of truth for goals/requirements &mdash; this page mirrors it).</div>
 
 </div>
 </div>
@@ -236,35 +227,35 @@ svg { width: 100%; height: auto; display: block; }
 
 <div class="faq-card">
   <div class="faq-q">How are agents going to be defined? Custom YAML schema?</div>
-  <div class="faq-a"><strong>Workflow definitions</strong> (apiVersion: v1, kind: AgentWorkflow) are the primary abstraction: multi-step workflows with conditions, approval gates, parallel groups. Each step runs in a lightspeed-agentic-sandbox container. Teams write workflow YAML with per-step prompts, output schemas, and conditions. Skills are specified and mounted for each step, providing domain knowledge as OCI images. The API request provides deployment-time config (provider, sandbox image, skills image, MCP servers).</div>
+  <div class="faq-a"><strong>Workflow definitions</strong> (apiVersion: v1, kind: AgentWorkflow) are the primary abstraction: multi-step workflows with conditions, approval gates, parallel groups. Each <code>spawn: ephemeral</code> step runs in a lightspeed-agentic-sandbox container. Teams write workflow YAML with per-step prompts, output schemas, and conditions. Skills are baked into the sandbox image at build time; each step opts into a subset via <code>allowed_skills</code>, enforced with Landlock. The API request provides deployment-time config (provider, sandbox image, MCP servers).</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Where are agent guardrails defined? What guardrails will be available?</div>
-  <div class="faq-a"><strong>Explored:</strong><br>
-    <em>Note: specific enforcement mechanisms vary by deployment target (K8s, Podman, OpenShell). The guardrails below are implemented across spawners where applicable, with K8s offering the richest native controls.</em><br><br>
+  <div class="faq-a"><strong>Implemented:</strong><br>
+    <em>Note: <code>OpenShellSpawner</code> is the sole ephemeral spawner (a gRPC client to an externally-supplied OpenShell gateway) &mdash; the guardrails below are its current enforcement mechanisms, not a choice between platforms.</em><br><br>
     &bull; <strong>Workflow level</strong>: risk_level per step (agent steps default to "high", approval steps default to "medium" &mdash; fails closed), approval gates with auto-approve policy, advisory mode (read-only container filesystem)<br>
     &bull; <strong>Execution level</strong>: hard timeouts per step, resource limits (CPU/memory via SpawnConfig), ephemeral container isolation (fresh per step, destroyed after), concurrency cap (MAX_SPAWNED_PODS)<br>
-    &bull; <strong>Container level</strong>: securityContext (non-root, read-only root fs, no privilege escalation), per-step ServiceAccount override, ephemeral TLS for runner-to-sandbox communication<br>
-    &bull; <strong>Credential isolation</strong>: OpenShell supervisor inference router injects LLM API keys into outgoing calls at the network level &mdash; the agent process never has access to credentials, preventing exfiltration even if compromised<br>
-    &bull; <strong>Network level</strong>: K8s NetworkPolicy or OpenShell per-sandbox policy (derived from provider and MCP config), scoped egress to known services<br>
+    &bull; <strong>Sandbox level</strong>: Landlock + seccomp + network namespace via the OpenShell supervisor (non-root, no privilege escalation), per-sandbox JWT auth to the gateway, skills scoped per-step via <code>allowed_skills</code><br>
+    &bull; <strong>Credential isolation</strong>: LLM credentials are delivered via the gateway's Provider API and injected into outgoing calls at the network level &mdash; the agent process never has direct access to the raw credential, preventing exfiltration even if compromised<br>
+    &bull; <strong>Network level</strong>: the OpenShell gateway derives per-sandbox L4/L7 egress policy from provider and MCP config, scoped to known services. Separately, the workflow runner's own NetworkPolicy restricts its egress (relevant to <code>spawn: none</code>/<code>local</code>, which make LLM calls from the runner process itself)<br>
     &bull; <strong>MCP</strong>: secret allowlist (MCP_ALLOWED_SECRETS), file-reference headers (secrets never inlined in env vars)<br>
     &bull; <strong>Audit</strong>: structured audit events for workflow start, approval decisions, sandbox spawn/destroy, secret mounts, escalation, orphan cleanup<br><br>
-    <strong>Future / not yet in workflow path:</strong><br>
-    &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet wired into the workflow sandbox path<br>
-    &bull; Dynamic RBAC from agent output (per-step ServiceAccount + Roles scoped to agent actions)<br>
+    <strong>Partial / TODO:</strong><br>
+    &bull; Advisory mode tool filtering &mdash; filesystem read-only works, but tool-level filtering not yet wired into the workflow sandbox path (sandbox-side enforcement pending in lightspeed-agentic-sandbox)<br>
+    &bull; Dynamic RBAC from agent output<br>
     &bull; Tool origin validation allowlist</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Are these agents going to be available as a ready-made template?</div>
-  <div class="faq-a">The framework is built for <strong>Lightspeed product teams</strong> to create ready-made agent solutions for Red Hat customers &mdash; not for customers to build their own agents directly. Product teams define workflow YAML with custom steps, prompts, and output schemas, then ship the resulting agent as a productized solution. Skills (domain knowledge packages) can be distributed as OCI images and mounted into sandbox containers. The goal is to re-use as many upstream and Red Hat projects as possible (e.g. OpenShell for sandbox infrastructure). Concrete productization plans are TBD &mdash; we are at the stage of prototyping and validating use cases.</div>
+  <div class="faq-a">The framework is built for <strong>Lightspeed product teams</strong> to create ready-made agent solutions for Red Hat customers &mdash; not for customers to build their own agents directly. Product teams define workflow YAML with custom steps, prompts, and output schemas, then ship the resulting agent as a productized solution. Skills (domain knowledge packages) are baked into the sandbox image at build time and scoped per-step via <code>allowed_skills</code>. The goal is to re-use as many upstream and Red Hat projects as possible (e.g. OpenShell for sandbox infrastructure, Temporal for durable execution).</div>
 </div>
 
 <div class="faq-card">
   <div class="faq-q">Are teams able to bring their own agent? Do they need a specific SDK or just a standardized API?</div>
-  <div class="faq-a">Yes &mdash; no SDK needed. Teams write a workflow definition with per-step prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) packaged in an OCI image. The skills image is specified at deployment time via the API request (<code>skills_image</code>), not in the YAML itself. No code required.<br><br>
-    The workflow YAML defines <em>what</em> (steps, prompts, output schemas, conditions, approval gates). The API request provides <em>how</em> (which provider, which sandbox image, which skills image, which MCP servers).</div>
+  <div class="faq-a">Yes &mdash; no SDK needed. Teams write a workflow definition with per-step prompts and output schemas. The sandbox runs the LLM with Shell, Filesystem, and Skills capabilities built in. Domain knowledge is provided as skills (SKILL.md files) baked into the sandbox image; each step's agent sees only the subset listed in that step's <code>allowed_skills</code>. No code required.<br><br>
+    The workflow YAML defines <em>what</em> (steps, prompts, output schemas, conditions, approval gates, <code>allowed_skills</code>). The API request provides <em>how</em> (which provider, which sandbox image, which MCP servers).</div>
 </div>
 
 <div class="faq-card">
@@ -272,18 +263,18 @@ svg { width: 100%; height: auto; display: block; }
   <div class="faq-a">
     <table class="faq-table">
       <tr><th>Component</th><th>Build vs Reuse</th><th>Status</th></tr>
-      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK + Build: pydantic-graph local executor</td><td>Explored</td></tr>
-      <tr><td>Spawner (K8s / Podman / OpenShell)</td><td>Build: one per platform, shared abstract interface</td><td>Explored</td></tr>
-      <tr><td>Definition store</td><td>Build: CRUD + validation</td><td>Explored</td></tr>
-      <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox</td><td>Explored</td></tr>
-      <tr><td>Durable state</td><td>Reuse: Temporal Server + Build: PostgreSQL RunStateStore (local mode)</td><td>Explored</td></tr>
-      <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Explored</td></tr>
-      <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Explored</td></tr>
-      <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Explored</td></tr>
-      <tr><td>Alert &amp; schedule triggers</td><td>Build: webhook-triggered and cron-based workflow launches</td><td>Explored</td></tr>
-      <tr><td>TLS (runner &harr; sandbox)</td><td>Build: ephemeral EC P-256 certs, per-sandbox CA</td><td>Explored</td></tr>
-      <tr><td>Transcript store</td><td>Build: persistent agent event storage (PostgreSQL)</td><td>Explored</td></tr>
-      <tr><td>Agents-as-tools</td><td>Build: registry &rarr; LLM tool generation</td><td>To be explored</td></tr>
+      <tr><td>Workflow engine</td><td>Reuse: Temporal SDK + Build: pydantic-graph local executor</td><td>Done</td></tr>
+      <tr><td>Spawner</td><td>Build: <code>OpenShellSpawner</code>, a gRPC client to an externally-supplied OpenShell gateway (sole ephemeral spawner)</td><td>Done</td></tr>
+      <tr><td>Definition store</td><td>Build: CRUD + validation</td><td>Done</td></tr>
+      <tr><td>Sandbox runtime</td><td>Reuse: lightspeed-agentic-sandbox, behind OpenShell's Landlock/seccomp supervisor</td><td>Done</td></tr>
+      <tr><td>Durable state</td><td>Reuse: Temporal Server + Build: PostgreSQL RunStateStore (local mode)</td><td>Done</td></tr>
+      <tr><td>Auth middleware</td><td>Build: bearer + K8s TokenReview</td><td>Done</td></tr>
+      <tr><td>Observability</td><td>Reuse: OTel, Prometheus, structlog</td><td>Done</td></tr>
+      <tr><td>Approval routing</td><td>Build: Slack/webhook notifiers</td><td>Done</td></tr>
+      <tr><td>Alert &amp; schedule triggers</td><td>Build: webhook-triggered and cron-based workflow launches</td><td>Done</td></tr>
+      <tr><td>TLS (runner &harr; sandbox)</td><td>Build: ephemeral EC P-256 certs, per-sandbox CA &mdash; built, but only applies to a hypothetical Kubernetes-native spawner. OpenShell's own gateway TLS termination is used instead</td><td>N/A (OpenShell path)</td></tr>
+      <tr><td>Transcript store</td><td>Build: persistent agent event storage (PostgreSQL)</td><td>Done</td></tr>
+      <tr><td>Agents-as-tools</td><td>Build: registry &rarr; LLM tool generation</td><td>TODO</td></tr>
     </table>
   </div>
 </div>
@@ -315,18 +306,16 @@ svg { width: 100%; height: auto; display: block; }
 </defs>
 <rect width="1140" height="580" fill="url(#g1)"/>
 
-<rect class="boundary" x="130" y="75" width="640" height="470" stroke="#30363d"/>
-<text x="148" y="93" class="blbl" fill="#484f58">K8s Cluster / Podman Host</text>
-<rect class="boundary" x="145" y="108" width="200" height="420" stroke="#58a6ff" opacity="0.35"/>
-<text x="155" y="125" class="blbl" fill="#58a6ff" opacity="0.55">Platform Framework</text>
-<rect class="boundary" x="390" y="108" width="365" height="330" stroke="#238636" opacity="0.35"/>
-<text x="405" y="125" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pod (one per step)</text>
+<rect class="boundary" x="145" y="75" width="200" height="453" stroke="#58a6ff" opacity="0.45"/>
+<text x="155" y="93" class="blbl" fill="#58a6ff" opacity="0.65">Workflow Runner (K8s/Podman)</text>
+<rect class="boundary" x="390" y="108" width="365" height="330" stroke="#a371f7" stroke-dasharray="7 4" opacity="0.4"/>
+<text x="405" y="125" class="blbl" fill="#a371f7" opacity="0.6">Externally-Supplied OpenShell Gateway</text>
 <rect class="boundary" x="800" y="75" width="200" height="470" stroke="#a371f7" opacity="0.25"/>
 <text x="815" y="93" class="blbl" fill="#a371f7" opacity="0.45">External</text>
 
 <g class="comp"><rect x="15" y="220" width="90" height="50" fill="#1f2937" stroke="#6366f1"/><text x="60" y="243" text-anchor="middle" class="lbl">User</text><text x="60" y="258" text-anchor="middle" class="desc">API caller</text></g>
 <g class="comp"><rect x="155" y="195" width="180" height="100" fill="#1c2333" stroke="#58a6ff"/><text x="245" y="220" text-anchor="middle" class="lbl">Workflow Runner</text><text x="245" y="236" text-anchor="middle" class="desc">Temporal AgentWorkflow</text><text x="245" y="250" text-anchor="middle" class="desc">definition → steps</text><text x="245" y="264" text-anchor="middle" class="desc">conditions, retry, signals</text><text x="245" y="278" text-anchor="middle" class="desc">sandbox activities</text></g>
-<g class="comp"><rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/><text x="245" y="365" text-anchor="middle" class="lbl">Spawner</text><text x="245" y="381" text-anchor="middle" class="desc">K8s Jobs / Podman containers</text></g>
+<g class="comp"><rect x="155" y="340" width="180" height="60" fill="#1c2333" stroke="#d29922"/><text x="245" y="362" text-anchor="middle" class="lbl">OpenShellSpawner</text><text x="245" y="378" text-anchor="middle" class="desc">gRPC client → OpenShell Gateway</text></g>
 <g class="comp"><rect x="155" y="135" width="180" height="40" fill="#1c2333" stroke="#8b949e"/><text x="245" y="155" text-anchor="middle" class="lbl">Agent &amp; Workflow Registry</text><text x="245" y="168" text-anchor="middle" class="desc">definitions + endpoints</text></g>
 <g class="comp"><rect x="155" y="450" width="180" height="40" fill="#1c2333" stroke="#79c0ff"/><text x="245" y="470" text-anchor="middle" class="lbl">Temporal Server</text><text x="245" y="484" text-anchor="middle" class="desc">durable execution + state</text></g>
 <g class="comp"><rect x="420" y="470" width="180" height="45" fill="#2d2000" stroke="#d29922"/><text x="510" y="491" text-anchor="middle" class="lbl" fill="#e3b341">Approval Channel</text><text x="510" y="505" text-anchor="middle" class="desc">Slack / Webhook</text></g>
@@ -334,9 +323,9 @@ svg { width: 100%; height: auto; display: block; }
 <g class="comp"><rect x="830" y="310" width="140" height="50" fill="#1c2333" stroke="#8b949e"/><text x="900" y="333" text-anchor="middle" class="lbl">Observability</text><text x="900" y="349" text-anchor="middle" class="desc">Prometheus + OTel</text></g>
 <g class="comp"><rect x="830" y="420" width="140" height="50" fill="#1f2937" stroke="#6366f1"/><text x="900" y="443" text-anchor="middle" class="lbl">Human Approver</text><text x="900" y="459" text-anchor="middle" class="desc">SRE / Operator</text></g>
 
-<g class="comp eph" id="w-pod-diagnose" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="85" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="457" y="152" text-anchor="middle" class="step-label">DIAGNOSE</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-a1b2c3d4e5f6</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (from Secret)</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + outputSchema)</text><text x="425" y="297" class="desc">Output: {health_status, root_cause, fix, severity}</text></g>
-<g class="comp eph" id="w-pod-fix" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="45" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="437" y="152" text-anchor="middle" class="step-label">FIX</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-d4e5f6a7b8c9</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox (fresh) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (from Secret)</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + context)</text><text x="425" y="297" class="desc">Output: {actions_taken, cluster_healthy}</text></g>
-<g class="comp eph" id="w-pod-verify" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="65" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="447" y="152" text-anchor="middle" class="step-label">VERIFY</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-g7h8i9j0k1l2</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox (fresh) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (from Secret)</text><text x="435" y="262" class="mount">/app/skills/ ← Volume (optional)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + context)</text><text x="425" y="297" class="desc">Output: {cluster_healthy, remaining_issues}</text></g>
+<g class="comp eph" id="w-pod-diagnose" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="85" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="457" y="152" text-anchor="middle" class="step-label">DIAGNOSE</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-a1b2c3d4e5f6</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (via gateway)</text><text x="435" y="262" class="mount">/skills/&lt;name&gt; (baked in, scoped)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + outputSchema)</text><text x="425" y="297" class="desc">Output: {health_status, root_cause, fix, severity}</text></g>
+<g class="comp eph" id="w-pod-fix" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="45" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="437" y="152" text-anchor="middle" class="step-label">FIX</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-d4e5f6a7b8c9</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox (fresh) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (via gateway)</text><text x="435" y="262" class="mount">/skills/&lt;name&gt; (baked in, scoped)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + context)</text><text x="425" y="297" class="desc">Output: {actions_taken, cluster_healthy}</text></g>
+<g class="comp eph" id="w-pod-verify" style="opacity:0"><rect x="410" y="135" width="230" height="170" fill="#0d2818" stroke="#238636"/><rect x="415" y="139" width="65" height="18" rx="4" fill="#1a4731" stroke="none"/><text x="447" y="152" text-anchor="middle" class="step-label">VERIFY</text><text x="525" y="168" text-anchor="middle" class="lbl" fill="#3fb950">ca-g7h8i9j0k1l2</text><text x="525" y="183" text-anchor="middle" class="desc">── lightspeed-agentic-sandbox (fresh) ──</text><line x1="420" y1="192" x2="630" y2="192" stroke="#30363d" stroke-width="0.5"/><text x="425" y="206" class="mount-hdr">Env vars:</text><text x="435" y="220" class="mount">LIGHTSPEED_PROVIDER=openai</text><text x="435" y="234" class="mount">LIGHTSPEED_MODEL=gpt-4o-mini</text><text x="435" y="248" class="mount">OPENAI_API_KEY=*** (via gateway)</text><text x="435" y="262" class="mount">/skills/&lt;name&gt; (baked in, scoped)</text><line x1="420" y1="270" x2="630" y2="270" stroke="#30363d" stroke-width="0.5"/><text x="425" y="284" class="desc">Contract: POST /v1/agent/run (query + context)</text><text x="425" y="297" class="desc">Output: {cluster_healthy, remaining_issues}</text></g>
 
 <line id="w-f1" class="flow" x1="105" y1="245" x2="150" y2="245" stroke="#58a6ff" marker-end="url(#w-a1)"/>
 <line id="w-f2" class="flow" x1="245" y1="195" x2="245" y2="178" stroke="#8b949e" marker-end="url(#w-a1)"/>
@@ -380,12 +369,10 @@ svg { width: 100%; height: auto; display: block; }
 </defs>
 <rect width="1140" height="560" fill="url(#g2)"/>
 
-<rect class="boundary" x="195" y="60" width="600" height="475" stroke="#30363d"/>
-<text x="210" y="78" class="blbl" fill="#484f58">K8s Cluster / Podman Host</text>
-<rect class="boundary" x="210" y="90" width="275" height="430" stroke="#58a6ff" opacity="0.35"/>
-<text x="220" y="107" class="blbl" fill="#58a6ff" opacity="0.55">Platform Services</text>
-<rect class="boundary" x="530" y="90" width="250" height="290" stroke="#238636" opacity="0.35"/>
-<text x="545" y="107" class="blbl" fill="#3fb950" opacity="0.55">Ephemeral Pods</text>
+<rect class="boundary" x="210" y="60" width="275" height="460" stroke="#58a6ff" opacity="0.45"/>
+<text x="220" y="78" class="blbl" fill="#58a6ff" opacity="0.65">Workflow Runner (K8s/Podman)</text>
+<rect class="boundary" x="530" y="90" width="250" height="290" stroke="#a371f7" stroke-dasharray="7 4" opacity="0.4"/>
+<text x="545" y="107" class="blbl" fill="#a371f7" opacity="0.6">OpenShell Gateway (external)</text>
 <rect class="boundary" x="830" y="60" width="200" height="430" stroke="#a371f7" opacity="0.25"/>
 <text x="845" y="78" class="blbl" fill="#a371f7" opacity="0.45">External</text>
 
@@ -432,14 +419,6 @@ svg { width: 100%; height: auto; display: block; }
 </div>
 
 <script>
-const goalTitles = {
-  G1: 'Bring Your Own Agents & Workflows',
-  G2: 'Secured & Governed Execution',
-  G3: 'Composable Agent Ecosystem',
-  G4: 'Seamless Human-Agent Handoff',
-  G5: 'Dual Deployment: Kubernetes + Podman',
-};
-
 function goToGoal(gid) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
