@@ -86,8 +86,9 @@ def resolve_mcp_servers(
                     "MCP server '%s' not found in catalog -- skipping", item
                 )
         elif isinstance(item, dict):
-            # Inline dict definition -- must have name/url; pass through
-            # even if incomplete so downstream validation can surface it.
+            # Inline dict definition -- validated at submission time
+            # (validate_definition) so incomplete entries are rejected
+            # with 422 before reaching the resolver.
             resolved.append(dict(item))
         elif hasattr(item, "model_dump"):
             # Inline MCPServerConfig model instance

@@ -237,6 +237,12 @@ async def _run_with_agent(
     mcp_servers = input_data.get("mcp_servers") or []
     mcp_toolsets: list[MCPToolset] = []
     for server in mcp_servers:
+        if server.get("secret_headers"):
+            logger.warning(
+                "MCP server '%s' has secret_headers which are ignored under "
+                "spawn: local (no secret mounts); use spawn: ephemeral",
+                server.get("name", ""),
+            )
         url = server.get("url", "")
         headers = server.get("headers")
         transport = StreamableHttpTransport(url=url, headers=headers)

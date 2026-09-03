@@ -308,3 +308,86 @@ class TestOutputSchemaValidation:
             self._defn_with_schema({"type": "object", "properties": {"things": {"type": "array"}}})
         )
         assert any("s1" in e for e in errors)
+
+
+class TestMCPServersValidation:
+    """Tests for mcp_servers validation at submission time (issue #265).
+
+    Validates that inline entries are caught by validate_definition
+    rather than only surfacing as KeyError at execution.
+    """
+
+    def _defn_with_mcp(self, mcp_servers: list) -> dict:
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {
+                        "name": "s1",
+                        "type": "agent",
+                        "output_key": "r1",
+                        "prompt": "check",
+                        "mcp_servers": mcp_servers,
+                    },
+                ]
+            },
+        }
+
+    def test_valid_string_ref_passes(self) -> None:
+        errors = validate_definition(self._defn_with_mcp(["my-server"]))
+        assert len(errors) == 0
+
+    def test_valid_inline_passes(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp([{"name": "inline", "url": "http://x"}])
+        )
+        assert len(errors) == 0
+
+    def test_mixed_string_and_inline_passes(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp(["a", {"name": "inline", "url": "http://x"}])
+        )
+        assert len(errors) == 0
+
+    def test_empty_string_rejected(self) -> None:
+        errors = validate_definition(self._defn_with_mcp([""]))
+        assert any("mcp_servers" in e for e in errors)
+
+    def test_inline_missing_name_rejected(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp([{"nam": "broken", "url": "http://x"}])
+        )
+        assert any("mcp_servers" in e and "name" in e for e in errors)
+
+    def test_inline_missing_url_rejected(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp([{"name": "inline"}])
+        )
+        assert any("mcp_servers" in e and "url" in e for e in errors)
+
+    def test_inline_empty_name_rejected(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp([{"name": "", "url": "http://x"}])
+        )
+        assert any("mcp_servers" in e for e in errors)
+
+    def test_non_string_non_dict_rejected(self) -> None:
+        errors = validate_definition(
+            self._defn_with_mcp([123])  # type: ignore[arg-type]
+        )
+        assert any("mcp_servers" in e for e in errors)
+
+    def test_no_mcp_field_passes(self) -> None:
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "check"},
+                ]
+            },
+        }
+        assert len(validate_definition(defn)) == 0
