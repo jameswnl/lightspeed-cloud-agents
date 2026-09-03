@@ -25,6 +25,7 @@ from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.workflow.notifiers.escalation import LogPackager
 from cloud_agents.workflow.notifiers.notifier import NullNotifier
+from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
 from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
@@ -160,11 +161,9 @@ async def _run_direct_or_local_step(
         skills_image=input.get("skills_image"),
         skills_paths=input.get("skills_paths"),
         allowed_skills=step.get("allowed_skills"),
-        # Full unfiltered catalog, matching the local engine's actual
-        # current behavior -- the ephemeral path's per-step-name filtering
-        # (see below) does not apply to none/local, same as on the local
-        # engine today (a step's own mcp_servers: field is a no-op there).
-        mcp_servers=input.get("mcp_servers"),
+        mcp_servers=resolve_mcp_servers(
+            step.get("mcp_servers"), input.get("mcp_servers")
+        ),
         workflow_id=input["workflow_id"],
         raw_step=step,
         step_name=step_name,
@@ -461,14 +460,11 @@ async def _run_sandbox_step_inner(
             # a placeholder via spec.providers, so it doesn't need it here.
 
     # MCP server injection — step references servers by name from workflow-level catalog
+    # plus inline step-scoped definitions (issue #265).
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    step_mcp_names = step.get("mcp_servers")
-    all_mcp_servers = input.get("mcp_servers") or []
-    if step_mcp_names:
-        mcp_by_name = {s["name"]: s for s in all_mcp_servers}
-        raw_mcp_servers = [mcp_by_name[n] for n in step_mcp_names if n in mcp_by_name]
-    else:
-        raw_mcp_servers = None
+    raw_mcp_servers = resolve_mcp_servers(
+        step.get("mcp_servers"), input.get("mcp_servers")
+    )
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:
@@ -499,9 +495,14 @@ async def _run_sandbox_step_inner(
                 )
             mcp_env_list.append(entry)
 
-        # Validate MCP secrets against allowlist
-        allowed_secrets_raw = os.environ.get("MCP_ALLOWED_SECRETS", "")
-        if allowed_secrets_raw:
+        # Validate MCP secrets against allowlist — fail closed if allowlist unset
+        if mcp_secret_mounts:
+            allowed_secrets_raw = os.environ.get("MCP_ALLOWED_SECRETS", "")
+            if not allowed_secrets_raw:
+                raise ValueError(
+                    "MCP secrets requested but MCP_ALLOWED_SECRETS is not set — "
+                    "set it to a comma-separated list of allowed K8s Secret names"
+                )
             allowed = set(s.strip() for s in allowed_secrets_raw.split(","))
             for mount in mcp_secret_mounts:
                 if mount[0] not in allowed:

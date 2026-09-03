@@ -1471,6 +1471,7 @@ class TestMCPInjection:
     @pytest.mark.asyncio
     async def test_secret_headers_encoded_as_file_refs(self, mocker: MockerFixture) -> None:
         """Secret headers encoded as file references in MCP env var."""
+        mocker.patch.dict("os.environ", {"MCP_ALLOWED_SECRETS": "mcp-sn-token"})
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -1534,6 +1535,7 @@ class TestMCPInjection:
     @pytest.mark.asyncio
     async def test_mcp_secret_mounts_passed_to_spawner(self, mocker: MockerFixture) -> None:
         """MCP secret refs passed to spawner as mcp_secret_mounts."""
+        mocker.patch.dict("os.environ", {"MCP_ALLOWED_SECRETS": "mcp-sn-token"})
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -1694,6 +1696,97 @@ class TestMCPInjection:
         )
 
         assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_mcp_secrets_require_allowlist(self, mocker: MockerFixture) -> None:
+        """MCP secrets requested but MCP_ALLOWED_SECRETS unset raises (fail closed).
+
+        Mirrors test_step_runner.TestMCPAllowlist.test_run_step_mcp_secrets_require_allowlist.
+        """
+        # Ensure env var is absent (fail closed)
+        mocker.patch.dict("os.environ", {}, clear=False)
+        # Explicitly remove if present in outer env
+        import os
+
+        os.environ.pop("MCP_ALLOWED_SECRETS", None)
+
+        mock_spawner = mocker.AsyncMock()
+
+        with pytest.raises(ValueError, match="MCP_ALLOWED_SECRETS is not set"):
+            await run_sandbox_step(
+                {
+                    "step": {
+                        "name": "s1",
+                        "prompt": "check",
+                        "output_key": "r1",
+                        "mcp_servers": ["sn"],
+                    },
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "k",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                    "mcp_servers": [
+                        {
+                            "name": "sn",
+                            "url": "http://mcp.local/sse",
+                            "secret_headers": {
+                                "Authorization": {
+                                    "secret_name": "mcp-sn-token",
+                                    "key": "bearer-token",
+                                },
+                            },
+                        }
+                    ],
+                },
+                spawner=mock_spawner,
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_inline_secrets_require_allowlist(self, mocker: MockerFixture) -> None:
+        """Inline mcp_servers with secret_headers also requires allowlist."""
+
+        import os
+
+        os.environ.pop("MCP_ALLOWED_SECRETS", None)
+
+        mock_spawner = mocker.AsyncMock()
+
+        with pytest.raises(ValueError, match="MCP_ALLOWED_SECRETS is not set"):
+            await run_sandbox_step(
+                {
+                    "step": {
+                        "name": "s1",
+                        "prompt": "check",
+                        "output_key": "r1",
+                        "mcp_servers": [
+                            {
+                                "name": "inline",
+                                "url": "http://mcp.local/sse",
+                                "secret_headers": {
+                                    "Authorization": {
+                                        "secret_name": "inline-token",
+                                        "key": "tok",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                    "workflow_id": "wf-1",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "k",
+                    },
+                    "sandbox_image": "sandbox:latest",
+                    "context": {},
+                    "mcp_servers": [],
+                },
+                spawner=mock_spawner,
+            )
 
 
 class TestPerStepMCPInjection:
@@ -4292,11 +4385,9 @@ class TestSpawnModeDispatch:
 
     @pytest.mark.asyncio
     async def test_full_unfiltered_mcp_catalog_passed_for_none(self, mocker: MockerFixture) -> None:
-        """spawn: none passes the full MCP catalog, matching local engine's
+        """spawn: none respects per-step mcp_servers filtering (unified resolver).
 
-        actual current behavior -- NOT the ephemeral path's per-step-name
-        filtering (step-level mcp_servers is a no-op for none/local today,
-        same as under the local engine's DirectExecutor).
+        After issue #265, all spawn modes filter via resolve_mcp_servers.
         """
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
@@ -4323,7 +4414,7 @@ class TestSpawnModeDispatch:
         await run_sandbox_step(input_dict, spawner=None)
 
         server_names = {s["name"] for s in captured["step_input"].mcp_servers}
-        assert server_names == {"only-this-one", "other-server"}
+        assert server_names == {"only-this-one"}
 
     @pytest.mark.asyncio
     async def test_transcript_persisted_for_spawn_none_when_store_configured(

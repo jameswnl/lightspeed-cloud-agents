@@ -399,6 +399,12 @@ class DirectExecutor(StepExecutor):
             # Build MCP toolsets
             mcp_toolsets: list[MCPToolset] = []
             for server in step_input.mcp_servers or []:
+                if server.get("secret_headers"):
+                    logger.warning(
+                        "MCP server '%s' has secret_headers which are ignored under "
+                        "spawn: none (no secret mounts); use spawn: ephemeral",
+                        server.get("name", ""),
+                    )
                 url = server.get("url", "")
                 headers = server.get("headers")
                 transport = StreamableHttpTransport(url=url, headers=headers)
@@ -517,6 +523,12 @@ class DirectExecutor(StepExecutor):
         # Build MCP toolsets
         mcp_toolsets: list[MCPToolset] = []
         for server in step_input.mcp_servers or []:
+            if server.get("secret_headers"):
+                logger.warning(
+                    "MCP server '%s' has secret_headers which are ignored under "
+                    "spawn: none (no secret mounts); use spawn: ephemeral",
+                    server.get("name", ""),
+                )
             url = server.get("url", "")
             headers = server.get("headers")
             transport = StreamableHttpTransport(url=url, headers=headers)

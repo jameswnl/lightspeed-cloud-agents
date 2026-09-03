@@ -25,6 +25,7 @@ from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer, inject_traceparent
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
 from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
 from cloud_agents.workflow.security.redact import redact_secrets
 from cloud_agents.workflow.core.context import build_sandbox_context
@@ -244,13 +245,9 @@ async def _run_step_inner(
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    step_mcp_names = step.get("mcp_servers")
-    all_mcp_servers = input.get("mcp_servers") or []
-    if step_mcp_names:
-        mcp_by_name = {s["name"]: s for s in all_mcp_servers}
-        raw_mcp_servers = [mcp_by_name[n] for n in step_mcp_names if n in mcp_by_name]
-    else:
-        raw_mcp_servers = None
+    raw_mcp_servers = resolve_mcp_servers(
+        step.get("mcp_servers"), input.get("mcp_servers")
+    )
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:

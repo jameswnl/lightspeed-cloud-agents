@@ -108,6 +108,31 @@ def validate_definition(
                         f"'.' or '..': {skill_name!r}"
                     )
 
+        # Validate mcp_servers entries at submission time (422) so /run
+        # and /definitions agree on the field this PR adds. Without this,
+        # an inline dict with a typo (e.g. {"nam": "x", "url": "..."}) is
+        # accepted by validate_definition but rejected by
+        # WorkflowDefinition.model_validate(), and at runtime the resolver
+        # passes it through to server["name"] -> opaque KeyError.
+        # Keep in sync with WorkflowStepSpec.mcp_servers typing.
+        mcp_servers = step.get("mcp_servers")
+        if mcp_servers:
+            for j, entry in enumerate(mcp_servers):
+                if isinstance(entry, str):
+                    if not entry:
+                        errors.append(
+                            f"Step '{name}': mcp_servers string entries must not be empty"
+                        )
+                elif isinstance(entry, dict):
+                    if not entry.get("name") or not entry.get("url"):
+                        errors.append(
+                            f"Step '{name}': inline mcp_servers entry [{j}] requires non-empty 'name' and 'url'"
+                        )
+                else:
+                    errors.append(
+                        f"Step '{name}': mcp_servers entries must be strings or inline configs"
+                    )
+
     # --- Content policy checks ---
     if content_policy is not None:
         violations = evaluate_content_policy(defn, content_policy)
