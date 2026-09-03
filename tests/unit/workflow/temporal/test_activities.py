@@ -1471,6 +1471,7 @@ class TestMCPInjection:
     @pytest.mark.asyncio
     async def test_secret_headers_encoded_as_file_refs(self, mocker: MockerFixture) -> None:
         """Secret headers encoded as file references in MCP env var."""
+        mocker.patch.dict("os.environ", {"MCP_ALLOWED_SECRETS": "mcp-sn-token"})
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -1534,6 +1535,7 @@ class TestMCPInjection:
     @pytest.mark.asyncio
     async def test_mcp_secret_mounts_passed_to_spawner(self, mocker: MockerFixture) -> None:
         """MCP secret refs passed to spawner as mcp_secret_mounts."""
+        mocker.patch.dict("os.environ", {"MCP_ALLOWED_SECRETS": "mcp-sn-token"})
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True

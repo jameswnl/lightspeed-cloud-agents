@@ -28,8 +28,8 @@ def _to_dict(server: Any) -> dict[str, Any]:
         return server.model_dump()  # type: ignore[no-any-return]
     if isinstance(server, dict):
         return server
-    # Fallback: unknown shape - return as-is if dict-like, else empty
-    return dict(server) if isinstance(server, dict) else {}
+    # Fallback: unknown shape - return empty (dict case already handled above)
+    return {}
 
 
 def resolve_mcp_servers(

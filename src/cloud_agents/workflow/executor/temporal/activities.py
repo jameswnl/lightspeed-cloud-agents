@@ -495,9 +495,14 @@ async def _run_sandbox_step_inner(
                 )
             mcp_env_list.append(entry)
 
-        # Validate MCP secrets against allowlist
-        allowed_secrets_raw = os.environ.get("MCP_ALLOWED_SECRETS", "")
-        if allowed_secrets_raw:
+        # Validate MCP secrets against allowlist — fail closed if allowlist unset
+        if mcp_secret_mounts:
+            allowed_secrets_raw = os.environ.get("MCP_ALLOWED_SECRETS", "")
+            if not allowed_secrets_raw:
+                raise ValueError(
+                    "MCP secrets requested but MCP_ALLOWED_SECRETS is not set — "
+                    "set it to a comma-separated list of allowed K8s Secret names"
+                )
             allowed = set(s.strip() for s in allowed_secrets_raw.split(","))
             for mount in mcp_secret_mounts:
                 if mount[0] not in allowed:
