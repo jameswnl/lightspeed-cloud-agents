@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, NonNegativeInt
 
 from cloud_agents.spawner.base import SpawnConfig
 from cloud_agents.workflow.core.models import MCPServerConfig
@@ -50,7 +50,7 @@ class WorkflowStepSpec(BaseModel):
     condition: Optional[str] = None
     message: Optional[str] = None
     timeout_seconds: int = 3600
-    max_retries: int = Field(default=1, ge=1)
+    max_retries: NonNegativeInt = 0
     spawn: Literal["none", "local", "ephemeral"] = "ephemeral"
     risk_level: Optional[Literal["low", "medium", "high", "critical"]] = None
     permissions: Optional[PermissionScope] = None
@@ -85,12 +85,14 @@ class ProviderSpec(BaseModel):
     Attributes:
         name: Provider name (openai, claude, gemini).
         model: Model identifier.
-        credentials_secret: K8s secret name or env var prefix for credentials.
+        credentials_secret: Optional K8s secret name or env var prefix
+            for credentials. Omit it for the issue-#268 contract;
+            runtime credentials resolve separately (see ProviderConfig).
     """
 
     name: str
     model: str
-    credentials_secret: str
+    credentials_secret: Optional[str] = None
 
 
 class SkillsSpec(BaseModel):

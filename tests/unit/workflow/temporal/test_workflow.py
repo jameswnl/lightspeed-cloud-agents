@@ -7,7 +7,10 @@ to make them pass.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from temporalio.exceptions import ActivityError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -862,3 +865,226 @@ class TestSpawnModeReplayContract:
         assert result.steps["r1"].status == "completed"
         assert result.steps["r1"].output == {"direct": True}
         mock_executor.run.assert_called_once()
+
+
+class TestStepProviderOverrideAndMcpValidation:
+    """Step-level provider override + MCP secret validation (issue #268).
+
+    The Temporal runner shares the canonical validation helpers with the
+    local runner: secret *values* in inline MCP configs fail before
+    scheduling, and a step-level inference provider override is honored
+    for name/model after catalog validation (runtime credentials still
+    come from the run-level provider).
+    """
+
+    @pytest.mark.asyncio
+    async def test_step_provider_override_reaches_activity(self) -> None:
+        """A validated step override sets the activity provider name/model."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "claude", "model": "claude-sonnet"},
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        activity_args = mock_execute.call_args_list[0].kwargs["args"][0]
+        provider = activity_args["provider"]
+        assert provider["name"] == "claude"
+        assert provider["model"] == "claude-sonnet"
+        # Cross-provider override: the run-level ref must NOT bind to
+        # another provider (B2). Credentials resolve from the override
+        # provider's default env key instead.
+        assert "credentials_secret" not in provider
+
+    @pytest.mark.asyncio
+    async def test_unapproved_step_provider_fails_before_scheduling(self) -> None:
+        """An unapproved step provider name fails the step (S4: step failure, not crash)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "evil-proxy", "model": "x"},
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        assert "evil-proxy" in (result.error or "")
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_secret_mcp_values_fail_before_scheduling(self) -> None:
+        """Credentialed inline MCP URLs fail the step without scheduling (S4)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "mcp_servers": [
+                    {"name": "x", "url": "https://tok:abc@internal/x"}
+                ],
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_provider_override_drops_reference(self) -> None:
+        """An override for another provider must not bind the run ref (B2)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "claude", "model": "claude-sonnet"},
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
+        assert provider["name"] == "claude"
+        assert "credentials_secret" not in provider
+
+
+class TestTransientActivityRetry:
+    """Transient activity failures retry on the Temporal path (B5)."""
+
+    @staticmethod
+    def _activity_error_with_cause(cause: BaseException) -> "ActivityError":
+        """Create an ActivityError carrying a root-cause failure."""
+        from temporalio.exceptions import ActivityError
+
+        error = ActivityError(
+            "activity failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test",
+            activity_type="run_sandbox_step",
+            activity_id="1",
+            retry_state=None,
+        )
+        error.__cause__ = cause
+        return error
+
+    @pytest.mark.asyncio
+    async def test_transient_cause_retries_activity(self) -> None:
+        """A 502 root cause retries the sandbox activity, then succeeds."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock(
+            side_effect=[
+                self._activity_error_with_cause(
+                    RuntimeError("upstream 502 bad gateway")
+                ),
+                {"status": "completed", "output": {"ok": True}},
+            ]
+        )
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "max_retries": 1,
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert mock_execute.call_count == 2
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_policy_cause_fails_without_retry(self) -> None:
+        """A policy-denial root cause fails immediately (no retry)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        calls = 0
+
+        async def mock_execute_side_effect(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if args and args[0] == "run_sandbox_step":
+                raise self._activity_error_with_cause(
+                    PermissionError("policy denies tool run_fix")
+                )
+            return {"status": "escalated", "output": {"type": "escalation_handoff"}}
+
+        mock_execute = AsyncMock(side_effect=mock_execute_side_effect)
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "max_retries": 3,
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        # One sandbox attempt, then the escalation activity.
+        sandbox_calls = [
+            c
+            for c in mock_execute.call_args_list
+            if c.args and c.args[0] == "run_sandbox_step"
+        ]
+        assert len(sandbox_calls) == 1

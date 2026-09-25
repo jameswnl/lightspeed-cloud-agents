@@ -22,6 +22,12 @@ from pydantic_graph import GraphBuilder, StepContext
 
 from cloud_agents.runtime.tracing import extract_traceparent, get_tracer
 from cloud_agents.workflow.core.conditions import evaluate_condition
+from cloud_agents.workflow.core.execution import (
+    apply_one_step_defaults,
+    build_step_input,
+    run_with_retries,
+    workflow_defaults_from_definition,
+)
 from cloud_agents.workflow.core.interpolation import interpolate
 from cloud_agents.workflow.core.state import StepResult, WorkflowState
 from cloud_agents.workflow.executor.middleware import (
@@ -29,8 +35,6 @@ from cloud_agents.workflow.executor.middleware import (
     TracingMiddleware,
     TranscriptMiddleware,
 )
-from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
-from cloud_agents.workflow.executor.step.base import StepInput, StepMetadata
 from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,9 @@ class WorkflowGraphState:
         approval_policy: Optional approval policy configuration.
         paused_at_step: Set when execution pauses for approval.
         approval_result: Set when approval is received.
+        workflow_defaults: Workflow-level defaults (service → workflow
+            level of the precedence chain) threaded into the canonical
+            StepInput construction.
         trace_parent: W3C traceparent of the most recently executed step's
             span. Updated after every step; the runner persists it when the
             workflow pauses, for span-link continuation on resume.
@@ -85,6 +92,7 @@ class WorkflowGraphState:
     session_id: Optional[str] = None
     paused_at_step: Optional[str] = None
     approval_result: Optional[dict[str, Any]] = None
+    workflow_defaults: dict[str, Any] = field(default_factory=dict)
 
 
 def build_graph(
@@ -124,6 +132,12 @@ def build_graph(
     metadata = definition.get("metadata", {})
     workflow_name = metadata.get("name", "unnamed")
 
+    # One-step convention (issue #268): a single step may omit name and
+    # output_key; they default to "agent"/"result" in this one documented
+    # helper so clients cannot invent their own names.
+    if len(steps) == 1:
+        steps = [apply_one_step_defaults(dict(steps[0]), step_count=1)]
+
     step_defs = {}
     for step in steps:
         step_defs[step["name"]] = step
@@ -134,6 +148,19 @@ def build_graph(
                 step["name"],
                 step["parallel_group"],
             )
+
+    # Workflow-level defaults shared by every step (issue #268): the
+    # service → workflow → step precedence chain is threaded into
+    # build_step_input below, so it is real on this runner, not doc-only.
+    # Run-level call args (provider/sandbox_image/...) win over definition
+    # defaults as the service-level configuration.
+    definition_defaults = workflow_defaults_from_definition(definition)
+    if provider:
+        definition_defaults["provider"] = provider
+    if sandbox_image != "sandbox:latest":
+        merged_spawn_config = dict(definition_defaults.get("spawn_config") or {})
+        merged_spawn_config["sandbox_image"] = sandbox_image
+        definition_defaults["spawn_config"] = merged_spawn_config
 
     state = WorkflowGraphState(
         workflow_id=workflow_id,
@@ -149,6 +176,7 @@ def build_graph(
         approval_policy=approval_policy,
         user_id=user_id,
         session_id=session_id,
+        workflow_defaults=definition_defaults,
     )
 
     builder = GraphBuilder(
@@ -256,41 +284,38 @@ def _build_agent_step(
                 logger.info("Step '%s' skipped -- condition not met", step_name)
                 return {"status": "skipped"}
 
+        # Canonical construction (issue #268): one-step and multi-step
+        # steps share build_step_input -- normalize + interpolate +
+        # MCP catalog resolution + executor input assembly in one place,
+        # with the definition's workflow-level defaults threaded through.
+        # Normalization failure is a step failure, not a graph crash.
+        try:
+            step_input = build_step_input(
+                step_def,
+                run_context={
+                    "provider": state.provider,
+                    "sandbox_image": state.sandbox_image,
+                    "skills_image": state.skills_image,
+                    "skills_paths": state.skills_paths,
+                    "mcp_servers": state.mcp_servers,
+                    "workflow_id": state.workflow_id,
+                    "step_results": state.step_results,
+                    "user_id": state.user_id,
+                    "session_id": state.session_id,
+                    "tools_module": os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
+                },
+                workflow_defaults=state.workflow_defaults,
+                step_count=len(state.step_defs),
+            )
+        except ValueError as exc:
+            logger.error("Step '%s' failed normalization: %s", step_name, exc)
+            state.step_results[output_key] = {"status": "failed", "error": str(exc)}
+            return {"status": "failed", "error": str(exc)}
+
         executor = get_step_executor(
             step=step_def,
             spawner=state.spawner,
             transcript_store=state.transcript_store,
-        )
-
-        raw_instructions = step_def.get("instructions")
-        step_input = StepInput(
-            prompt=_interpolate_step_text(step_def.get("prompt", ""), wf_state),
-            provider=state.provider,
-            system_prompt=(
-                _interpolate_step_text(raw_instructions, wf_state)
-                if raw_instructions
-                else raw_instructions
-            ),
-            output_schema=step_def.get("output_schema"),
-            tools=step_def.get("tools", []),
-            tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
-            context=state.step_results,
-            timeout_seconds=step_def.get("timeout_seconds", 600),
-            sandbox_image=state.sandbox_image,
-            skills_image=state.skills_image,
-            skills_paths=state.skills_paths,
-            allowed_skills=step_def.get("allowed_skills"),
-            mcp_servers=resolve_mcp_servers(
-                step_def.get("mcp_servers"), state.mcp_servers
-            ),
-            workflow_id=state.workflow_id,
-            raw_step=step_def,
-            step_name=step_name,
-            output_key=output_key,
-            metadata=StepMetadata(
-                user_id=state.user_id,
-                session_id=state.session_id,
-            ),
         )
 
         # Build middleware stack: tracing + optional transcript persistence
@@ -309,7 +334,28 @@ def _build_agent_step(
             state.resume_trace_parent = None
 
         wrapped = MiddlewareExecutor(executor, middlewares, tracer=_tracer, links=links)
-        exec_result = await wrapped.run(step_input)
+
+        # Unified retry semantics (issue #268): same classifier and
+        # attempt accounting as the Temporal runner. Only transient
+        # failures retry; max_retries counts retries after the initial
+        # attempt (0 means try once). Invalid values already failed the
+        # step at normalization above, so this clamp only sees valid
+        # non-negative ints.
+        raw_retries = step_def.get("max_retries", 0)
+        max_retries = (
+            raw_retries if isinstance(raw_retries, int) and raw_retries >= 0 else 0
+        )
+
+        async def attempt() -> Any:
+            """Run one executor attempt."""
+            return await wrapped.run(step_input)
+
+        exec_result = await run_with_retries(
+            attempt,
+            max_retries,
+            lambda result: result.status == "completed",
+            lambda result: result.error,
+        )
 
         # Always overwrite (not just when truthy) so a step whose capture
         # failed doesn't leave a stale, unrelated earlier step's trace_parent

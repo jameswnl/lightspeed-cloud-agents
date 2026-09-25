@@ -9,6 +9,10 @@ import re
 from typing import Any, Optional
 
 from cloud_agents.workflow.security.content_policy import ContentPolicy, evaluate_content_policy
+from cloud_agents.workflow.core.execution import (
+    reject_secret_bearing_mcp,
+    validate_inference_provider,
+)
 
 
 def _validate_schema(
@@ -132,6 +136,20 @@ def validate_definition(
                     errors.append(
                         f"Step '{name}': mcp_servers entries must be strings or inline configs"
                     )
+
+        # Canonical secret/provider checks (issue #268): fail fast at
+        # submission (422) with the same rules the runners enforce, so
+        # both engines and all API surfaces agree.
+        try:
+            reject_secret_bearing_mcp(step.get("mcp_servers"))
+        except ValueError as exc:
+            errors.append(f"Step '{name}': {exc}")
+        step_provider = step.get("inference_provider") or step.get("provider")
+        if step_provider is not None:
+            try:
+                validate_inference_provider(dict(step_provider))
+            except ValueError as exc:
+                errors.append(f"Step '{name}': {exc}")
 
     # --- Content policy checks ---
     if content_policy is not None:

@@ -20,6 +20,14 @@ with workflow.unsafe.imports_passed_through():
     from cloud_agents.workflow.security.auto_approve import ApprovalPolicy, classify_step_risk
     from cloud_agents.workflow.core.conditions import evaluate_condition
     from cloud_agents.workflow.core.definition import WorkflowStepSpec
+    from cloud_agents.workflow.core.execution import (
+        activity_error_text,
+        chunk_parallel_groups,
+        normalize_workflow_step,
+        reject_secret_bearing_mcp,
+        run_with_retries,
+        workflow_defaults_from_definition,
+    )
     from cloud_agents.workflow.core.interpolation import interpolate
     from cloud_agents.workflow.core.state import StepResult as LegacyStepResult
     from cloud_agents.workflow.core.state import WorkflowState
@@ -31,6 +39,27 @@ with workflow.unsafe.imports_passed_through():
         WorkflowOutput,
         WorkflowStatus,
     )
+
+
+def _activity_succeeded(result: Any) -> bool:
+    """Check whether a sandbox activity result counts as success for retry.
+
+    Only ``completed`` steps succeed; failed/denied/skipped results fall
+    through to the transient-failure classifier shared with the local
+    runner (issue #268).
+    """
+    if isinstance(result, dict):
+        return result.get("status") == "completed"
+    return getattr(result, "status", "") == "completed"
+
+
+def _activity_error(result: Any) -> Optional[str]:
+    """Extract error text from a sandbox activity result for classification."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        return error if isinstance(error, str) else (str(error) if error is not None else None)
+    error = getattr(result, "error", None)
+    return error if isinstance(error, str) else (str(error) if error is not None else None)
 
 
 @workflow.defn(sandboxed=False)
@@ -132,26 +161,22 @@ class AgentWorkflow:
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
-        i = 0
-        while i < len(steps):
-            step = steps[i]
-            group = step.get("parallel_group")
-
+        # Group scheduling uses the canonical chunking helper (issue
+        # #268): contiguous same-group steps run concurrently via
+        # asyncio.gather; the group completes when all members complete,
+        # and a failed/denied member stops subsequent steps (siblings
+        # already running are not cancelled; no concurrency limit).
+        for group, group_steps in chunk_parallel_groups(steps):
             if group:
-                group_steps = []
-                while i < len(steps) and steps[i].get("parallel_group") == group:
-                    group_steps.append(steps[i])
-                    i += 1
                 results = await asyncio.gather(
                     *[self._execute_step(s, input) for s in group_steps]
                 )
                 if any(r and r.status in ("failed", "denied") for r in results):
                     break
             else:
-                result = await self._execute_step(step, input)
+                result = await self._execute_step(group_steps[0], input)
                 if result and result.status in ("failed", "denied"):
                     break
-                i += 1
 
         return WorkflowOutput(steps=self._steps)
 
@@ -276,12 +301,51 @@ class AgentWorkflow:
         enforcer: Optional[AdvisoryEnforcer] = None,
     ) -> StepResult:
         """Handle an agent step by dispatching to the sandbox activity."""
-        step_name = step["name"]
-        output_key = step["output_key"]
-        timeout_seconds = step.get("timeout_seconds", 600)
-        max_retries = step.get("max_retries", 1)
+        # Canonical normalization shared with the local runner (issue
+        # #268): the definition's workflow-level defaults thread through
+        # the same precedence chain, one-step definitions get the
+        # agent/result convention, and invalid steps fail the step --
+        # never the workflow. normalize_workflow_step is pure
+        # (pydantic + pure helpers), so replay sees identical values.
+        definition = input.definition
+        spec = definition.get("spec", {})
+        step_count = len(spec.get("steps", []))
+        try:
+            normalized, _meta = normalize_workflow_step(
+                step,
+                workflow_defaults={
+                    **workflow_defaults_from_definition(definition),
+                    "provider": {
+                        "name": input.provider.name,
+                        "model": input.provider.model,
+                    },
+                },
+                step_count=step_count,
+            )
+        except ValueError as exc:
+            return StepResult(status="failed", error=str(exc))
+        step_name = normalized.name
+        output_key = normalized.output_key
+        timeout_seconds = normalized.timeout_seconds or 600
+        max_retries = normalized.max_retries
         if enforcer is None:
             enforcer = AdvisoryEnforcer(enabled=False)
+
+        # Canonical validation shared with the local runner (issue #268):
+        # reject secret *values* in inline MCP configs before scheduling,
+        # and honor a step-level inference provider override after
+        # validating it against the executor-known names. The run-level
+        # credential reference is honored solely for the same provider:
+        # otherwise the override would silently bind another provider's
+        # credentials (cross-provider confusion). Runtime credentials
+        # still resolve outside serializable data (pre-#269 contract).
+        reject_secret_bearing_mcp(step.get("mcp_servers"))
+        activity_provider = input.provider.model_dump()
+        if normalized.inference_provider is not None:
+            activity_provider["name"] = normalized.inference_provider.name
+            activity_provider["model"] = normalized.inference_provider.model
+            if normalized.inference_provider.name != input.provider.name:
+                activity_provider.pop("credentials_secret", None)
 
         resolved_step = dict(step)
         if prompt := step.get("prompt"):
@@ -292,14 +356,20 @@ class AgentWorkflow:
 
         self._emit("step.started", step_name)
 
-        try:
-            result = await workflow.execute_activity(
+        async def attempt() -> Any:
+            """Run one sandbox activity attempt without activity-level retries.
+
+            Retry accounting lives in run_with_retries (shared with the
+            local runner) so a single policy covers exceptions and
+            transient result failures; the activity itself tries once.
+            """
+            return await workflow.execute_activity(
                 "run_sandbox_step",
                 args=[
                     {
                         "step": resolved_step,
                         "workflow_id": input.workflow_id,
-                        "provider": input.provider.model_dump(),
+                        "provider": activity_provider,
                         "sandbox_image": input.sandbox_image,
                         "skills_image": input.skills_image,
                         "skills_paths": input.skills_paths,
@@ -313,7 +383,20 @@ class AgentWorkflow:
                 ],
                 start_to_close_timeout=timedelta(seconds=timeout_seconds),
                 heartbeat_timeout=timedelta(seconds=180),
-                retry_policy=RetryPolicy(maximum_attempts=max_retries + 1),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+
+        try:
+            result = await run_with_retries(
+                attempt,
+                max_retries,
+                _activity_succeeded,
+                _activity_error,
+                # Classify by root cause: str(ActivityError) names only
+                # the activity/retry state, so transient infra failures
+                # (e.g. sandbox 502s) would otherwise never retry here
+                # while the local runner retries them.
+                exc_text=activity_error_text,
             )
 
             if isinstance(result, dict):

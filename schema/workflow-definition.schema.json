@@ -125,7 +125,7 @@
       "type": "object"
     },
     "ProviderSpec": {
-      "description": "Provider configuration at the workflow level.\n\nAttributes:\n    name: Provider name (openai, claude, gemini).\n    model: Model identifier.\n    credentials_secret: K8s secret name or env var prefix for credentials.",
+      "description": "Provider configuration at the workflow level.\n\nAttributes:\n    name: Provider name (openai, claude, gemini).\n    model: Model identifier.\n    credentials_secret: Optional K8s secret name or env var prefix\n        for credentials. Omit it for the issue-#268 contract;\n        runtime credentials resolve separately (see ProviderConfig).",
       "properties": {
         "name": {
           "title": "Name",
@@ -136,14 +136,21 @@
           "type": "string"
         },
         "credentials_secret": {
-          "title": "Credentials Secret",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credentials Secret"
         }
       },
       "required": [
         "name",
-        "model",
-        "credentials_secret"
+        "model"
       ],
       "title": "ProviderSpec",
       "type": "object"
@@ -197,7 +204,7 @@
       "type": "object"
     },
     "SpawnConfig": {
-      "description": "Per-step resource configuration for ephemeral pods.\n\nValidation bounds prevent resource abuse. workflow step configuration\nsets the maximum envelope; SpawnConfig may only narrow within it.\n\nAttributes:\n    cpu_request: CPU request (e.g. \"100m\").\n    cpu_limit: CPU limit (max 4 cores).\n    memory_request: Memory request (e.g. \"256Mi\").\n    memory_limit: Memory limit (max 4Gi).\n    timeout_seconds: Max wait for pod readiness.\n    health_path: Health probe endpoint path.",
+      "description": "Per-step resource configuration for ephemeral pods.\n\nValidation bounds prevent resource abuse. workflow step configuration\nsets the maximum envelope; SpawnConfig may only narrow within it.\n\nAttributes:\n    cpu_request: CPU request (e.g. \"100m\").\n    cpu_limit: CPU limit (max 4 cores).\n    memory_request: Memory request (e.g. \"256Mi\").\n    memory_limit: Memory limit (max 4Gi).\n    timeout_seconds: Max wait for pod readiness.\n    health_path: Health probe endpoint path.\n    sandbox_image: Optional OCI image override for the sandbox pod.\n        When set on a step, normalization uses it as the approved\n        image instead of the service default.",
       "properties": {
         "cpu_request": {
           "default": "100m",
@@ -230,6 +237,18 @@
           "default": "/healthz",
           "title": "Health Path",
           "type": "string"
+        },
+        "sandbox_image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sandbox Image"
         }
       },
       "title": "SpawnConfig",
@@ -326,8 +345,8 @@
           "type": "integer"
         },
         "max_retries": {
-          "default": 1,
-          "minimum": 1,
+          "default": 0,
+          "minimum": 0,
           "title": "Max Retries",
           "type": "integer"
         },

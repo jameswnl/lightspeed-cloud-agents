@@ -391,3 +391,74 @@ class TestMCPServersValidation:
             },
         }
         assert len(validate_definition(defn)) == 0
+
+
+class TestCanonicalSubmissionChecks268:
+    """Submission-time secret/provider checks shared by both engines (#268)."""
+
+    def _defn_with_step(self, step: dict) -> dict:
+        base = {
+            "name": "s1",
+            "type": "agent",
+            "output_key": "r1",
+            "prompt": "check",
+        }
+        base.update(step)
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [base]},
+        }
+
+    def test_credentialed_mcp_url_rejected(self) -> None:
+        """Test that secret-bearing inline MCP fails submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"mcp_servers": [{"name": "x", "url": "https://t:abc@in/x"}]}
+            )
+        )
+        assert any("credentialed" in e for e in errors)
+
+    def test_secret_header_value_rejected(self) -> None:
+        """Test that credential-shaped header values fail submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {
+                    "mcp_servers": [
+                        {
+                            "name": "x",
+                            "url": "https://in/x",
+                            "headers": {"X-Custom": "sk-live-abc"},
+                        }
+                    ]
+                }
+            )
+        )
+        assert any("credential" in e for e in errors)
+
+    def test_unapproved_step_provider_rejected(self) -> None:
+        """Test that free-form step provider names fail submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"inference_provider": {"name": "evil-proxy", "model": "x"}}
+            )
+        )
+        assert any("unapproved" in e for e in errors)
+
+    def test_approved_step_provider_passes(self) -> None:
+        """Test that executor-known provider names pass submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"inference_provider": {"name": "azure", "model": "gpt-4o"}}
+            )
+        )
+        assert errors == []
