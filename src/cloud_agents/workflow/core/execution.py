@@ -607,6 +607,12 @@ def inference_spec_from_provider_config(
     Raises:
         ValueError: If the provider name is not approved.
     """
+    allowed_keys = {"name", "model", "credentials_secret", "model_provider"}
+    unknown_keys = set(raw) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            "unknown provider fields: " + ", ".join(sorted(unknown_keys))
+        )
     return validate_inference_provider({"name": raw.get("name"), "model": raw.get("model")})
 
 

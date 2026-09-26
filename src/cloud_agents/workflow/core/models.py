@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cloud_agents.workflow.security.authorization import WorkflowAuthzContext
 
@@ -21,6 +21,8 @@ class SecretHeaderRef(BaseModel):
         secret_name: Name of the K8s Secret containing the header value.
         key: Key within the Secret to use as the header value.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     secret_name: str
     key: str
@@ -35,6 +37,8 @@ class MCPServerConfig(BaseModel):
         headers: Optional plain-text headers to send with requests.
         secret_headers: Optional Secret-backed headers encoded as file references.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     url: str
@@ -55,6 +59,8 @@ class ProviderConfig(BaseModel):
             contract tracked in #269.
         model_provider: Optional model provider override for the sandbox pod.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: Literal["claude", "openai", "gemini"]
     model: str

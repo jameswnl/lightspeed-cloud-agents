@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, NonNegativeInt
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
 from cloud_agents.spawner.base import SpawnConfig
 from cloud_agents.workflow.core.execution import InferenceProviderSpec
@@ -96,9 +96,21 @@ class ProviderSpec(BaseModel):
             runtime credentials resolve separately (see ProviderConfig).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     model: str
     credentials_secret: Optional[str] = None
+
+    @field_validator("credentials_secret")
+    @classmethod
+    def _validate_secret_reference(cls, value: Optional[str]) -> Optional[str]:
+        """Reject secret values in the definition provider reference."""
+        if value is None:
+            return None
+        from cloud_agents.workflow.core.execution import validate_credential_reference
+
+        return validate_credential_reference(value)
 
 
 class SkillsSpec(BaseModel):

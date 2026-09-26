@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cloud_agents.workflow.core.validation import validate_definition
 
 
@@ -582,3 +584,40 @@ class TestDefinitionProviderGate:
         )
         errors = validate_definition(defn)
         assert len(errors) == 0
+
+    def test_unknown_definition_provider_field_rejected(self) -> None:
+        """Unknown provider fields cannot carry an unvalidated secret."""
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "api_key": "not-a-reference"}
+        )
+        errors = validate_definition(defn)
+        assert any("unknown provider fields" in e for e in errors)
+
+    def test_definition_provider_model_rejects_secret_value(self) -> None:
+        """The persisted definition model rejects a secret-shaped reference."""
+        from pydantic import ValidationError
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        with pytest.raises(ValidationError, match="secret value"):
+            WorkflowDefinition.model_validate(
+                {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "sk-" + "not-a-real-secret",
+                    },
+                    "spec": {
+                        "steps": [
+                            {
+                                "name": "s1",
+                                "type": "agent",
+                                "output_key": "r1",
+                                "prompt": "a",
+                            }
+                        ]
+                    },
+                }
+            )
