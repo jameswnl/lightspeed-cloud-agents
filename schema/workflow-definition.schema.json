@@ -1,5 +1,27 @@
 {
   "$defs": {
+    "InferenceProviderSpec": {
+      "additionalProperties": false,
+      "description": "LLM/inference provider selection for an agent step.\n\nSpecifically the LLM/inference provider. MCP servers, execution\nbackends, and identity providers remain separate types -- do not\nintroduce a generic provider hierarchy here.\n\nAttributes:\n    name: Approved provider-profile/catalog key (not an arbitrary\n        free-form provider or environment selection; the catalog is\n        enforced stack-side).\n    model: Model identifier.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "model"
+      ],
+      "title": "InferenceProviderSpec",
+      "type": "object"
+    },
     "MCPServerConfig": {
       "description": "MCP server configuration to inject into sandbox pods.\n\nAttributes:\n    name: Unique name identifying this MCP server.\n    url: SSE endpoint URL of the MCP server.\n    headers: Optional plain-text headers to send with requests.\n    secret_headers: Optional Secret-backed headers encoded as file references.",
       "properties": {
@@ -538,6 +560,17 @@
           ],
           "default": null,
           "title": "Allowed Skills"
+        },
+        "inference_provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceProviderSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

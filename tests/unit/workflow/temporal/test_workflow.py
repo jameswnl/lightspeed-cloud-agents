@@ -1210,3 +1210,117 @@ class TestExecutionContextTemporal:
 
         args = mock_execute.call_args_list[0].kwargs["args"][0]
         assert args["execution_context"] == {"region": "eu", "env": "qa"}
+
+
+class TestNormalizedDispatch:
+    """The activity receives the normalized step, not the raw one (#270 F3)."""
+
+    @staticmethod
+    def _completed_activity(mocker=None):
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+        return patch("temporalio.workflow.execute_activity", mock_execute), \
+            patch("temporalio.workflow.now", return_value=mock_now), mock_execute
+
+    @pytest.mark.asyncio
+    async def test_workflow_default_spawn_reaches_activity(self) -> None:
+        """A spec-level spawn default materializes in the activity step."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn"] = "none"
+            await wf._handle_agent_step(step, wf_input)
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["spawn"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_workflow_default_mcp_and_skills_reach_activity(self) -> None:
+        """Spec-level mcp_servers/allowed_skills inherit into the payload."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["mcp_servers"] = [
+                {"name": "cat", "url": "https://internal/x"}
+            ]
+            wf_input.definition["spec"]["allowed_skills"] = ["troubleshooting"]
+            await wf._handle_agent_step(step, wf_input)
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["mcp_servers"] == [
+            {"name": "cat", "url": "https://internal/x"}
+        ]
+        assert activity_step["allowed_skills"] == ["troubleshooting"]
+
+    @pytest.mark.asyncio
+    async def test_collapsed_permissions_reach_activity(self) -> None:
+        """Step permissions survive normalization into the payload."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "service_account": "system:diag",
+                "target_namespaces": ["ns-1"],
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["permissions"]["service_account"] == "system:diag"
+        assert activity_step["target_namespaces"] == ["ns-1"]
+
+
+class TestUnknownStepType:
+    """Unsupported step types fail the step, never succeed silently (#270 F7)."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_type_returns_failed_not_none(self) -> None:
+        """A non-agent/non-approval type produces a failed StepResult."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        mock_now = datetime.now(tz=timezone.utc)
+        with patch("temporalio.workflow.now", return_value=mock_now):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "tool-call",
+                "output_key": "r1",
+                "prompt": "t",
+            }
+            result = await wf._execute_step(step, _make_input([step]))
+
+        assert result is not None
+        assert result.status == "failed"
+        assert "tool-call" in (result.error or "")
+        assert wf._steps["r1"].status == "failed"
+
+
+class TestBareOneStepShorthand:
+    """The bare one-step shorthand works on the Temporal path (#270 F4)."""
+
+    @pytest.mark.asyncio
+    async def test_bare_step_executes_with_convention_names(self) -> None:
+        """A nameless single step runs as agent/result, no KeyError."""
+        p1, p2, mock_execute = TestNormalizedDispatch._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            bare = {"type": "agent", "prompt": "t"}
+            output = await wf.run(_make_input([bare]))
+
+        assert "result" in output.steps
+        assert output.steps["result"].status == "completed"
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["name"] == "agent"
+        assert activity_step["output_key"] == "result"

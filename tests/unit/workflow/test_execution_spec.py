@@ -409,3 +409,34 @@ class TestMcpDefaultParity:
                     "mcp_servers": [{"name": "x", "url": "https://t:a@h/p"}]
                 },
             )
+
+
+class TestStoredStepProvider:
+    """Step-level provider overrides survive stored definitions (#270 F5)."""
+
+    def test_stored_definition_keeps_step_inference_provider(self) -> None:
+        """WorkflowStepSpec round-trips inference_provider."""
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        defn = WorkflowDefinition.model_validate(
+            {
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "stored"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "prompt": "p",
+                            "output_key": "r1",
+                            "inference_provider": {"name": "claude", "model": "sonnet"},
+                        }
+                    ]
+                },
+            }
+        )
+        step = defn.spec.steps[0]
+        assert step.inference_provider is not None
+        assert step.inference_provider.name == "claude"
+        assert step.inference_provider.model == "sonnet"

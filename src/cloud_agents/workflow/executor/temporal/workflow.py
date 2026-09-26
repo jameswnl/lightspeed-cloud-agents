@@ -22,6 +22,7 @@ with workflow.unsafe.imports_passed_through():
     from cloud_agents.workflow.core.definition import WorkflowStepSpec
     from cloud_agents.workflow.core.execution import (
         activity_error_text,
+        apply_one_step_defaults,
         chunk_parallel_groups,
         normalize_workflow_step,
         resolve_sandbox_image,
@@ -161,6 +162,13 @@ class AgentWorkflow:
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
+        # One-step convention (issue #268): a single step may omit
+        # ``name``/``output_key``; default them before any step indexing
+        # so the bare shorthand behaves like the local runner and never
+        # KeyErrors downstream (#270).
+        if len(steps) == 1:
+            steps = [apply_one_step_defaults(dict(steps[0]), step_count=1)]
+
         # Group scheduling uses the canonical chunking helper (issue
         # #268): contiguous same-group steps run concurrently via
         # asyncio.gather; the group completes when all members complete,
@@ -210,7 +218,19 @@ class AgentWorkflow:
         if step["type"] == "agent":
             return await self._handle_agent_step(step, input, enforcer)
 
-        return None
+        # Unknown step types fail the step (#270): a silent None would
+        # let the run report success with a missing output, diverging
+        # from the local runner's rejection.
+        result = StepResult(
+            status="failed",
+            error=(
+                f"unknown step type {step['type']!r}: only 'agent' and "
+                "'human-approval' are supported"
+            ),
+        )
+        self._steps[output_key] = result
+        self._emit("step.failed", step_name)
+        return result
 
     async def _handle_approval(
         self,
@@ -312,7 +332,7 @@ class AgentWorkflow:
         step_count = len(spec.get("steps", []))
         definition_defaults = workflow_defaults_from_definition(definition)
         try:
-            normalized, _meta = normalize_workflow_step(
+            normalized, meta = normalize_workflow_step(
                 step,
                 workflow_defaults=definition_defaults,
                 step_count=step_count,
@@ -348,8 +368,15 @@ class AgentWorkflow:
             if normalized.inference_provider.name != input.provider.name:
                 activity_provider.pop("credentials_secret", None)
 
-        resolved_step = dict(step)
-        if prompt := step.get("prompt"):
+        # Canonical dispatch (#270): the activity receives the NORMALIZED
+        # step -- workflow-default inheritance (spawn, mcp_servers,
+        # allowed_skills, permissions, timeout), permission collapse, and
+        # the one-step naming convention all materialized -- never the
+        # raw definition step. Pure dict ops on immutable inputs keep
+        # Temporal replay deterministic.
+        resolved_step = normalized.model_dump(exclude_none=True)
+        resolved_step.update({k: v for k, v in meta.items() if v is not None})
+        if prompt := normalized.prompt:
             interpolated = self._interpolate_prompt(prompt, input)
             resolved_step["prompt"] = enforcer.annotate_prompt(interpolated)
         if input.advisory:

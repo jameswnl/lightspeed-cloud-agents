@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, NonNegativeInt
 
 from cloud_agents.spawner.base import SpawnConfig
+from cloud_agents.workflow.core.execution import InferenceProviderSpec
 from cloud_agents.workflow.core.models import MCPServerConfig
 from cloud_agents.workflow.core.permissions import PermissionScope
 
@@ -66,6 +67,7 @@ class WorkflowStepSpec(BaseModel):
     service_account: Optional[str] = None
     target_namespaces: Optional[list[str]] = None
     allowed_skills: Optional[list[str]] = None
+    inference_provider: Optional[InferenceProviderSpec] = None
 
 
 class WorkflowSpec(BaseModel):

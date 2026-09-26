@@ -10,7 +10,10 @@ from typing import Any, Optional
 
 from cloud_agents.workflow.security.content_policy import ContentPolicy, evaluate_content_policy
 from cloud_agents.workflow.core.execution import (
+    apply_one_step_defaults,
+    inference_spec_from_provider_config,
     reject_secret_bearing_mcp,
+    validate_credential_reference,
     validate_inference_provider,
 )
 
@@ -62,6 +65,32 @@ def validate_definition(
     if not steps:
         errors.append("Workflow must have at least one step")
         return errors
+
+    # One-step convention (issue #268): a single step may omit
+    # ``name``/``output_key``; default them so the documented shorthand
+    # passes the 422 gate and every downstream check sees the canonical
+    # names, matching both runners (#270).
+    if len(steps) == 1:
+        steps = [apply_one_step_defaults(dict(steps[0]), step_count=1)]
+
+    # Definition-level provider gate (#270): validate the catalog name
+    # and reject secret *values* at submission, before any persistence
+    # or workflow start, so raw tokens cannot enter serialized run state.
+    definition_provider = defn.get("provider")
+    if isinstance(definition_provider, dict):
+        try:
+            # ``credentials_secret`` is a legitimate reference on the
+            # legacy ProviderConfig shape; validate the name/model
+            # selection and the reference separately.
+            inference_spec_from_provider_config(definition_provider)
+        except ValueError as exc:
+            errors.append(f"Definition provider: {exc}")
+        credentials_secret = definition_provider.get("credentials_secret")
+        if credentials_secret is not None:
+            try:
+                validate_credential_reference(credentials_secret)
+            except ValueError as exc:
+                errors.append(f"Definition provider: {exc}")
 
     # Workflow-level MCP catalog default (issue #268): steps without
     # their own ``mcp_servers`` inherit this value at normalization, so

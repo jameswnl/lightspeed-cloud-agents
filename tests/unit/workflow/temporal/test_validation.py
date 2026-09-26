@@ -107,7 +107,12 @@ class TestDefinitionValidation:
         assert len(errors) == 0
 
     def test_missing_name(self) -> None:
-        """Step without name is caught."""
+        """A step without a name is caught in multi-step definitions.
+
+        A single bare step is the documented one-step shorthand (#268)
+        and defaults to agent/result; only multi-step definitions must
+        name every step explicitly.
+        """
         defn = {
             "apiVersion": "v1",
             "kind": "AgentWorkflow",
@@ -115,6 +120,7 @@ class TestDefinitionValidation:
             "spec": {
                 "steps": [
                     {"type": "agent", "output_key": "r1", "prompt": "check"},
+                    {"type": "agent", "name": "s2", "output_key": "r2", "prompt": "b"},
                 ]
             },
         }
@@ -517,5 +523,62 @@ class TestWorkflowLevelSecretGate:
                 ],
             },
         }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+
+class TestBareOneStepShorthandValidation:
+    """The documented one-step shorthand passes the 422 gate (#270 F4)."""
+
+    def test_bare_single_step_passes_validation(self) -> None:
+        """A nameless single-step definition is valid as documented."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [{"type": "agent", "prompt": "check"}]},
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+
+class TestDefinitionProviderGate:
+    """The definition-level provider is gated at submission (#270 F6)."""
+
+    def _defn(self, provider: dict) -> dict:
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "provider": provider,
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ]
+            },
+        }
+
+    def test_secret_value_in_definition_provider_rejected(self) -> None:
+        """A raw token in the provider credentials_secret fails at 422."""
+        # Assembled at runtime so secret scanners never see a contiguous
+        # fake token; the value still exercises the sk- prefix check.
+        fake_token = "sk-" + "live-abc123"
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "credentials_secret": fake_token}
+        )
+        errors = validate_definition(defn)
+        assert any("secret value" in e for e in errors)
+
+    def test_unapproved_definition_provider_rejected(self) -> None:
+        """An unknown provider name fails at 422."""
+        defn = self._defn({"name": "evil-proxy", "model": "x"})
+        errors = validate_definition(defn)
+        assert any("unapproved inference provider" in e for e in errors)
+
+    def test_valid_definition_provider_with_reference_passes(self) -> None:
+        """A clean provider with a secret-name reference passes."""
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "credentials_secret": "OPENAI_API_KEY"}
+        )
         errors = validate_definition(defn)
         assert len(errors) == 0
