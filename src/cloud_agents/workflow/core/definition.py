@@ -62,6 +62,7 @@ class WorkflowStepSpec(BaseModel):
     instructions: Optional[str] = None
     output_schema: Optional[dict[str, Any]] = None
     tools: list[str] = Field(default_factory=list)
+    context: Optional[dict[str, Any]] = None
     service_account: Optional[str] = None
     target_namespaces: Optional[list[str]] = None
     allowed_skills: Optional[list[str]] = None
@@ -73,10 +74,13 @@ class WorkflowSpec(BaseModel):
     Attributes:
         input_prompt: Optional initial prompt passed to the first step.
         steps: Ordered list of workflow steps.
+        context: Optional workflow-level execution context merged with
+            per-step ``context`` (step values win per key).
     """
 
     input_prompt: Optional[str] = None
     steps: list[WorkflowStepSpec] = Field(..., min_length=1)
+    context: Optional[dict[str, Any]] = None
 
 
 class ProviderSpec(BaseModel):

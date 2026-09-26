@@ -1383,3 +1383,28 @@ class TestRunModelRequestNativeStructuredOutput:
             await _run_model_request(self._base_input({"type": "object"}))
 
         assert any("falling back" in record.message for record in caplog.records)
+
+
+class TestExecutionContextChild:
+    """The subprocess child renders execution context into its prompt."""
+
+    def test_execution_context_rendered(self) -> None:
+        """execution_context is labelled in the child user content."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _build_user_content
+
+        content = _build_user_content(
+            {
+                "prompt": "p",
+                "context": {},
+                "execution_context": {"env": "staging"},
+            }
+        )
+        assert "Execution context" in content
+        assert "staging" in content
+
+    def test_no_execution_context_no_block(self) -> None:
+        """No execution_context means no block is appended."""
+        from cloud_agents.workflow.executor.step.subprocess_child import _build_user_content
+
+        content = _build_user_content({"prompt": "p", "context": {}})
+        assert "Execution context" not in content

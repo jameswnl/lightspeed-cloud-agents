@@ -255,7 +255,7 @@
       "type": "object"
     },
     "WorkflowSpec": {
-      "description": "Full workflow specification.\n\nAttributes:\n    input_prompt: Optional initial prompt passed to the first step.\n    steps: Ordered list of workflow steps.",
+      "description": "Full workflow specification.\n\nAttributes:\n    input_prompt: Optional initial prompt passed to the first step.\n    steps: Ordered list of workflow steps.\n    context: Optional workflow-level execution context merged with\n        per-step ``context`` (step values win per key).",
       "properties": {
         "input_prompt": {
           "anyOf": [
@@ -276,6 +276,19 @@
           "minItems": 1,
           "title": "Steps",
           "type": "array"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
         }
       },
       "required": [
@@ -470,6 +483,19 @@
           },
           "title": "Tools",
           "type": "array"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
         },
         "service_account": {
           "anyOf": [

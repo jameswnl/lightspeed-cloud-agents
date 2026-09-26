@@ -152,15 +152,10 @@ def build_graph(
     # Workflow-level defaults shared by every step (issue #268): the
     # service → workflow → step precedence chain is threaded into
     # build_step_input below, so it is real on this runner, not doc-only.
-    # Run-level call args (provider/sandbox_image/...) win over definition
-    # defaults as the service-level configuration.
+    # Run-level call args (provider/sandbox_image/...) stay in
+    # run_context: they are the service-level defaults the definition
+    # layer outranks, never a clobber of definition-level values.
     definition_defaults = workflow_defaults_from_definition(definition)
-    if provider:
-        definition_defaults["provider"] = provider
-    if sandbox_image != "sandbox:latest":
-        merged_spawn_config = dict(definition_defaults.get("spawn_config") or {})
-        merged_spawn_config["sandbox_image"] = sandbox_image
-        definition_defaults["spawn_config"] = merged_spawn_config
 
     state = WorkflowGraphState(
         workflow_id=workflow_id,

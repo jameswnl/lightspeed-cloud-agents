@@ -59,10 +59,14 @@ def validate_definition(
     errors: list[str] = []
     spec = defn.get("spec", {})
     steps = spec.get("steps", [])
-
     if not steps:
         errors.append("Workflow must have at least one step")
         return errors
+
+    # Workflow-level MCP catalog default (issue #268): steps without
+    # their own ``mcp_servers`` inherit this value at normalization, so
+    # the secret gate below must check the same merged view.
+    workflow_mcp_default = spec.get("mcp_servers")
 
     output_keys: set[str] = set()
     step_names: set[str] = set()
@@ -139,9 +143,12 @@ def validate_definition(
 
         # Canonical secret/provider checks (issue #268): fail fast at
         # submission (422) with the same rules the runners enforce, so
-        # both engines and all API surfaces agree.
+        # both engines and all API surfaces agree. The secret gate runs
+        # on the MERGED value (step + workflow-level spec default) so a
+        # secret-bearing catalog at spec level is a 422 here, not a
+        # runtime failed step.
         try:
-            reject_secret_bearing_mcp(step.get("mcp_servers"))
+            reject_secret_bearing_mcp(step.get("mcp_servers", workflow_mcp_default))
         except ValueError as exc:
             errors.append(f"Step '{name}': {exc}")
         step_provider = step.get("inference_provider") or step.get("provider")

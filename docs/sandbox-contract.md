@@ -19,7 +19,8 @@ POST /v1/agent/run
       {"step": "string", "error": "string", "output": {}}
     ],
     "approvedOption": {"id": "string", "action": "string"},
-    "executionResult": {}
+    "executionResult": {},
+    "executionContext": {}
   },
   "systemPrompt": "string (optional) — inline system instructions",
   "outputSchema": {} 
@@ -34,6 +35,7 @@ POST /v1/agent/run
 | `previousAttempts` | Prior steps failed | Step results with `status=failed` |
 | `approvedOption` | Execution step after approval | Analysis step options + approval `selected_option_id` |
 | `executionResult` | Verification step after execution | Execution step output |
+| `executionContext` | Workflow/step `context` is set (issue #268; step values win per key over workflow values) | Merged workflow+step `context` |
 
 ## Response
 

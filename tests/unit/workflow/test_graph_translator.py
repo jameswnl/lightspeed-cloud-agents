@@ -1585,3 +1585,82 @@ class TestNormalizationFailureIsStepFailure:
         assert "credentialed" in state.step_results["result"]["error"]
         mock_dispatch.assert_not_called()
         mock_executor.run.assert_not_called()
+
+
+class TestPrecedenceChainLocalRunner:
+    """Definition-level defaults outrank run-level args on the local runner.
+
+    The documented chain (issue #268) is service/run → workflow
+    definition → step; run-level provider and sandbox_image act as
+    defaults only when the definition does not specify them.
+    """
+
+    @staticmethod
+    def _mock_executor(mocker: MockerFixture) -> mocker.AsyncMock:
+        """Patch get_step_executor with a completing executor."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        return mock_executor
+
+    def _definition(self, top_provider: dict | None, spec: dict | None) -> dict:
+        defn: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "precedence"},
+            "spec": {"steps": [{"name": "s1", "type": "agent", "prompt": "p", "output_key": "r1"}]},
+        }
+        if spec:
+            defn["spec"].update(spec)
+        if top_provider:
+            defn["provider"] = top_provider
+        return defn
+
+    @pytest.mark.asyncio
+    async def test_definition_provider_outranks_run_provider(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Definition provider wins; run credentials do not bind cross-name."""
+        mock_executor = self._mock_executor(mocker)
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = self._definition(
+            top_provider={"name": "claude", "model": "claude-sonnet"}, spec=None
+        )
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-prec-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+        await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.provider["name"] == "claude"
+        assert solo_input.provider["model"] == "claude-sonnet"
+        assert "credentials_secret" not in solo_input.provider
+
+    @pytest.mark.asyncio
+    async def test_definition_sandbox_image_outranks_run_image(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Definition-level spawn_config image wins over the run image."""
+        mock_executor = self._mock_executor(mocker)
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = self._definition(
+            top_provider=None, spec={"spawn_config": {"sandbox_image": "img-def"}}
+        )
+        graph, state = build_graph(
+            defn, workflow_id="wf-prec-2", sandbox_image="run-image"
+        )
+        await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.sandbox_image == "img-def"

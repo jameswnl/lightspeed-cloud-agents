@@ -133,3 +133,29 @@ class TestContextBuilding:
             current_step={"name": "diag", "prompt": "check"},
         )
         assert "targetNamespaces" not in ctx
+
+
+class TestExecutionContextSection:
+    """build_sandbox_context delivers executionContext to the sandbox pod."""
+
+    def test_execution_context_included(self) -> None:
+        """Non-empty execution context appears as executionContext."""
+        from cloud_agents.workflow.core.context import build_sandbox_context
+
+        context = build_sandbox_context(
+            workflow_steps={},
+            current_step={"name": "s1", "prompt": "p"},
+            execution_context={"env": "staging"},
+        )
+        assert context["executionContext"] == {"env": "staging"}
+
+    def test_empty_execution_context_omitted(self) -> None:
+        """Empty execution context adds no section."""
+        from cloud_agents.workflow.core.context import build_sandbox_context
+
+        context = build_sandbox_context(
+            workflow_steps={},
+            current_step={"name": "s1", "prompt": "p"},
+            execution_context={},
+        )
+        assert "executionContext" not in context

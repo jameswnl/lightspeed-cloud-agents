@@ -462,3 +462,60 @@ class TestCanonicalSubmissionChecks268:
             )
         )
         assert errors == []
+
+
+class TestWorkflowLevelSecretGate:
+    """The 422 secret gate covers workflow-level MCP defaults (issue #270)."""
+
+    def test_workflow_level_secret_mcp_rejected_at_submission(self) -> None:
+        """A credentialed URL in spec-level mcp_servers fails validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [
+                    {"name": "leaky", "url": "https://tok:abc@internal/x"}
+                ],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert any("credentialed" in e for e in errors)
+
+    def test_workflow_level_plaintext_header_rejected(self) -> None:
+        """A plaintext secret header in spec-level MCP fails validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [
+                    {"name": "leaky", "url": "https://internal/x",
+                     "headers": {"Authorization": "Bearer x"}},
+                ],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert any("secret" in e or "plaintext" in e for e in errors)
+
+    def test_benign_workflow_level_mcp_passes(self) -> None:
+        """A clean workflow-level catalog entry passes validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [{"name": "ok", "url": "https://internal/x"}],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0

@@ -24,7 +24,7 @@ with workflow.unsafe.imports_passed_through():
         activity_error_text,
         chunk_parallel_groups,
         normalize_workflow_step,
-        reject_secret_bearing_mcp,
+        resolve_sandbox_image,
         run_with_retries,
         workflow_defaults_from_definition,
     )
@@ -310,16 +310,11 @@ class AgentWorkflow:
         definition = input.definition
         spec = definition.get("spec", {})
         step_count = len(spec.get("steps", []))
+        definition_defaults = workflow_defaults_from_definition(definition)
         try:
             normalized, _meta = normalize_workflow_step(
                 step,
-                workflow_defaults={
-                    **workflow_defaults_from_definition(definition),
-                    "provider": {
-                        "name": input.provider.name,
-                        "model": input.provider.model,
-                    },
-                },
+                workflow_defaults=definition_defaults,
                 step_count=step_count,
             )
         except ValueError as exc:
@@ -328,18 +323,24 @@ class AgentWorkflow:
         output_key = normalized.output_key
         timeout_seconds = normalized.timeout_seconds or 600
         max_retries = normalized.max_retries
+        # Sandbox-image precedence (issue #268): step spawn_config →
+        # definition spawn_config → run-level input image. The run-level
+        # image is a default the definition layer outranks.
+        sandbox_image = resolve_sandbox_image(
+            normalized.spawn_config,
+            definition_defaults,
+            input.sandbox_image,
+        )
         if enforcer is None:
             enforcer = AdvisoryEnforcer(enabled=False)
 
-        # Canonical validation shared with the local runner (issue #268):
-        # reject secret *values* in inline MCP configs before scheduling,
-        # and honor a step-level inference provider override after
-        # validating it against the executor-known names. The run-level
+        # Provider selection (issue #268): the normalized spec already
+        # carries the step/definition winner (the run-level provider is
+        # the default only when neither layer set one). The run-level
         # credential reference is honored solely for the same provider:
-        # otherwise the override would silently bind another provider's
+        # otherwise the winner would silently bind another provider's
         # credentials (cross-provider confusion). Runtime credentials
         # still resolve outside serializable data (pre-#269 contract).
-        reject_secret_bearing_mcp(step.get("mcp_servers"))
         activity_provider = input.provider.model_dump()
         if normalized.inference_provider is not None:
             activity_provider["name"] = normalized.inference_provider.name
@@ -370,7 +371,8 @@ class AgentWorkflow:
                         "step": resolved_step,
                         "workflow_id": input.workflow_id,
                         "provider": activity_provider,
-                        "sandbox_image": input.sandbox_image,
+                        "sandbox_image": sandbox_image,
+                        "execution_context": dict(normalized.context),
                         "skills_image": input.skills_image,
                         "skills_paths": input.skills_paths,
                         "mcp_servers": (

@@ -156,6 +156,7 @@ async def _run_direct_or_local_step(
         tools=step.get("tools", []),
         tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
         context=context,
+        execution_context=input.get("execution_context") or {},
         timeout_seconds=step.get("timeout_seconds", 600),
         sandbox_image=input.get("sandbox_image", "sandbox:latest"),
         skills_image=input.get("skills_image"),
@@ -605,6 +606,7 @@ async def _run_sandbox_step_inner(
             context = build_sandbox_context(
                 workflow_steps=prior_steps,
                 current_step=step,
+                execution_context=input.get("execution_context") or {},
             )
 
             request_body: dict[str, Any] = {

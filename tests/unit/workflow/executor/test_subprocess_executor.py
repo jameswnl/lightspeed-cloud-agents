@@ -605,3 +605,21 @@ class TestSubprocessChildModuleInvocation:
         source = Path(mod.__file__).read_text()
         assert "non-OpenAI-compatible" not in source
         assert "_UNSUPPORTED_NATIVE_PROVIDERS" not in source
+
+
+class TestExecutionContextPayload:
+    """execution_context survives the subprocess payload boundary."""
+
+    def test_payload_carries_execution_context(self) -> None:
+        """_step_input_to_dict includes execution_context."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.subprocess_exec import _step_input_to_dict
+
+        payload = _step_input_to_dict(
+            StepInput(
+                prompt="p",
+                provider={"name": "openai", "model": "gpt-4o"},
+                execution_context={"env": "staging"},
+            )
+        )
+        assert payload["execution_context"] == {"env": "staging"}

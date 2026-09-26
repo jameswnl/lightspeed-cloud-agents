@@ -1088,3 +1088,125 @@ class TestTransientActivityRetry:
             if c.args and c.args[0] == "run_sandbox_step"
         ]
         assert len(sandbox_calls) == 1
+
+
+class TestPrecedenceChainTemporal:
+    """Definition-level defaults outrank run-level args on Temporal (#268)."""
+
+    @pytest.mark.asyncio
+    async def test_definition_provider_outranks_run_provider(self) -> None:
+        """A definition-level provider beats WorkflowInput.provider."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["provider"] = {
+                "name": "claude",
+                "model": "claude-sonnet",
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
+        assert provider["name"] == "claude"
+        assert provider["model"] == "claude-sonnet"
+        # Run-level ref (openai/test-key) must not bind to the claude winner.
+        assert "credentials_secret" not in provider
+
+    @pytest.mark.asyncio
+    async def test_definition_sandbox_image_outranks_run_image(self) -> None:
+        """A definition-level spawn_config image beats input.sandbox_image."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn_config"] = {
+                "sandbox_image": "img-def"
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["sandbox_image"] == "img-def"
+
+    @pytest.mark.asyncio
+    async def test_step_spawn_image_outranks_definition_and_run(self) -> None:
+        """A step spawn_config image outranks definition and run images."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "spawn_config": {"sandbox_image": "img-step"},
+            }
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn_config"] = {
+                "sandbox_image": "img-def"
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["sandbox_image"] == "img-step"
+
+
+class TestExecutionContextTemporal:
+    """Merged execution context reaches the Temporal activity payload."""
+
+    @pytest.mark.asyncio
+    async def test_execution_context_reaches_activity_args(self) -> None:
+        """Workflow+step context merges into the activity payload."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "context": {"env": "qa"},
+            }
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["context"] = {"region": "eu"}
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["execution_context"] == {"region": "eu", "env": "qa"}

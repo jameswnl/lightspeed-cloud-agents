@@ -170,3 +170,242 @@ class TestOneStepDefaults:
                 {"prompt": "hi"},
                 step_count=2,
             )
+
+
+class TestPrecedenceChain:
+    """Service (run) → workflow-definition → step precedence (issue #268).
+
+    Run-level provider and sandbox image are defaults only: a workflow
+    definition value outranks them, and a step value outranks both. Both
+    runners resolve through this same chain.
+    """
+
+    RUN_PROVIDER = {"name": "openai", "model": "gpt-4o", "credentials_secret": "run-key"}
+
+    def _build(
+        self,
+        step: dict,
+        workflow_defaults: dict | None = None,
+    ):
+        from cloud_agents.workflow.core.execution import build_step_input
+
+        return build_step_input(
+            step,
+            run_context={
+                "provider": dict(self.RUN_PROVIDER),
+                "sandbox_image": "run-image",
+                "workflow_id": "wf-prec",
+            },
+            workflow_defaults=workflow_defaults,
+        )
+
+    def test_definition_provider_outranks_run_provider(self) -> None:
+        """The definition-level provider wins over the run-level default."""
+        step_input = self._build(
+            {"name": "s1", "output_key": "r1", "prompt": "p"},
+            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+        )
+        assert step_input.provider["name"] == "claude"
+        assert step_input.provider["model"] == "claude-sonnet"
+
+    def test_run_credentials_do_not_bind_cross_name_winner(self) -> None:
+        """Run-level credentials bind only when the winner shares their name."""
+        step_input = self._build(
+            {"name": "s1", "output_key": "r1", "prompt": "p"},
+            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+        )
+        assert "credentials_secret" not in step_input.provider
+
+    def test_run_credentials_bind_same_name_definition_provider(self) -> None:
+        """Same-name definition provider inherits the run credential ref."""
+        step_input = self._build(
+            {"name": "s1", "output_key": "r1", "prompt": "p"},
+            workflow_defaults={"provider": {"name": "openai", "model": "gpt-4o-mini"}},
+        )
+        assert step_input.provider["model"] == "gpt-4o-mini"
+        assert step_input.provider["credentials_secret"] == "run-key"
+
+    def test_step_provider_outranks_definition_and_run(self) -> None:
+        """A step-level override outranks definition and run levels."""
+        step_input = self._build(
+            {
+                "name": "s1",
+                "output_key": "r1",
+                "prompt": "p",
+                "inference_provider": {"name": "gemini", "model": "gemini-2"},
+            },
+            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+        )
+        assert step_input.provider["name"] == "gemini"
+        assert step_input.provider["model"] == "gemini-2"
+
+    def test_run_provider_used_when_definition_has_none(self) -> None:
+        """The run-level provider is the default when the definition has none."""
+        step_input = self._build({"name": "s1", "output_key": "r1", "prompt": "p"})
+        assert step_input.provider["name"] == "openai"
+        assert step_input.provider["credentials_secret"] == "run-key"
+
+    def test_sandbox_image_step_over_definition_over_run(self) -> None:
+        """Sandbox image precedence: step > definition > run."""
+        defaults = {"spawn_config": {"sandbox_image": "img-def"}}
+        step = {
+            "name": "s1",
+            "output_key": "r1",
+            "prompt": "p",
+            "spawn_config": {"sandbox_image": "img-step"},
+        }
+        assert self._build(step, defaults).sandbox_image == "img-step"
+
+    def test_sandbox_image_definition_outranks_run(self) -> None:
+        """Definition-level spawn_config image wins over the run image."""
+        defaults = {"spawn_config": {"sandbox_image": "img-def"}}
+        step = {"name": "s1", "output_key": "r1", "prompt": "p"}
+        assert self._build(step, defaults).sandbox_image == "img-def"
+
+    def test_sandbox_image_step_config_without_image_keeps_definition(self) -> None:
+        """A step spawn_config lacking an image falls to the definition image."""
+        step = {
+            "name": "s1",
+            "output_key": "r1",
+            "prompt": "p",
+            "spawn_config": {"cpu_request": "200m"},
+        }
+        defaults = {"spawn_config": {"sandbox_image": "img-def"}}
+        assert self._build(step, defaults).sandbox_image == "img-def"
+
+    def test_sandbox_image_run_used_when_definition_has_none(self) -> None:
+        """The run-level image is the default when the definition has none."""
+        step_input = self._build({"name": "s1", "output_key": "r1", "prompt": "p"})
+        assert step_input.sandbox_image == "run-image"
+
+
+class TestExecutionContextDelivery:
+    """User-supplied execution context reaches the executor (issue #268).
+
+    ``execution_context`` is distinct from prior step results: the
+    workflow+step merged context is delivered on its own StepInput field
+    and prior outputs stay in ``context``.
+    """
+
+    def _build(self, step: dict, workflow_defaults: dict | None = None):
+        from cloud_agents.workflow.core.execution import build_step_input
+
+        return build_step_input(
+            step,
+            run_context={
+                "provider": {"name": "openai", "model": "gpt-4o"},
+                "step_results": {"prev": {"status": "completed", "output": {"r": 1}}},
+                "workflow_id": "wf-exec-ctx",
+            },
+            workflow_defaults=workflow_defaults,
+        )
+
+    def test_merged_context_flows_to_execution_context(self) -> None:
+        """Workflow+step context merges onto execution_context."""
+        step_input = self._build(
+            {"name": "s1", "output_key": "r1", "prompt": "p", "context": {"env": "staging"}},
+            workflow_defaults={"context": {"region": "eu"}},
+        )
+        assert step_input.execution_context == {"region": "eu", "env": "staging"}
+
+    def test_step_context_overrides_workflow_context(self) -> None:
+        """Step values win per key over workflow values."""
+        step_input = self._build(
+            {"name": "s1", "output_key": "r1", "prompt": "p", "context": {"env": "qa"}},
+            workflow_defaults={"context": {"env": "prod", "region": "eu"}},
+        )
+        assert step_input.execution_context == {"env": "qa", "region": "eu"}
+
+    def test_prior_results_stay_out_of_execution_context(self) -> None:
+        """Prior step outputs land in context, never execution_context."""
+        step_input = self._build({"name": "s1", "output_key": "r1", "prompt": "p"})
+        assert step_input.context == {"prev": {"status": "completed", "output": {"r": 1}}}
+        assert step_input.execution_context == {}
+
+    def test_definition_models_carry_context(self) -> None:
+        """WorkflowStepSpec/WorkflowSpec round-trip step/workflow context."""
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        defn = WorkflowDefinition.model_validate(
+            {
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "ctx"},
+                "spec": {
+                    "context": {"region": "eu"},
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "prompt": "p",
+                            "output_key": "r1",
+                            "context": {"env": "qa"},
+                        }
+                    ],
+                },
+            }
+        )
+        assert defn.spec.context == {"region": "eu"}
+        assert defn.spec.steps[0].context == {"env": "qa"}
+
+
+class TestProviderSpecStrictFields:
+    """Unknown keys in provider mappings are rejected, not ignored (#270)."""
+
+    def test_inference_provider_spec_rejects_unknown_fields(self) -> None:
+        """A smuggled credentials_secret key fails validation."""
+        with pytest.raises(ValidationError):
+            InferenceProviderSpec.model_validate(
+                {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"}
+            )
+
+    def test_normalize_rejects_step_provider_extra_keys(self) -> None:
+        """Step provider mappings with unknown keys fail normalization."""
+        from cloud_agents.workflow.core.execution import normalize_workflow_step
+
+        with pytest.raises(ValueError, match="credentials_secret"):
+            normalize_workflow_step(
+                {
+                    "name": "s1",
+                    "output_key": "r1",
+                    "prompt": "p",
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4o",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                }
+            )
+
+
+class TestMcpDefaultParity:
+    """Workflow-level MCP defaults flow and reject identically (#270)."""
+
+    def test_workflow_mcp_default_reaches_step_input(self) -> None:
+        """A step without mcp_servers inherits the spec-level catalog."""
+        from cloud_agents.workflow.core.execution import build_step_input
+
+        step_input = build_step_input(
+            {"name": "s1", "output_key": "r1", "prompt": "p"},
+            run_context={"provider": {"name": "openai", "model": "gpt-4o"}},
+            workflow_defaults={
+                "mcp_servers": [{"name": "cat", "url": "https://internal/x"}]
+            },
+        )
+        resolved = step_input.mcp_servers
+        assert resolved is not None and len(resolved) == 1
+        assert resolved[0]["name"] == "cat"
+        assert resolved[0]["url"] == "https://internal/x"
+
+    def test_runtime_rejects_secret_in_workflow_mcp_default(self) -> None:
+        """Normalization rejects a secret-bearing spec-level catalog."""
+        from cloud_agents.workflow.core.execution import build_step_input
+
+        with pytest.raises(ValueError, match="credentialed"):
+            build_step_input(
+                {"name": "s1", "output_key": "r1", "prompt": "p"},
+                run_context={"provider": {"name": "openai", "model": "gpt-4o"}},
+                workflow_defaults={
+                    "mcp_servers": [{"name": "x", "url": "https://t:a@h/p"}]
+                },
+            )

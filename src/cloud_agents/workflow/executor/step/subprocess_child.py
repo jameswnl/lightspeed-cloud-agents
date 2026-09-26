@@ -129,6 +129,10 @@ def _build_user_content(input_data: dict[str, Any]) -> str:
         if context_parts:
             context_block = "\n\n".join(context_parts)
             user_content = f"{user_content}\n\n--- Prior step outputs ---\n{context_block}"
+    execution_context = input_data.get("execution_context") or {}
+    if execution_context:
+        exec_block = json.dumps(execution_context, indent=2)
+        user_content = f"{user_content}\n\n--- Execution context ---\n{exec_block}"
     if output_schema:
         schema_text = json.dumps(output_schema, indent=2)
         user_content += f"\n\nRespond with valid JSON matching this schema:\n{schema_text}"

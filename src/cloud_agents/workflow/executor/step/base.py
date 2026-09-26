@@ -46,6 +46,9 @@ class StepInput:
         tools: Tool names this step is allowed to use.
         tools_module: Dotted import path for module containing tool registrations.
         context: Prior step outputs keyed by output_key.
+        execution_context: User-supplied execution context merged from
+            workflow-level and step-level ``context`` (step wins per key);
+            distinct from prior step outputs.
         timeout_seconds: Max execution time.
         sandbox_image: Container image for ephemeral mode.
         skills_image: Optional OCI image for skills.
@@ -67,6 +70,7 @@ class StepInput:
     tools: list[str] = field(default_factory=list)
     tools_module: Optional[str] = None
     context: dict[str, Any] = field(default_factory=dict)
+    execution_context: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: int = 600
     sandbox_image: str = "sandbox:latest"
     skills_image: Optional[str] = None

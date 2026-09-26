@@ -65,6 +65,12 @@ def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
 
     user_content = step_input.prompt
 
+    if step_input.execution_context:
+        exec_block = json.dumps(step_input.execution_context, indent=2)
+        user_content = (
+            f"{user_content}\n\n--- Execution context ---\n{exec_block}"
+        )
+
     if step_input.context:
         context_parts = []
         for key, value in step_input.context.items():
@@ -97,6 +103,12 @@ def _build_user_prompt(step_input: StepInput) -> str:
         Concatenated user prompt string.
     """
     user_content = step_input.prompt
+
+    if step_input.execution_context:
+        exec_block = json.dumps(step_input.execution_context, indent=2)
+        user_content = (
+            f"{user_content}\n\n--- Execution context ---\n{exec_block}"
+        )
 
     if step_input.context:
         context_parts = []

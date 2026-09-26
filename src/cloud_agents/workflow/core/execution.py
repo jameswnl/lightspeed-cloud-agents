@@ -111,6 +111,8 @@ class InferenceProviderSpec(BaseModel):
         model: Model identifier.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1)
     model: str = Field(min_length=1)
 
@@ -614,6 +616,58 @@ def _is_secret_key(key: str) -> bool:
     return any(marker in lowered for marker in MCP_SECRET_KEY_MARKERS)
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """Coerce a provider/config value to a plain mapping.
+
+    Accepts raw dicts (YAML path) and pydantic models (validated
+    ``WorkflowDefinition`` path) so normalization behaves identically
+    whichever shape a definition arrives in.
+
+    Parameters:
+        value: Dict or pydantic model.
+
+    Returns:
+        A plain dict view of the value.
+    """
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    return dict(value)
+
+
+def resolve_sandbox_image(
+    spawn_config: Optional[SpawnConfig],
+    workflow_defaults: Optional[dict[str, Any]],
+    run_image: Optional[str],
+) -> str:
+    """Resolve the sandbox image through the precedence chain (issue #268).
+
+    ``step spawn_config.sandbox_image`` → workflow-definition
+    ``spawn_config.sandbox_image`` → run-level default →
+    ``sandbox:latest``. Run-level images are defaults only: a workflow
+    definition value outranks them, and a step value outranks both.
+
+    Parameters:
+        spawn_config: Normalized step-or-default spawn config (may be
+            None or carry no image).
+        workflow_defaults: Workflow-level defaults (definition layer).
+        run_image: Run-level default image.
+
+    Returns:
+        The effective sandbox image.
+    """
+    if spawn_config is not None and spawn_config.sandbox_image:
+        return spawn_config.sandbox_image
+    defaults_config = _as_mapping(
+        (workflow_defaults or {}).get("spawn_config") or {}
+    )
+    default_image = defaults_config.get("sandbox_image")
+    if default_image:
+        return default_image
+    return run_image or "sandbox:latest"
+
+
 def reject_secret_bearing_mcp(
     mcp_servers: Optional[list[Any]],
 ) -> Optional[list[Any]]:
@@ -863,7 +917,7 @@ def normalize_workflow_step(
         provider_raw = defaults.get("provider")
     inference_provider = None
     if provider_raw is not None:
-        inference_provider = validate_inference_provider(dict(provider_raw))
+        inference_provider = validate_inference_provider(_as_mapping(provider_raw))
 
     mcp_servers = raw.get("mcp_servers", defaults.get("mcp_servers"))
     allowed_skills = raw.get("allowed_skills", defaults.get("allowed_skills"))
@@ -883,7 +937,7 @@ def normalize_workflow_step(
         spawn_config = (
             spawn_config_raw
             if isinstance(spawn_config_raw, SpawnConfig)
-            else SpawnConfig.model_validate(dict(spawn_config_raw))
+            else SpawnConfig.model_validate(_as_mapping(spawn_config_raw))
         )
 
     tools = raw.get("tools", [])
@@ -1167,9 +1221,11 @@ def build_step_input(
     prompt = _interpolate_step_text(normalized.prompt, wf_state) or ""
     system_prompt = _interpolate_step_text(normalized.instructions, wf_state)
 
-    sandbox_image = run_context.get("sandbox_image", "sandbox:latest")
-    if normalized.spawn_config and normalized.spawn_config.sandbox_image:
-        sandbox_image = normalized.spawn_config.sandbox_image
+    sandbox_image = resolve_sandbox_image(
+        normalized.spawn_config,
+        workflow_defaults,
+        run_context.get("sandbox_image"),
+    )
 
     provider_payload: dict[str, Any] = {
         "name": provider_name,
@@ -1188,6 +1244,7 @@ def build_step_input(
         tools=list(normalized.tools),
         tools_module=run_context.get("tools_module"),
         context=dict(step_results),
+        execution_context=dict(normalized.context),
         timeout_seconds=normalized.timeout_seconds or 600,
         sandbox_image=sandbox_image,
         skills_image=run_context.get("skills_image"),
