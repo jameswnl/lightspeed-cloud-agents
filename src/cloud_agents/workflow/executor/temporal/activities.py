@@ -169,6 +169,7 @@ async def _run_direct_or_local_step(
         raw_step=step,
         step_name=step_name,
         output_key=output_key,
+        attempt=input.get("attempt", 1),
     )
 
     executor = get_step_executor(step, spawner=None, transcript_store=None)

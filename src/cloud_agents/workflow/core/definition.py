@@ -82,6 +82,13 @@ class WorkflowSpec(BaseModel):
 
     input_prompt: Optional[str] = None
     steps: list[WorkflowStepSpec] = Field(..., min_length=1)
+    timeout_seconds: Optional[int] = None
+    spawn: Optional[Literal["none", "local", "ephemeral"]] = None
+    spawn_config: Optional[SpawnConfig] = None
+    mcp_servers: Optional[list[str | MCPServerConfig]] = None
+    allowed_skills: Optional[list[str]] = None
+    permissions: Optional[PermissionScope] = None
+    service_account: Optional[str] = None
     context: Optional[dict[str, Any]] = None
 
 

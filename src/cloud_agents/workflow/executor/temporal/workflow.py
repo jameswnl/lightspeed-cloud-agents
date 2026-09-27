@@ -343,7 +343,15 @@ class AgentWorkflow:
                 input.provider.model_dump(),
             )
         except ValueError as exc:
-            return StepResult(status="failed", error=str(exc))
+            failed_name = step.get("name", "agent")
+            failed_key = step.get("output_key", "result")
+            result = StepResult(status="failed", error=str(exc))
+            self._steps[failed_key] = result
+            self._step_transcripts[failed_key] = StepTranscript(
+                step_name=failed_name,
+            ).model_dump()
+            self._emit("step.failed", failed_name)
+            return result
         step_name = normalized.name
         output_key = normalized.output_key
         timeout_seconds = normalized.timeout_seconds or 600
@@ -389,6 +397,8 @@ class AgentWorkflow:
 
         self._emit("step.started", step_name)
 
+        attempt_number = 0
+
         async def attempt() -> Any:
             """Run one sandbox activity attempt without activity-level retries.
 
@@ -396,6 +406,8 @@ class AgentWorkflow:
             local runner) so a single policy covers exceptions and
             transient result failures; the activity itself tries once.
             """
+            nonlocal attempt_number
+            attempt_number += 1
             return await workflow.execute_activity(
                 "run_sandbox_step",
                 args=[
@@ -405,6 +417,7 @@ class AgentWorkflow:
                         "provider": activity_provider,
                         "sandbox_image": sandbox_image,
                         "execution_context": dict(normalized.context),
+                        "attempt": attempt_number,
                         "skills_image": input.skills_image,
                         "skills_paths": input.skills_paths,
                         "mcp_servers": (
@@ -431,6 +444,7 @@ class AgentWorkflow:
                 # (e.g. sandbox 502s) would otherwise never retry here
                 # while the local runner retries them.
                 exc_text=activity_error_text,
+                retry_sleep=workflow.sleep if workflow.in_workflow() else None,
             )
 
             if isinstance(result, dict):

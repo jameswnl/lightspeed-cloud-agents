@@ -75,7 +75,13 @@ def build_local_router(
                 detail="Workflow definition is required",
             )
 
-        if not request.provider:
+        definition = request.definition
+        provider = request.provider
+        if provider is None and definition:
+            definition_provider = definition.get("provider")
+            if isinstance(definition_provider, dict):
+                provider = dict(definition_provider)
+        if not provider:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
@@ -91,19 +97,18 @@ def build_local_router(
                 detail=tool_errors[0],
             )
 
-        if content_policy:
-            from cloud_agents.workflow.core.validation import validate_definition
+        from cloud_agents.workflow.core.validation import validate_definition
 
-            errors = validate_definition(request.definition, content_policy)
-            if errors:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail={"validation_errors": errors},
-                )
+        errors = validate_definition(request.definition, content_policy)
+        if errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": errors},
+            )
 
         input_data: dict[str, Any] = {
             "definition": request.definition,
-            "provider": request.provider,
+            "provider": provider,
             "sandbox_image": request.sandbox_image,
             "skills_image": request.skills_image,
             "skills_paths": request.skills_paths,

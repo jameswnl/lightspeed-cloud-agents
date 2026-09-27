@@ -440,3 +440,23 @@ class TestStoredStepProvider:
         assert step.inference_provider is not None
         assert step.inference_provider.name == "claude"
         assert step.inference_provider.model == "sonnet"
+
+
+class TestParallelDependencySafety:
+    """Parallel groups do not race steps with prompt dependencies."""
+
+    def test_internal_prompt_dependency_serializes_group(self) -> None:
+        """A dependent member cannot run before its referenced output exists."""
+        from cloud_agents.workflow.core.execution import chunk_parallel_groups
+
+        chunks = chunk_parallel_groups(
+            [
+                {"name": "first", "parallel_group": "g", "prompt": "collect"},
+                {
+                    "name": "second",
+                    "parallel_group": "g",
+                    "prompt": "use {{ steps.first.output.value }}",
+                },
+            ]
+        )
+        assert chunks == [(None, [{"name": "first", "parallel_group": "g", "prompt": "collect"}]), (None, [{"name": "second", "parallel_group": "g", "prompt": "use {{ steps.first.output.value }}"}])]

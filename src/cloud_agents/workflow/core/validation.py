@@ -111,9 +111,11 @@ def validate_definition(
         step_names.add(name)
 
         output_key = step.get("output_key")
-        if output_key:
-            if output_key in output_keys:
-                errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
+        if not output_key:
+            errors.append(f"Step '{name}' is missing required field 'output_key'")
+        elif output_key in output_keys:
+            errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
+        else:
             output_keys.add(output_key)
 
         prompt = step.get("prompt") or ""

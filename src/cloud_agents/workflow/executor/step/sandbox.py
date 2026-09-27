@@ -96,6 +96,7 @@ class SandboxExecutor(StepExecutor):
             "name": step_input.step_name,
             "prompt": step_input.prompt,
             "output_key": step_input.output_key,
+            "attempt": step_input.attempt,
         }
 
         run_step_input = {

@@ -302,6 +302,106 @@
           "title": "Steps",
           "type": "array"
         },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        },
+        "spawn": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "local",
+                "ephemeral"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spawn"
+        },
+        "spawn_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpawnConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mcp_servers": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/MCPServerConfig"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mcp Servers"
+        },
+        "allowed_skills": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Skills"
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "service_account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Account"
+        },
         "context": {
           "anyOf": [
             {

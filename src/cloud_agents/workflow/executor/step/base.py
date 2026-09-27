@@ -60,6 +60,7 @@ class StepInput:
         workflow_id: Workflow execution ID.
         step_name: Step name within the workflow.
         output_key: Key for this step's result in workflow state.
+        attempt: One-based retry attempt number for this execution.
         metadata: Typed identity and cross-cutting metadata.
     """
 
@@ -80,6 +81,7 @@ class StepInput:
     workflow_id: str = ""
     step_name: str = ""
     output_key: str = ""
+    attempt: int = 1
     raw_step: Optional[dict[str, Any]] = None
     metadata: Optional[StepMetadata] = None
 

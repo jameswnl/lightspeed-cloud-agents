@@ -712,10 +712,31 @@ class TestNormalizeDefinition:
 class TestRemainingReviewFindings:
     """Regression tests for reviewer findings (N1/N2/S2/S5)."""
 
-    def test_none_output_key_defaults_to_name(self) -> None:
-        """Test that an explicit null output_key falls back to the name (N1)."""
+    def test_none_output_key_uses_one_step_result_default(self) -> None:
+        """An explicit null output_key uses the documented one-step result."""
         step, _ = normalize_workflow_step(_step(output_key=None))
-        assert step.output_key == "agent"
+        assert step.output_key == "result"
+
+    def test_none_output_key_rejected_for_multi_step(self) -> None:
+        """A multi-step null output key cannot silently reroute results."""
+        with pytest.raises(ValueError, match="output_key"):
+            normalize_workflow_step(_step(output_key=None), step_count=2)
+
+    def test_null_context_is_empty(self) -> None:
+        """A null step context does not crash normalization."""
+        step, _ = normalize_workflow_step(_step(context=None))
+        assert step.context == {}
+
+    def test_null_mcp_servers_inherits_workflow_default(self) -> None:
+        """A null list value means inherit rather than clear the default."""
+        step, _ = normalize_workflow_step(
+            _step(mcp_servers=None),
+            workflow_defaults={
+                "mcp_servers": [{"name": "catalog", "url": "https://internal/mcp"}]
+            },
+        )
+        assert step.mcp_servers is not None
+        assert step.mcp_servers[0].name == "catalog"
 
     def test_bool_timeout_rejected(self) -> None:
         """Test that boolean timeouts are rejected (N2)."""

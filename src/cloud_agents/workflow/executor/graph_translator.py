@@ -11,6 +11,7 @@ No temporalio imports. Used by the LocalWorkflowRunner.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
@@ -308,7 +309,7 @@ def _build_agent_step(
             return {"status": "failed", "error": str(exc)}
 
         executor = get_step_executor(
-            step=step_def,
+            step=step_input.raw_step or step_def,
             spawner=state.spawner,
             transcript_store=state.transcript_store,
         )
@@ -341,8 +342,13 @@ def _build_agent_step(
             raw_retries if isinstance(raw_retries, int) and raw_retries >= 0 else 0
         )
 
+        attempt_number = 0
+
         async def attempt() -> Any:
             """Run one executor attempt."""
+            nonlocal attempt_number
+            attempt_number += 1
+            step_input.attempt = attempt_number
             return await wrapped.run(step_input)
 
         exec_result = await run_with_retries(
@@ -350,6 +356,7 @@ def _build_agent_step(
             max_retries,
             lambda result: result.status == "completed",
             lambda result: result.error,
+            retry_sleep=asyncio.sleep,
         )
 
         # Always overwrite (not just when truthy) so a step whose capture

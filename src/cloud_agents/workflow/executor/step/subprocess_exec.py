@@ -53,6 +53,7 @@ def _step_input_to_dict(step_input: StepInput) -> dict[str, Any]:
         "workflow_id": step_input.workflow_id,
         "step_name": step_input.step_name,
         "output_key": step_input.output_key,
+        "attempt": step_input.attempt,
     }
 
 

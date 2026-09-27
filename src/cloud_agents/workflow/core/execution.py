@@ -220,8 +220,10 @@ def apply_one_step_defaults(
                 "multi-step definitions must set 'name' and 'output_key' "
                 "explicitly"
             )
-        result.setdefault("name", ONE_STEP_NAME)
-        result.setdefault("output_key", ONE_STEP_OUTPUT_KEY)
+        if result.get("name") is None:
+            result["name"] = ONE_STEP_NAME
+        if result.get("output_key") is None:
+            result["output_key"] = ONE_STEP_OUTPUT_KEY
     return result
 
 
@@ -309,6 +311,8 @@ async def run_with_retries(
     succeeded: Callable[[_T], bool],
     error_of: Callable[[_T], Optional[str]],
     exc_text: Callable[[BaseException], str] | None = None,
+    retry_sleep: Callable[[float], Awaitable[None]] | None = None,
+    backoff_seconds: float = 1.0,
 ) -> _T:
     """Run an attempt callable with unified retry semantics.
 
@@ -328,6 +332,8 @@ async def run_with_retries(
             exception (defaults to ``str``). The Temporal runner passes
             an unwrapping extractor so ``ActivityError`` wrappers are
             classified by their root cause, not the wrapper text.
+        retry_sleep: Optional async sleep function used between retries.
+        backoff_seconds: Initial exponential backoff delay.
 
     Returns:
         The first successful result, the last non-transient result, or
@@ -347,11 +353,15 @@ async def run_with_retries(
             if index + 1 >= attempts or not is_transient_failure(text_of(exc)):
                 raise
             last_exc = exc
+            if retry_sleep is not None:
+                await retry_sleep(backoff_seconds * (2**index))
             continue
         if succeeded(result):
             return result
         if index + 1 >= attempts or not is_transient_failure(error_of(result)):
             return result
+        if retry_sleep is not None:
+            await retry_sleep(backoff_seconds * (2**index))
     assert last_exc is not None  # noqa: S101 -- loop always runs >= once
     raise last_exc
 
@@ -409,7 +419,16 @@ def chunk_parallel_groups(
             while index < len(steps) and steps[index].get("parallel_group") == group:
                 members.append(steps[index])
                 index += 1
-            chunks.append((group, members))
+            member_names = {member.get("name") for member in members}
+            has_internal_dependency = any(
+                set(re.findall(r"\{\{\s*steps\.(\w+)\.", member.get("prompt") or ""))
+                & member_names
+                for member in members
+            )
+            if has_internal_dependency:
+                chunks.extend((None, [member]) for member in members)
+            else:
+                chunks.append((group, members))
         else:
             chunks.append((None, [steps[index]]))
             index += 1
@@ -945,7 +964,9 @@ def normalize_workflow_step(
     if not raw.get("name"):
         raise ValueError("agent steps require 'name'")
 
-    timeout = raw.get("timeout_seconds", defaults.get("timeout_seconds"))
+    timeout = raw.get("timeout_seconds")
+    if timeout is None:
+        timeout = defaults.get("timeout_seconds")
     if timeout is not None and (
         isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
     ):
@@ -960,19 +981,33 @@ def normalize_workflow_step(
     if provider_raw is not None:
         inference_provider = validate_inference_provider(_as_mapping(provider_raw))
 
-    mcp_servers = raw.get("mcp_servers", defaults.get("mcp_servers"))
-    allowed_skills = raw.get("allowed_skills", defaults.get("allowed_skills"))
+    mcp_servers = raw.get("mcp_servers")
+    if mcp_servers is None:
+        mcp_servers = defaults.get("mcp_servers")
+    allowed_skills = raw.get("allowed_skills")
+    if allowed_skills is None:
+        allowed_skills = defaults.get("allowed_skills")
     reject_secret_bearing_mcp(mcp_servers)
 
+    permissions = raw.get("permissions")
+    if permissions is None:
+        permissions = defaults.get("permissions")
+    service_account = raw.get("service_account")
+    if service_account is None:
+        service_account = defaults.get("service_account")
     scope, perm_meta = collapse_permissions(
-        raw.get("permissions", defaults.get("permissions")),
-        raw.get("service_account", defaults.get("service_account")),
+        permissions,
+        service_account,
         raw.get("risk_level"),
         raw.get("target_namespaces"),
     )
 
-    spawn = raw.get("spawn", defaults.get("spawn", "ephemeral"))
-    spawn_config_raw = raw.get("spawn_config", defaults.get("spawn_config"))
+    spawn = raw.get("spawn")
+    if spawn is None:
+        spawn = defaults.get("spawn", "ephemeral")
+    spawn_config_raw = raw.get("spawn_config")
+    if spawn_config_raw is None:
+        spawn_config_raw = defaults.get("spawn_config")
     spawn_config = None
     if spawn_config_raw is not None:
         spawn_config = (
@@ -990,8 +1025,8 @@ def normalize_workflow_step(
             "(a bare string would splinter into per-character names)"
         )
     context = merge_context(
-        dict(defaults.get("context", {})),
-        dict(raw.get("context", {})),
+        dict(defaults.get("context") or {}),
+        dict(raw.get("context") or {}),
     )
 
     normalized = WorkflowAgentStep(
@@ -1008,7 +1043,7 @@ def normalize_workflow_step(
         context=context,
         timeout_seconds=timeout,
         name=raw["name"],
-        output_key=raw.get("output_key") or raw["name"],
+        output_key=raw["output_key"],
         condition=raw.get("condition"),
         max_retries=raw.get("max_retries", 0),
         parallel_group=raw.get("parallel_group"),
@@ -1194,7 +1229,7 @@ def build_step_input(
         ValueError: On any normalization failure (see
             ``normalize_workflow_step``).
     """
-    normalized, _meta = normalize_workflow_step(
+    normalized, meta = normalize_workflow_step(
         step, workflow_defaults=workflow_defaults, step_count=step_count
     )
 
@@ -1278,6 +1313,12 @@ def build_step_input(
         # ensure_credentials_env execution path -- never a secret value.
         provider_payload["credentials_secret"] = credentials_secret
 
+    normalized_step = normalized.model_dump(exclude_none=True)
+    normalized_step.update({key: value for key, value in meta.items() if value is not None})
+    normalized_step["prompt"] = prompt
+    if system_prompt is not None:
+        normalized_step["instructions"] = system_prompt
+
     return StepInput(
         prompt=prompt,
         provider=provider_payload,
@@ -1294,7 +1335,7 @@ def build_step_input(
         allowed_skills=normalized.allowed_skills,
         mcp_servers=resolve_mcp_servers(normalized.mcp_servers, run_context.get("mcp_servers")),
         workflow_id=run_context.get("workflow_id", ""),
-        raw_step=dict(step),
+        raw_step=normalized_step,
         step_name=normalized.name,
         output_key=normalized.output_key,
         metadata=StepMetadata(

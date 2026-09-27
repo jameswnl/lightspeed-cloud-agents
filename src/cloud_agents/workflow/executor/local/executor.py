@@ -200,6 +200,23 @@ class LocalWorkflowRunner(WorkflowRunner):
                                 )
                             persisted_keys.update(new_keys)
 
+                        failed_steps = [
+                            key
+                            for key, value in state.step_results.items()
+                            if value.get("status") in ("failed", "denied")
+                        ]
+                        if failed_steps:
+                            if self._store:
+                                await self._store.append_event(
+                                    workflow_id,
+                                    {
+                                        "type": "workflow.failed",
+                                        "steps": failed_steps,
+                                    },
+                                )
+                                await self._store.mark_terminal(workflow_id, "failed")
+                            return
+
                         if state.paused_at_step:
                             if self._store:
                                 if state.trace_parent:

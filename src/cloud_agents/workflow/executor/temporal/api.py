@@ -290,6 +290,11 @@ def build_temporal_router(
         else:
             provider = request.provider
 
+        if provider is None and definition:
+            definition_provider = definition.get("provider")
+            if isinstance(definition_provider, dict):
+                provider = ProviderConfig.model_validate(definition_provider)
+
         if not definition:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
