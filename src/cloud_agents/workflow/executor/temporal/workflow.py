@@ -472,8 +472,12 @@ class AgentWorkflow:
                     error=step_result.error,
                 )
 
-        except ActivityError:
-            step_result = StepResult(status="failed", error="retries exhausted")
+        except ActivityError as exc:
+            error_detail = activity_error_text(exc)
+            error = "retries exhausted"
+            if error_detail:
+                error = f"{error}: {error_detail}"
+            step_result = StepResult(status="failed", error=error)
             self._steps[output_key] = step_result
             self._step_transcripts[output_key] = StepTranscript(
                 step_name=step_name,

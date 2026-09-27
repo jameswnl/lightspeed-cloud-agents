@@ -290,6 +290,10 @@ def is_transient_failure(error: Optional[str]) -> bool:
         return False
     if TOOL_FAILURE_PATTERN.search(lowered):
         return False
+    if "tool" in lowered and any(
+        marker in lowered for marker in ("failed", "failure", "error", "timed out")
+    ):
+        return False
     return any(marker in lowered for marker in TRANSIENT_FAILURE_MARKERS)
 
 

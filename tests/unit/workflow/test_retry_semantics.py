@@ -338,6 +338,7 @@ class TestToolFailuresDoNotRetry:
         assert is_transient_failure("tool kubectl_get failed: connection reset") is False
         assert is_transient_failure("tool run_fix timed out after 30s") is False
         assert is_transient_failure("tool exec error: 502 bad gateway") is False
+        assert is_transient_failure("Error executing tool call: connection reset") is False
 
     def test_plain_infra_failure_still_retries(self) -> None:
         """Test that non-tool infra failures remain retryable."""
