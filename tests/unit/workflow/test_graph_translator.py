@@ -1632,7 +1632,7 @@ class TestPrecedenceChainLocalRunner:
         from cloud_agents.workflow.executor.graph_translator import build_graph
 
         defn = self._definition(
-            top_provider={"name": "claude", "model": "claude-sonnet"}, spec=None
+            top_provider={"name": "openai", "model": "gpt-4o-mini"}, spec=None
         )
         graph, state = build_graph(
             defn,
@@ -1642,9 +1642,9 @@ class TestPrecedenceChainLocalRunner:
         await graph.run(state=state)
 
         solo_input = mock_executor.run.call_args_list[0].args[0]
-        assert solo_input.provider["name"] == "claude"
-        assert solo_input.provider["model"] == "claude-sonnet"
-        assert "credentials_secret" not in solo_input.provider
+        assert solo_input.provider["name"] == "openai"
+        assert solo_input.provider["model"] == "gpt-4o-mini"
+        assert solo_input.provider["credentials_secret"] == "k"
 
     @pytest.mark.asyncio
     async def test_definition_sandbox_image_outranks_run_image(

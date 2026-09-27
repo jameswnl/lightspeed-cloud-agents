@@ -897,18 +897,15 @@ class TestStepProviderOverrideAndMcpValidation:
                 "type": "agent",
                 "output_key": "r1",
                 "prompt": "test",
-                "inference_provider": {"name": "claude", "model": "claude-sonnet"},
+                "inference_provider": {"name": "openai", "model": "gpt-4o-mini"},
             }
             await wf._handle_agent_step(step, _make_input([step]))
 
         activity_args = mock_execute.call_args_list[0].kwargs["args"][0]
         provider = activity_args["provider"]
-        assert provider["name"] == "claude"
-        assert provider["model"] == "claude-sonnet"
-        # Cross-provider override: the run-level ref must NOT bind to
-        # another provider (B2). Credentials resolve from the override
-        # provider's default env key instead.
-        assert "credentials_secret" not in provider
+        assert provider["name"] == "openai"
+        assert provider["model"] == "gpt-4o-mini"
+        assert provider["credentials_secret"] == "test-key"
 
     @pytest.mark.asyncio
     async def test_unapproved_step_provider_fails_before_scheduling(self) -> None:
@@ -966,8 +963,8 @@ class TestStepProviderOverrideAndMcpValidation:
         mock_execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cross_provider_override_drops_reference(self) -> None:
-        """An override for another provider must not bind the run ref (B2)."""
+    async def test_cross_provider_override_fails_closed(self) -> None:
+        """An override for another provider fails before activity dispatch."""
         from datetime import datetime, timezone
         from unittest.mock import AsyncMock, patch
 
@@ -985,13 +982,40 @@ class TestStepProviderOverrideAndMcpValidation:
                 "type": "agent",
                 "output_key": "r1",
                 "prompt": "test",
-                "inference_provider": {"name": "claude", "model": "claude-sonnet"},
+                "inference_provider": {"name": "azure", "model": "gpt-4o"},
             }
-            await wf._handle_agent_step(step, _make_input([step]))
+            result = await wf._handle_agent_step(step, _make_input([step]))
 
-        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
-        assert provider["name"] == "claude"
-        assert "credentials_secret" not in provider
+        assert result.status == "failed"
+        assert "cross-provider" in (result.error or "")
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_azure_override_cannot_use_ambient_worker_credentials(self) -> None:
+        """An Azure override cannot bypass an OpenAI run provider boundary."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "azure", "model": "gpt-4o"},
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        assert "cross-provider" in (result.error or "")
+        mock_execute.assert_not_called()
 
 
 class TestTransientActivityRetry:
@@ -1111,16 +1135,15 @@ class TestPrecedenceChainTemporal:
             step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
             wf_input = _make_input([step])
             wf_input.definition["provider"] = {
-                "name": "claude",
-                "model": "claude-sonnet",
+                "name": "openai",
+                "model": "gpt-4o-mini",
             }
             await wf._handle_agent_step(step, wf_input)
 
         provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
-        assert provider["name"] == "claude"
-        assert provider["model"] == "claude-sonnet"
-        # Run-level ref (openai/test-key) must not bind to the claude winner.
-        assert "credentials_secret" not in provider
+        assert provider["name"] == "openai"
+        assert provider["model"] == "gpt-4o-mini"
+        assert provider["credentials_secret"] == "test-key"
 
     @pytest.mark.asyncio
     async def test_definition_sandbox_image_outranks_run_image(self) -> None:

@@ -580,6 +580,41 @@ def validate_inference_provider(raw: dict[str, Any]) -> InferenceProviderSpec:
     return spec
 
 
+def enforce_provider_boundary(
+    selected_provider: Optional[InferenceProviderSpec],
+    run_provider: dict[str, Any],
+) -> None:
+    """Reject provider overrides that cross the run authorization boundary.
+
+    Cloud-agents validates provider structure, but the stack owns tenant
+    catalog authorization. Until an explicit authorized-provider set is
+    passed through that boundary, allowing a nested definition provider to
+    differ from the run provider could select a worker's ambient credentials
+    (for example Azure credentials during an OpenAI run).
+
+    Parameters:
+        selected_provider: Effective workflow/step provider, if any.
+        run_provider: Provider selected and authorized for the run.
+
+    Raises:
+        ValueError: If no run provider is available or the providers differ.
+    """
+    if selected_provider is None:
+        return
+    run_name = run_provider.get("name")
+    if not run_name:
+        raise ValueError(
+            "provider override requires an authorized run provider; "
+            f"selected {selected_provider.name!r} without a run boundary"
+        )
+    if selected_provider.name != run_name:
+        raise ValueError(
+            "cross-provider override is not authorized: run provider "
+            f"{run_name!r}, selected provider {selected_provider.name!r}; "
+            "the stack must authorize the provider before execution"
+        )
+
+
 def inference_spec_from_provider_config(
     raw: dict[str, Any],
 ) -> InferenceProviderSpec:
@@ -1170,6 +1205,7 @@ def build_step_input(
     if normalized.inference_provider is not None:
         provider_name = normalized.inference_provider.name
         provider_model = normalized.inference_provider.model
+        enforce_provider_boundary(normalized.inference_provider, run_provider)
         # A step override selects name/model only. The run-level
         # credential reference is honored solely when it names the same
         # provider: otherwise the override would silently bind another

@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():
         activity_error_text,
         apply_one_step_defaults,
         chunk_parallel_groups,
+        enforce_provider_boundary,
         normalize_workflow_step,
         resolve_sandbox_image,
         run_with_retries,
@@ -336,6 +337,10 @@ class AgentWorkflow:
                 step,
                 workflow_defaults=definition_defaults,
                 step_count=step_count,
+            )
+            enforce_provider_boundary(
+                normalized.inference_provider,
+                input.provider.model_dump(),
             )
         except ValueError as exc:
             return StepResult(status="failed", error=str(exc))

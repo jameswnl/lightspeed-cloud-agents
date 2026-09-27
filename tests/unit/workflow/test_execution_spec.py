@@ -203,18 +203,18 @@ class TestPrecedenceChain:
         """The definition-level provider wins over the run-level default."""
         step_input = self._build(
             {"name": "s1", "output_key": "r1", "prompt": "p"},
-            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+            workflow_defaults={"provider": {"name": "openai", "model": "gpt-4o-mini"}},
         )
-        assert step_input.provider["name"] == "claude"
-        assert step_input.provider["model"] == "claude-sonnet"
+        assert step_input.provider["name"] == "openai"
+        assert step_input.provider["model"] == "gpt-4o-mini"
 
-    def test_run_credentials_do_not_bind_cross_name_winner(self) -> None:
-        """Run-level credentials bind only when the winner shares their name."""
-        step_input = self._build(
-            {"name": "s1", "output_key": "r1", "prompt": "p"},
-            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
-        )
-        assert "credentials_secret" not in step_input.provider
+    def test_cross_name_workflow_provider_is_rejected(self) -> None:
+        """A workflow provider cannot cross the run authorization boundary."""
+        with pytest.raises(ValueError, match="cross-provider"):
+            self._build(
+                {"name": "s1", "output_key": "r1", "prompt": "p"},
+                workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+            )
 
     def test_run_credentials_bind_same_name_definition_provider(self) -> None:
         """Same-name definition provider inherits the run credential ref."""
@@ -232,12 +232,12 @@ class TestPrecedenceChain:
                 "name": "s1",
                 "output_key": "r1",
                 "prompt": "p",
-                "inference_provider": {"name": "gemini", "model": "gemini-2"},
+                "inference_provider": {"name": "openai", "model": "gpt-4o-mini"},
             },
-            workflow_defaults={"provider": {"name": "claude", "model": "claude-sonnet"}},
+            workflow_defaults={"provider": {"name": "openai", "model": "gpt-4o"}},
         )
-        assert step_input.provider["name"] == "gemini"
-        assert step_input.provider["model"] == "gemini-2"
+        assert step_input.provider["name"] == "openai"
+        assert step_input.provider["model"] == "gpt-4o-mini"
 
     def test_run_provider_used_when_definition_has_none(self) -> None:
         """The run-level provider is the default when the definition has none."""

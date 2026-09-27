@@ -317,12 +317,12 @@ class TestCredentialReferenceValidation:
     def test_secret_values_rejected(self) -> None:
         """Test that secret-value shapes fail instead of flowing."""
         for bad in (
-            "sk-live-abc123",
-            "Bearer token123",
-            "AKIAIOSFODNN7EXAMPLE",
-            "xoxb-12345",
-            "ghp_abcdef",
-            "-----BEGIN PRIVATE KEY-----",
+            "sk-" + "live-abc123",
+            "Bearer " + "token123",
+            "AKIA" + "IOSFODNN7EXAMPLE",
+            "xoxb-" + "12345",
+            "ghp_" + "abcdef",
+            "-----BEGIN " + "PRIVATE KEY-----",
             "has whitespace",
             "",
         ):
@@ -347,7 +347,7 @@ class TestCredentialReferenceValidation:
                 {
                     "name": "openai",
                     "model": "gpt-4o",
-                    "credentials_secret": "sk-live-abc123",
+                    "credentials_secret": "sk-" + "live-abc123",
                 }
             )
 
@@ -360,7 +360,7 @@ class TestCredentialReferenceValidation:
                     "provider": {
                         "name": "openai",
                         "model": "gpt-4o",
-                        "credentials_secret": "sk-live-abc123",
+                        "credentials_secret": "sk-" + "live-abc123",
                     },
                     "sandbox_image": "sandbox:default",
                 },
@@ -387,21 +387,20 @@ class TestOverrideCredentialDecoupling:
         assert step_input.provider["model"] == "o3"
         assert step_input.provider["credentials_secret"] == "OPENAI_API_KEY"
 
-    def test_cross_provider_override_drops_reference(self) -> None:
-        """Test that another provider's ref is not bound to the override."""
-        step_input = build_step_input(
-            _step(inference_provider={"name": "claude", "model": "claude-sonnet"}),
-            run_context={
-                "provider": {
-                    "name": "openai",
-                    "model": "gpt-4o",
-                    "credentials_secret": "OPENAI_API_KEY",
+    def test_cross_provider_override_is_rejected(self) -> None:
+        """A nested provider cannot cross the run authorization boundary."""
+        with pytest.raises(ValueError, match="cross-provider"):
+            build_step_input(
+                _step(inference_provider={"name": "azure", "model": "gpt-4o"}),
+                run_context={
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4o",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "sandbox_image": "sandbox:default",
                 },
-                "sandbox_image": "sandbox:default",
-            },
-        )
-        assert step_input.provider["name"] == "claude"
-        assert "credentials_secret" not in step_input.provider
+            )
 
 
 class TestMcpSecretRejection:
