@@ -43,16 +43,18 @@ class WorkflowStepSpec(BaseModel):
             CLOUD_AGENTS_SKILLS_PATHS happens to provide.
     """
 
-    name: str
-    type: Literal["agent", "human-approval"]
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    type: Literal["agent", "human-approval"] = "agent"
     agent: Optional[str] = None
     prompt: Optional[str] = None
-    output_key: str
+    output_key: Optional[str] = None
     condition: Optional[str] = None
     message: Optional[str] = None
-    timeout_seconds: int = 3600
+    timeout_seconds: Optional[int] = None
     max_retries: NonNegativeInt = 0
-    spawn: Literal["none", "local", "ephemeral"] = "ephemeral"
+    spawn: Optional[Literal["none", "local", "ephemeral"]] = None
     risk_level: Optional[Literal["low", "medium", "high", "critical"]] = None
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
@@ -80,6 +82,8 @@ class WorkflowSpec(BaseModel):
             per-step ``context`` (step values win per key).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     input_prompt: Optional[str] = None
     steps: list[WorkflowStepSpec] = Field(..., min_length=1)
     timeout_seconds: Optional[int] = None
@@ -90,6 +94,7 @@ class WorkflowSpec(BaseModel):
     permissions: Optional[PermissionScope] = None
     service_account: Optional[str] = None
     context: Optional[dict[str, Any]] = None
+    escalation: Optional[dict[str, Any]] = None
 
 
 class ProviderSpec(BaseModel):
@@ -143,6 +148,8 @@ class WorkflowDefinition(BaseModel):
         provider: Default provider for all steps.
         skills: Skills OCI image configuration.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     apiVersion: str
     kind: Literal["AgentWorkflow"]

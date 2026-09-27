@@ -423,10 +423,24 @@ def chunk_parallel_groups(
             while index < len(steps) and steps[index].get("parallel_group") == group:
                 members.append(steps[index])
                 index += 1
-            member_names = {member.get("name") for member in members}
+            member_names = {
+                identifier
+                for member in members
+                for identifier in (member.get("name"), member.get("output_key"))
+                if identifier
+            }
             has_internal_dependency = any(
-                set(re.findall(r"\{\{\s*steps\.(\w+)\.", member.get("prompt") or ""))
-                & member_names
+                (
+                    set(
+                        re.findall(
+                            r"(?:\{\{\s*)?steps\.(\w+)",
+                            (member.get("prompt") or "")
+                            + " "
+                            + (member.get("condition") or ""),
+                        )
+                    )
+                    & member_names
+                )
                 for member in members
             )
             if has_internal_dependency:
@@ -1028,10 +1042,13 @@ def normalize_workflow_step(
             f"tools must be a list of tool names, got {tools!r} "
             "(a bare string would splinter into per-character names)"
         )
-    context = merge_context(
-        dict(defaults.get("context") or {}),
-        dict(raw.get("context") or {}),
-    )
+    workflow_context = defaults.get("context")
+    step_context = raw.get("context")
+    if workflow_context is not None and not isinstance(workflow_context, dict):
+        raise ValueError("workflow context must be an object")
+    if step_context is not None and not isinstance(step_context, dict):
+        raise ValueError("step context must be an object")
+    context = merge_context(workflow_context or {}, step_context or {})
 
     normalized = WorkflowAgentStep(
         prompt=raw.get("prompt", ""),

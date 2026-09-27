@@ -116,7 +116,7 @@ class SandboxExecutor(StepExecutor):
             run_step_input,
             spawner=self._spawner,
             transcript_store=self._transcript_store,
-            attempt=1,
+            attempt=step_input.attempt,
         )
         duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 

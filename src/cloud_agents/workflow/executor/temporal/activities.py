@@ -391,7 +391,7 @@ async def _run_sandbox_step_inner(
     workflow_id = input["workflow_id"]
     provider = input["provider"]
     sandbox_image = input.get("sandbox_image", "sandbox:latest")
-    attempt = activity.info().attempt if activity.in_activity() else 1
+    attempt = input.get("attempt", 1)
 
     provider_name = provider.get("name", "unknown")
     if _circuit_breaker.is_open(provider_name):

@@ -460,3 +460,21 @@ class TestParallelDependencySafety:
             ]
         )
         assert chunks == [(None, [{"name": "first", "parallel_group": "g", "prompt": "collect"}]), (None, [{"name": "second", "parallel_group": "g", "prompt": "use {{ steps.first.output.value }}"}])]
+
+    def test_output_key_and_condition_dependencies_serialize_group(self) -> None:
+        """Output-key and condition references also impose ordering."""
+        from cloud_agents.workflow.core.execution import chunk_parallel_groups
+
+        chunks = chunk_parallel_groups(
+            [
+                {"name": "first", "output_key": "diagnosis", "parallel_group": "g"},
+                {
+                    "name": "second",
+                    "output_key": "fix",
+                    "parallel_group": "g",
+                    "condition": "steps.diagnosis.output.ready",
+                },
+            ]
+        )
+        assert len(chunks) == 2
+        assert all(group is None for group, _ in chunks)

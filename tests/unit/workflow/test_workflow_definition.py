@@ -120,11 +120,11 @@ class TestWorkflowDefinitionValidation:
             assert defn.spec.steps[0].type == stype
 
     def test_missing_output_key_rejected(self) -> None:
-        """Test missing output_key is rejected."""
+        """A bare one-step definition receives the documented default."""
         data = yaml.safe_load(MINIMAL_WORKFLOW)
         del data["spec"]["steps"][0]["output_key"]
-        with pytest.raises(ValidationError):
-            WorkflowDefinition.model_validate(data)
+        defn = WorkflowDefinition.model_validate(data)
+        assert defn.spec.steps[0].output_key is None
 
 
 class TestWorkflowStepSpecTools:

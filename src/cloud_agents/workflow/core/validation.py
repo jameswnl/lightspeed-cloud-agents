@@ -61,6 +61,24 @@ def validate_definition(
     """
     errors: list[str] = []
     spec = defn.get("spec", {})
+    unknown_spec_fields = set(spec) - {
+        "input_prompt",
+        "steps",
+        "timeout_seconds",
+        "spawn",
+        "spawn_config",
+        "mcp_servers",
+        "allowed_skills",
+        "permissions",
+        "service_account",
+        "context",
+        "escalation",
+    }
+    if unknown_spec_fields:
+        errors.append(
+            "Workflow spec contains unknown fields: "
+            + ", ".join(sorted(unknown_spec_fields))
+        )
     steps = spec.get("steps", [])
     if not steps:
         errors.append("Workflow must have at least one step")
@@ -99,8 +117,41 @@ def validate_definition(
 
     output_keys: set[str] = set()
     step_names: set[str] = set()
+    allowed_step_fields = {
+        "name",
+        "type",
+        "agent",
+        "prompt",
+        "output_key",
+        "condition",
+        "message",
+        "timeout_seconds",
+        "max_retries",
+        "spawn",
+        "risk_level",
+        "permissions",
+        "parallel_group",
+        "mcp_servers",
+        "spawn_config",
+        "runtime",
+        "role",
+        "instructions",
+        "output_schema",
+        "tools",
+        "context",
+        "service_account",
+        "target_namespaces",
+        "allowed_skills",
+        "inference_provider",
+        "provider",
+    }
 
     for i, step in enumerate(steps):
+        unknown_fields = set(step) - allowed_step_fields
+        if unknown_fields:
+            errors.append(
+                f"Step {i} contains unknown fields: {', '.join(sorted(unknown_fields))}"
+            )
         name = step.get("name")
         if not name:
             errors.append(f"Step {i} is missing required field 'name'")
@@ -155,6 +206,8 @@ def validate_definition(
         # passes it through to server["name"] -> opaque KeyError.
         # Keep in sync with WorkflowStepSpec.mcp_servers typing.
         mcp_servers = step.get("mcp_servers")
+        if mcp_servers is None:
+            mcp_servers = workflow_mcp_default
         if mcp_servers:
             for j, entry in enumerate(mcp_servers):
                 if isinstance(entry, str):
@@ -179,7 +232,7 @@ def validate_definition(
         # secret-bearing catalog at spec level is a 422 here, not a
         # runtime failed step.
         try:
-            reject_secret_bearing_mcp(step.get("mcp_servers", workflow_mcp_default))
+            reject_secret_bearing_mcp(mcp_servers)
         except ValueError as exc:
             errors.append(f"Step '{name}': {exc}")
         step_provider = step.get("inference_provider") or step.get("provider")
