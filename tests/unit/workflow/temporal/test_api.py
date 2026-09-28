@@ -70,6 +70,22 @@ class TestRunWorkflow:
         assert response.status_code == 202
         assert "workflow_id" in response.json()
 
+    def test_invalid_definition_provider_returns_422(self, client: TestClient) -> None:
+        """Inline provider model errors are translated to HTTP 422."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "openai", "unknown": "value"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+
     def test_start_workflow_calls_temporal(
         self,
         client: TestClient,

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 from temporalio.client import Client, WorkflowExecutionStatus
 
 from cloud_agents.runtime.audit import emit_audit
@@ -290,17 +290,13 @@ def build_temporal_router(
         else:
             provider = request.provider
 
-        if provider is None and definition:
-            definition_provider = definition.get("provider")
-            if isinstance(definition_provider, dict):
-                provider = ProviderConfig.model_validate(definition_provider)
-
         if not definition:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Either definition or workflow_name is required",
             )
-        if not provider:
+        definition_provider = definition.get("provider")
+        if not provider and not isinstance(definition_provider, dict):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
@@ -329,6 +325,20 @@ def build_temporal_router(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"validation_errors": validation_errors},
+            )
+
+        if provider is None and isinstance(definition_provider, dict):
+            try:
+                provider = ProviderConfig.model_validate(definition_provider)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": [str(exc)]},
+                ) from exc
+        if not provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provider configuration is required",
             )
 
         if request.advisory is not None:

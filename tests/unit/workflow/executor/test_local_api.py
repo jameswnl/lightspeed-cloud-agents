@@ -167,6 +167,26 @@ class TestRunWorkflowToolValidation:
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 202
 
+    def test_invalid_definition_provider_returns_422(self) -> None:
+        """Local and Temporal submission paths reject provider extras equally."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "openai", "unknown": "value"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+
     def test_unknown_tools_return_422(self) -> None:
         """Steps referencing unknown tools are rejected with 422."""
         register_tool("kubectl_get", _dummy_func, description="Get K8s resources")
