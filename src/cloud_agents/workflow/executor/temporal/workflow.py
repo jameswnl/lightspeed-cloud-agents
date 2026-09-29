@@ -177,9 +177,7 @@ class AgentWorkflow:
         # already running are not cancelled; no concurrency limit).
         for group, group_steps in chunk_parallel_groups(steps):
             if group:
-                results = await asyncio.gather(
-                    *[self._execute_step(s, input) for s in group_steps]
-                )
+                results = await asyncio.gather(*[self._execute_step(s, input) for s in group_steps])
                 if any(r and r.status in ("failed", "denied") for r in results):
                     break
             else:
@@ -256,7 +254,9 @@ class AgentWorkflow:
 
         # Interpolate approval message with step outputs
         raw_message = step.get("message", "")
-        interpolated_message = self._interpolate_prompt(raw_message, input) if raw_message else raw_message
+        interpolated_message = (
+            self._interpolate_prompt(raw_message, input) if raw_message else raw_message
+        )
 
         if classification.auto_approved:
             result = StepResult(
@@ -511,9 +511,7 @@ class AgentWorkflow:
             return step_result
 
         self._steps[output_key] = step_result
-        event_type = (
-            "step.completed" if step_result.status == "completed" else "step.failed"
-        )
+        event_type = "step.completed" if step_result.status == "completed" else "step.failed"
         self._emit(event_type, step_name)
         return step_result
 

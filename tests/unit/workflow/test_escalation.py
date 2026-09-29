@@ -353,7 +353,11 @@ class TestTranscriptInHandoff:
                         {
                             "ts": "2026-01-01T00:00:01Z",
                             "type": "tool_call",
-                            "data": {"name": "ssh_exec", "input": "restart service", "duration_ms": 3000},
+                            "data": {
+                                "name": "ssh_exec",
+                                "input": "restart service",
+                                "duration_ms": 3000,
+                            },
                         },
                         {
                             "ts": "2026-01-01T00:00:04Z",

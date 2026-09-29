@@ -125,9 +125,7 @@ class TemporalWorkflowRunner(WorkflowRunner):
         is_terminal = desc.status in _TERMINAL_STATUSES
 
         status = "completed" if is_terminal else "running"
-        if not is_terminal and any(
-            e.get("type") == "workflow.paused" for e in events[-3:]
-        ):
+        if not is_terminal and any(e.get("type") == "workflow.paused" for e in events[-3:]):
             status = "paused"
 
         return WorkflowStatus(

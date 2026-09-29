@@ -36,9 +36,7 @@ class TestSlackNotifier:
             mock_client_cls.return_value = mock_client
 
             notifier = SlackNotifier("https://hooks.slack.com/test")
-            await notifier.notify(
-                "wf-1", "approve-fix", "Approve?", "http://wf/approve"
-            )
+            await notifier.notify("wf-1", "approve-fix", "Approve?", "http://wf/approve")
 
             mock_client.post.assert_called_once()
             payload = mock_client.post.call_args[1]["json"]
@@ -95,9 +93,7 @@ class TestWebhookNotifier:
             mock_client_cls.return_value = mock_client
 
             notifier = WebhookNotifier("http://hooks.example.com/approval")
-            await notifier.notify(
-                "wf-1", "approve-fix", "Approve?", "http://wf/approve"
-            )
+            await notifier.notify("wf-1", "approve-fix", "Approve?", "http://wf/approve")
 
             payload = mock_client.post.call_args[1]["json"]
             assert payload["event"] == "approval_required"

@@ -65,8 +65,10 @@ def _build_spawner():
 async def check_fails_closed_without_tls() -> bool:
     """Returns True if the fail-closed check ran (i.e. gateway has no TLS configured)."""
     if TLS_CA:
-        print("SKIP (1): GATEWAY_TLS_CA is set -- nothing to fail closed on. "
-              "Run against a plaintext gateway to exercise this check.")
+        print(
+            "SKIP (1): GATEWAY_TLS_CA is set -- nothing to fail closed on. "
+            "Run against a plaintext gateway to exercise this check."
+        )
         return False
 
     os.environ.pop("OPENSHELL_ALLOW_INSECURE_CREDENTIALS", None)

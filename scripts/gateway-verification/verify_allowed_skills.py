@@ -73,7 +73,12 @@ async def _run_checks(client, sandbox_id: str) -> None:
     assert r1.exit_code == 0, f"expected {ALLOWED_SKILL} readable"
 
     r2 = _exec(client, sandbox_id, ["cat", f"/skills/{DENIED_SKILL}/SKILL.md"])
-    print(f"(2) read unlisted skill '{DENIED_SKILL}' -- exit_code:", r2.exit_code, "stderr:", r2.stderr)
+    print(
+        f"(2) read unlisted skill '{DENIED_SKILL}' -- exit_code:",
+        r2.exit_code,
+        "stderr:",
+        r2.stderr,
+    )
     assert r2.exit_code != 0, f"expected {DENIED_SKILL} NOT readable"
 
     r3 = _exec(client, sandbox_id, ["ls", "/app/skills"])
@@ -127,7 +132,9 @@ async def run_bypass() -> None:
         tls_ca=TLS_CA,
         bearer_token=BEARER_TOKEN,
     )
-    spec = openshell_pb2.SandboxSpec(template=openshell_pb2.SandboxTemplate(image=SANDBOX_IMAGE, labels={}))
+    spec = openshell_pb2.SandboxSpec(
+        template=openshell_pb2.SandboxTemplate(image=SANDBOX_IMAGE, labels={})
+    )
     env = {"LIGHTSPEED_PROVIDER": "openai", "LIGHTSPEED_MODEL": "gpt-4o-mini"}
     for k, v in env.items():
         spec.environment[k] = v

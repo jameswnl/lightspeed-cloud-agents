@@ -30,9 +30,9 @@ class TestCatalogData:
     @pytest.fixture
     def catalog_data(self) -> dict:
         """Load the catalog data JSON."""
-        assert self.DATA_PATH.exists(), (
-            f"Missing {self.DATA_PATH} — mock catalog data file is required"
-        )
+        assert (
+            self.DATA_PATH.exists()
+        ), f"Missing {self.DATA_PATH} — mock catalog data file is required"
         with open(self.DATA_PATH) as f:
             return json.load(f)
 
@@ -47,9 +47,9 @@ class TestCatalogData:
         required_fields = {"name", "repo", "owner", "tech_stack", "dependencies"}
         for component in catalog_data["components"]:
             missing = required_fields - set(component.keys())
-            assert not missing, (
-                f"Component '{component.get('name', '?')}' missing fields: {missing}"
-            )
+            assert (
+                not missing
+            ), f"Component '{component.get('name', '?')}' missing fields: {missing}"
 
     def test_dependencies_have_required_fields(self, catalog_data: dict) -> None:
         """Each dependency must have name, version, cve, patched fields."""
@@ -69,9 +69,9 @@ class TestCatalogData:
             has_cve = any(dep.get("cve") for dep in component["dependencies"])
             if has_cve:
                 vulnerable_count += 1
-        assert vulnerable_count >= 2, (
-            f"Need at least 2 vulnerable components for demo, found {vulnerable_count}"
-        )
+        assert (
+            vulnerable_count >= 2
+        ), f"Need at least 2 vulnerable components for demo, found {vulnerable_count}"
 
     def test_payment_gateway_has_spring_boot_cve(self, catalog_data: dict) -> None:
         """payment-gateway must have a Spring Boot CVE."""
@@ -108,9 +108,7 @@ class TestCatalogData:
         required_fields = {"description", "severity", "affected_versions", "patched_version"}
         for cve_id, cve_data in catalog_data["cve_database"].items():
             missing = required_fields - set(cve_data.keys())
-            assert not missing, (
-                f"CVE '{cve_id}' missing fields: {missing}"
-            )
+            assert not missing, f"CVE '{cve_id}' missing fields: {missing}"
 
     def test_cve_ids_match_component_references(self, catalog_data: dict) -> None:
         """CVE IDs referenced in components must exist in the cve_database."""
@@ -122,9 +120,9 @@ class TestCatalogData:
 
         db_cves = set(catalog_data["cve_database"].keys())
         missing = referenced_cves - db_cves
-        assert not missing, (
-            f"CVEs referenced in components but missing from cve_database: {missing}"
-        )
+        assert (
+            not missing
+        ), f"CVEs referenced in components but missing from cve_database: {missing}"
 
 
 class TestMockServerContainerfile:
@@ -134,9 +132,7 @@ class TestMockServerContainerfile:
 
     def test_containerfile_exists(self) -> None:
         """Containerfile for mcp-rhdh-mock must exist."""
-        assert self.CONTAINERFILE.exists(), (
-            f"Missing {self.CONTAINERFILE}"
-        )
+        assert self.CONTAINERFILE.exists(), f"Missing {self.CONTAINERFILE}"
 
     def test_containerfile_uses_python_base(self) -> None:
         """Containerfile should use a Python base image."""
@@ -148,9 +144,9 @@ class TestMockServerContainerfile:
         """Containerfile must install fastmcp (via requirements.txt)."""
         content = self.CONTAINERFILE.read_text()
         # fastmcp is installed via pip from requirements.txt
-        assert "requirements.txt" in content, (
-            "Must install Python deps from requirements.txt (which includes fastmcp)"
-        )
+        assert (
+            "requirements.txt" in content
+        ), "Must install Python deps from requirements.txt (which includes fastmcp)"
 
     def test_containerfile_installs_supergateway(self) -> None:
         """Containerfile must install supergateway for streamable HTTP."""
@@ -222,16 +218,12 @@ class TestMockServerScript:
 class TestCvePatchWorkflow:
     """Validate the CVE patch workflow YAML definition."""
 
-    WORKFLOW_PATH = (
-        ROOT / "examples" / "workflow-definitions" / "cve-patch-workflow.yaml"
-    )
+    WORKFLOW_PATH = ROOT / "examples" / "workflow-definitions" / "cve-patch-workflow.yaml"
 
     @pytest.fixture
     def workflow_data(self) -> dict:
         """Load the workflow YAML."""
-        assert self.WORKFLOW_PATH.exists(), (
-            f"Missing {self.WORKFLOW_PATH}"
-        )
+        assert self.WORKFLOW_PATH.exists(), f"Missing {self.WORKFLOW_PATH}"
         with open(self.WORKFLOW_PATH) as f:
             return yaml.safe_load(f)
 
@@ -259,16 +251,14 @@ class TestCvePatchWorkflow:
     def test_scan_step_uses_rhdh_catalog(self, workflow_data: dict) -> None:
         """Scan step must reference the rhdh-catalog MCP server."""
         scan_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "scan-vulnerabilities"
+            s for s in workflow_data["spec"]["steps"] if s["name"] == "scan-vulnerabilities"
         )
         assert "rhdh-catalog" in scan_step.get("mcp_servers", [])
 
     def test_scan_step_has_output_schema(self, workflow_data: dict) -> None:
         """Scan step must have an output_schema."""
         scan_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "scan-vulnerabilities"
+            s for s in workflow_data["spec"]["steps"] if s["name"] == "scan-vulnerabilities"
         )
         schema = scan_step.get("output_schema")
         assert schema is not None
@@ -279,28 +269,21 @@ class TestCvePatchWorkflow:
     def test_approve_step_is_human_approval(self, workflow_data: dict) -> None:
         """Approve step must be type human-approval."""
         approve_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "approve-patch"
+            s for s in workflow_data["spec"]["steps"] if s["name"] == "approve-patch"
         )
         assert approve_step["type"] == "human-approval"
         assert approve_step.get("risk_level") in ("high", "critical")
 
     def test_patch_step_conditional_on_approval(self, workflow_data: dict) -> None:
         """Patch step must be conditional on approval."""
-        patch_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "apply-patches"
-        )
+        patch_step = next(s for s in workflow_data["spec"]["steps"] if s["name"] == "apply-patches")
         assert patch_step.get("condition") is not None
         assert "approval" in patch_step["condition"]
         assert "approved" in patch_step["condition"]
 
     def test_verify_step_conditional_on_patches(self, workflow_data: dict) -> None:
         """Verify step must be conditional on patch completion."""
-        verify_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "verify-ci"
-        )
+        verify_step = next(s for s in workflow_data["spec"]["steps"] if s["name"] == "verify-ci")
         assert verify_step.get("condition") is not None
         assert "patches" in verify_step["condition"]
 
@@ -308,8 +291,7 @@ class TestCvePatchWorkflow:
         """Agent steps with mcp_servers must have permissions.allowed_tools."""
         steps = workflow_data["spec"]["steps"]
         agent_steps_with_mcp = [
-            s for s in steps
-            if s.get("type") == "agent" and s.get("mcp_servers")
+            s for s in steps if s.get("type") == "agent" and s.get("mcp_servers")
         ]
         assert len(agent_steps_with_mcp) >= 1
 
@@ -323,27 +305,23 @@ class TestCvePatchWorkflow:
     def test_scan_step_has_read_only_tools(self, workflow_data: dict) -> None:
         """Scan step should only have read-only catalog tools."""
         scan_step = next(
-            s for s in workflow_data["spec"]["steps"]
-            if s["name"] == "scan-vulnerabilities"
+            s for s in workflow_data["spec"]["steps"] if s["name"] == "scan-vulnerabilities"
         )
         allowed = scan_step.get("permissions", {}).get("allowed_tools", [])
         assert len(allowed) > 0
         write_tools = [
-            t for t in allowed
+            t
+            for t in allowed
             if any(w in t for w in ["create", "delete", "update", "fork", "patch"])
         ]
-        assert not write_tools, (
-            f"Scan step allows write tools: {write_tools}"
-        )
+        assert not write_tools, f"Scan step allows write tools: {write_tools}"
 
     def test_no_dead_fields(self, workflow_data: dict) -> None:
         """Steps must not use dead fields."""
         dead_fields = {"agent"}
         for step in workflow_data["spec"]["steps"]:
             used_dead = dead_fields & set(step.keys())
-            assert not used_dead, (
-                f"Step '{step.get('name')}' uses dead fields: {used_dead}"
-            )
+            assert not used_dead, f"Step '{step.get('name')}' uses dead fields: {used_dead}"
 
 
 class TestCveDemoComposeOverlay:
@@ -354,9 +332,7 @@ class TestCveDemoComposeOverlay:
     @pytest.fixture
     def compose_data(self) -> dict:
         """Load the compose overlay YAML."""
-        assert self.COMPOSE_PATH.exists(), (
-            f"Missing {self.COMPOSE_PATH}"
-        )
+        assert self.COMPOSE_PATH.exists(), f"Missing {self.COMPOSE_PATH}"
         with open(self.COMPOSE_PATH) as f:
             return yaml.safe_load(f)
 
@@ -374,9 +350,9 @@ class TestCveDemoComposeOverlay:
         """mcp-rhdh-mock service must expose port 8083."""
         svc = compose_data["services"]["mcp-rhdh-mock"]
         ports = svc.get("ports", [])
-        assert any("8083" in str(p) for p in ports), (
-            f"mcp-rhdh-mock must expose port 8083, got: {ports}"
-        )
+        assert any(
+            "8083" in str(p) for p in ports
+        ), f"mcp-rhdh-mock must expose port 8083, got: {ports}"
 
 
 class TestMakefileTargets:
@@ -389,12 +365,10 @@ class TestMakefileTargets:
 
     def test_build_mcp_rhdh_mock_target(self, makefile_content: str) -> None:
         """Makefile must have a build-mcp-rhdh-mock target."""
-        assert "build-mcp-rhdh-mock" in makefile_content, (
-            "Makefile must define build-mcp-rhdh-mock target"
-        )
+        assert (
+            "build-mcp-rhdh-mock" in makefile_content
+        ), "Makefile must define build-mcp-rhdh-mock target"
 
     def test_cve_demo_up_target(self, makefile_content: str) -> None:
         """Makefile must have a cve-demo-up target."""
-        assert "cve-demo-up" in makefile_content, (
-            "Makefile must define cve-demo-up target"
-        )
+        assert "cve-demo-up" in makefile_content, "Makefile must define cve-demo-up target"

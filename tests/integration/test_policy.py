@@ -32,9 +32,7 @@ def _make_input(steps: list[dict], **kwargs) -> WorkflowInput:
             "spec": {"steps": steps},
         },
         workflow_id="wf-int-1",
-        provider=ProviderConfig(
-            name="openai", model="gpt-4", credentials_secret="test-key"
-        ),
+        provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="test-key"),
         **kwargs,
     )
 
@@ -50,9 +48,7 @@ class TestMixedRiskLevels:
     """Tests for workflows with mixed auto-approve and manual steps."""
 
     @pytest.mark.asyncio
-    async def test_low_risk_auto_high_risk_manual(
-        self, env: WorkflowEnvironment
-    ) -> None:
+    async def test_low_risk_auto_high_risk_manual(self, env: WorkflowEnvironment) -> None:
         """Low-risk step auto-approves, high-risk times out."""
         steps = [
             {

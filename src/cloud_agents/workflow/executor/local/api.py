@@ -146,9 +146,7 @@ def build_local_router(
         return {"workflow_id": workflow_id}
 
     @router.post("/{workflow_id}/approve")
-    async def approve_workflow(
-        workflow_id: str, request: ApproveRequest
-    ) -> dict[str, str]:
+    async def approve_workflow(workflow_id: str, request: ApproveRequest) -> dict[str, str]:
         """Send an approval signal to a paused workflow."""
         try:
             await executor.approve(

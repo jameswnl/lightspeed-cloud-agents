@@ -99,7 +99,12 @@ class TestRunStateStorePostgres:
         try:
             await store.create(parent_id, "parent", {}, {}, {}, user_id="user-a")
             await store.create(
-                child_id, "child", {}, {}, {}, user_id="user-b",
+                child_id,
+                "child",
+                {},
+                {},
+                {},
+                user_id="user-b",
                 parent_workflow_id=parent_id,
             )
 
@@ -169,7 +174,9 @@ class TestTranscriptStorePostgres:
         wf_id = f"wf-{uuid.uuid4().hex[:8]}"
         transcript = StepTranscript(
             step_name="turn-1",
-            events=[TranscriptEvent(ts="2026-08-23T12:00:00Z", type="result", data={"model": "gpt-4o"})],
+            events=[
+                TranscriptEvent(ts="2026-08-23T12:00:00Z", type="result", data={"model": "gpt-4o"})
+            ],
             input_tokens=50,
             output_tokens=20,
             duration_ms=500,
@@ -194,7 +201,9 @@ class TestTranscriptStorePostgres:
             ConversationMessage(role="user", content="What pods?").to_dict(),
             ConversationMessage(role="assistant", content="8 pods.").to_dict(),
         ]
-        transcript = StepTranscript(step_name="turn-1", events=[], input_tokens=30, output_tokens=10)
+        transcript = StepTranscript(
+            step_name="turn-1", events=[], input_tokens=30, output_tokens=10
+        )
         try:
             await store.save(wf_id, "turn-1", transcript, messages=messages)
 
@@ -216,9 +225,13 @@ class TestTranscriptStorePostgres:
         wf_id = f"wf-{uuid.uuid4().hex[:8]}"
         try:
             for i in range(5):
-                transcript = StepTranscript(step_name=f"turn-{i}", events=[], input_tokens=10, output_tokens=5)
+                transcript = StepTranscript(
+                    step_name=f"turn-{i}", events=[], input_tokens=10, output_tokens=5
+                )
                 await store.save(
-                    wf_id, f"turn-{i}", transcript,
+                    wf_id,
+                    f"turn-{i}",
+                    transcript,
                     messages=[{"role": "user", "content": f"msg-{i}"}],
                 )
 
@@ -237,8 +250,17 @@ class TestAlembicMigrations:
         import subprocess
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
-            capture_output=True, text=True,
+            [
+                "uv",
+                "run",
+                "alembic",
+                "-c",
+                "src/cloud_agents/_alembic/alembic.ini",
+                "upgrade",
+                "head",
+            ],
+            capture_output=True,
+            text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
         )
@@ -250,23 +272,50 @@ class TestAlembicMigrations:
         import subprocess
 
         subprocess.run(
-            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
-            capture_output=True, text=True,
+            [
+                "uv",
+                "run",
+                "alembic",
+                "-c",
+                "src/cloud_agents/_alembic/alembic.ini",
+                "upgrade",
+                "head",
+            ],
+            capture_output=True,
+            text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
         )
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "downgrade", "base"],
-            capture_output=True, text=True,
+            [
+                "uv",
+                "run",
+                "alembic",
+                "-c",
+                "src/cloud_agents/_alembic/alembic.ini",
+                "downgrade",
+                "base",
+            ],
+            capture_output=True,
+            text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
         )
         assert result.returncode == 0, f"Alembic downgrade failed: {result.stderr}"
 
         result = subprocess.run(
-            ["uv", "run", "alembic", "-c", "src/cloud_agents/_alembic/alembic.ini", "upgrade", "head"],
-            capture_output=True, text=True,
+            [
+                "uv",
+                "run",
+                "alembic",
+                "-c",
+                "src/cloud_agents/_alembic/alembic.ini",
+                "upgrade",
+                "head",
+            ],
+            capture_output=True,
+            text=True,
             env={**os.environ, "RUN_STATE_DB_URL": _DB_URL},
             timeout=30,
         )

@@ -16,13 +16,11 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from cloud_agents.runtime.auth import (
-    EXEMPT_PATHS,
     BearerAuthMiddleware,
     get_api_token,
     get_api_tokens,
 )
 from cloud_agents.runtime.audit import AuditEvent
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -261,12 +259,12 @@ class TestRejectedTokenLogging:
             client.get("/test", headers={"Authorization": "Bearer badtoken1234"})
 
         # Should log with prefix (first 4 chars) but NOT the full token
-        assert any("badt" in record.message for record in caplog.records), (
-            f"Expected token prefix 'badt' in log, got: {[r.message for r in caplog.records]}"
-        )
-        assert not any("badtoken1234" in record.message for record in caplog.records), (
-            "Full token should NOT appear in log messages"
-        )
+        assert any(
+            "badt" in record.message for record in caplog.records
+        ), f"Expected token prefix 'badt' in log, got: {[r.message for r in caplog.records]}"
+        assert not any(
+            "badtoken1234" in record.message for record in caplog.records
+        ), "Full token should NOT appear in log messages"
 
     def test_missing_header_does_not_log_token_prefix(self, caplog: Any) -> None:
         """Missing Authorization header does not attempt to log a token prefix."""
@@ -311,7 +309,8 @@ class TestRejectedTokenAudit:
             client.get("/test", headers={"Authorization": "Bearer badx9999"})
             mock_audit.assert_called_once()
             details = mock_audit.call_args.kwargs.get(
-                "details", mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {}
+                "details",
+                mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {},
             )
             assert details.get("token_prefix") == "badx"
 
@@ -324,7 +323,8 @@ class TestRejectedTokenAudit:
             client.get("/test", headers={"Authorization": "Bearer wrong"})
             mock_audit.assert_called_once()
             details = mock_audit.call_args.kwargs.get(
-                "details", mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {}
+                "details",
+                mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {},
             )
             assert details.get("path") == "/test"
 
@@ -418,11 +418,18 @@ class TestTokenExpiry:
         client = TestClient(app, raise_server_exceptions=False)
 
         # Plain token → accepted
-        assert client.get("/test", headers={"Authorization": "Bearer plain-token"}).status_code == 200
+        assert (
+            client.get("/test", headers={"Authorization": "Bearer plain-token"}).status_code == 200
+        )
         # Future token → accepted
-        assert client.get("/test", headers={"Authorization": "Bearer future-token"}).status_code == 200
+        assert (
+            client.get("/test", headers={"Authorization": "Bearer future-token"}).status_code == 200
+        )
         # Expired token → rejected
-        assert client.get("/test", headers={"Authorization": "Bearer expired-token"}).status_code == 401
+        assert (
+            client.get("/test", headers={"Authorization": "Bearer expired-token"}).status_code
+            == 401
+        )
 
     def test_expired_token_emits_audit_event(self) -> None:
         """Expired token produces audit event with reason=expired."""
@@ -435,7 +442,8 @@ class TestTokenExpiry:
             client.get("/test", headers={"Authorization": "Bearer exptoken"})
             mock_audit.assert_called_once()
             details = mock_audit.call_args.kwargs.get(
-                "details", mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {}
+                "details",
+                mock_audit.call_args[1].get("details", {}) if len(mock_audit.call_args) > 1 else {},
             )
             assert details.get("reason") == "expired"
 

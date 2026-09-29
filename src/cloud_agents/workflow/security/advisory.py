@@ -13,8 +13,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 ADVISORY_PROMPT_SUFFIX = (
-    "\n\nADVISORY MODE: Diagnose only. "
-    "Report what you would do without taking action."
+    "\n\nADVISORY MODE: Diagnose only. " "Report what you would do without taking action."
 )
 
 

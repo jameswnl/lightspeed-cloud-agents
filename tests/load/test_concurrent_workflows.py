@@ -125,7 +125,6 @@ class TestConcurrentWorkflowSubmissions:
         status_resp = sync_client.get(f"/v1/workflows/{wf_id}")
         assert status_resp.status_code == 200
 
-
     def test_truly_concurrent_submissions(
         self,
         sync_client: TestClient,

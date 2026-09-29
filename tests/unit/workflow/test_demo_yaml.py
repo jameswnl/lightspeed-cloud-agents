@@ -67,7 +67,9 @@ class TestDemoYaml:
 
     def test_demo_yaml_matches_example_file(self, demo_yaml: dict) -> None:
         """DEMO.md YAML matches the standalone example file."""
-        example_path = Path(__file__).parents[3] / "examples" / "definitions" / "diagnostic-workflow.yaml"
+        example_path = (
+            Path(__file__).parents[3] / "examples" / "definitions" / "diagnostic-workflow.yaml"
+        )
         if not example_path.exists():
             pytest.skip("diagnostic-workflow.yaml example file not found")
         with open(example_path) as f:

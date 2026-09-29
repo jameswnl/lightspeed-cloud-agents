@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from cloud_agents.workflow.security.content_policy import ContentPolicy
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.workflow.core.definition_store import DefinitionStore
@@ -37,16 +37,18 @@ _CRON_5_FIELD_RE = re.compile(
 )
 
 # Temporal-supported shorthands.
-_CRON_SHORTHANDS = frozenset({
-    "@yearly",
-    "@annually",
-    "@monthly",
-    "@weekly",
-    "@daily",
-    "@midnight",
-    "@hourly",
-    "@every",
-})
+_CRON_SHORTHANDS = frozenset(
+    {
+        "@yearly",
+        "@annually",
+        "@monthly",
+        "@weekly",
+        "@daily",
+        "@midnight",
+        "@hourly",
+        "@every",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +104,7 @@ class ScheduleSpec(BaseModel):
                 )
             # @every requires an interval argument (e.g. "@every 5m")
             if keyword == "@every" and len(stripped.split()) < 2:
-                raise ValueError(
-                    "@every requires an interval argument, e.g. '@every 5m'"
-                )
+                raise ValueError("@every requires an interval argument, e.g. '@every 5m'")
             return stripped
 
         # Must be exactly 5 fields
@@ -289,22 +289,16 @@ def build_schedule_router(
         if content_policy is not None:
             from cloud_agents.workflow.core.validation import validate_definition
 
-            validation_errors = validate_definition(
-                definition, content_policy=content_policy
-            )
+            validation_errors = validate_definition(definition, content_policy=content_policy)
             if validation_errors:
-                policy_errors = [
-                    e for e in validation_errors if "content policy" in e.lower()
-                ]
+                policy_errors = [e for e in validation_errors if "content policy" in e.lower()]
                 if policy_errors:
                     emit_audit(
                         event_type="content_policy_violation",
                         workflow_id="",
                         details={
                             "schedule_id": schedule_id,
-                            "definition_name": definition.get("metadata", {}).get(
-                                "name", ""
-                            ),
+                            "definition_name": definition.get("metadata", {}).get("name", ""),
                             "violations": policy_errors,
                         },
                     )
@@ -335,9 +329,7 @@ def build_schedule_router(
             "cancel_other": ScheduleOverlapPolicy.CANCEL_OTHER,
             "allow_all": ScheduleOverlapPolicy.ALLOW_ALL,
         }
-        overlap = overlap_map.get(
-            schedule_spec.overlap_policy, ScheduleOverlapPolicy.SKIP
-        )
+        overlap = overlap_map.get(schedule_spec.overlap_policy, ScheduleOverlapPolicy.SKIP)
 
         try:
             await temporal_client.create_schedule(
@@ -610,9 +602,7 @@ def build_schedule_router(
                 ) from exc
             raise
 
-        ls_schedule_triggers_total.labels(
-            workflow_name="unknown", status="deleted"
-        ).inc()
+        ls_schedule_triggers_total.labels(workflow_name="unknown", status="deleted").inc()
 
         emit_audit(
             event_type="schedule_deleted",
@@ -660,9 +650,7 @@ def build_schedule_router(
                 ) from exc
             raise
 
-        ls_schedule_triggers_total.labels(
-            workflow_name="unknown", status="paused"
-        ).inc()
+        ls_schedule_triggers_total.labels(workflow_name="unknown", status="paused").inc()
 
         return {"status": "paused"}
 
@@ -704,9 +692,7 @@ def build_schedule_router(
                 ) from exc
             raise
 
-        ls_schedule_triggers_total.labels(
-            workflow_name="unknown", status="resumed"
-        ).inc()
+        ls_schedule_triggers_total.labels(workflow_name="unknown", status="resumed").inc()
 
         return {"status": "resumed"}
 

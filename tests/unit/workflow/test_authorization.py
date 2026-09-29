@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,9 +23,7 @@ from cloud_agents.workflow.security.authorization import (
 class TestCallerIdentity:
     """Tests for CallerIdentity model and get_caller_identity dependency."""
 
-    async def test_anonymous_fallback_shared_secret(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_anonymous_fallback_shared_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No request.state.caller_identity, WORKFLOW_AUTHZ=none -> anonymous."""
         monkeypatch.delenv("WORKFLOW_AUTHZ", raising=False)
         request = MagicMock()
@@ -37,9 +34,7 @@ class TestCallerIdentity:
         assert identity.username == "anonymous"
         assert identity.auth_mode == "shared_secret"
 
-    async def test_fail_closed_when_authz_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fail_closed_when_authz_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No identity, WORKFLOW_AUTHZ=policy -> 401."""
         monkeypatch.setenv("WORKFLOW_AUTHZ", "policy")
         request = MagicMock()
@@ -75,9 +70,7 @@ class TestCallerIdentity:
         assert identity.uid is None
         assert identity.groups == []
 
-    async def test_anonymous_fallback_explicit_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_anonymous_fallback_explicit_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """WORKFLOW_AUTHZ explicitly set to 'none' -> anonymous fallback."""
         monkeypatch.setenv("WORKFLOW_AUTHZ", "none")
         request = MagicMock()
@@ -122,9 +115,18 @@ class TestWorkflowAction:
     def test_all_actions_defined(self) -> None:
         """Verify all expected actions exist."""
         expected = {
-            "trigger", "approve", "view", "cancel", "view_defs", "manage_defs",
-            "schedule_create", "schedule_view", "schedule_delete",
-            "schedule_pause", "schedule_resume", "session_message",
+            "trigger",
+            "approve",
+            "view",
+            "cancel",
+            "view_defs",
+            "manage_defs",
+            "schedule_create",
+            "schedule_view",
+            "schedule_delete",
+            "schedule_pause",
+            "schedule_resume",
+            "session_message",
         }
         actual = {a.value for a in WorkflowAction}
         assert actual == expected
@@ -228,9 +230,7 @@ class TestApproverInfo:
 
     def test_uid_populated(self) -> None:
         """UID can be explicitly set."""
-        info = ApproverInfo(
-            username="admin", uid="uid-456", approved_at="2026-01-01T00:00:00Z"
-        )
+        info = ApproverInfo(username="admin", uid="uid-456", approved_at="2026-01-01T00:00:00Z")
         assert info.uid == "uid-456"
 
 
@@ -239,10 +239,7 @@ class TestNamespaceParsing:
 
     def test_sa_username_format(self) -> None:
         """Parses namespace from K8s SA username format."""
-        assert (
-            parse_namespace_from_sa_username("system:serviceaccount:prod:sre-bot")
-            == "prod"
-        )
+        assert parse_namespace_from_sa_username("system:serviceaccount:prod:sre-bot") == "prod"
 
     def test_non_sa_returns_none(self) -> None:
         """Non-SA username returns None."""
@@ -262,10 +259,7 @@ class TestNamespaceParsing:
 
     def test_extra_colons_returns_none(self) -> None:
         """Too many segments returns None."""
-        assert (
-            parse_namespace_from_sa_username("system:serviceaccount:ns:name:extra")
-            is None
-        )
+        assert parse_namespace_from_sa_username("system:serviceaccount:ns:name:extra") is None
 
 
 class TestBearerMiddlewareSetsCallerIdentity:
@@ -296,9 +290,7 @@ class TestBearerMiddlewareSetsCallerIdentity:
         app.add_middleware(BearerAuthMiddleware, tokens=[token])
 
         client = TestClient(app)
-        response = client.get(
-            "/check-identity", headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/check-identity", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 200
         data = response.json()
         assert data["username"] == "anonymous"

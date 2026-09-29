@@ -96,9 +96,7 @@ class TestSandboxResponseContract:
             "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
-            return_value=mocker.MagicMock(
-                post=mocker.AsyncMock(return_value=mock_response)
-            ),
+            return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
@@ -140,9 +138,7 @@ class TestSandboxResponseContract:
             "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
-            return_value=mocker.MagicMock(
-                post=mocker.AsyncMock(return_value=mock_response)
-            ),
+            return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
@@ -180,9 +176,7 @@ class TestSandboxResponseContract:
             "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient"
         )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
-            return_value=mocker.MagicMock(
-                post=mocker.AsyncMock(return_value=mock_response)
-            ),
+            return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 

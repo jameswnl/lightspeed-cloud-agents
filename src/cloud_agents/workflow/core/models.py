@@ -194,9 +194,7 @@ class StepTranscript(BaseModel):
         Returns:
             A new StepTranscript with truncated events.
         """
-        truncated_events = [
-            self._truncate_event(e, max_payload_bytes) for e in self.events
-        ]
+        truncated_events = [self._truncate_event(e, max_payload_bytes) for e in self.events]
 
         if len(truncated_events) <= max_events:
             return StepTranscript(

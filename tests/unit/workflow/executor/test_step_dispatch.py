@@ -80,9 +80,7 @@ class TestGraphTranslatorUsesStepExecutor:
     """Tests that graph_translator dispatches via StepExecutor."""
 
     @pytest.mark.asyncio
-    async def test_agent_step_uses_step_executor(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_agent_step_uses_step_executor(self, mocker: MockerFixture) -> None:
         """Agent step node calls StepExecutor.run() instead of run_step directly."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -103,9 +101,11 @@ class TestGraphTranslatorUsesStepExecutor:
             "apiVersion": "v1",
             "kind": "AgentWorkflow",
             "metadata": {"name": "test"},
-            "spec": {"steps": [
-                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-            ]},
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                ]
+            },
         }
 
         graph, state = build_graph(

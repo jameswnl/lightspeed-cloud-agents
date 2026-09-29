@@ -19,9 +19,7 @@ def mock_client(mocker: MockerFixture) -> Any:
     client = mocker.MagicMock()
     handle = mocker.AsyncMock()
     handle.id = "wf-test-1"
-    handle.query.return_value = mocker.MagicMock(
-        model_dump=lambda: {"steps": {}, "events": []}
-    )
+    handle.query.return_value = mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
     client.start_workflow = mocker.AsyncMock(return_value=handle)
     client.get_workflow_handle.return_value = handle
     return client
@@ -58,7 +56,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -87,6 +89,9 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        assert response.json()["detail"] == {
+            "validation_errors": ["Definition provider: unknown provider fields: unknown"]
+        }
         mock_client.start_workflow.assert_not_called()
 
     def test_definition_provider_reference_is_forwarded(
@@ -114,9 +119,7 @@ class TestRunWorkflow:
         workflow_input = mock_client.start_workflow.call_args.args[1]
         assert workflow_input.provider.credentials_secret == "OPENAI_API_KEY"
 
-    def test_non_object_step_returns_422(
-        self, client: TestClient, mock_client: Any
-    ) -> None:
+    def test_non_object_step_returns_422(self, client: TestClient, mock_client: Any) -> None:
         """Malformed step entries are validation errors, not server errors."""
         response = client.post(
             "/v1/workflows/run",
@@ -131,6 +134,7 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        assert response.json()["detail"] == {"validation_errors": ["Step 0 must be an object"]}
         mock_client.start_workflow.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -156,6 +160,8 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        errors = response.json()["detail"]["validation_errors"]
+        assert any(field in error for error in errors)
         mock_client.start_workflow.assert_not_called()
 
     def test_definition_provider_rejected_by_provider_config_returns_422(
@@ -179,6 +185,8 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        errors = response.json()["detail"]["validation_errors"]
+        assert any("azure" in error for error in errors)
         mock_client.start_workflow.assert_not_called()
 
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
@@ -199,6 +207,10 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        expected_type = type(bad_provider).__name__
+        assert response.json()["detail"] == {
+            "validation_errors": [f"Definition provider must be an object, got {expected_type}"]
+        }
         mock_client.start_workflow.assert_not_called()
 
     def test_unknown_tools_return_422_without_dispatch(
@@ -228,6 +240,7 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        assert "missing_tool" in response.json()["detail"]
         mock_client.start_workflow.assert_not_called()
 
     def test_start_workflow_calls_temporal(
@@ -243,7 +256,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -276,7 +293,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "test-wf"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -300,7 +321,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -329,7 +354,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -357,7 +386,11 @@ class TestRunWorkflow:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "diag"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -367,8 +400,7 @@ class TestRunWorkflow:
             },
         )
         started_calls = [
-            c for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "workflow_started"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "workflow_started"
         ]
         assert len(started_calls) == 1
         assert started_calls[0][1]["details"]["definition_name"] == "diag"
@@ -405,8 +437,7 @@ class TestApproveWorkflow:
             json={"step_name": "approve-step", "decision": "approved"},
         )
         approved_calls = [
-            c for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "step_approved"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "step_approved"
         ]
         assert len(approved_calls) == 1
         assert approved_calls[0][1]["step_name"] == "approve-step"
@@ -424,8 +455,7 @@ class TestApproveWorkflow:
             json={"step_name": "approve-step", "decision": "denied"},
         )
         denied_calls = [
-            c for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "step_denied"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "step_denied"
         ]
         assert len(denied_calls) == 1
 
@@ -513,7 +543,11 @@ class TestAdvisoryPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -541,7 +575,11 @@ class TestAdvisoryPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -593,9 +631,7 @@ class TestDefinitionManagement:
         assert response.status_code == 201
         assert response.json()["name"] == "my-wf"
 
-    def test_post_definition_with_invalid_schema_returns_422(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_definition_with_invalid_schema_returns_422(self, mocker: MockerFixture) -> None:
         """POST /definitions with invalid output_schema returns 422."""
         from cloud_agents.workflow.core.definition_store import DefinitionStore
 
@@ -631,10 +667,10 @@ class TestDefinitionManagement:
             },
         )
         assert response.status_code == 422
+        errors = response.json()["detail"]["validation_errors"]
+        assert any("missing required 'items'" in error for error in errors)
 
-    def test_post_definition_with_negative_retries_returns_422(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_definition_with_negative_retries_returns_422(self, mocker: MockerFixture) -> None:
         """Pydantic model errors are translated to HTTP 422."""
         from cloud_agents.workflow.core.definition_store import DefinitionStore
 
@@ -666,7 +702,9 @@ class TestDefinitionManagement:
         )
         assert response.status_code == 422
         body = response.json()
-        assert "validation_errors" in body.get("detail", {})
+        assert body["detail"] == {
+            "validation_errors": ["Step 's1' max_retries must be a non-negative integer"]
+        }
 
     def test_get_definition_by_name(self, mocker: MockerFixture) -> None:
         """GET /definitions/{name} returns a stored definition."""
@@ -735,7 +773,11 @@ class TestConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -762,7 +804,11 @@ class TestConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -796,7 +842,11 @@ class TestDeploymentConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -825,7 +875,11 @@ class TestDeploymentConfigPropagation:
                     "apiVersion": "v1",
                     "kind": "AgentWorkflow",
                     "metadata": {"name": "t"},
-                    "spec": {"steps": [{"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}]},
+                    "spec": {
+                        "steps": [
+                            {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "test"}
+                        ]
+                    },
                 },
                 "provider": {
                     "name": "openai",
@@ -1122,9 +1176,7 @@ class TestAuthorizationWiring:
         )
 
         approved_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "step_approved"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "step_approved"
         ]
         assert len(approved_calls) == 1
         details = approved_calls[0][1]["details"]
@@ -1171,14 +1223,8 @@ class TestSSEEventStream:
         """Build a mock WorkflowStatus."""
         from cloud_agents.workflow.core.models import StepResult, WorkflowEvent, WorkflowStatus
 
-        step_results = {
-            k: StepResult(**v) if isinstance(v, dict) else v
-            for k, v in steps.items()
-        }
-        event_objs = [
-            WorkflowEvent(**e) if isinstance(e, dict) else e
-            for e in events
-        ]
+        step_results = {k: StepResult(**v) if isinstance(v, dict) else v for k, v in steps.items()}
+        event_objs = [WorkflowEvent(**e) if isinstance(e, dict) else e for e in events]
         return WorkflowStatus(steps=step_results, events=event_objs)
 
     def _make_describe(self, status_name="RUNNING"):
@@ -1257,20 +1303,22 @@ class TestSSEEventStream:
         mock_temporal.get_workflow_handle.return_value = handle
 
         handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
-        handle.query = mocker.AsyncMock(return_value=self._make_status(
-            steps={
-                "diagnosis": {"status": "completed"},
-                "approval": {"status": "completed", "output": {"approved": True}},
-                "fix": {"status": "completed"},
-            },
-            events=[
-                {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
-                {"type": "step.completed", "step": "diagnose", "timestamp": "t2"},
-                {"type": "step.completed", "step": "approve", "timestamp": "t3"},
-                {"type": "step.started", "step": "fix", "timestamp": "t4"},
-                {"type": "step.completed", "step": "fix", "timestamp": "t5"},
-            ],
-        ))
+        handle.query = mocker.AsyncMock(
+            return_value=self._make_status(
+                steps={
+                    "diagnosis": {"status": "completed"},
+                    "approval": {"status": "completed", "output": {"approved": True}},
+                    "fix": {"status": "completed"},
+                },
+                events=[
+                    {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
+                    {"type": "step.completed", "step": "diagnose", "timestamp": "t2"},
+                    {"type": "step.completed", "step": "approve", "timestamp": "t3"},
+                    {"type": "step.started", "step": "fix", "timestamp": "t4"},
+                    {"type": "step.completed", "step": "fix", "timestamp": "t5"},
+                ],
+            )
+        )
 
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
@@ -1413,16 +1461,18 @@ class TestSSEEventStream:
         mock_temporal.get_workflow_handle.return_value = handle
 
         handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
-        handle.query = mocker.AsyncMock(return_value=self._make_status(
-            steps={
-                "diagnosis": {"status": "failed", "error": "retries exhausted"},
-                "escalation": {"status": "escalated"},
-            },
-            events=[
-                {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
-                {"type": "step.failed", "step": "diagnose", "timestamp": "t2"},
-            ],
-        ))
+        handle.query = mocker.AsyncMock(
+            return_value=self._make_status(
+                steps={
+                    "diagnosis": {"status": "failed", "error": "retries exhausted"},
+                    "escalation": {"status": "escalated"},
+                },
+                events=[
+                    {"type": "step.started", "step": "diagnose", "timestamp": "t1"},
+                    {"type": "step.failed", "step": "diagnose", "timestamp": "t2"},
+                ],
+            )
+        )
 
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
@@ -1447,13 +1497,15 @@ class TestSSEEventStream:
         mock_temporal.get_workflow_handle.return_value = handle
 
         handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
-        handle.query = mocker.AsyncMock(return_value=self._make_status(
-            steps={"r1": {"status": "completed"}},
-            events=[
-                {"type": "step.started", "step": "s1", "timestamp": "t1"},
-                {"type": "step.completed", "step": "s1", "timestamp": "t2"},
-            ],
-        ))
+        handle.query = mocker.AsyncMock(
+            return_value=self._make_status(
+                steps={"r1": {"status": "completed"}},
+                events=[
+                    {"type": "step.started", "step": "s1", "timestamp": "t1"},
+                    {"type": "step.completed", "step": "s1", "timestamp": "t2"},
+                ],
+            )
+        )
 
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
@@ -1477,17 +1529,19 @@ class TestSSEEventStream:
         mock_temporal.get_workflow_handle.return_value = handle
 
         handle.describe = mocker.AsyncMock(return_value=self._make_describe("COMPLETED"))
-        handle.query = mocker.AsyncMock(return_value=self._make_status(
-            steps={
-                "diagnosis": {"status": "completed"},
-                "approval": {"status": "denied"},
-            },
-            events=[
-                {"type": "step.completed", "step": "diagnose", "timestamp": "t1"},
-                {"type": "workflow.paused", "step": "approve", "timestamp": "t2"},
-                {"type": "step.denied", "step": "approve", "timestamp": "t3"},
-            ],
-        ))
+        handle.query = mocker.AsyncMock(
+            return_value=self._make_status(
+                steps={
+                    "diagnosis": {"status": "completed"},
+                    "approval": {"status": "denied"},
+                },
+                events=[
+                    {"type": "step.completed", "step": "diagnose", "timestamp": "t1"},
+                    {"type": "workflow.paused", "step": "approve", "timestamp": "t2"},
+                    {"type": "step.denied", "step": "approve", "timestamp": "t3"},
+                ],
+            )
+        )
 
         app = FastAPI()
         router = build_temporal_router(mock_temporal)
@@ -1616,9 +1670,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mock_temporal.get_workflow_handle.return_value = handle
 
         app = FastAPI()
-        router = build_temporal_router(
-            mock_temporal, authorizer=OwnerOnlyAuthorizer()
-        )
+        router = build_temporal_router(mock_temporal, authorizer=OwnerOnlyAuthorizer())
         app.include_router(router)
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -1671,9 +1723,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mock_temporal.get_workflow_handle.return_value = handle
 
         app = FastAPI()
-        router = build_temporal_router(
-            mock_temporal, authorizer=OwnerOnlyAuthorizer()
-        )
+        router = build_temporal_router(mock_temporal, authorizer=OwnerOnlyAuthorizer())
         app.include_router(router)
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -1721,9 +1771,7 @@ class TestAuthzContextLoadedForLaterOperations:
         mock_temporal.get_workflow_handle.return_value = handle
 
         app = FastAPI()
-        router = build_temporal_router(
-            mock_temporal, authorizer=OwnerOnlyAuthorizer()
-        )
+        router = build_temporal_router(mock_temporal, authorizer=OwnerOnlyAuthorizer())
         app.include_router(router)
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -1762,13 +1810,21 @@ class TestGetWorkflowHandoff:
                 status="completed",
                 output={"summary": "found issues"},
                 error=None,
-                model_dump=lambda: {"status": "completed", "output": {"summary": "found issues"}, "error": None},
+                model_dump=lambda: {
+                    "status": "completed",
+                    "output": {"summary": "found issues"},
+                    "error": None,
+                },
             ),
             "r2": mocker.MagicMock(
                 status="failed",
                 output=None,
                 error="retries exhausted",
-                model_dump=lambda: {"status": "failed", "output": None, "error": "retries exhausted"},
+                model_dump=lambda: {
+                    "status": "failed",
+                    "output": None,
+                    "error": "retries exhausted",
+                },
             ),
         }
         status_result.events = [
@@ -1776,13 +1832,21 @@ class TestGetWorkflowHandoff:
                 type="step.started",
                 step="diagnose",
                 timestamp="2026-01-01T00:00:00",
-                model_dump=lambda: {"type": "step.started", "step": "diagnose", "timestamp": "2026-01-01T00:00:00"},
+                model_dump=lambda: {
+                    "type": "step.started",
+                    "step": "diagnose",
+                    "timestamp": "2026-01-01T00:00:00",
+                },
             ),
             mocker.MagicMock(
                 type="step.failed",
                 step="fix-hosts",
                 timestamp="2026-01-01T00:01:00",
-                model_dump=lambda: {"type": "step.failed", "step": "fix-hosts", "timestamp": "2026-01-01T00:01:00"},
+                model_dump=lambda: {
+                    "type": "step.failed",
+                    "step": "fix-hosts",
+                    "timestamp": "2026-01-01T00:01:00",
+                },
             ),
         ]
 
@@ -1795,6 +1859,7 @@ class TestGetWorkflowHandoff:
 
         def side_effect(query_fn):
             from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
+
             if query_fn == AgentWorkflow.get_status:
                 return status_result
             if query_fn == AgentWorkflow.get_workflow_context:
@@ -1864,9 +1929,7 @@ class TestGetWorkflowHandoff:
     ) -> None:
         """GET /handoff for non-existent workflow returns 404."""
         handle = mock_client.get_workflow_handle.return_value
-        handle.query = mocker.AsyncMock(
-            side_effect=Exception("workflow not found")
-        )
+        handle.query = mocker.AsyncMock(side_effect=Exception("workflow not found"))
 
         response = client.get("/v1/workflows/wf-nonexistent/handoff")
         assert response.status_code == 404
@@ -1944,9 +2007,7 @@ class TestTranscriptEndpoint:
     ) -> None:
         """GET /steps/{step}/transcript for non-existent workflow returns 404."""
         handle = mock_client.get_workflow_handle.return_value
-        handle.query = mocker.AsyncMock(
-            side_effect=Exception("workflow not found")
-        )
+        handle.query = mocker.AsyncMock(side_effect=Exception("workflow not found"))
         response = client.get("/v1/workflows/wf-missing/steps/r1/transcript")
         assert response.status_code == 404
 
@@ -1978,6 +2039,7 @@ class TestTranscriptWithPostgres:
 
         async def mock_query(query_fn):
             from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
+
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {
                     "r1": {
@@ -1998,18 +2060,25 @@ class TestTranscriptWithPostgres:
         handle.query = mocker.AsyncMock(side_effect=mock_query)
 
     def test_reads_from_postgres_first(
-        self, client_with_store: TestClient, mock_client: Any,
-        mock_store: Any, mocker: MockerFixture,
+        self,
+        client_with_store: TestClient,
+        mock_client: Any,
+        mock_store: Any,
+        mocker: MockerFixture,
     ) -> None:
         """Transcript endpoint reads from Postgres when available."""
         from cloud_agents.workflow.core.models import StepTranscript, TranscriptEvent
+
         full_transcript = StepTranscript(
             step_name="diagnose",
             events=[
                 TranscriptEvent(ts="t1", type="tool_call", data={"name": "kubectl"}),
                 TranscriptEvent(ts="t2", type="result", data={"output": "full data"}),
             ],
-            cost_usd=0.05, input_tokens=1000, output_tokens=500, duration_ms=5000,
+            cost_usd=0.05,
+            input_tokens=1000,
+            output_tokens=500,
+            duration_ms=5000,
         )
         mock_store.get = mocker.AsyncMock(return_value=full_transcript)
         self._mock_workflow_query(mock_client, mocker)
@@ -2020,8 +2089,11 @@ class TestTranscriptWithPostgres:
         assert len(data["events"]) == 2
 
     def test_falls_back_to_workflow_query_when_postgres_empty(
-        self, client_with_store: TestClient, mock_client: Any,
-        mock_store: Any, mocker: MockerFixture,
+        self,
+        client_with_store: TestClient,
+        mock_client: Any,
+        mock_store: Any,
+        mocker: MockerFixture,
     ) -> None:
         """Falls back to workflow query state when Postgres has no data."""
         mock_store.get = mocker.AsyncMock(return_value=None)
@@ -2032,8 +2104,11 @@ class TestTranscriptWithPostgres:
         assert data["truncated"] is True
 
     def test_falls_back_to_workflow_query_when_postgres_fails(
-        self, client_with_store: TestClient, mock_client: Any,
-        mock_store: Any, mocker: MockerFixture,
+        self,
+        client_with_store: TestClient,
+        mock_client: Any,
+        mock_store: Any,
+        mocker: MockerFixture,
     ) -> None:
         """Falls back to workflow query state when Postgres is unreachable."""
         mock_store.get = mocker.AsyncMock(side_effect=RuntimeError("connection refused"))
@@ -2044,13 +2119,17 @@ class TestTranscriptWithPostgres:
         assert data["truncated"] is True
 
     def test_no_store_marks_truncated(
-        self, client: TestClient, mock_client: Any, mocker: MockerFixture,
+        self,
+        client: TestClient,
+        mock_client: Any,
+        mocker: MockerFixture,
     ) -> None:
         """Without transcript store, response has truncated=True."""
         handle = mock_client.get_workflow_handle.return_value
 
         async def mock_query(query_fn):
             from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
+
             if query_fn == AgentWorkflow.get_step_transcripts:
                 return {"r1": {"step_name": "diagnose", "events": []}}
             if query_fn == AgentWorkflow.get_authz_context:

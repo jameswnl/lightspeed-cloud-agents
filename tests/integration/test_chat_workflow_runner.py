@@ -397,7 +397,6 @@ class TestToolAwareHistory:
         mocker: MockerFixture,
     ) -> None:
         """Tool call messages survive save/load and replay as pydantic-ai parts."""
-        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
         captured_inputs: list[Any] = []
         call_count = 0
@@ -484,6 +483,7 @@ class TestToolAwareHistory:
         mocker: MockerFixture,
     ) -> None:
         """get_history() returns tool_call and tool_result messages."""
+
         def make_mock_executor() -> Any:
             mock_exec = mocker.AsyncMock()
 
@@ -537,6 +537,7 @@ class TestToolAwareHistory:
         mocker: MockerFixture,
     ) -> None:
         """Conversations without tool events still work as before."""
+
         def make_mock_executor() -> Any:
             mock_exec = mocker.AsyncMock()
 

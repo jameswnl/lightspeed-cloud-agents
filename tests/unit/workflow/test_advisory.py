@@ -43,9 +43,16 @@ class TestAdvisoryEnforcerEnabled:
     def test_tools_filtered_to_read_only(self) -> None:
         """Test that only read-only tools are kept."""
         enforcer = AdvisoryEnforcer(enabled=True)
-        fn_a = lambda: "a"
-        fn_b = lambda: "b"
-        fn_c = lambda: "c"
+
+        def fn_a() -> str:
+            return "a"
+
+        def fn_b() -> str:
+            return "b"
+
+        def fn_c() -> str:
+            return "c"
+
         tools = [("list_hosts", fn_a), ("check_host", fn_b), ("run_fix", fn_c)]
         filtered = enforcer.filter_tools(tools, ["list_hosts", "check_host"])
         assert len(filtered) == 2

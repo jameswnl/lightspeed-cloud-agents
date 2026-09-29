@@ -8,10 +8,8 @@ heartbeat data to the SSE stream.
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
@@ -28,12 +26,8 @@ def _make_status(steps, events):
         WorkflowStatus,
     )
 
-    step_results = {
-        k: StepResult(**v) if isinstance(v, dict) else v for k, v in steps.items()
-    }
-    event_objs = [
-        WorkflowEvent(**e) if isinstance(e, dict) else e for e in events
-    ]
+    step_results = {k: StepResult(**v) if isinstance(v, dict) else v for k, v in steps.items()}
+    event_objs = [WorkflowEvent(**e) if isinstance(e, dict) else e for e in events]
     return WorkflowStatus(steps=step_results, events=event_objs)
 
 

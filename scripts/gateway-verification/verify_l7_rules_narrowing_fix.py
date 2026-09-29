@@ -103,13 +103,11 @@ async def main() -> None:
         allowed_cmd = (
             "curl -s -o /dev/null -w '%{http_code}' "
             "https://api.openai.com/v1/chat/completions "
-            "-H \"Authorization: Bearer $OPENAI_API_KEY\" "
+            '-H "Authorization: Bearer $OPENAI_API_KEY" '
             "-H 'Content-Type: application/json' "
             '-d \'{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"max_tokens":1}\''
         )
-        r_allowed = spawner._client.exec(
-            sandbox_id, ["sh", "-c", allowed_cmd], timeout_seconds=30
-        )
+        r_allowed = spawner._client.exec(sandbox_id, ["sh", "-c", allowed_cmd], timeout_seconds=30)
         allowed_code = r_allowed.stdout.strip()
         print("Allowlisted path (POST /v1/chat/completions) HTTP status:", allowed_code)
         assert allowed_code == "200", (
@@ -121,13 +119,14 @@ async def main() -> None:
         blocked_cmd = (
             "curl -s -o /dev/null -w '%{http_code}' --max-time 10 "
             "https://api.openai.com/v1/models "
-            "-H \"Authorization: Bearer $OPENAI_API_KEY\""
+            '-H "Authorization: Bearer $OPENAI_API_KEY"'
         )
-        r_blocked = spawner._client.exec(
-            sandbox_id, ["sh", "-c", blocked_cmd], timeout_seconds=30
-        )
+        r_blocked = spawner._client.exec(sandbox_id, ["sh", "-c", blocked_cmd], timeout_seconds=30)
         blocked_code = r_blocked.stdout.strip()
-        print("Non-allowlisted path (GET /v1/models) HTTP status:", blocked_code or "(no response / connection error)")
+        print(
+            "Non-allowlisted path (GET /v1/models) HTTP status:",
+            blocked_code or "(no response / connection error)",
+        )
         # Pinned to the gateway's actual L7-deny status (403), not just
         # "!= 200" -- the same valid key already proved good on the
         # allowlisted path in check (2), so a loose "not 200" here could

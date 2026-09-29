@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging
 
-import pytest
 
 from cloud_agents.runtime.audit import AuditEvent, emit_audit
 

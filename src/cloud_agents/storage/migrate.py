@@ -78,7 +78,11 @@ def run_alembic(db_url: str) -> None:
         # and environments where the database isn't ready yet.
         # Schema/revision errors should be visible.
         exc_str = str(exc).lower()
-        if "connection refused" in exc_str or "could not connect" in exc_str or "no password" in exc_str:
+        if (
+            "connection refused" in exc_str
+            or "could not connect" in exc_str
+            or "no password" in exc_str
+        ):
             logger.debug("Alembic migration skipped (database unavailable): %s", exc)
         else:
             raise RuntimeError(f"Alembic migration failed: {exc}") from exc

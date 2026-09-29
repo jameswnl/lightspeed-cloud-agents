@@ -7,7 +7,6 @@ server stability.
 from __future__ import annotations
 
 import time
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -117,9 +116,9 @@ class TestSSEScalability:
 
             connection_results.append(event_count)
 
-        assert all(count >= 2 for count in connection_results), (
-            f"Some connections received too few events: {connection_results}"
-        )
+        assert all(
+            count >= 2 for count in connection_results
+        ), f"Some connections received too few events: {connection_results}"
 
     def test_sse_connection_latency(
         self,
@@ -140,9 +139,7 @@ class TestSSEScalability:
                     break
 
         assert first_event_time is not None
-        assert first_event_time < 2.0, (
-            f"First SSE event took {first_event_time:.2f}s (SLO: <2s)"
-        )
+        assert first_event_time < 2.0, f"First SSE event took {first_event_time:.2f}s (SLO: <2s)"
 
     def test_sse_completed_event_terminates_stream(
         self,

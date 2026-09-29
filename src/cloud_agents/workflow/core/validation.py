@@ -96,8 +96,7 @@ def validate_definition(
     }
     if unknown_spec_fields:
         errors.append(
-            "Workflow spec contains unknown fields: "
-            + ", ".join(sorted(unknown_spec_fields))
+            "Workflow spec contains unknown fields: " + ", ".join(sorted(unknown_spec_fields))
         )
     steps = spec.get("steps", [])
     if not isinstance(steps, list):
@@ -106,13 +105,9 @@ def validate_definition(
         errors.append("Workflow must have at least one step")
         return errors
 
-    invalid_step_indexes = [
-        index for index, step in enumerate(steps) if not isinstance(step, dict)
-    ]
+    invalid_step_indexes = [index for index, step in enumerate(steps) if not isinstance(step, dict)]
     if invalid_step_indexes:
-        return errors + [
-            f"Step {index} must be an object" for index in invalid_step_indexes
-        ]
+        return errors + [f"Step {index} must be an object" for index in invalid_step_indexes]
 
     # One-step convention (issue #268): a single step may omit
     # ``name``/``output_key``; default them so the documented shorthand
@@ -127,8 +122,7 @@ def validate_definition(
     definition_provider = defn.get("provider")
     if definition_provider is not None and not isinstance(definition_provider, dict):
         errors.append(
-            "Definition provider must be an object, "
-            f"got {type(definition_provider).__name__}"
+            "Definition provider must be an object, " f"got {type(definition_provider).__name__}"
         )
     elif isinstance(definition_provider, dict):
         try:
@@ -184,9 +178,7 @@ def validate_definition(
     for i, step in enumerate(steps):
         unknown_fields = set(step) - allowed_step_fields
         if unknown_fields:
-            errors.append(
-                f"Step {i} contains unknown fields: {', '.join(sorted(unknown_fields))}"
-            )
+            errors.append(f"Step {i} contains unknown fields: {', '.join(sorted(unknown_fields))}")
         name = step.get("name")
         if not name:
             errors.append(f"Step {i} is missing required field 'name'")
@@ -206,8 +198,7 @@ def validate_definition(
 
         max_retries = step.get("max_retries")
         if isinstance(max_retries, bool) or (
-            max_retries is not None
-            and (not isinstance(max_retries, int) or max_retries < 0)
+            max_retries is not None and (not isinstance(max_retries, int) or max_retries < 0)
         ):
             errors.append(f"Step '{name}' max_retries must be a non-negative integer")
 

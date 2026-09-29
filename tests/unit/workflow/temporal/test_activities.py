@@ -961,9 +961,7 @@ class TestCredentialSecretNameResolution:
     unset, unlike spawn: none/local's existing provider-default fallback.
     """
 
-    async def _run_with_provider(
-        self, mocker: MockerFixture, provider: dict[str, Any]
-    ) -> Any:
+    async def _run_with_provider(self, mocker: MockerFixture, provider: dict[str, Any]) -> Any:
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
@@ -4110,9 +4108,7 @@ class TestSpawnModeDispatch:
         }
 
     @pytest.mark.asyncio
-    async def test_instructions_interpolated_for_ephemeral_too(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_instructions_interpolated_for_ephemeral_too(self, mocker: MockerFixture) -> None:
         """{{ steps.X.output.Y }} in `instructions` is expanded for spawn: ephemeral too.
 
         Regression test for a review finding: _interpolate_instructions()
@@ -4157,7 +4153,7 @@ class TestSpawnModeDispatch:
         result = await run_sandbox_step(input_dict, spawner=mock_spawner)
 
         assert result["status"] == "completed"
-        assert captured_body["systemPrompt"] == "Prior result: <data>\"all clear\"</data>"
+        assert captured_body["systemPrompt"] == 'Prior result: <data>"all clear"</data>'
 
     @pytest.mark.asyncio
     async def test_spawn_none_never_calls_spawner(self, mocker: MockerFixture) -> None:

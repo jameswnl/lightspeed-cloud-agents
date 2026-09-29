@@ -15,8 +15,12 @@ import pytest
 REPO_ROOT = Path(__file__).parents[2]
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "runbook.md"
 DEPLOYMENT_MD = REPO_ROOT / "docs" / "DEPLOYMENT.md"
-METRICS_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "metrics.py"
-ENTRYPOINT_PY = REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "entrypoint.py"
+METRICS_PY = (
+    REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "metrics.py"
+)
+ENTRYPOINT_PY = (
+    REPO_ROOT / "src" / "cloud_agents" / "workflow" / "executor" / "temporal" / "entrypoint.py"
+)
 MAKEFILE = REPO_ROOT / "Makefile"
 HELM_PROMETHEUSRULE = REPO_ROOT / "deploy" / "helm" / "templates" / "prometheusrule.yaml"
 
@@ -103,9 +107,9 @@ class TestRunbookExists:
             "Schedule",
         ]
         for heading in required_headings:
-            assert heading.lower() in content.lower(), (
-                f"Runbook missing required section: '{heading}'"
-            )
+            assert (
+                heading.lower() in content.lower()
+            ), f"Runbook missing required section: '{heading}'"
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +136,7 @@ class TestRunbookMetricReferences:
 
         missing = referenced_metrics - defined_metrics
         assert not missing, (
-            f"Runbook references metrics not defined in "
-            f"{METRICS_PY.name}: {missing}"
+            f"Runbook references metrics not defined in " f"{METRICS_PY.name}: {missing}"
         )
 
     def test_key_metrics_are_mentioned(self):
@@ -148,9 +151,7 @@ class TestRunbookMetricReferences:
             "ls_sandbox_timeout_total",
         ]
         for metric in key_metrics:
-            assert metric in runbook, (
-                f"Runbook should mention key metric: {metric}"
-            )
+            assert metric in runbook, f"Runbook should mention key metric: {metric}"
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +171,15 @@ class TestRunbookEndpointReferences:
         for ep in health_endpoints:
             if ep in runbook:
                 assert ep in entrypoint, (
-                    f"Runbook references {ep} but it's not in "
-                    f"{ENTRYPOINT_PY.name}"
+                    f"Runbook references {ep} but it's not in " f"{ENTRYPOINT_PY.name}"
                 )
 
     def test_cancel_endpoint_referenced(self):
         """Cancel endpoint should be in runbook (for stuck workflow recovery)."""
         runbook = _read(RUNBOOK)
-        assert "/cancel" in runbook or "cancel" in runbook.lower(), (
-            "Runbook should describe how to cancel stuck workflows"
-        )
+        assert (
+            "/cancel" in runbook or "cancel" in runbook.lower()
+        ), "Runbook should describe how to cancel stuck workflows"
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +197,7 @@ class TestRunbookEnvVarReferences:
 
         # Find env-var-shaped refs (ALL_CAPS_WITH_UNDERSCORES)
         env_var_pattern = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
-        runbook_env_vars = {
-            ref for ref in backtick_refs if env_var_pattern.match(ref)
-        }
+        runbook_env_vars = {ref for ref in backtick_refs if env_var_pattern.match(ref)}
 
         if not runbook_env_vars:
             pytest.skip("No env vars found in runbook")
@@ -211,9 +209,7 @@ class TestRunbookEnvVarReferences:
             src_content += py_file.read_text(encoding="utf-8")
 
         missing = {var for var in runbook_env_vars if var not in src_content}
-        assert not missing, (
-            f"Runbook references env vars not found in src/: {missing}"
-        )
+        assert not missing, f"Runbook references env vars not found in src/: {missing}"
 
 
 # ---------------------------------------------------------------------------
@@ -230,14 +226,10 @@ class TestRunbookMakefileReferences:
         available_targets = _get_makefile_targets()
 
         # Find all `make <target>` references
-        referenced_targets = set(
-            re.findall(r"make\s+([a-zA-Z][a-zA-Z0-9_-]*)", runbook)
-        )
+        referenced_targets = set(re.findall(r"make\s+([a-zA-Z][a-zA-Z0-9_-]*)", runbook))
 
         missing = referenced_targets - available_targets
-        assert not missing, (
-            f"Runbook references Makefile targets that don't exist: {missing}"
-        )
+        assert not missing, f"Runbook references Makefile targets that don't exist: {missing}"
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +249,7 @@ class TestRunbookFileReferences:
 
         for path_str in py_paths:
             full_path = REPO_ROOT / path_str
-            assert full_path.exists(), (
-                f"Runbook references non-existent file: {path_str}"
-            )
+            assert full_path.exists(), f"Runbook references non-existent file: {path_str}"
 
 
 # ---------------------------------------------------------------------------
@@ -279,17 +269,13 @@ class TestRunbookAlertRuleReferences:
         helm_alerts = set(re.findall(r"alert:\s*(\w+)", helm_content))
 
         # Extract PascalCase alert names from runbook backtick refs
-        runbook_alerts = set(
-            re.findall(r"`(\w+(?:High|Failure|Detected|Down))`", runbook)
-        )
+        runbook_alerts = set(re.findall(r"`(\w+(?:High|Failure|Detected|Down))`", runbook))
 
         if not runbook_alerts:
             pytest.skip("No alert names found in runbook")
 
         missing = runbook_alerts - helm_alerts
-        assert not missing, (
-            f"Runbook references alerts not in prometheusrule.yaml: {missing}"
-        )
+        assert not missing, f"Runbook references alerts not in prometheusrule.yaml: {missing}"
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +289,6 @@ class TestDeploymentLinksRunbook:
     def test_deployment_links_to_runbook(self):
         """DEPLOYMENT.md should contain a link to the runbook."""
         deployment = _read(DEPLOYMENT_MD)
-        assert "runbook" in deployment.lower(), (
-            "DEPLOYMENT.md should link to the operational runbook"
-        )
+        assert (
+            "runbook" in deployment.lower()
+        ), "DEPLOYMENT.md should link to the operational runbook"

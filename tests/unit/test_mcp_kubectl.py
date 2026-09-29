@@ -43,16 +43,12 @@ class TestContainerfile:
     def test_containerfile_installs_mcp_kubernetes(self) -> None:
         """Containerfile must install mcp-server-kubernetes."""
         content = self.CONTAINERFILE.read_text()
-        assert "mcp-server-kubernetes" in content, (
-            "Must install mcp-server-kubernetes npm package"
-        )
+        assert "mcp-server-kubernetes" in content, "Must install mcp-server-kubernetes npm package"
 
     def test_containerfile_installs_supergateway(self) -> None:
         """Containerfile must install supergateway for streamable HTTP."""
         content = self.CONTAINERFILE.read_text()
-        assert "supergateway" in content, (
-            "Must install supergateway for stdio-to-HTTP bridge"
-        )
+        assert "supergateway" in content, "Must install supergateway for stdio-to-HTTP bridge"
 
     def test_containerfile_exposes_port_8082(self) -> None:
         """Containerfile must expose port 8082."""
@@ -62,9 +58,9 @@ class TestContainerfile:
     def test_containerfile_runs_as_non_root(self) -> None:
         """Containerfile must set a non-root USER."""
         content = self.CONTAINERFILE.read_text()
-        assert "USER" in content, (
-            "Containerfile must contain a USER directive to avoid running as root"
-        )
+        assert (
+            "USER" in content
+        ), "Containerfile must contain a USER directive to avoid running as root"
 
 
 class TestKubernetesManifests:
@@ -140,9 +136,9 @@ class TestKubernetesManifests:
 
         # Must have read access to these resources
         required_read_resources = {"pods", "pods/log", "events", "deployments", "services", "nodes"}
-        assert required_read_resources.issubset(all_resources), (
-            f"Missing read resources: {required_read_resources - all_resources}"
-        )
+        assert required_read_resources.issubset(
+            all_resources
+        ), f"Missing read resources: {required_read_resources - all_resources}"
         assert {"get", "list", "watch"}.issubset(all_verbs), "Must have get/list/watch verbs"
 
     def test_role_has_limited_write(self, manifests: list[dict]) -> None:
@@ -192,9 +188,9 @@ class TestKubernetesManifests:
             if doc and "metadata" in doc:
                 labels = doc["metadata"].get("labels", {})
                 if doc["kind"] in ("Deployment", "Service", "ServiceAccount"):
-                    assert labels.get("environment") == "cloud-agents", (
-                        f"{doc['kind']} {doc['metadata']['name']} missing environment label"
-                    )
+                    assert (
+                        labels.get("environment") == "cloud-agents"
+                    ), f"{doc['kind']} {doc['metadata']['name']} missing environment label"
 
 
 class TestNetworkPolicy:
@@ -256,34 +252,27 @@ class TestNetworkPolicy:
                     break
 
         assert rule_8082 is not None, "No egress rule with port 8082 found"
-        assert "to" in rule_8082, (
-            "Port 8082 egress rule must have a 'to' clause to scope traffic"
-        )
+        assert "to" in rule_8082, "Port 8082 egress rule must have a 'to' clause to scope traffic"
 
         # Verify the to clause targets mcp-kubectl pods
         to_selectors = rule_8082["to"]
         labels = [
-            selector.get("podSelector", {}).get("matchLabels", {})
-            for selector in to_selectors
+            selector.get("podSelector", {}).get("matchLabels", {}) for selector in to_selectors
         ]
-        assert any(l.get("app") == "mcp-kubectl" for l in labels), (
-            "Port 8082 egress 'to' clause must target pods with app: mcp-kubectl"
-        )
+        assert any(
+            label.get("app") == "mcp-kubectl" for label in labels
+        ), "Port 8082 egress 'to' clause must target pods with app: mcp-kubectl"
 
 
 class TestWorkflowDefinition:
     """Validate the k8s-realcluster-workflow.yaml definition."""
 
-    WORKFLOW_PATH = (
-        ROOT / "examples" / "workflow-definitions" / "k8s-realcluster-workflow.yaml"
-    )
+    WORKFLOW_PATH = ROOT / "examples" / "workflow-definitions" / "k8s-realcluster-workflow.yaml"
 
     @pytest.fixture
     def workflow_data(self) -> dict:
         """Load the workflow YAML."""
-        assert self.WORKFLOW_PATH.exists(), (
-            f"Missing {self.WORKFLOW_PATH}"
-        )
+        assert self.WORKFLOW_PATH.exists(), f"Missing {self.WORKFLOW_PATH}"
         with open(self.WORKFLOW_PATH) as f:
             return yaml.safe_load(f)
 
@@ -301,18 +290,14 @@ class TestWorkflowDefinition:
     def test_uses_kubectl_mcp_server(self, workflow_data: dict) -> None:
         """At least one step must reference the kubectl MCP server."""
         steps = workflow_data["spec"]["steps"]
-        has_kubectl = any(
-            "kubectl" in (step.get("mcp_servers") or [])
-            for step in steps
-        )
+        has_kubectl = any("kubectl" in (step.get("mcp_servers") or []) for step in steps)
         assert has_kubectl, "Workflow must reference 'kubectl' MCP server"
 
     def test_steps_have_tool_filtering(self, workflow_data: dict) -> None:
         """Steps with mcp_servers should have permissions.allowed_tools."""
         steps = workflow_data["spec"]["steps"]
         agent_steps_with_mcp = [
-            s for s in steps
-            if s.get("type") == "agent" and s.get("mcp_servers")
+            s for s in steps if s.get("type") == "agent" and s.get("mcp_servers")
         ]
         assert len(agent_steps_with_mcp) > 0, "Must have agent steps with MCP servers"
 
@@ -327,29 +312,30 @@ class TestWorkflowDefinition:
         """Diagnose step should only allow read-only MCP tools."""
         steps = workflow_data["spec"]["steps"]
         diagnose_steps = [
-            s for s in steps
-            if "diagnose" in s.get("name", "").lower() and s.get("permissions", {}).get("allowed_tools")
+            s
+            for s in steps
+            if "diagnose" in s.get("name", "").lower()
+            and s.get("permissions", {}).get("allowed_tools")
         ]
         assert len(diagnose_steps) > 0, "Must have a diagnose step with allowed_tools"
 
         for step in diagnose_steps:
             allowed = step["permissions"]["allowed_tools"]
             write_tools = [
-                t for t in allowed
+                t
+                for t in allowed
                 if any(w in t for w in ["rollout", "scale", "apply", "delete", "create"])
             ]
-            assert not write_tools, (
-                f"Diagnose step '{step['name']}' allows write tools: {write_tools}"
-            )
+            assert (
+                not write_tools
+            ), f"Diagnose step '{step['name']}' allows write tools: {write_tools}"
 
     def test_no_dead_fields(self, workflow_data: dict) -> None:
         """Steps must not use dead fields."""
         dead_fields = {"agent"}
         for step in workflow_data["spec"]["steps"]:
             used_dead = dead_fields & set(step.keys())
-            assert not used_dead, (
-                f"Step '{step.get('name')}' uses dead fields: {used_dead}"
-            )
+            assert not used_dead, f"Step '{step.get('name')}' uses dead fields: {used_dead}"
 
 
 class TestPermissionScopeToolFiltering:
@@ -419,9 +405,9 @@ class TestMakefileTargets:
 
     def test_build_mcp_kubectl_target(self, makefile_content: str) -> None:
         """Makefile must have a build-mcp-kubectl target."""
-        assert "build-mcp-kubectl" in makefile_content, (
-            "Makefile must define build-mcp-kubectl target"
-        )
+        assert (
+            "build-mcp-kubectl" in makefile_content
+        ), "Makefile must define build-mcp-kubectl target"
 
     def test_build_demo_includes_mcp_kubectl(self, makefile_content: str) -> None:
         """build-demo target should depend on build-mcp-kubectl."""
@@ -429,19 +415,15 @@ class TestMakefileTargets:
         lines = makefile_content.split("\n")
         for line in lines:
             if line.startswith("build-demo:"):
-                assert "build-mcp-kubectl" in line, (
-                    "build-demo target must depend on build-mcp-kubectl"
-                )
+                assert (
+                    "build-mcp-kubectl" in line
+                ), "build-demo target must depend on build-mcp-kubectl"
                 break
 
     def test_kind_up_deploys_mcp_kubectl(self, makefile_content: str) -> None:
         """kind-up target must deploy mcp-kubectl manifests."""
-        assert "kind-mcp-kubectl" in makefile_content, (
-            "kind-up must apply kind-mcp-kubectl.yaml"
-        )
+        assert "kind-mcp-kubectl" in makefile_content, "kind-up must apply kind-mcp-kubectl.yaml"
 
     def test_kind_up_loads_mcp_kubectl_image(self, makefile_content: str) -> None:
         """kind-up must load mcp-kubectl image into Kind cluster."""
-        assert "mcp-kubectl" in makefile_content, (
-            "kind-up must load mcp-kubectl image"
-        )
+        assert "mcp-kubectl" in makefile_content, "kind-up must load mcp-kubectl image"

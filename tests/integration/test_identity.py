@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from unittest.mock import AsyncMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -19,9 +18,7 @@ class TestStepMetadataFlowsThroughGraph:
     """Verify StepMetadata is wired from graph_translator to executor."""
 
     @pytest.mark.asyncio
-    async def test_metadata_reaches_executor_with_user_id(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_metadata_reaches_executor_with_user_id(self, mocker: MockerFixture) -> None:
         """StepMetadata with user_id flows from build_graph to executor.run()."""
         from cloud_agents.workflow.executor.step.base import StepMetadata
 
@@ -80,9 +77,7 @@ class TestStepMetadataFlowsThroughGraph:
         assert call_args.metadata.session_id == "ses-abc"
 
     @pytest.mark.asyncio
-    async def test_metadata_none_when_no_identity(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_metadata_none_when_no_identity(self, mocker: MockerFixture) -> None:
         """StepMetadata has None fields when no identity is provided."""
         mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
 
@@ -188,9 +183,7 @@ class TestConversationMessageRoundTrip:
         ]
 
         serialized = json.dumps([m.to_dict() for m in history])
-        restored = [
-            ConversationMessage.from_dict(d) for d in json.loads(serialized)
-        ]
+        restored = [ConversationMessage.from_dict(d) for d in json.loads(serialized)]
 
         assert len(restored) == 4
         assert restored[0].role == "user"

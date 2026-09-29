@@ -15,7 +15,6 @@ from cloud_agents.workflow.security.content_policy import (
     load_content_policy,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -442,9 +441,13 @@ class TestEntrypointLoadContentPolicy:
         import cloud_agents.workflow.executor.temporal.entrypoint as ep
 
         policy_file = tmp_path / "policy.yaml"
-        policy_file.write_text(yaml.dump({
-            "content_policy": {"max_prompt_length": 500},
-        }))
+        policy_file.write_text(
+            yaml.dump(
+                {
+                    "content_policy": {"max_prompt_length": 500},
+                }
+            )
+        )
         monkeypatch.setattr(ep, "CONTENT_POLICY_PATH", str(policy_file))
         result = ep._load_content_policy()
         assert result is not None

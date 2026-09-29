@@ -338,9 +338,7 @@ def _build_agent_step(
         # step at normalization above, so this clamp only sees valid
         # non-negative ints.
         raw_retries = step_def.get("max_retries", 0)
-        max_retries = (
-            raw_retries if isinstance(raw_retries, int) and raw_retries >= 0 else 0
-        )
+        max_retries = raw_retries if isinstance(raw_retries, int) and raw_retries >= 0 else 0
 
         attempt_number = 0
 
@@ -434,9 +432,7 @@ def _build_approval_step(
         # consistent with how `instructions` is handled for agent steps.
         raw_message = step_def.get("message")
         message = (
-            _interpolate_step_text(raw_message, _to_workflow_state(state))
-            if raw_message
-            else None
+            _interpolate_step_text(raw_message, _to_workflow_state(state)) if raw_message else None
         )
 
         # Signal pause -- the LocalWorkflowRunner checks paused_at_step

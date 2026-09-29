@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 from pytest_mock import MockerFixture
 
-
 # ---------------------------------------------------------------------------
 # TokenBucket tests
 # ---------------------------------------------------------------------------
@@ -573,8 +572,10 @@ class TestRateLimitEntrypointWiring:
         from cloud_agents.workflow.executor.temporal.entrypoint import build_temporal_app
 
         app = build_temporal_app(temporal_url="localhost:7233")
-        middleware_types = [type(m.cls).__name__ if hasattr(m, "cls") else type(m).__name__
-                           for m in getattr(app, "user_middleware", [])]
+        middleware_types = [
+            type(m.cls).__name__ if hasattr(m, "cls") else type(m).__name__
+            for m in getattr(app, "user_middleware", [])
+        ]
         assert "RateLimitMiddleware" not in str(middleware_types)
 
     def test_middleware_added_when_enabled(self, mocker: MockerFixture) -> None:

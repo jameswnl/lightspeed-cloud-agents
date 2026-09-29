@@ -8,10 +8,8 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

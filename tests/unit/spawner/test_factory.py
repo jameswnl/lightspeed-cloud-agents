@@ -224,9 +224,7 @@ class TestBuildSpawnerOpenShell:
 class TestBuildSpawnerOpenShellBearerTokenProvider:
     """Tests for bearer_token_provider wiring (issue #236)."""
 
-    def test_provider_forwarded_to_sandbox_client_and_spawner(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_provider_forwarded_to_sandbox_client_and_spawner(self, mocker: MockerFixture) -> None:
         """bearer_token_provider is forwarded as-is to both SandboxClient
         (bearer_token=) and OpenShellSpawner (bearer_token_provider=)."""
         from cloud_agents.spawner.factory import build_spawner

@@ -168,9 +168,7 @@ class TranscriptMiddleware:
                     if isinstance(result.output, dict)
                     else str(result.output)
                 )
-                messages.append(
-                    ConversationMessage(role="assistant", content=content).to_dict()
-                )
+                messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
             step_name = step_input.output_key or step_input.step_name
 
@@ -184,9 +182,7 @@ class TranscriptMiddleware:
                     output_tokens=result.output_tokens,
                     duration_ms=result.duration_ms,
                 ),
-                trace_id=(
-                    step_input.metadata.trace_id if step_input.metadata else None
-                ),
+                trace_id=(step_input.metadata.trace_id if step_input.metadata else None),
                 messages=messages,
             )
         except Exception:
@@ -378,7 +374,7 @@ class MiddlewareExecutor:
             "step.execute.stream",
             attributes=self._span_attributes(step_input),
             links=self._links or None,
-        ) as span:
+        ):
             self._capture_trace_parent(step_input)
 
             for mw in self._middlewares:

@@ -348,6 +348,7 @@ class TestTranscriptStoreCleanupExpired:
         store._pool = mock_pool
 
         deleted = await store.cleanup_expired()
+        assert deleted == 5
 
         calls = mock_pool.execute.call_args_list
         cleanup_calls = [c for c in calls if "created_at" in str(c)]
@@ -446,21 +447,15 @@ class TestLoadRecentTurnsOrdering:
             return_value=[
                 {
                     "step_name": "turn-2",
-                    "messages": json.dumps(
-                        [{"role": "user", "content": "Third"}]
-                    ),
+                    "messages": json.dumps([{"role": "user", "content": "Third"}]),
                 },
                 {
                     "step_name": "turn-1",
-                    "messages": json.dumps(
-                        [{"role": "user", "content": "Second"}]
-                    ),
+                    "messages": json.dumps([{"role": "user", "content": "Second"}]),
                 },
                 {
                     "step_name": "turn-0",
-                    "messages": json.dumps(
-                        [{"role": "user", "content": "First"}]
-                    ),
+                    "messages": json.dumps([{"role": "user", "content": "First"}]),
                 },
             ]
         )
@@ -489,9 +484,7 @@ class TestLoadRecentTurnsOrdering:
             return_value=[
                 {
                     "step_name": "turn-0",
-                    "messages": json.dumps(
-                        [{"role": "user", "content": "Only turn"}]
-                    ),
+                    "messages": json.dumps([{"role": "user", "content": "Only turn"}]),
                 },
             ]
         )

@@ -19,9 +19,7 @@ def mock_client(mocker: MockerFixture) -> Any:
     client = mocker.MagicMock()
     handle = mocker.AsyncMock()
     handle.id = "wf-test-1"
-    handle.query.return_value = mocker.MagicMock(
-        model_dump=lambda: {"steps": {}, "events": []}
-    )
+    handle.query.return_value = mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
     client.start_workflow = mocker.AsyncMock(return_value=handle)
     client.get_workflow_handle.return_value = handle
     return client
@@ -47,9 +45,7 @@ def _app_with_limit(mock_client: Any, limit: int = 1024) -> FastAPI:
 class TestContentSizeLimitMiddleware:
     """Tests for ContentSizeLimitMiddleware."""
 
-    def test_oversized_content_length_returns_413(
-        self, mock_client: Any
-    ) -> None:
+    def test_oversized_content_length_returns_413(self, mock_client: Any) -> None:
         """Request with Content-Length exceeding the limit returns 413."""
         app = _app_with_limit(mock_client, limit=1024)
         client = TestClient(app, raise_server_exceptions=False)
@@ -64,9 +60,7 @@ class TestContentSizeLimitMiddleware:
         assert response.status_code == 413
         assert "too large" in response.json()["detail"].lower()
 
-    def test_oversized_chunked_body_returns_413(
-        self, mock_client: Any
-    ) -> None:
+    def test_oversized_chunked_body_returns_413(self, mock_client: Any) -> None:
         """Chunked request exceeding the limit returns 413."""
         app = _app_with_limit(mock_client, limit=512)
         client = TestClient(app, raise_server_exceptions=False)
@@ -140,9 +134,7 @@ class TestContentSizeLimitMiddleware:
         # (it may return 422 for invalid JSON, which is fine — not 413)
         assert response.status_code != 413
 
-    def test_413_response_includes_limit_in_detail(
-        self, mock_client: Any
-    ) -> None:
+    def test_413_response_includes_limit_in_detail(self, mock_client: Any) -> None:
         """413 response body includes the configured limit."""
         limit = 256
         app = _app_with_limit(mock_client, limit=limit)

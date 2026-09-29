@@ -996,9 +996,7 @@ class TestSubprocessChildInstrumentation:
             "cloud_agents.workflow.executor.step.subprocess_child.otel_context.attach",
         )
 
-        mocker.patch.dict(
-            "os.environ", {"TRACEPARENT": "00-aaaa-bbbb-01"}, clear=False
-        )
+        mocker.patch.dict("os.environ", {"TRACEPARENT": "00-aaaa-bbbb-01"}, clear=False)
 
         input_data = {
             "prompt": "test",
@@ -1018,9 +1016,7 @@ class TestSubprocessChildInstrumentation:
         mock_extract.assert_called_once_with({"traceparent": "00-aaaa-bbbb-01"})
         mock_attach.assert_called_once_with(fake_ctx)
 
-    def test_main_skips_context_attach_when_traceparent_absent(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_main_skips_context_attach_when_traceparent_absent(self, mocker: MockerFixture) -> None:
         """main() does not attempt context propagation when TRACEPARENT is unset."""
         from pydantic_ai.usage import RequestUsage
 

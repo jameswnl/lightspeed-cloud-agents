@@ -1421,9 +1421,7 @@ class OpenShellSpawner(AgentSpawner):
             try:
                 stub = openshell_pb2_grpc.OpenShellStub(channel)
                 existing = stub.ListProviderProfiles(
-                    openshell_pb2.ListProviderProfilesRequest(
-                        workspace=self._workspace, limit=1000
-                    )
+                    openshell_pb2.ListProviderProfilesRequest(workspace=self._workspace, limit=1000)
                 )
                 if any(profile.id == provider_type for profile in existing.profiles):
                     return
@@ -1453,9 +1451,7 @@ class OpenShellSpawner(AgentSpawner):
                 # lint-failure-plus-conflict response as benign, would let a
                 # real rejection slip through disguised as a harmless race
                 # (PR #246 review nit).
-                already_exists_message = (
-                    f"custom provider profile '{provider_type}' already exists"
-                )
+                already_exists_message = f"custom provider profile '{provider_type}' already exists"
                 if diagnostic_messages and all(
                     msg == already_exists_message for msg in diagnostic_messages
                 ):

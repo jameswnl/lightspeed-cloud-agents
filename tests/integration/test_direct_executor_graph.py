@@ -59,7 +59,7 @@ class TestDirectExecutorGraphIntegration:
             provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "openai-api-key"},
         )
 
-        result = await graph.run(state=state)
+        await graph.run(state=state)
         assert state.step_results["triage_result"]["status"] == "completed"
         assert state.step_results["triage_result"]["output"]["severity"] == "high"
 
@@ -412,8 +412,13 @@ class TestDirectExecutorToolsGraphIntegration:
 
         mock_executor = mocker.AsyncMock()
         mock_executor.run.return_value = mocker.MagicMock(
-            status="completed", output={"ok": True}, error=None,
-            transcript=[], input_tokens=0, output_tokens=0, duration_ms=0,
+            status="completed",
+            output={"ok": True},
+            error=None,
+            transcript=[],
+            input_tokens=0,
+            output_tokens=0,
+            duration_ms=0,
         )
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",
@@ -461,8 +466,13 @@ class TestDirectExecutorToolsGraphIntegration:
 
         mock_executor = mocker.AsyncMock()
         mock_executor.run.return_value = mocker.MagicMock(
-            status="completed", output={"ok": True}, error=None,
-            transcript=[], input_tokens=0, output_tokens=0, duration_ms=0,
+            status="completed",
+            output={"ok": True},
+            error=None,
+            transcript=[],
+            input_tokens=0,
+            output_tokens=0,
+            duration_ms=0,
         )
         mocker.patch(
             "cloud_agents.workflow.executor.graph_translator.get_step_executor",

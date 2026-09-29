@@ -2806,7 +2806,7 @@ class TestEnsureProviderProfile:
     async def test_noop_for_provider_type_without_bundled_default(
         self, mocker: MockerFixture
     ) -> None:
-        """"nvidia" already has a real OpenShell builtin profile -- no action needed."""
+        """ "nvidia" already has a real OpenShell builtin profile -- no action needed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_stub_cls = mocker.patch("openshell._proto.openshell_pb2_grpc.OpenShellStub")
@@ -2845,9 +2845,7 @@ class TestEnsureProviderProfile:
             await spawner._ensure_provider_profile("openai")
 
     @pytest.mark.asyncio
-    async def test_tolerates_already_exists_race_on_import(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_tolerates_already_exists_race_on_import(self, mocker: MockerFixture) -> None:
         """imported=False with an "already exists" diagnostic is a benign race, not an error.
 
         Two concurrent first-time spawns for the same provider_type can both
@@ -3339,9 +3337,7 @@ class TestBuildNetworkPolicy:
         assert np._ep.host == "api.openai.com"
         assert np._ep.port == 443
 
-    def test_llm_provider_endpoint_configures_l7_inspection(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_llm_provider_endpoint_configures_l7_inspection(self, mocker: MockerFixture) -> None:
         """The llm_provider endpoint must request real L7 inspection, not a bare L4 pin.
 
         Regression for issue #244 PR #246 review: once a ProviderProfile is
@@ -3564,9 +3560,7 @@ class TestBuildNetworkPolicy:
             },
         )
 
-        assert (
-            OpenShellSpawner._bundled_l7_rules_for_host("api.anthropic.com") == sentinel_rules
-        )
+        assert OpenShellSpawner._bundled_l7_rules_for_host("api.anthropic.com") == sentinel_rules
         assert OpenShellSpawner._bundled_l7_rules_for_host("api.openai.com") == []
 
     def test_llm_provider_endpoint_uses_bundled_rules_when_available(

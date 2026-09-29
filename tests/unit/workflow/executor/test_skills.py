@@ -181,5 +181,7 @@ class TestGetSkillsCapability:
                 result = get_skills_capability(include=["k8s-diag"])
 
             expected_dir = os.path.realpath(tmpdir)
-            mock_cls.assert_called_once_with(directories=[expected_dir], include=["k8s-diag"], validate=False)
+            mock_cls.assert_called_once_with(
+                directories=[expected_dir], include=["k8s-diag"], validate=False
+            )
             assert result is mock_instance

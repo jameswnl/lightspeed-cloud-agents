@@ -436,9 +436,7 @@ def chunk_parallel_groups(
                     set(
                         re.findall(
                             r"(?:\{\{\s*)?steps\.(\w+)",
-                            (member.get("prompt") or "")
-                            + " "
-                            + (member.get("condition") or ""),
+                            (member.get("prompt") or "") + " " + (member.get("condition") or ""),
                         )
                     )
                     & member_names
@@ -684,9 +682,7 @@ def inference_spec_from_provider_config(
     allowed_keys = {"name", "model", "credentials_secret", "model_provider"}
     unknown_keys = set(raw) - allowed_keys
     if unknown_keys:
-        raise ValueError(
-            "unknown provider fields: " + ", ".join(sorted(unknown_keys))
-        )
+        raise ValueError("unknown provider fields: " + ", ".join(sorted(unknown_keys)))
     return validate_inference_provider({"name": raw.get("name"), "model": raw.get("model")})
 
 
@@ -739,9 +735,7 @@ def resolve_sandbox_image(
     """
     if spawn_config is not None and spawn_config.sandbox_image:
         return spawn_config.sandbox_image
-    defaults_config = _as_mapping(
-        (workflow_defaults or {}).get("spawn_config") or {}
-    )
+    defaults_config = _as_mapping((workflow_defaults or {}).get("spawn_config") or {})
     default_image = defaults_config.get("sandbox_image")
     if default_image:
         return default_image

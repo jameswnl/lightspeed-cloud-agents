@@ -18,7 +18,6 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 import uuid
@@ -27,15 +26,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 TEMPORAL_URL = os.environ.get("TEMPORAL_E2E_URL", "localhost:7233")
 OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080")
-SANDBOX_IMAGE = os.environ.get(
-    "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
-)
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal")
 WORKFLOW_YAML = (
     Path(__file__).parents[2]
     / "examples"
@@ -118,11 +114,6 @@ class TestFullStackWorkflow:
         from temporalio.client import Client
         from temporalio.worker import Worker
 
-        from cloud_agents.workflow.executor.temporal.activities import (
-            build_escalation_activity,
-            run_sandbox_step,
-            send_approval_notification,
-        )
         from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
         from cloud_agents.workflow.executor.temporal.worker import build_worker_config
         from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
@@ -177,15 +168,15 @@ class TestFullStackWorkflow:
         # Verify real LLM output (not stub placeholder)
         assert "result" in result.steps, "result step missing from output"
         step_result = result.steps["result"]
-        assert step_result.status == "completed", (
-            f"Expected completed, got {step_result.status}: {step_result.error}"
-        )
+        assert (
+            step_result.status == "completed"
+        ), f"Expected completed, got {step_result.status}: {step_result.error}"
         assert step_result.output is not None, "Expected non-None output from real LLM"
         # Stub mode returns {"summary": "executed-analyze"} — real output is different
         output_str = str(step_result.output)
-        assert "executed-analyze" not in output_str, (
-            "Output looks like a stub result, not real LLM output"
-        )
+        assert (
+            "executed-analyze" not in output_str
+        ), "Output looks like a stub result, not real LLM output"
 
     async def test_no_sandbox_containers_left_running(self, spawner) -> None:
         """After workflow completes, no sandbox containers remain.
@@ -247,6 +238,6 @@ class TestFullStackWorkflow:
 
         # Check no containers with our workflow labels remain
         active = await spawner.list_active({"cloud-agents/workflow-id": wf_id})
-        assert len(active) == 0, (
-            f"Expected no containers after workflow completion, found: {active}"
-        )
+        assert (
+            len(active) == 0
+        ), f"Expected no containers after workflow completion, found: {active}"

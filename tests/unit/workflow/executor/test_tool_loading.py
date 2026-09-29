@@ -12,7 +12,6 @@ Covers:
 from __future__ import annotations
 
 import sys
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -42,7 +41,8 @@ class TestTemporalEntrypointToolLoading:
     """Tests for tool loading in the Temporal entrypoint."""
 
     def test_temporal_entrypoint_calls_load_builtin_tools(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """build_temporal_app calls load_builtin_tools at startup."""
         mock_load = mocker.patch("cloud_agents.tools.load_builtin_tools")
@@ -55,7 +55,9 @@ class TestTemporalEntrypointToolLoading:
         mock_load.assert_called()
 
     def test_temporal_entrypoint_loads_tools_module_from_env(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """build_temporal_app loads CLOUD_AGENTS_TOOLS_MODULE when set."""
         monkeypatch.setenv("CLOUD_AGENTS_TOOLS_MODULE", "myapp.tools")
@@ -72,7 +74,9 @@ class TestTemporalEntrypointToolLoading:
         mock_load_mod.assert_called_once_with("myapp.tools")
 
     def test_temporal_entrypoint_skips_tools_module_when_unset(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """build_temporal_app skips CLOUD_AGENTS_TOOLS_MODULE when unset."""
         monkeypatch.delenv("CLOUD_AGENTS_TOOLS_MODULE", raising=False)
@@ -98,7 +102,9 @@ class TestLocalEntrypointToolLoading:
     """Tests for CLOUD_AGENTS_TOOLS_MODULE in local entrypoint."""
 
     def test_local_entrypoint_loads_tools_module_from_env(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """build_local_app loads CLOUD_AGENTS_TOOLS_MODULE when set."""
         monkeypatch.setenv("CLOUD_AGENTS_TOOLS_MODULE", "myapp.tools")
@@ -115,7 +121,9 @@ class TestLocalEntrypointToolLoading:
         mock_load_mod.assert_any_call("myapp.tools")
 
     def test_local_entrypoint_skips_tools_module_when_unset(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """build_local_app skips CLOUD_AGENTS_TOOLS_MODULE when unset."""
         monkeypatch.delenv("CLOUD_AGENTS_TOOLS_MODULE", raising=False)
@@ -139,7 +147,8 @@ class TestLoadToolsModuleBuiltins:
     """Tests that load_tools_module loads builtins before the product module."""
 
     def test_load_tools_module_calls_builtins_first(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """load_tools_module calls load_builtin_tools before importing module."""
         call_order: list[str] = []
@@ -172,7 +181,8 @@ class TestLoadToolsModuleBuiltins:
         sys.modules.pop("myapp.tools", None)
 
     def test_load_tools_module_no_longer_checks_hasattr(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """load_tools_module doesn't rely on module having load_builtin_tools."""
         mock_load_builtins = mocker.patch(
@@ -251,7 +261,8 @@ class TestGetToolsEndpointUsesList:
     """Tests that GET /tools uses list_tool_definitions instead of _REGISTRY."""
 
     def test_endpoint_calls_list_tool_definitions(
-        self, mocker: MockerFixture,
+        self,
+        mocker: MockerFixture,
     ) -> None:
         """GET /tools delegates to list_tool_definitions()."""
         from cloud_agents.workflow.executor.local.api import build_local_router

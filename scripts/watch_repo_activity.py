@@ -24,7 +24,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_STATE_FILE = Path(
     os.environ.get(
         "PR_WATCH_STATE_FILE",
@@ -75,8 +74,7 @@ def _run_json(command: list[str], cwd: Path | None = None) -> Any:
             last_error = exc
     stderr = (last_error.stderr or "").strip() if last_error else ""
     raise WatchFetchError(
-        f"Command failed: {' '.join(command)}"
-        + (f" | stderr: {stderr}" if stderr else "")
+        f"Command failed: {' '.join(command)}" + (f" | stderr: {stderr}" if stderr else "")
     ) from last_error
 
 

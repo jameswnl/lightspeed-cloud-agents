@@ -351,9 +351,7 @@ class TestSubprocessTraceparentPropagation:
     """Tests for TRACEPARENT env var injection into child process."""
 
     @pytest.mark.asyncio
-    async def test_traceparent_injected_when_tracing_active(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_traceparent_injected_when_tracing_active(self, mocker: MockerFixture) -> None:
         """TRACEPARENT env var is set when OTEL tracing produces a traceparent."""
         captured_env: dict[str, Any] = {}
 
@@ -362,12 +360,14 @@ class TestSubprocessTraceparentPropagation:
             proc = mocker.AsyncMock()
             proc.communicate = mocker.AsyncMock(
                 return_value=(
-                    json.dumps({
-                        "status": "completed",
-                        "output": {"ok": True},
-                        "input_tokens": 10,
-                        "output_tokens": 5,
-                    }).encode(),
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "output": {"ok": True},
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                        }
+                    ).encode(),
                     b"",
                 )
             )
@@ -401,12 +401,12 @@ class TestSubprocessTraceparentPropagation:
         )
 
         assert "TRACEPARENT" in captured_env
-        assert captured_env["TRACEPARENT"] == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        assert (
+            captured_env["TRACEPARENT"] == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        )
 
     @pytest.mark.asyncio
-    async def test_no_traceparent_when_tracing_inactive(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_traceparent_when_tracing_inactive(self, mocker: MockerFixture) -> None:
         """TRACEPARENT env var is not set when OTEL tracing is not active."""
         captured_env: dict[str, Any] = {}
 
@@ -415,12 +415,14 @@ class TestSubprocessTraceparentPropagation:
             proc = mocker.AsyncMock()
             proc.communicate = mocker.AsyncMock(
                 return_value=(
-                    json.dumps({
-                        "status": "completed",
-                        "output": {"ok": True},
-                        "input_tokens": 10,
-                        "output_tokens": 5,
-                    }).encode(),
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "output": {"ok": True},
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                        }
+                    ).encode(),
                     b"",
                 )
             )
@@ -480,7 +482,12 @@ class TestSubprocessChildStderrSurfacing:
             proc.communicate = mocker.AsyncMock(
                 return_value=(
                     json.dumps(
-                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                        {
+                            "status": "completed",
+                            "output": {"ok": True},
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                        }
                     ).encode(),
                     (
                         b"WARNING:cloud_agents.workflow.executor.step.subprocess_child:"
@@ -514,7 +521,12 @@ class TestSubprocessChildStderrSurfacing:
             proc.communicate = mocker.AsyncMock(
                 return_value=(
                     json.dumps(
-                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                        {
+                            "status": "completed",
+                            "output": {"ok": True},
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                        }
                     ).encode(),
                     b"",
                 )
@@ -550,7 +562,12 @@ class TestSubprocessChildStderrSurfacing:
             proc.communicate = mocker.AsyncMock(
                 return_value=(
                     json.dumps(
-                        {"status": "completed", "output": {"ok": True}, "input_tokens": 1, "output_tokens": 1}
+                        {
+                            "status": "completed",
+                            "output": {"ok": True},
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                        }
                     ).encode(),
                     b"\xff\xfe not valid utf-8",
                 )

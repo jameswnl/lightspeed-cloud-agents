@@ -37,9 +37,7 @@ def _make_input(steps: list[dict], input_prompt: str | None = None) -> WorkflowI
         },
         input_prompt=input_prompt,
         workflow_id="wf-test-1",
-        provider=ProviderConfig(
-            name="openai", model="gpt-4", credentials_secret="test-key"
-        ),
+        provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="test-key"),
     )
 
 
@@ -226,9 +224,7 @@ class TestApprovalFlow:
     """Tests for human approval via signals."""
 
     @pytest.mark.asyncio
-    async def test_approval_signal_resumes_workflow(
-        self, env: WorkflowEnvironment
-    ) -> None:
+    async def test_approval_signal_resumes_workflow(self, env: WorkflowEnvironment) -> None:
         """Sending an approve signal unblocks a paused workflow."""
         steps = [
             {
@@ -253,18 +249,14 @@ class TestApprovalFlow:
                 task_queue="test-q",
             )
 
-            await handle.signal(
-                AgentWorkflow.approve, args=["approve", "approved", None]
-            )
+            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
             result = await handle.result()
 
         assert result.steps["approval"].status == "completed"
         assert result.steps["approval"].output["approved"] is True
 
     @pytest.mark.asyncio
-    async def test_approval_timeout_produces_denied(
-        self, env: WorkflowEnvironment
-    ) -> None:
+    async def test_approval_timeout_produces_denied(self, env: WorkflowEnvironment) -> None:
         """No signal within timeout produces denied status."""
         steps = [
             {
@@ -325,9 +317,7 @@ class TestQueryStatus:
             assert isinstance(status, WorkflowStatus)
             assert len(status.events) > 0
 
-            await handle.signal(
-                AgentWorkflow.approve, args=["approve", "approved", None]
-            )
+            await handle.signal(AgentWorkflow.approve, args=["approve", "approved", None])
             await handle.result()
 
 
@@ -497,9 +487,7 @@ class TestAutoApproval:
         assert result.steps["approval"].output["reason"] == "timeout"
 
     @pytest.mark.asyncio
-    async def test_no_risk_level_defaults_to_manual(
-        self, env: WorkflowEnvironment
-    ) -> None:
+    async def test_no_risk_level_defaults_to_manual(self, env: WorkflowEnvironment) -> None:
         """Step without risk_level defaults to manual approval."""
         steps = [
             {
@@ -663,7 +651,16 @@ class TestWorkflowEscalatedEvent:
         # args order: steps, workflow_name, escalation_config, definition,
         #             input_prompt, events, provider_name, workflow_id
         assert len(esc_args) == 8
-        steps_arg, wf_name_arg, esc_config_arg, definition_arg, prompt_arg, events_arg, provider_arg, wf_id_arg = esc_args
+        (
+            steps_arg,
+            wf_name_arg,
+            esc_config_arg,
+            definition_arg,
+            prompt_arg,
+            events_arg,
+            provider_arg,
+            wf_id_arg,
+        ) = esc_args
         assert wf_name_arg == "test-wf"
         assert definition_arg == wf_input.definition
         assert prompt_arg == "investigate issue"
@@ -831,9 +828,7 @@ class TestSpawnModeReplayContract:
         from cloud_agents.workflow.executor.step.base import StepResult as ExecStepResult
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = ExecStepResult(
-            status="completed", output={"direct": True}
-        )
+        mock_executor.run.return_value = ExecStepResult(status="completed", output={"direct": True})
         mocker.patch(
             "cloud_agents.workflow.executor.temporal.activities.get_step_executor",
             return_value=mock_executor,
@@ -953,9 +948,7 @@ class TestStepProviderOverrideAndMcpValidation:
                 "type": "agent",
                 "output_key": "r1",
                 "prompt": "test",
-                "mcp_servers": [
-                    {"name": "x", "url": "https://tok:abc@internal/x"}
-                ],
+                "mcp_servers": [{"name": "x", "url": "https://tok:abc@internal/x"}],
             }
             result = await wf._handle_agent_step(step, _make_input([step]))
 
@@ -1046,9 +1039,7 @@ class TestTransientActivityRetry:
 
         mock_execute = AsyncMock(
             side_effect=[
-                self._activity_error_with_cause(
-                    RuntimeError("upstream 502 bad gateway")
-                ),
+                self._activity_error_with_cause(RuntimeError("upstream 502 bad gateway")),
                 {"status": "completed", "output": {"ok": True}},
             ]
         )
@@ -1083,9 +1074,7 @@ class TestTransientActivityRetry:
             nonlocal calls
             calls += 1
             if args and args[0] == "run_sandbox_step":
-                raise self._activity_error_with_cause(
-                    PermissionError("policy denies tool run_fix")
-                )
+                raise self._activity_error_with_cause(PermissionError("policy denies tool run_fix"))
             return {"status": "escalated", "output": {"type": "escalation_handoff"}}
 
         mock_execute = AsyncMock(side_effect=mock_execute_side_effect)
@@ -1107,9 +1096,7 @@ class TestTransientActivityRetry:
 
         # One sandbox attempt, then the escalation activity.
         sandbox_calls = [
-            c
-            for c in mock_execute.call_args_list
-            if c.args and c.args[0] == "run_sandbox_step"
+            c for c in mock_execute.call_args_list if c.args and c.args[0] == "run_sandbox_step"
         ]
         assert len(sandbox_calls) == 1
 
@@ -1192,9 +1179,7 @@ class TestPrecedenceChainTemporal:
             wf = AgentWorkflow()
             step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
             wf_input = _make_input([step])
-            wf_input.definition["spec"]["spawn_config"] = {
-                "sandbox_image": "img-def"
-            }
+            wf_input.definition["spec"]["spawn_config"] = {"sandbox_image": "img-def"}
             await wf._handle_agent_step(step, wf_input)
 
         args = mock_execute.call_args_list[0].kwargs["args"][0]
@@ -1223,9 +1208,7 @@ class TestPrecedenceChainTemporal:
                 "spawn_config": {"sandbox_image": "img-step"},
             }
             wf_input = _make_input([step])
-            wf_input.definition["spec"]["spawn_config"] = {
-                "sandbox_image": "img-def"
-            }
+            wf_input.definition["spec"]["spawn_config"] = {"sandbox_image": "img-def"}
             await wf._handle_agent_step(step, wf_input)
 
         args = mock_execute.call_args_list[0].kwargs["args"][0]
@@ -1276,8 +1259,11 @@ class TestNormalizedDispatch:
         mock_execute = AsyncMock()
         mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
         mock_now = datetime.now(tz=timezone.utc)
-        return patch("temporalio.workflow.execute_activity", mock_execute), \
-            patch("temporalio.workflow.now", return_value=mock_now), mock_execute
+        return (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+            mock_execute,
+        )
 
     @pytest.mark.asyncio
     async def test_workflow_default_spawn_reaches_activity(self) -> None:
@@ -1308,9 +1294,7 @@ class TestNormalizedDispatch:
             await wf._handle_agent_step(step, wf_input)
 
         activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
-        assert activity_step["mcp_servers"] == [
-            {"name": "cat", "url": "https://internal/x"}
-        ]
+        assert activity_step["mcp_servers"] == [{"name": "cat", "url": "https://internal/x"}]
         assert activity_step["allowed_skills"] == ["troubleshooting"]
 
     @pytest.mark.asyncio

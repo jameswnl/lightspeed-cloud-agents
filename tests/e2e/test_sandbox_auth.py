@@ -27,9 +27,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 OPENSHELL_GATEWAY_URL = os.environ.get("OPENSHELL_GATEWAY_URL", "localhost:9080")
-SANDBOX_IMAGE = os.environ.get(
-    "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
-)
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal")
 
 
 @pytest.mark.skipif(
@@ -84,9 +82,10 @@ class TestSandboxAuthE2E:
                     f"http://{endpoint}/v1/agent/run",
                     json={"query": "hello", "context": {}},
                 )
-                assert resp.status_code in (401, 403), (
-                    f"Expected 401/403 without auth, got {resp.status_code}"
-                )
+                assert resp.status_code in (
+                    401,
+                    403,
+                ), f"Expected 401/403 without auth, got {resp.status_code}"
         finally:
             await spawner.destroy(name)
 
@@ -118,9 +117,10 @@ class TestSandboxAuthE2E:
                 )
                 # Should not be 401/403 (may be 200 or 502 depending on
                 # LLM provider availability, but auth passed)
-                assert resp.status_code not in (401, 403), (
-                    f"Expected auth to pass, got {resp.status_code}"
-                )
+                assert resp.status_code not in (
+                    401,
+                    403,
+                ), f"Expected auth to pass, got {resp.status_code}"
         finally:
             await spawner.destroy(name)
 
@@ -150,9 +150,10 @@ class TestSandboxAuthE2E:
                     json={"query": "hello", "context": {}},
                     headers={"Authorization": "Bearer wrong-token-value"},
                 )
-                assert resp.status_code in (401, 403), (
-                    f"Expected 401/403 with wrong token, got {resp.status_code}"
-                )
+                assert resp.status_code in (
+                    401,
+                    403,
+                ), f"Expected 401/403 with wrong token, got {resp.status_code}"
         finally:
             await spawner.destroy(name)
 
@@ -178,8 +179,8 @@ class TestSandboxAuthE2E:
 
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(f"http://{endpoint}/health")
-                assert resp.status_code == 200, (
-                    f"Health endpoint should be accessible without auth, got {resp.status_code}"
-                )
+                assert (
+                    resp.status_code == 200
+                ), f"Health endpoint should be accessible without auth, got {resp.status_code}"
         finally:
             await spawner.destroy(name)

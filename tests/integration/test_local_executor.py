@@ -103,9 +103,11 @@ class TestSingleAgentStep:
             return_value=mock_executor,
         )
 
-        input_data = _make_workflow_input([
-            {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diagnosis"},
-        ])
+        input_data = _make_workflow_input(
+            [
+                {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diagnosis"},
+            ]
+        )
 
         wf_id = await executor.start(input_data)
         assert wf_id.startswith("wf-")
@@ -147,10 +149,12 @@ class TestMultiStepWorkflow:
             return_value=mock_executor,
         )
 
-        input_data = _make_workflow_input([
-            {"name": "diagnose", "type": "agent", "prompt": "Diagnose", "output_key": "diag"},
-            {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
-        ])
+        input_data = _make_workflow_input(
+            [
+                {"name": "diagnose", "type": "agent", "prompt": "Diagnose", "output_key": "diag"},
+                {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
+            ]
+        )
 
         await executor.start(input_data)
         await asyncio.sleep(0.2)
@@ -185,7 +189,12 @@ class TestApprovalGate:
         input_data = _make_workflow_input(
             [
                 {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diag"},
-                {"name": "approve", "type": "human-approval", "output_key": "approval", "message": "OK?"},
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "OK?",
+                },
                 {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
             ],
             approval_policy={"auto_approve": True},
@@ -217,11 +226,18 @@ class TestApprovalGate:
             return_value=mock_executor,
         )
 
-        input_data = _make_workflow_input([
-            {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diag"},
-            {"name": "approve", "type": "human-approval", "output_key": "approval", "message": "OK?"},
-            {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
-        ])
+        input_data = _make_workflow_input(
+            [
+                {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diag"},
+                {
+                    "name": "approve",
+                    "type": "human-approval",
+                    "output_key": "approval",
+                    "message": "OK?",
+                },
+                {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
+            ]
+        )
 
         await executor.start(input_data)
         await asyncio.sleep(0.2)
@@ -263,16 +279,18 @@ class TestConditionEvaluation:
             return_value=mock_executor,
         )
 
-        input_data = _make_workflow_input([
-            {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diagnosis"},
-            {
-                "name": "fix",
-                "type": "agent",
-                "prompt": "Fix",
-                "output_key": "fix_result",
-                "condition": "steps.diagnosis.output.severity == 'high'",
-            },
-        ])
+        input_data = _make_workflow_input(
+            [
+                {"name": "diagnose", "type": "agent", "prompt": "Check", "output_key": "diagnosis"},
+                {
+                    "name": "fix",
+                    "type": "agent",
+                    "prompt": "Fix",
+                    "output_key": "fix_result",
+                    "condition": "steps.diagnosis.output.severity == 'high'",
+                },
+            ]
+        )
 
         await executor.start(input_data)
         await asyncio.sleep(0.2)
@@ -306,9 +324,7 @@ class TestDuplicateWorkflowId:
 class TestFactoryIntegration:
     """Integration: factory creates correct executor."""
 
-    def test_factory_local_creates_runner(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_factory_local_creates_runner(self, mocker: MockerFixture) -> None:
         """Factory with WORKFLOW_ENGINE=local creates LocalWorkflowRunner."""
         mocker.patch.dict(os.environ, {"WORKFLOW_ENGINE": "local"}, clear=False)
 
@@ -318,9 +334,7 @@ class TestFactoryIntegration:
         runner = create_runner()
         assert isinstance(runner, LocalWorkflowRunner)
 
-    def test_factory_temporal_requires_url(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_factory_temporal_requires_url(self, mocker: MockerFixture) -> None:
         """Factory with WORKFLOW_ENGINE=temporal requires TEMPORAL_URL."""
         mocker.patch.dict(
             os.environ,
@@ -375,7 +389,6 @@ class TestParallelWorkflows:
 
         # Both should complete
         terminal_calls = [
-            c for c in mock_store.mark_terminal.call_args_list
-            if c.args[1] == "completed"
+            c for c in mock_store.mark_terminal.call_args_list if c.args[1] == "completed"
         ]
         assert len(terminal_calls) == 2

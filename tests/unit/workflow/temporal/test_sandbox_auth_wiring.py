@@ -177,9 +177,7 @@ class TestSandboxAuthWiring:
         assert headers.get("Authorization") == "Bearer sa-projected-token"
 
     @pytest.mark.asyncio
-    async def test_auth_enabled_no_token_available_skips_auth(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_auth_enabled_no_token_available_skips_auth(self, mocker: MockerFixture) -> None:
         """SANDBOX_AUTH_ENABLED=true but no token available skips auth gracefully."""
         mocker.patch.dict(
             "os.environ",

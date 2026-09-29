@@ -24,8 +24,8 @@ class ApprovalPolicy(BaseModel):
         default_risk: Default risk level for steps without explicit risk.
     """
 
-    auto_approve_risk_levels: list[Literal["low", "medium", "high", "critical"]] = (
-        Field(default_factory=lambda: ["low"])
+    auto_approve_risk_levels: list[Literal["low", "medium", "high", "critical"]] = Field(
+        default_factory=lambda: ["low"]
     )
     default_risk: Literal["low", "medium", "high", "critical"] = "medium"
 
@@ -115,9 +115,9 @@ def _explain_agent_risk(
 ) -> str:
     """Generate a human-readable explanation for the risk classification."""
     if risk == "low":
-        return (
-            f"Step '{step.name}' classified as low risk — read/analysis operations only"
-        )
+        return f"Step '{step.name}' classified as low risk — read/analysis operations only"
     if risk == "high":
-        return f"Step '{step.name}' classified as high risk — contains modification/execution keywords"
+        return (
+            f"Step '{step.name}' classified as high risk — contains modification/execution keywords"
+        )
     return f"Step '{step.name}' classified as {risk} risk — default classification"

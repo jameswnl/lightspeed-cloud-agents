@@ -40,9 +40,7 @@ def _bind_sandbox_activity(spawner: Any, transcript_store: Any = None):
 
     @activity.defn(name="run_sandbox_step")
     async def bound_run_sandbox_step(input: dict[str, Any]) -> dict[str, Any]:
-        return await run_sandbox_step(
-            input, spawner=spawner, transcript_store=transcript_store
-        )
+        return await run_sandbox_step(input, spawner=spawner, transcript_store=transcript_store)
 
     return bound_run_sandbox_step
 

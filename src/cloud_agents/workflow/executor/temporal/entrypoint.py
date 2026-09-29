@@ -12,6 +12,7 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from temporalio.client import Client
@@ -23,6 +24,9 @@ from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
 from cloud_agents.workflow.executor.temporal.api import build_temporal_router
 from cloud_agents.workflow.executor.temporal.worker import build_worker_config
+
+if TYPE_CHECKING:
+    from cloud_agents.spawner.base import AgentSpawner
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +109,7 @@ def _create_spawner():
     )
 
 
-async def reconcile_orphaned_sandboxes(spawner: "AgentSpawner | None") -> None:
+async def reconcile_orphaned_sandboxes(spawner: AgentSpawner | None) -> None:
     """Destroy orphaned sandbox containers left from a previous crash.
 
     On startup, scans for containers/Jobs with the "spawned-by=workflow-runner"

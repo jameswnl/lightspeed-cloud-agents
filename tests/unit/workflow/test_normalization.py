@@ -84,9 +84,7 @@ class TestNormalizeWorkflowStep:
     def test_human_approval_is_not_an_agent_step(self) -> None:
         """Test that human-approval steps cannot normalize to agent spec."""
         with pytest.raises(ValueError, match="human-approval"):
-            normalize_workflow_step(
-                _step(type="human-approval", prompt=None, message="approve?")
-            )
+            normalize_workflow_step(_step(type="human-approval", prompt=None, message="approve?"))
 
     def test_unknown_type_rejected(self) -> None:
         """Test that unknown step types are rejected."""
@@ -135,16 +133,12 @@ class TestPrecedence:
             _step(),
             workflow_defaults={"provider": {"name": "openai", "model": "gpt-4o"}},
         )
-        assert step.inference_provider == InferenceProviderSpec(
-            name="openai", model="gpt-4o"
-        )
+        assert step.inference_provider == InferenceProviderSpec(name="openai", model="gpt-4o")
 
     def test_step_provider_overrides_workflow(self) -> None:
         """Test that a step-level provider wins over the workflow default."""
         step, _ = normalize_workflow_step(
-            _step(
-                inference_provider={"name": "claude", "model": "claude-sonnet"}
-            ),
+            _step(inference_provider={"name": "claude", "model": "claude-sonnet"}),
             workflow_defaults={"provider": {"name": "openai", "model": "gpt-4o"}},
         )
         assert step.inference_provider is not None
@@ -152,9 +146,7 @@ class TestPrecedence:
 
     def test_workflow_timeout_default_applies(self) -> None:
         """Test that a workflow-level timeout fills a step without one."""
-        step, _ = normalize_workflow_step(
-            _step(), workflow_defaults={"timeout_seconds": 120}
-        )
+        step, _ = normalize_workflow_step(_step(), workflow_defaults={"timeout_seconds": 120})
         assert step.timeout_seconds == 120
 
     def test_step_timeout_overrides_workflow(self) -> None:
@@ -409,16 +401,12 @@ class TestMcpSecretRejection:
     def test_credentialed_url_rejected(self) -> None:
         """Test that URLs with embedded userinfo are rejected."""
         with pytest.raises(ValueError, match="[Ss]ecret|credential"):
-            reject_secret_bearing_mcp(
-                [{"name": "x", "url": "https://token:abc123@internal/x"}]
-            )
+            reject_secret_bearing_mcp([{"name": "x", "url": "https://token:abc123@internal/x"}])
 
     def test_schemeless_credentialed_url_rejected(self) -> None:
         """Test that scheme-less userinfo URLs are rejected (B6)."""
         with pytest.raises(ValueError, match="[Ss]ecret|credential"):
-            reject_secret_bearing_mcp(
-                [{"name": "x", "url": "tok:abc@internal/x"}]
-            )
+            reject_secret_bearing_mcp([{"name": "x", "url": "tok:abc@internal/x"}])
 
     def test_credential_shaped_header_value_rejected(self) -> None:
         """Test that credential-like values in benign headers fail (B6)."""
@@ -466,9 +454,7 @@ class TestMcpSecretRejection:
         entry = {
             "name": "x",
             "url": "https://internal/x",
-            "secret_headers": {
-                "Authorization": {"secret_name": "mcp-creds", "key": "token"}
-            },
+            "secret_headers": {"Authorization": {"secret_name": "mcp-creds", "key": "token"}},
         }
         assert reject_secret_bearing_mcp([entry]) == [entry]
 
@@ -487,9 +473,7 @@ class TestMcpSecretRejection:
 
     def test_plain_inline_config_accepted(self) -> None:
         """Test that a secret-free inline config passes."""
-        result = reject_secret_bearing_mcp(
-            [{"name": "x", "url": "https://internal/x"}]
-        )
+        result = reject_secret_bearing_mcp([{"name": "x", "url": "https://internal/x"}])
         assert result == [{"name": "x", "url": "https://internal/x"}]
 
     def test_catalog_names_accepted(self) -> None:
@@ -501,11 +485,7 @@ class TestMcpSecretRejection:
         """Test that normalize applies MCP secret rejection."""
         with pytest.raises(ValueError, match="[Ss]ecret|credential"):
             normalize_workflow_step(
-                _step(
-                    mcp_servers=[
-                        {"name": "x", "url": "https://tok:abc@internal/x"}
-                    ]
-                )
+                _step(mcp_servers=[{"name": "x", "url": "https://tok:abc@internal/x"}])
             )
 
 
@@ -567,9 +547,7 @@ class TestContextMerge:
 
     def test_merge_is_shallow_with_step_winning(self) -> None:
         """Test shallow merge: step values override workflow values."""
-        merged = merge_context(
-            {"a": 1, "nested": {"x": 1, "y": 2}}, {"nested": {"y": 99}, "b": 2}
-        )
+        merged = merge_context({"a": 1, "nested": {"x": 1, "y": 2}}, {"nested": {"y": 99}, "b": 2})
         assert merged == {"a": 1, "nested": {"y": 99}, "b": 2}
 
     def test_merge_does_not_mutate_inputs(self) -> None:
@@ -684,9 +662,7 @@ class TestNormalizeDefinition:
     def test_multi_step_names_must_be_unique(self) -> None:
         """Test that multi-step collisions are rejected."""
         with pytest.raises(ValueError, match="[Dd]uplicate"):
-            normalize_definition(
-                {"spec": {"steps": [_step(name="a"), _step(name="a")]}}
-            )
+            normalize_definition({"spec": {"steps": [_step(name="a"), _step(name="a")]}})
 
     def test_human_approval_steps_pass_through_unnormalized(self) -> None:
         """Test that approval steps are returned as metadata, not agent spec."""
@@ -731,9 +707,7 @@ class TestRemainingReviewFindings:
         """A null list value means inherit rather than clear the default."""
         step, _ = normalize_workflow_step(
             _step(mcp_servers=None),
-            workflow_defaults={
-                "mcp_servers": [{"name": "catalog", "url": "https://internal/mcp"}]
-            },
+            workflow_defaults={"mcp_servers": [{"name": "catalog", "url": "https://internal/mcp"}]},
         )
         assert step.mcp_servers is not None
         assert step.mcp_servers[0].name == "catalog"
@@ -745,9 +719,7 @@ class TestRemainingReviewFindings:
 
     def test_workflow_level_service_account_applies(self) -> None:
         """Test that a workflow-level service account fills the scope (S2)."""
-        step, _ = normalize_workflow_step(
-            _step(), workflow_defaults={"service_account": "wf-sa"}
-        )
+        step, _ = normalize_workflow_step(_step(), workflow_defaults={"service_account": "wf-sa"})
         assert step.permissions is not None
         assert step.permissions.service_account == "wf-sa"
 

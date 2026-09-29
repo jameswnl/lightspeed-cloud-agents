@@ -243,9 +243,7 @@ class TestOutputSchemaFailuresDoNotRetry:
             is False
         )
         assert (
-            is_transient_failure(
-                "LLM returned null content but output_schema was requested"
-            )
+            is_transient_failure("LLM returned null content but output_schema was requested")
             is False
         )
 
@@ -324,9 +322,7 @@ class TestActivityErrorUnwrap:
             raise wrapper
 
         with pytest.raises(RuntimeError):
-            await run_with_retries(
-                attempt, 3, _succeeded, _error_of, exc_text=activity_error_text
-            )
+            await run_with_retries(attempt, 3, _succeeded, _error_of, exc_text=activity_error_text)
         assert calls == 1
 
 
@@ -352,9 +348,7 @@ class TestToolFailuresDoNotRetry:
         async def attempt() -> FakeResult:
             nonlocal calls
             calls += 1
-            return FakeResult(
-                status="failed", error="tool kubectl_get failed: timeout"
-            )
+            return FakeResult(status="failed", error="tool kubectl_get failed: timeout")
 
         result = await run_with_retries(attempt, 3, _succeeded, _error_of)
         assert result.status == "failed"

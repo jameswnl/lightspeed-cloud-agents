@@ -19,10 +19,8 @@ import asyncio
 import os
 import sys
 import uuid
-from datetime import timedelta
 
 import pytest
-import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -80,7 +78,7 @@ def _full_alertmanager_payload(
     fp = fingerprint or uuid.uuid4().hex[:16]
     return {
         "version": "4",
-        "groupKey": f"{{alertname=\"{alertname}\"}}",
+        "groupKey": f'{{alertname="{alertname}"}}',
         "status": "firing",
         "receiver": "cloud-agents",
         "groupLabels": {"alertname": alertname},
@@ -101,7 +99,7 @@ def _full_alertmanager_payload(
                     "namespace": "prod",
                 },
                 "annotations": {
-                    "summary": f"CPU > 90% on node-1",
+                    "summary": "CPU > 90% on node-1",
                     "description": "High CPU usage detected in production.",
                 },
                 "startsAt": "2024-01-01T00:00:00Z",
@@ -140,7 +138,6 @@ class TestAlertTriggerE2E:
         from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
         client = await Client.connect(TEMPORAL_URL)
-        queue = f"e2e-alert-{uuid.uuid4().hex[:8]}"
 
         # Register the workflow definition
         definition_store = DefinitionStore()
@@ -177,7 +174,9 @@ class TestAlertTriggerE2E:
                 payload = _full_alertmanager_payload()
                 resp = test_client.post("/v1/webhooks/alertmanager", json=payload)
 
-                assert resp.status_code == 200, f"Alert webhook returned {resp.status_code}: {resp.text}"
+                assert (
+                    resp.status_code == 200
+                ), f"Alert webhook returned {resp.status_code}: {resp.text}"
                 data = resp.json()
                 assert data["workflows_started"] == 1, f"Expected 1 workflow started, got {data}"
                 assert data["errors"] == 0, f"Expected 0 errors, got {data}"
@@ -339,25 +338,25 @@ class TestScheduleTriggerE2E:
                     "sandbox_image": "lightspeed-agentic-sandbox:latest",
                 },
             )
-            assert create_resp.status_code == 201, (
-                f"Expected 201, got {create_resp.status_code}: {create_resp.text}"
-            )
+            assert (
+                create_resp.status_code == 201
+            ), f"Expected 201, got {create_resp.status_code}: {create_resp.text}"
             assert create_resp.json()["schedule_id"] == schedule_id
 
             # 2. Get the schedule
             get_resp = test_client.get(f"/v1/schedules/{schedule_id}")
-            assert get_resp.status_code == 200, (
-                f"Expected 200, got {get_resp.status_code}: {get_resp.text}"
-            )
+            assert (
+                get_resp.status_code == 200
+            ), f"Expected 200, got {get_resp.status_code}: {get_resp.text}"
             schedule_info = get_resp.json()
             assert schedule_info["cron"] == "*/5 * * * *"
             assert schedule_info["workflow_name"] == "test-trigger-workflow"
 
             # 3. Delete the schedule
             delete_resp = test_client.delete(f"/v1/schedules/{schedule_id}")
-            assert delete_resp.status_code == 200, (
-                f"Expected 200, got {delete_resp.status_code}: {delete_resp.text}"
-            )
+            assert (
+                delete_resp.status_code == 200
+            ), f"Expected 200, got {delete_resp.status_code}: {delete_resp.text}"
 
             # 4. Verify it's gone
             gone_resp = test_client.get(f"/v1/schedules/{schedule_id}")

@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # Import the helpers from the steps module
 from tests.e2e.features.steps.multi_replica_steps import (
     _get_ready_runner_pods,
@@ -69,7 +68,8 @@ class TestKubectlJson:
     def test_kubectl_json_parses_output(self, mock_run) -> None:
         """_kubectl_json returns parsed JSON."""
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps({"items": []}),
             stderr="",
         )
@@ -80,7 +80,8 @@ class TestKubectlJson:
     def test_kubectl_json_adds_output_flag(self, mock_run) -> None:
         """_kubectl_json adds -o json to the command."""
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps({}),
             stderr="",
         )
@@ -109,7 +110,8 @@ class TestGetRunnerPods:
             ]
         }
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps(pods_data),
             stderr="",
         )
@@ -121,7 +123,8 @@ class TestGetRunnerPods:
     def test_get_runner_pods_empty(self, mock_run) -> None:
         """_get_runner_pods returns empty list when no pods found."""
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps({"items": []}),
             stderr="",
         )
@@ -156,7 +159,8 @@ class TestGetRunnerPods:
             ]
         }
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps(pods_data),
             stderr="",
         )
@@ -171,20 +175,17 @@ class TestGetRunnerPods:
             "items": [
                 {
                     "metadata": {"name": "runner-1"},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
                 },
                 {
                     "metadata": {"name": "runner-2"},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
                 },
             ]
         }
         mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0,
+            args=[],
+            returncode=0,
             stdout=json.dumps(pods_data),
             stderr="",
         )

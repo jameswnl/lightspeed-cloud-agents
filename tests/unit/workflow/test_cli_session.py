@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -97,7 +95,9 @@ class TestCLISessionLauncherLaunch:
         spawner.spawn.assert_called_once()
         call_kwargs = spawner.spawn.call_args
         # The agent_name should start with "cli-"
-        agent_name = call_kwargs[1]["agent_name"] if "agent_name" in call_kwargs[1] else call_kwargs[0][0]
+        agent_name = (
+            call_kwargs[1]["agent_name"] if "agent_name" in call_kwargs[1] else call_kwargs[0][0]
+        )
         assert agent_name.startswith("cli-")
 
     @pytest.mark.asyncio
@@ -196,7 +196,8 @@ class TestCLISessionLauncherLaunch:
             )
 
             launched_calls = [
-                c for c in mock_audit.call_args_list
+                c
+                for c in mock_audit.call_args_list
                 if c[1].get("event_type") == "cli_session_launched"
             ]
             assert len(launched_calls) == 1
@@ -221,7 +222,8 @@ class TestCLISessionLauncherLaunch:
                 )
 
             failed_calls = [
-                c for c in mock_audit.call_args_list
+                c
+                for c in mock_audit.call_args_list
                 if c[1].get("event_type") == "cli_session_failed"
             ]
             assert len(failed_calls) == 1
@@ -358,7 +360,8 @@ class TestCLISessionLauncherTerminate:
             await launcher.terminate(session_id, spawner)
 
             terminated_calls = [
-                c for c in mock_audit.call_args_list
+                c
+                for c in mock_audit.call_args_list
                 if c[1].get("event_type") == "cli_session_terminated"
             ]
             assert len(terminated_calls) == 1
@@ -863,7 +866,8 @@ class TestCLISessionSendMessage:
             await launcher.send_message(session_id, spawner, "Hello!")
 
             msg_calls = [
-                c for c in mock_audit.call_args_list
+                c
+                for c in mock_audit.call_args_list
                 if c[1].get("event_type") == "cli_session_message_sent"
             ]
             assert len(msg_calls) == 1

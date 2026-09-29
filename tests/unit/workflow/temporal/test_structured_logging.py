@@ -26,9 +26,7 @@ def _restore_root_logger():
 class TestStructuredLogging:
     """Tests for LOG_FORMAT-based logging configuration."""
 
-    def test_json_format_produces_valid_json(
-        self, capfd: pytest.CaptureFixture
-    ) -> None:
+    def test_json_format_produces_valid_json(self, capfd: pytest.CaptureFixture) -> None:
         """LOG_FORMAT=json produces parseable JSON with renamed fields."""
         with patch.dict(os.environ, {"LOG_FORMAT": "json"}):
             configure_logging()

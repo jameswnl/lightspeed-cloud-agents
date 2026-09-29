@@ -31,9 +31,7 @@ def _make_input(steps: list[dict]) -> WorkflowInput:
             "spec": {"steps": steps},
         },
         workflow_id="wf-test-signal",
-        provider=ProviderConfig(
-            name="openai", model="gpt-4", credentials_secret="test-key"
-        ),
+        provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="test-key"),
     )
 
 

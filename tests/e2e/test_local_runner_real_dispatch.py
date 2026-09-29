@@ -173,7 +173,7 @@ def _workflow_definition() -> dict[str, Any]:
                     "type": "agent",
                     "spawn": "none",
                     "prompt": (
-                        f'Respond with a JSON object with exactly one field '
+                        f"Respond with a JSON object with exactly one field "
                         f'"severity" whose value is exactly the string '
                         f'"{_SEVERITY_TOKEN}". Only output JSON, no other text.'
                     ),

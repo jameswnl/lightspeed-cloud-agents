@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
 from cloud_agents.workflow.core.models import MCPServerConfig, SecretHeaderRef
@@ -43,9 +42,7 @@ class TestResolveMCPReferenceByName:
         catalog = [{"name": "a", "url": "http://a"}]
         assert resolve_mcp_servers(["missing"], catalog) is None
         # Mixed known + unknown -> only known returned
-        assert resolve_mcp_servers(["a", "missing"], catalog) == [
-            {"name": "a", "url": "http://a"}
-        ]
+        assert resolve_mcp_servers(["a", "missing"], catalog) == [{"name": "a", "url": "http://a"}]
 
     def test_catalog_as_pydantic_models(self):
         catalog = [

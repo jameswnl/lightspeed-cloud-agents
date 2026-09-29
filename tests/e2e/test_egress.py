@@ -23,9 +23,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-SANDBOX_IMAGE = os.environ.get(
-    "SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal"
-)
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "localhost/lightspeed-agentic-sandbox:temporal")
 
 
 def _kubectl_run(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
@@ -93,49 +91,88 @@ class TestNetworkEgress:
 
         # Create a pod with sandbox labels so NetworkPolicy applies
         try:
-            _kubectl_run([
-                "run", pod_name,
-                "--namespace", namespace,
-                "--image", "curlimages/curl:latest",
-                "--labels", "app=agent-sandbox,spawned-by=workflow-runner",
-                "--restart", "Never",
-                "--command", "--",
-                "curl", "--connect-timeout", "5", "--max-time", "10",
-                "http://example.com",
-            ])
+            _kubectl_run(
+                [
+                    "run",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "--image",
+                    "curlimages/curl:latest",
+                    "--labels",
+                    "app=agent-sandbox,spawned-by=workflow-runner",
+                    "--restart",
+                    "Never",
+                    "--command",
+                    "--",
+                    "curl",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    "10",
+                    "http://example.com",
+                ]
+            )
 
             # Wait for pod to complete
-            _kubectl_run([
-                "wait", "--for=condition=Ready",
-                f"pod/{pod_name}", "--namespace", namespace,
-                "--timeout=30s",
-            ])
+            _kubectl_run(
+                [
+                    "wait",
+                    "--for=condition=Ready",
+                    f"pod/{pod_name}",
+                    "--namespace",
+                    namespace,
+                    "--timeout=30s",
+                ]
+            )
 
             # Check exit code - should be non-zero (connection failed)
-            result = _kubectl_run([
-                "get", "pod", pod_name, "--namespace", namespace,
-                "-o", "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
-            ], timeout=60)
+            result = _kubectl_run(
+                [
+                    "get",
+                    "pod",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
+                ],
+                timeout=60,
+            )
 
             # Wait for the pod to terminate (Failed phase because egress is blocked)
-            _kubectl_run([
-                "wait", "--for=jsonpath={.status.phase}=Failed",
-                f"pod/{pod_name}", "--namespace", namespace,
-                "--timeout=60s",
-            ])
+            _kubectl_run(
+                [
+                    "wait",
+                    "--for=jsonpath={.status.phase}=Failed",
+                    f"pod/{pod_name}",
+                    "--namespace",
+                    namespace,
+                    "--timeout=60s",
+                ]
+            )
 
             # Re-check exit code
-            result = _kubectl_run([
-                "get", "pod", pod_name, "--namespace", namespace,
-                "-o", "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
-            ])
+            result = _kubectl_run(
+                [
+                    "get",
+                    "pod",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
+                ]
+            )
 
             exit_code = result.stdout.strip()
-            assert exit_code and exit_code != "0", (
-                f"Expected curl to fail (egress blocked), but got exit code {exit_code!r}"
-            )
+            assert (
+                exit_code and exit_code != "0"
+            ), f"Expected curl to fail (egress blocked), but got exit code {exit_code!r}"
         finally:
-            _kubectl_run(["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"])
+            _kubectl_run(
+                ["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"]
+            )
 
     def test_sandbox_can_reach_dns(self) -> None:
         """Sandbox pod can perform DNS resolution (port 53 allowed).
@@ -147,27 +184,48 @@ class TestNetworkEgress:
         namespace = os.environ.get("EGRESS_TEST_NAMESPACE", "default")
 
         try:
-            _kubectl_run([
-                "run", pod_name,
-                "--namespace", namespace,
-                "--image", "busybox:latest",
-                "--labels", "app=agent-sandbox,spawned-by=workflow-runner",
-                "--restart", "Never",
-                "--command", "--",
-                "nslookup", "kubernetes.default.svc.cluster.local",
-            ])
+            _kubectl_run(
+                [
+                    "run",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "--image",
+                    "busybox:latest",
+                    "--labels",
+                    "app=agent-sandbox,spawned-by=workflow-runner",
+                    "--restart",
+                    "Never",
+                    "--command",
+                    "--",
+                    "nslookup",
+                    "kubernetes.default.svc.cluster.local",
+                ]
+            )
 
             # Wait for pod to complete
-            _kubectl_run([
-                "wait", "--for=jsonpath={.status.phase}=Succeeded",
-                f"pod/{pod_name}", "--namespace", namespace,
-                "--timeout=30s",
-            ])
+            _kubectl_run(
+                [
+                    "wait",
+                    "--for=jsonpath={.status.phase}=Succeeded",
+                    f"pod/{pod_name}",
+                    "--namespace",
+                    namespace,
+                    "--timeout=30s",
+                ]
+            )
 
-            result = _kubectl_run([
-                "get", "pod", pod_name, "--namespace", namespace,
-                "-o", "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
-            ])
+            result = _kubectl_run(
+                [
+                    "get",
+                    "pod",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
+                ]
+            )
 
             exit_code = result.stdout.strip()
             assert exit_code == "0", (
@@ -175,7 +233,9 @@ class TestNetworkEgress:
                 f"but got exit code {exit_code}"
             )
         finally:
-            _kubectl_run(["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"])
+            _kubectl_run(
+                ["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"]
+            )
 
     def test_sandbox_can_reach_cluster_services(self) -> None:
         """Sandbox pod can reach in-cluster services (e.g., Kubernetes API).
@@ -187,33 +247,59 @@ class TestNetworkEgress:
         namespace = os.environ.get("EGRESS_TEST_NAMESPACE", "default")
 
         try:
-            _kubectl_run([
-                "run", pod_name,
-                "--namespace", namespace,
-                "--image", "curlimages/curl:latest",
-                "--labels", "app=agent-sandbox,spawned-by=workflow-runner",
-                "--restart", "Never",
-                "--command", "--",
-                "curl", "--connect-timeout", "5", "--max-time", "10",
-                "-k", "https://kubernetes.default.svc:443/healthz",
-            ])
+            _kubectl_run(
+                [
+                    "run",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "--image",
+                    "curlimages/curl:latest",
+                    "--labels",
+                    "app=agent-sandbox,spawned-by=workflow-runner",
+                    "--restart",
+                    "Never",
+                    "--command",
+                    "--",
+                    "curl",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    "10",
+                    "-k",
+                    "https://kubernetes.default.svc:443/healthz",
+                ]
+            )
 
             # Wait for pod to complete
-            _kubectl_run([
-                "wait", "--for=jsonpath={.status.phase}=Succeeded",
-                f"pod/{pod_name}", "--namespace", namespace,
-                "--timeout=60s",
-            ])
+            _kubectl_run(
+                [
+                    "wait",
+                    "--for=jsonpath={.status.phase}=Succeeded",
+                    f"pod/{pod_name}",
+                    "--namespace",
+                    namespace,
+                    "--timeout=60s",
+                ]
+            )
 
-            result = _kubectl_run([
-                "get", "pod", pod_name, "--namespace", namespace,
-                "-o", "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
-            ])
+            result = _kubectl_run(
+                [
+                    "get",
+                    "pod",
+                    pod_name,
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "jsonpath={.status.containerStatuses[0].state.terminated.exitCode}",
+                ]
+            )
 
             exit_code = result.stdout.strip()
             assert exit_code == "0", (
-                f"Expected in-cluster HTTPS to succeed, "
-                f"but got exit code {exit_code}"
+                f"Expected in-cluster HTTPS to succeed, " f"but got exit code {exit_code}"
             )
         finally:
-            _kubectl_run(["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"])
+            _kubectl_run(
+                ["delete", "pod", pod_name, "--namespace", namespace, "--ignore-not-found"]
+            )

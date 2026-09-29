@@ -85,7 +85,9 @@ async def main() -> None:
     if PROVIDER_URL:
         env["LIGHTSPEED_PROVIDER_URL"] = PROVIDER_URL
 
-    spec = openshell_pb2.SandboxSpec(template=openshell_pb2.SandboxTemplate(image=SANDBOX_IMAGE, labels={}))
+    spec = openshell_pb2.SandboxSpec(
+        template=openshell_pb2.SandboxTemplate(image=SANDBOX_IMAGE, labels={})
+    )
     for k, v in env.items():
         spec.environment[k] = v
     spawner._build_network_policy(spec, env)
@@ -102,7 +104,8 @@ async def main() -> None:
 
     _print_result("env", spawner._client.exec(sandbox_id, ["env"], timeout_seconds=15))
     _print_result(
-        "resolv.conf", spawner._client.exec(sandbox_id, ["cat", "/etc/resolv.conf"], timeout_seconds=15)
+        "resolv.conf",
+        spawner._client.exec(sandbox_id, ["cat", "/etc/resolv.conf"], timeout_seconds=15),
     )
 
     if PROVIDER_URL:
@@ -116,7 +119,9 @@ async def main() -> None:
         _print_result(
             f"curl -v --max-time 5 {PROVIDER_URL}/",
             spawner._client.exec(
-                sandbox_id, ["curl", "-v", "--max-time", "5", f"{PROVIDER_URL}/"], timeout_seconds=15
+                sandbox_id,
+                ["curl", "-v", "--max-time", "5", f"{PROVIDER_URL}/"],
+                timeout_seconds=15,
             ),
         )
 
@@ -125,7 +130,13 @@ async def main() -> None:
         "python3 -c 'import lightspeed_agentic.app' (with EXTRA_ENV)",
         spawner._client.exec(
             sandbox_id,
-            ["env", *import_env_args, "python3", "-c", "import lightspeed_agentic.app; print('IMPORT OK')"],
+            [
+                "env",
+                *import_env_args,
+                "python3",
+                "-c",
+                "import lightspeed_agentic.app; print('IMPORT OK')",
+            ],
             timeout_seconds=30,
         ),
     )
