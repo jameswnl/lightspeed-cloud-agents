@@ -44,6 +44,7 @@ def _step_input_to_dict(step_input: StepInput) -> dict[str, Any]:
         "tools": step_input.tools,
         "tools_module": step_input.tools_module,
         "context": step_input.context,
+        "execution_context": step_input.execution_context,
         "provider": step_input.provider,
         "timeout_seconds": step_input.timeout_seconds,
         "sandbox_image": step_input.sandbox_image,
@@ -52,6 +53,7 @@ def _step_input_to_dict(step_input: StepInput) -> dict[str, Any]:
         "workflow_id": step_input.workflow_id,
         "step_name": step_input.step_name,
         "output_key": step_input.output_key,
+        "attempt": step_input.attempt,
     }
 
 

@@ -70,6 +70,166 @@ class TestRunWorkflow:
         assert response.status_code == 202
         assert "workflow_id" in response.json()
 
+    def test_invalid_definition_provider_returns_422(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Inline provider model errors are translated to HTTP 422."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "openai", "unknown": "value"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    def test_definition_provider_reference_is_forwarded(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Temporal receives the validated definition-level provider reference."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        workflow_input = mock_client.start_workflow.call_args.args[1]
+        assert workflow_input.provider.credentials_secret == "OPENAI_API_KEY"
+
+    def test_non_object_step_returns_422(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Malformed step entries are validation errors, not server errors."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [None]},
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [("kind", "Nope"), ("apiVersion", None), ("metadata", "not-an-object")],
+    )
+    def test_invalid_definition_top_level_fields_return_422(
+        self, client: TestClient, mock_client: Any, field: str, value: object
+    ) -> None:
+        """Top-level workflow schema errors are rejected before start."""
+        definition: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test-wf"},
+            "spec": {"steps": [{"prompt": "test"}]},
+        }
+        definition[field] = value
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": definition,
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    def test_definition_provider_rejected_by_provider_config_returns_422(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Catalog-valid but ProviderConfig-rejected names map to HTTP 422."""
+        # azure passes shared catalog validation (executor supports it) but
+        # fails ProviderConfig's Literal[name], exercising the
+        # ProviderConfig.model_validate() exception handler (not the shared
+        # validation gate that rejects unknown-field inputs earlier).
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "azure", "model": "gpt-4o"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
+    def test_non_object_definition_provider_returns_422(
+        self, client: TestClient, mock_client: Any, bad_provider: object
+    ) -> None:
+        """Non-object definition providers return structured 422, not 400."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": bad_provider,
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    def test_unknown_tools_return_422_without_dispatch(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Tool validation failures do not start a Temporal workflow."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {
+                        "steps": [
+                            {
+                                "name": "s1",
+                                "type": "agent",
+                                "output_key": "r1",
+                                "prompt": "test",
+                                "tools": ["missing_tool"],
+                            }
+                        ]
+                    },
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
     def test_start_workflow_calls_temporal(
         self,
         client: TestClient,
@@ -466,6 +626,40 @@ class TestDefinitionManagement:
                                 },
                             },
                         },
+                    ]
+                },
+            },
+        )
+        assert response.status_code == 422
+
+    def test_post_definition_with_negative_retries_returns_422(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Pydantic model errors are translated to HTTP 422."""
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "bad-retries"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "max_retries": -1,
+                        }
                     ]
                 },
             },

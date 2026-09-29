@@ -46,6 +46,9 @@ class StepInput:
         tools: Tool names this step is allowed to use.
         tools_module: Dotted import path for module containing tool registrations.
         context: Prior step outputs keyed by output_key.
+        execution_context: User-supplied execution context merged from
+            workflow-level and step-level ``context`` (step wins per key);
+            distinct from prior step outputs.
         timeout_seconds: Max execution time.
         sandbox_image: Container image for ephemeral mode.
         skills_image: Optional OCI image for skills.
@@ -57,6 +60,7 @@ class StepInput:
         workflow_id: Workflow execution ID.
         step_name: Step name within the workflow.
         output_key: Key for this step's result in workflow state.
+        attempt: One-based retry attempt number for this execution.
         metadata: Typed identity and cross-cutting metadata.
     """
 
@@ -67,6 +71,7 @@ class StepInput:
     tools: list[str] = field(default_factory=list)
     tools_module: Optional[str] = None
     context: dict[str, Any] = field(default_factory=dict)
+    execution_context: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: int = 600
     sandbox_image: str = "sandbox:latest"
     skills_image: Optional[str] = None
@@ -76,6 +81,7 @@ class StepInput:
     workflow_id: str = ""
     step_name: str = ""
     output_key: str = ""
+    attempt: int = 1
     raw_step: Optional[dict[str, Any]] = None
     metadata: Optional[StepMetadata] = None
 

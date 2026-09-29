@@ -20,6 +20,16 @@ with workflow.unsafe.imports_passed_through():
     from cloud_agents.workflow.security.auto_approve import ApprovalPolicy, classify_step_risk
     from cloud_agents.workflow.core.conditions import evaluate_condition
     from cloud_agents.workflow.core.definition import WorkflowStepSpec
+    from cloud_agents.workflow.core.execution import (
+        activity_error_text,
+        apply_one_step_defaults,
+        chunk_parallel_groups,
+        enforce_provider_boundary,
+        normalize_workflow_step,
+        resolve_sandbox_image,
+        run_with_retries,
+        workflow_defaults_from_definition,
+    )
     from cloud_agents.workflow.core.interpolation import interpolate
     from cloud_agents.workflow.core.state import StepResult as LegacyStepResult
     from cloud_agents.workflow.core.state import WorkflowState
@@ -31,6 +41,27 @@ with workflow.unsafe.imports_passed_through():
         WorkflowOutput,
         WorkflowStatus,
     )
+
+
+def _activity_succeeded(result: Any) -> bool:
+    """Check whether a sandbox activity result counts as success for retry.
+
+    Only ``completed`` steps succeed; failed/denied/skipped results fall
+    through to the transient-failure classifier shared with the local
+    runner (issue #268).
+    """
+    if isinstance(result, dict):
+        return result.get("status") == "completed"
+    return getattr(result, "status", "") == "completed"
+
+
+def _activity_error(result: Any) -> Optional[str]:
+    """Extract error text from a sandbox activity result for classification."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        return error if isinstance(error, str) else (str(error) if error is not None else None)
+    error = getattr(result, "error", None)
+    return error if isinstance(error, str) else (str(error) if error is not None else None)
 
 
 @workflow.defn(sandboxed=False)
@@ -132,26 +163,29 @@ class AgentWorkflow:
         definition = input.definition
         steps = definition.get("spec", {}).get("steps", [])
 
-        i = 0
-        while i < len(steps):
-            step = steps[i]
-            group = step.get("parallel_group")
+        # One-step convention (issue #268): a single step may omit
+        # ``name``/``output_key``; default them before any step indexing
+        # so the bare shorthand behaves like the local runner and never
+        # KeyErrors downstream (#270).
+        if len(steps) == 1:
+            steps = [apply_one_step_defaults(dict(steps[0]), step_count=1)]
 
+        # Group scheduling uses the canonical chunking helper (issue
+        # #268): contiguous same-group steps run concurrently via
+        # asyncio.gather; the group completes when all members complete,
+        # and a failed/denied member stops subsequent steps (siblings
+        # already running are not cancelled; no concurrency limit).
+        for group, group_steps in chunk_parallel_groups(steps):
             if group:
-                group_steps = []
-                while i < len(steps) and steps[i].get("parallel_group") == group:
-                    group_steps.append(steps[i])
-                    i += 1
                 results = await asyncio.gather(
                     *[self._execute_step(s, input) for s in group_steps]
                 )
                 if any(r and r.status in ("failed", "denied") for r in results):
                     break
             else:
-                result = await self._execute_step(step, input)
+                result = await self._execute_step(group_steps[0], input)
                 if result and result.status in ("failed", "denied"):
                     break
-                i += 1
 
         return WorkflowOutput(steps=self._steps)
 
@@ -185,7 +219,19 @@ class AgentWorkflow:
         if step["type"] == "agent":
             return await self._handle_agent_step(step, input, enforcer)
 
-        return None
+        # Unknown step types fail the step (#270): a silent None would
+        # let the run report success with a missing output, diverging
+        # from the local runner's rejection.
+        result = StepResult(
+            status="failed",
+            error=(
+                f"unknown step type {step['type']!r}: only 'agent' and "
+                "'human-approval' are supported"
+            ),
+        )
+        self._steps[output_key] = result
+        self._emit("step.failed", step_name)
+        return result
 
     async def _handle_approval(
         self,
@@ -276,15 +322,80 @@ class AgentWorkflow:
         enforcer: Optional[AdvisoryEnforcer] = None,
     ) -> StepResult:
         """Handle an agent step by dispatching to the sandbox activity."""
-        step_name = step["name"]
-        output_key = step["output_key"]
-        timeout_seconds = step.get("timeout_seconds", 600)
-        max_retries = step.get("max_retries", 1)
+        # Canonical normalization shared with the local runner (issue
+        # #268): the definition's workflow-level defaults thread through
+        # the same precedence chain, one-step definitions get the
+        # agent/result convention, and invalid steps fail the step --
+        # never the workflow. normalize_workflow_step is pure
+        # (pydantic + pure helpers), so replay sees identical values.
+        definition = input.definition
+        spec = definition.get("spec", {})
+        step_count = len(spec.get("steps", []))
+        definition_defaults = workflow_defaults_from_definition(definition)
+        try:
+            normalized, meta = normalize_workflow_step(
+                step,
+                workflow_defaults=definition_defaults,
+                step_count=step_count,
+            )
+            enforce_provider_boundary(
+                normalized.inference_provider,
+                input.provider.model_dump(),
+            )
+        except ValueError as exc:
+            failed_name = step.get("name", "agent")
+            failed_key = step.get("output_key", "result")
+            result = StepResult(status="failed", error=str(exc))
+            self._steps[failed_key] = result
+            self._step_transcripts[failed_key] = StepTranscript(
+                step_name=failed_name,
+            ).model_dump()
+            self._emit("step.failed", failed_name)
+            return result
+        step_name = normalized.name
+        output_key = normalized.output_key
+        timeout_seconds = normalized.timeout_seconds or 600
+        max_retries = normalized.max_retries
+        # Sandbox-image precedence (issue #268): step spawn_config →
+        # definition spawn_config → run-level input image. The run-level
+        # image is a default the definition layer outranks.
+        sandbox_image = resolve_sandbox_image(
+            normalized.spawn_config,
+            definition_defaults,
+            input.sandbox_image,
+        )
         if enforcer is None:
             enforcer = AdvisoryEnforcer(enabled=False)
 
-        resolved_step = dict(step)
-        if prompt := step.get("prompt"):
+        # Provider selection (issue #268): the normalized spec already
+        # carries the step/definition winner (the run-level provider is
+        # the default only when neither layer set one). The run-level
+        # credential reference is honored solely for the same provider:
+        # otherwise the winner would silently bind another provider's
+        # credentials (cross-provider confusion). Runtime credentials
+        # still resolve outside serializable data (pre-#269 contract).
+        activity_provider = input.provider.model_dump()
+        if normalized.inference_provider is not None:
+            activity_provider["name"] = normalized.inference_provider.name
+            activity_provider["model"] = normalized.inference_provider.model
+            if normalized.inference_provider.name != input.provider.name:
+                activity_provider.pop("credentials_secret", None)
+            elif not activity_provider.get("credentials_secret"):
+                definition_provider = definition_defaults.get("provider") or {}
+                if isinstance(definition_provider, dict):
+                    reference = definition_provider.get("credentials_secret")
+                    if reference:
+                        activity_provider["credentials_secret"] = reference
+
+        # Canonical dispatch (#270): the activity receives the NORMALIZED
+        # step -- workflow-default inheritance (spawn, mcp_servers,
+        # allowed_skills, permissions, timeout), permission collapse, and
+        # the one-step naming convention all materialized -- never the
+        # raw definition step. Pure dict ops on immutable inputs keep
+        # Temporal replay deterministic.
+        resolved_step = normalized.model_dump(exclude_none=True)
+        resolved_step.update({k: v for k, v in meta.items() if v is not None})
+        if prompt := normalized.prompt:
             interpolated = self._interpolate_prompt(prompt, input)
             resolved_step["prompt"] = enforcer.annotate_prompt(interpolated)
         if input.advisory:
@@ -292,15 +403,27 @@ class AgentWorkflow:
 
         self._emit("step.started", step_name)
 
-        try:
-            result = await workflow.execute_activity(
+        attempt_number = 0
+
+        async def attempt() -> Any:
+            """Run one sandbox activity attempt without activity-level retries.
+
+            Retry accounting lives in run_with_retries (shared with the
+            local runner) so a single policy covers exceptions and
+            transient result failures; the activity itself tries once.
+            """
+            nonlocal attempt_number
+            attempt_number += 1
+            return await workflow.execute_activity(
                 "run_sandbox_step",
                 args=[
                     {
                         "step": resolved_step,
                         "workflow_id": input.workflow_id,
-                        "provider": input.provider.model_dump(),
-                        "sandbox_image": input.sandbox_image,
+                        "provider": activity_provider,
+                        "sandbox_image": sandbox_image,
+                        "execution_context": dict(normalized.context),
+                        "attempt": attempt_number,
                         "skills_image": input.skills_image,
                         "skills_paths": input.skills_paths,
                         "mcp_servers": (
@@ -313,7 +436,21 @@ class AgentWorkflow:
                 ],
                 start_to_close_timeout=timedelta(seconds=timeout_seconds),
                 heartbeat_timeout=timedelta(seconds=180),
-                retry_policy=RetryPolicy(maximum_attempts=max_retries + 1),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+
+        try:
+            result = await run_with_retries(
+                attempt,
+                max_retries,
+                _activity_succeeded,
+                _activity_error,
+                # Classify by root cause: str(ActivityError) names only
+                # the activity/retry state, so transient infra failures
+                # (e.g. sandbox 502s) would otherwise never retry here
+                # while the local runner retries them.
+                exc_text=activity_error_text,
+                retry_sleep=workflow.sleep if workflow.in_workflow() else None,
             )
 
             if isinstance(result, dict):
@@ -341,8 +478,12 @@ class AgentWorkflow:
                     error=step_result.error,
                 )
 
-        except ActivityError:
-            step_result = StepResult(status="failed", error="retries exhausted")
+        except ActivityError as exc:
+            error_detail = activity_error_text(exc)
+            error = "retries exhausted"
+            if error_detail:
+                error = f"{error}: {error_detail}"
+            step_result = StepResult(status="failed", error=error)
             self._steps[output_key] = step_result
             self._step_transcripts[output_key] = StepTranscript(
                 step_name=step_name,

@@ -156,6 +156,7 @@ async def _run_direct_or_local_step(
         tools=step.get("tools", []),
         tools_module=os.environ.get("CLOUD_AGENTS_TOOLS_MODULE"),
         context=context,
+        execution_context=input.get("execution_context") or {},
         timeout_seconds=step.get("timeout_seconds", 600),
         sandbox_image=input.get("sandbox_image", "sandbox:latest"),
         skills_image=input.get("skills_image"),
@@ -168,6 +169,7 @@ async def _run_direct_or_local_step(
         raw_step=step,
         step_name=step_name,
         output_key=output_key,
+        attempt=input.get("attempt", 1),
     )
 
     executor = get_step_executor(step, spawner=None, transcript_store=None)
@@ -389,7 +391,7 @@ async def _run_sandbox_step_inner(
     workflow_id = input["workflow_id"]
     provider = input["provider"]
     sandbox_image = input.get("sandbox_image", "sandbox:latest")
-    attempt = activity.info().attempt if activity.in_activity() else 1
+    attempt = input.get("attempt", 1)
 
     provider_name = provider.get("name", "unknown")
     if _circuit_breaker.is_open(provider_name):
@@ -605,6 +607,7 @@ async def _run_sandbox_step_inner(
             context = build_sandbox_context(
                 workflow_steps=prior_steps,
                 current_step=step,
+                execution_context=input.get("execution_context") or {},
             )
 
             request_body: dict[str, Any] = {

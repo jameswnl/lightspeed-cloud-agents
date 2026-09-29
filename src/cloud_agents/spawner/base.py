@@ -13,6 +13,7 @@ import logging
 import os
 import ssl
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import re
 
@@ -49,6 +50,9 @@ class SpawnConfig(BaseModel):
         memory_limit: Memory limit (max 4Gi).
         timeout_seconds: Max wait for pod readiness.
         health_path: Health probe endpoint path.
+        sandbox_image: Optional OCI image override for the sandbox pod.
+            When set on a step, normalization uses it as the approved
+            image instead of the service default.
     """
 
     cpu_request: str = "100m"
@@ -57,6 +61,7 @@ class SpawnConfig(BaseModel):
     memory_limit: str = Field(default="512Mi")
     timeout_seconds: int = Field(default=60, ge=5, le=300)
     health_path: str = "/healthz"
+    sandbox_image: Optional[str] = None
 
     @field_validator("cpu_limit")
     @classmethod

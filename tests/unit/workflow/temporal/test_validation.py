@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cloud_agents.workflow.core.validation import validate_definition
 
 
@@ -107,7 +109,12 @@ class TestDefinitionValidation:
         assert len(errors) == 0
 
     def test_missing_name(self) -> None:
-        """Step without name is caught."""
+        """A step without a name is caught in multi-step definitions.
+
+        A single bare step is the documented one-step shorthand (#268)
+        and defaults to agent/result; only multi-step definitions must
+        name every step explicitly.
+        """
         defn = {
             "apiVersion": "v1",
             "kind": "AgentWorkflow",
@@ -115,6 +122,7 @@ class TestDefinitionValidation:
             "spec": {
                 "steps": [
                     {"type": "agent", "output_key": "r1", "prompt": "check"},
+                    {"type": "agent", "name": "s2", "output_key": "r2", "prompt": "b"},
                 ]
             },
         }
@@ -391,3 +399,225 @@ class TestMCPServersValidation:
             },
         }
         assert len(validate_definition(defn)) == 0
+
+
+class TestCanonicalSubmissionChecks268:
+    """Submission-time secret/provider checks shared by both engines (#268)."""
+
+    def _defn_with_step(self, step: dict) -> dict:
+        base = {
+            "name": "s1",
+            "type": "agent",
+            "output_key": "r1",
+            "prompt": "check",
+        }
+        base.update(step)
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [base]},
+        }
+
+    def test_credentialed_mcp_url_rejected(self) -> None:
+        """Test that secret-bearing inline MCP fails submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"mcp_servers": [{"name": "x", "url": "https://t:abc@in/x"}]}
+            )
+        )
+        assert any("credentialed" in e for e in errors)
+
+    def test_secret_header_value_rejected(self) -> None:
+        """Test that credential-shaped header values fail submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {
+                    "mcp_servers": [
+                        {
+                            "name": "x",
+                            "url": "https://in/x",
+                            "headers": {"X-Custom": "sk-live-abc"},
+                        }
+                    ]
+                }
+            )
+        )
+        assert any("credential" in e for e in errors)
+
+    def test_unapproved_step_provider_rejected(self) -> None:
+        """Test that free-form step provider names fail submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"inference_provider": {"name": "evil-proxy", "model": "x"}}
+            )
+        )
+        assert any("unapproved" in e for e in errors)
+
+    def test_approved_step_provider_passes(self) -> None:
+        """Test that executor-known provider names pass submission."""
+        from cloud_agents.workflow.core.validation import validate_definition
+
+        errors = validate_definition(
+            self._defn_with_step(
+                {"inference_provider": {"name": "azure", "model": "gpt-4o"}}
+            )
+        )
+        assert errors == []
+
+
+class TestWorkflowLevelSecretGate:
+    """The 422 secret gate covers workflow-level MCP defaults (issue #270)."""
+
+    def test_workflow_level_secret_mcp_rejected_at_submission(self) -> None:
+        """A credentialed URL in spec-level mcp_servers fails validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [
+                    {"name": "leaky", "url": "https://tok:abc@internal/x"}
+                ],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert any("credentialed" in e for e in errors)
+
+    def test_workflow_level_plaintext_header_rejected(self) -> None:
+        """A plaintext secret header in spec-level MCP fails validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [
+                    {"name": "leaky", "url": "https://internal/x",
+                     "headers": {"Authorization": "Bearer x"}},
+                ],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert any("secret" in e or "plaintext" in e for e in errors)
+
+    def test_benign_workflow_level_mcp_passes(self) -> None:
+        """A clean workflow-level catalog entry passes validation."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {
+                "mcp_servers": [{"name": "ok", "url": "https://internal/x"}],
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ],
+            },
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+
+class TestBareOneStepShorthandValidation:
+    """The documented one-step shorthand passes the 422 gate (#270 F4)."""
+
+    def test_bare_single_step_passes_validation(self) -> None:
+        """A nameless single-step definition is valid as documented."""
+        defn = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "spec": {"steps": [{"type": "agent", "prompt": "check"}]},
+        }
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+
+class TestDefinitionProviderGate:
+    """The definition-level provider is gated at submission (#270 F6)."""
+
+    def _defn(self, provider: dict) -> dict:
+        return {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test"},
+            "provider": provider,
+            "spec": {
+                "steps": [
+                    {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
+                ]
+            },
+        }
+
+    def test_secret_value_in_definition_provider_rejected(self) -> None:
+        """A raw token in the provider credentials_secret fails at 422."""
+        # Assembled at runtime so secret scanners never see a contiguous
+        # fake token; the value still exercises the sk- prefix check.
+        fake_token = "sk-" + "live-abc123"
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "credentials_secret": fake_token}
+        )
+        errors = validate_definition(defn)
+        assert any("secret value" in e for e in errors)
+
+    def test_unapproved_definition_provider_rejected(self) -> None:
+        """An unknown provider name fails at 422."""
+        defn = self._defn({"name": "evil-proxy", "model": "x"})
+        errors = validate_definition(defn)
+        assert any("unapproved inference provider" in e for e in errors)
+
+    def test_valid_definition_provider_with_reference_passes(self) -> None:
+        """A clean provider with a secret-name reference passes."""
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "credentials_secret": "OPENAI_API_KEY"}
+        )
+        errors = validate_definition(defn)
+        assert len(errors) == 0
+
+    def test_unknown_definition_provider_field_rejected(self) -> None:
+        """Unknown provider fields cannot carry an unvalidated secret."""
+        defn = self._defn(
+            {"name": "openai", "model": "gpt-4", "api_key": "not-a-reference"}
+        )
+        errors = validate_definition(defn)
+        assert any("unknown provider fields" in e for e in errors)
+
+    def test_definition_provider_model_rejects_secret_value(self) -> None:
+        """The persisted definition model rejects a secret-shaped reference."""
+        from pydantic import ValidationError
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        with pytest.raises(ValidationError, match="secret value"):
+            WorkflowDefinition.model_validate(
+                {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "sk-" + "not-a-real-secret",
+                    },
+                    "spec": {
+                        "steps": [
+                            {
+                                "name": "s1",
+                                "type": "agent",
+                                "output_key": "r1",
+                                "prompt": "a",
+                            }
+                        ]
+                    },
+                }
+            )

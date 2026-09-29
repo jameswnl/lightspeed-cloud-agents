@@ -275,7 +275,10 @@ class TestGraphTranslator:
         )
 
         graph, state = build_graph(defn, workflow_id="wf-1")
-        with caplog.at_level("DEBUG", logger="cloud_agents.workflow.executor.graph_translator"):
+        # Agent-prompt interpolation now runs inside the canonical
+        # build_step_input helper (issue #268), so the fail-open debug
+        # record comes from the execution module.
+        with caplog.at_level("DEBUG", logger="cloud_agents.workflow.core.execution"):
             await graph.run(state=state)
 
         solo_input = mock_executor.run.call_args_list[0].args[0]
@@ -1312,3 +1315,352 @@ class TestGraphTranslatorResumeTraceContinuity:
         await graph.run(state=state)
 
         assert mock_me_class.call_args_list[0].kwargs["links"] is None
+
+
+class TestOneStepWorkflowExecution:
+    """One-step workflows execute through the identical runner path (#268).
+
+    A standalone agent invocation becomes a one-step workflow: a bare
+    single step (no name/output_key) normalizes to the documented
+    agent/result convention and runs through the same StepInput
+    construction, middleware (tracing + transcript persistence), and
+    result storage as a step embedded in a multi-step workflow.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bare_one_step_executes_with_convention_names(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A prompt-only step runs as agent/result with run-level provider."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"summary": "ok"}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_transcript_store = mocker.AsyncMock()
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition([{"prompt": "Inspect the cluster"}])
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-one-step",
+            provider={
+                "name": "openai",
+                "model": "gpt-4o",
+                "credentials_secret": "OPENAI_API_KEY",
+            },
+            sandbox_image="sandbox:default",
+            transcript_store=mock_transcript_store,
+        )
+        await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.step_name == "agent"
+        assert solo_input.output_key == "result"
+        assert solo_input.prompt == "Inspect the cluster"
+        assert solo_input.provider["name"] == "openai"
+        assert solo_input.provider["model"] == "gpt-4o"
+        # Pre-#269 execution path: the secret reference flows so
+        # ensure_credentials_env keeps working; values never do.
+        assert solo_input.provider["credentials_secret"] == "OPENAI_API_KEY"
+        assert solo_input.sandbox_image == "sandbox:default"
+        # Same persistence path as multi-step: result stored under the
+        # output key and transcript middleware invoked.
+        assert state.step_results["result"]["status"] == "completed"
+        mock_transcript_store.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_one_step_matches_embedded_step_input(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A one-step workflow and the same step embedded multi-step build
+        equal executor inputs (minus identity/conditionals), through the
+        same middleware and persistence path."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_transcript_store = mocker.AsyncMock()
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        provider = {"name": "openai", "model": "gpt-4o"}
+        catalog = [{"name": "catalog-a", "url": "https://a"}]
+        first_step = {
+            "name": "agent",
+            "type": "agent",
+            "prompt": "Inspect the cluster",
+            "output_key": "result",
+            "tools": ["kubectl_get"],
+            "mcp_servers": ["catalog-a"],
+            "allowed_skills": ["kubernetes"],
+            "timeout_seconds": 120,
+        }
+        one_step_defn = _make_definition([dict(first_step)])
+        multi_step_defn = _make_definition(
+            [
+                dict(first_step),
+                {
+                    "name": "second",
+                    "type": "agent",
+                    "prompt": "Summarize",
+                    "output_key": "summary",
+                    "condition": "steps.result.output.ok == true",
+                },
+            ]
+        )
+
+        graph_one, state_one = build_graph(
+            one_step_defn,
+            workflow_id="wf-1",
+            provider=dict(provider),
+            mcp_servers=[dict(catalog[0])],
+            transcript_store=mock_transcript_store,
+        )
+        await graph_one.run(state=state_one)
+        graph_multi, state_multi = build_graph(
+            multi_step_defn,
+            workflow_id="wf-1",
+            provider=dict(provider),
+            mcp_servers=[dict(catalog[0])],
+            transcript_store=mock_transcript_store,
+        )
+        await graph_multi.run(state=state_multi)
+
+        first_one = mock_executor.run.call_args_list[0].args[0]
+        # call 0 = one-step run; calls 1,2 = multi-step run (condition
+        # references prior output; mock output {"ok": True} satisfies it).
+        first_multi = mock_executor.run.call_args_list[1].args[0]
+        assert first_one.prompt == first_multi.prompt
+        assert first_one.provider == first_multi.provider
+        assert first_one.tools == first_multi.tools
+        assert first_one.sandbox_image == first_multi.sandbox_image
+        assert first_one.mcp_servers == first_multi.mcp_servers == catalog
+        assert first_one.allowed_skills == first_multi.allowed_skills == [
+            "kubernetes"
+        ]
+        assert first_one.timeout_seconds == first_multi.timeout_seconds == 120
+        # Same persistence path: first-step result stored under the same
+        # output key, transcript middleware invoked for every step.
+        assert state_one.step_results["result"]["status"] == "completed"
+        assert state_multi.step_results["result"]["status"] == "completed"
+        assert mock_transcript_store.save.call_count == 3
+
+
+class TestNoSecretValuesInSerializedArtifacts:
+    """Serialization sweep for the credentials invariant (issue #268).
+
+    Runtime credential *values* must not enter workflow definitions,
+    normalized specs, executor inputs, run state, persisted transcripts,
+    or logs. References (secret names / env var keys) may flow; values
+    must not -- even when the value sits in the process environment and
+    the run resolves credentials from it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_secret_value_absent_from_all_artifacts(
+        self,
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A one-step run leaves the env secret value out of every dump."""
+        import json
+        import logging
+
+        sentinel = "sk-sentinel-secret-value-999"
+        monkeypatch.setenv("OPENAI_API_KEY", sentinel)
+
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"summary": "ok"},
+            transcript=[
+                {"ts": "t", "type": "result", "data": {"text": "done"}},
+            ],
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_transcript_store = mocker.AsyncMock()
+
+        from cloud_agents.workflow.core.execution import normalize_workflow_step
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        step = {
+            "name": "agent",
+            "type": "agent",
+            "prompt": "Inspect the cluster",
+            "output_key": "result",
+        }
+        defn = _make_definition([dict(step)])
+        provider = {
+            "name": "openai",
+            "model": "gpt-4o",
+            "credentials_secret": "OPENAI_API_KEY",
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            graph, state = build_graph(
+                defn,
+                workflow_id="wf-sweep",
+                provider=dict(provider),
+                transcript_store=mock_transcript_store,
+            )
+            await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        normalized, _ = normalize_workflow_step(dict(step))
+
+        artifacts = {
+            "definition": json.dumps(defn),
+            "normalized_spec": normalized.model_dump_json(),
+            "step_input": repr(solo_input.__dict__),
+            "step_results": json.dumps(state.step_results),
+            "logs": caplog.text,
+        }
+        assert mock_transcript_store.save.call_count == 1
+        save_kwargs = mock_transcript_store.save.call_args[1]
+        artifacts["transcript"] = save_kwargs["transcript"].model_dump_json()
+        artifacts["messages"] = json.dumps(save_kwargs["messages"])
+
+        for artifact_name, dumped in artifacts.items():
+            assert sentinel not in dumped, (
+                f"secret value leaked into {artifact_name}"
+            )
+        # The reference still flows where execution needs it.
+        assert solo_input.provider["credentials_secret"] == "OPENAI_API_KEY"
+
+
+class TestNormalizationFailureIsStepFailure:
+    """Invalid steps fail the step, never crash the run (S4)."""
+
+    @pytest.mark.asyncio
+    async def test_secret_mcp_step_fails_without_dispatch(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A secret-bearing step records failure and never dispatches."""
+        mock_executor = mocker.AsyncMock()
+        mock_dispatch = mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = _make_definition(
+            [
+                {
+                    "name": "agent",
+                    "type": "agent",
+                    "prompt": "Inspect the cluster",
+                    "output_key": "result",
+                    "mcp_servers": [
+                        {"name": "x", "url": "https://tok:abc@internal/x"}
+                    ],
+                }
+            ]
+        )
+        graph, state = build_graph(
+            defn, workflow_id="wf-1", provider={"name": "openai", "model": "m"}
+        )
+        await graph.run(state=state)
+
+        assert state.step_results["result"]["status"] == "failed"
+        assert "credentialed" in state.step_results["result"]["error"]
+        mock_dispatch.assert_not_called()
+        mock_executor.run.assert_not_called()
+
+
+class TestPrecedenceChainLocalRunner:
+    """Definition-level defaults outrank run-level args on the local runner.
+
+    The documented chain (issue #268) is service/run → workflow
+    definition → step; run-level provider and sandbox_image act as
+    defaults only when the definition does not specify them.
+    """
+
+    @staticmethod
+    def _mock_executor(mocker: MockerFixture) -> mocker.AsyncMock:
+        """Patch get_step_executor with a completing executor."""
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed", output={"ok": True}
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        return mock_executor
+
+    def _definition(self, top_provider: dict | None, spec: dict | None) -> dict:
+        defn: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "precedence"},
+            "spec": {"steps": [{"name": "s1", "type": "agent", "prompt": "p", "output_key": "r1"}]},
+        }
+        if spec:
+            defn["spec"].update(spec)
+        if top_provider:
+            defn["provider"] = top_provider
+        return defn
+
+    @pytest.mark.asyncio
+    async def test_definition_provider_outranks_run_provider(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Definition provider wins; run credentials do not bind cross-name."""
+        mock_executor = self._mock_executor(mocker)
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = self._definition(
+            top_provider={"name": "openai", "model": "gpt-4o-mini"}, spec=None
+        )
+        graph, state = build_graph(
+            defn,
+            workflow_id="wf-prec-1",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+        )
+        await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.provider["name"] == "openai"
+        assert solo_input.provider["model"] == "gpt-4o-mini"
+        assert solo_input.provider["credentials_secret"] == "k"
+
+    @pytest.mark.asyncio
+    async def test_definition_sandbox_image_outranks_run_image(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Definition-level spawn_config image wins over the run image."""
+        mock_executor = self._mock_executor(mocker)
+        from cloud_agents.workflow.executor.graph_translator import build_graph
+
+        defn = self._definition(
+            top_provider=None, spec={"spawn_config": {"sandbox_image": "img-def"}}
+        )
+        graph, state = build_graph(
+            defn, workflow_id="wf-prec-2", sandbox_image="run-image"
+        )
+        await graph.run(state=state)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.sandbox_image == "img-def"

@@ -7,7 +7,10 @@ to make them pass.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from temporalio.exceptions import ActivityError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -862,3 +865,515 @@ class TestSpawnModeReplayContract:
         assert result.steps["r1"].status == "completed"
         assert result.steps["r1"].output == {"direct": True}
         mock_executor.run.assert_called_once()
+
+
+class TestStepProviderOverrideAndMcpValidation:
+    """Step-level provider override + MCP secret validation (issue #268).
+
+    The Temporal runner shares the canonical validation helpers with the
+    local runner: secret *values* in inline MCP configs fail before
+    scheduling, and a step-level inference provider override is honored
+    for name/model after catalog validation (runtime credentials still
+    come from the run-level provider).
+    """
+
+    @pytest.mark.asyncio
+    async def test_step_provider_override_reaches_activity(self) -> None:
+        """A validated step override sets the activity provider name/model."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "openai", "model": "gpt-4o-mini"},
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        activity_args = mock_execute.call_args_list[0].kwargs["args"][0]
+        provider = activity_args["provider"]
+        assert provider["name"] == "openai"
+        assert provider["model"] == "gpt-4o-mini"
+        assert provider["credentials_secret"] == "test-key"
+
+    @pytest.mark.asyncio
+    async def test_unapproved_step_provider_fails_before_scheduling(self) -> None:
+        """An unapproved step provider name fails the step (S4: step failure, not crash)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "evil-proxy", "model": "x"},
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        assert "evil-proxy" in (result.error or "")
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_secret_mcp_values_fail_before_scheduling(self) -> None:
+        """Credentialed inline MCP URLs fail the step without scheduling (S4)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "mcp_servers": [
+                    {"name": "x", "url": "https://tok:abc@internal/x"}
+                ],
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_provider_override_fails_closed(self) -> None:
+        """An override for another provider fails before activity dispatch."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "azure", "model": "gpt-4o"},
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        assert "cross-provider" in (result.error or "")
+        mock_execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_azure_override_cannot_use_ambient_worker_credentials(self) -> None:
+        """An Azure override cannot bypass an OpenAI run provider boundary."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "inference_provider": {"name": "azure", "model": "gpt-4o"},
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert result.status == "failed"
+        assert "cross-provider" in (result.error or "")
+        mock_execute.assert_not_called()
+
+
+class TestTransientActivityRetry:
+    """Transient activity failures retry on the Temporal path (B5)."""
+
+    @staticmethod
+    def _activity_error_with_cause(cause: BaseException) -> "ActivityError":
+        """Create an ActivityError carrying a root-cause failure."""
+        from temporalio.exceptions import ActivityError
+
+        error = ActivityError(
+            "activity failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test",
+            activity_type="run_sandbox_step",
+            activity_id="1",
+            retry_state=None,
+        )
+        error.__cause__ = cause
+        return error
+
+    @pytest.mark.asyncio
+    async def test_transient_cause_retries_activity(self) -> None:
+        """A 502 root cause retries the sandbox activity, then succeeds."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock(
+            side_effect=[
+                self._activity_error_with_cause(
+                    RuntimeError("upstream 502 bad gateway")
+                ),
+                {"status": "completed", "output": {"ok": True}},
+            ]
+        )
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "max_retries": 1,
+            }
+            result = await wf._handle_agent_step(step, _make_input([step]))
+
+        assert mock_execute.call_count == 2
+        assert result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_policy_cause_fails_without_retry(self) -> None:
+        """A policy-denial root cause fails immediately (no retry)."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        calls = 0
+
+        async def mock_execute_side_effect(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if args and args[0] == "run_sandbox_step":
+                raise self._activity_error_with_cause(
+                    PermissionError("policy denies tool run_fix")
+                )
+            return {"status": "escalated", "output": {"type": "escalation_handoff"}}
+
+        mock_execute = AsyncMock(side_effect=mock_execute_side_effect)
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "test",
+                "max_retries": 3,
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        # One sandbox attempt, then the escalation activity.
+        sandbox_calls = [
+            c
+            for c in mock_execute.call_args_list
+            if c.args and c.args[0] == "run_sandbox_step"
+        ]
+        assert len(sandbox_calls) == 1
+
+
+class TestPrecedenceChainTemporal:
+    """Definition-level defaults outrank run-level args on Temporal (#268)."""
+
+    @pytest.mark.asyncio
+    async def test_definition_provider_outranks_run_provider(self) -> None:
+        """A definition-level provider beats WorkflowInput.provider."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["provider"] = {
+                "name": "openai",
+                "model": "gpt-4o-mini",
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
+        assert provider["name"] == "openai"
+        assert provider["model"] == "gpt-4o-mini"
+        assert provider["credentials_secret"] == "test-key"
+
+    @pytest.mark.asyncio
+    async def test_definition_credentials_reference_reaches_activity(self) -> None:
+        """Definition credentials reach the activity when run ref is absent."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.core.models import ProviderConfig
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.provider = ProviderConfig(name="openai", model="gpt-4")
+            wf_input.definition["provider"] = {
+                "name": "openai",
+                "model": "gpt-4o-mini",
+                "credentials_secret": "OPENAI_API_KEY",
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
+        assert provider["credentials_secret"] == "OPENAI_API_KEY"
+
+    @pytest.mark.asyncio
+    async def test_definition_sandbox_image_outranks_run_image(self) -> None:
+        """A definition-level spawn_config image beats input.sandbox_image."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn_config"] = {
+                "sandbox_image": "img-def"
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["sandbox_image"] == "img-def"
+
+    @pytest.mark.asyncio
+    async def test_step_spawn_image_outranks_definition_and_run(self) -> None:
+        """A step spawn_config image outranks definition and run images."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "spawn_config": {"sandbox_image": "img-step"},
+            }
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn_config"] = {
+                "sandbox_image": "img-def"
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["sandbox_image"] == "img-step"
+
+
+class TestExecutionContextTemporal:
+    """Merged execution context reaches the Temporal activity payload."""
+
+    @pytest.mark.asyncio
+    async def test_execution_context_reaches_activity_args(self) -> None:
+        """Workflow+step context merges into the activity payload."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "context": {"env": "qa"},
+            }
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["context"] = {"region": "eu"}
+            await wf._handle_agent_step(step, wf_input)
+
+        args = mock_execute.call_args_list[0].kwargs["args"][0]
+        assert args["execution_context"] == {"region": "eu", "env": "qa"}
+
+
+class TestNormalizedDispatch:
+    """The activity receives the normalized step, not the raw one (#270 F3)."""
+
+    @staticmethod
+    def _completed_activity(mocker=None):
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+        return patch("temporalio.workflow.execute_activity", mock_execute), \
+            patch("temporalio.workflow.now", return_value=mock_now), mock_execute
+
+    @pytest.mark.asyncio
+    async def test_workflow_default_spawn_reaches_activity(self) -> None:
+        """A spec-level spawn default materializes in the activity step."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["spawn"] = "none"
+            await wf._handle_agent_step(step, wf_input)
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["spawn"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_workflow_default_mcp_and_skills_reach_activity(self) -> None:
+        """Spec-level mcp_servers/allowed_skills inherit into the payload."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.definition["spec"]["mcp_servers"] = [
+                {"name": "cat", "url": "https://internal/x"}
+            ]
+            wf_input.definition["spec"]["allowed_skills"] = ["troubleshooting"]
+            await wf._handle_agent_step(step, wf_input)
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["mcp_servers"] == [
+            {"name": "cat", "url": "https://internal/x"}
+        ]
+        assert activity_step["allowed_skills"] == ["troubleshooting"]
+
+    @pytest.mark.asyncio
+    async def test_collapsed_permissions_reach_activity(self) -> None:
+        """Step permissions survive normalization into the payload."""
+        p1, p2, mock_execute = self._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "agent",
+                "output_key": "r1",
+                "prompt": "t",
+                "service_account": "system:diag",
+                "target_namespaces": ["ns-1"],
+            }
+            await wf._handle_agent_step(step, _make_input([step]))
+
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["permissions"]["service_account"] == "system:diag"
+        assert activity_step["target_namespaces"] == ["ns-1"]
+
+
+class TestUnknownStepType:
+    """Unsupported step types fail the step, never succeed silently (#270 F7)."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_type_returns_failed_not_none(self) -> None:
+        """A non-agent/non-approval type produces a failed StepResult."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        mock_now = datetime.now(tz=timezone.utc)
+        with patch("temporalio.workflow.now", return_value=mock_now):
+            wf = AgentWorkflow()
+            step = {
+                "name": "s1",
+                "type": "tool-call",
+                "output_key": "r1",
+                "prompt": "t",
+            }
+            result = await wf._execute_step(step, _make_input([step]))
+
+        assert result is not None
+        assert result.status == "failed"
+        assert "tool-call" in (result.error or "")
+        assert wf._steps["r1"].status == "failed"
+
+
+class TestBareOneStepShorthand:
+    """The bare one-step shorthand works on the Temporal path (#270 F4)."""
+
+    @pytest.mark.asyncio
+    async def test_bare_step_executes_with_convention_names(self) -> None:
+        """A nameless single step runs as agent/result, no KeyError."""
+        p1, p2, mock_execute = TestNormalizedDispatch._completed_activity()
+        with p1, p2:
+            wf = AgentWorkflow()
+            bare = {"type": "agent", "prompt": "t"}
+            output = await wf.run(_make_input([bare]))
+
+        assert "result" in output.steps
+        assert output.steps["result"].status == "completed"
+        activity_step = mock_execute.call_args_list[0].kwargs["args"][0]["step"]
+        assert activity_step["name"] == "agent"
+        assert activity_step["output_key"] == "result"

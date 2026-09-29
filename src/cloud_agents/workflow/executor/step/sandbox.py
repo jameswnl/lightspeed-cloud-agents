@@ -96,6 +96,7 @@ class SandboxExecutor(StepExecutor):
             "name": step_input.step_name,
             "prompt": step_input.prompt,
             "output_key": step_input.output_key,
+            "attempt": step_input.attempt,
         }
 
         run_step_input = {
@@ -107,6 +108,7 @@ class SandboxExecutor(StepExecutor):
             "skills_paths": step_input.skills_paths,
             "mcp_servers": step_input.mcp_servers,
             "context": step_input.context,
+            "execution_context": step_input.execution_context,
         }
 
         start_ms = time.monotonic_ns() // 1_000_000
@@ -114,7 +116,7 @@ class SandboxExecutor(StepExecutor):
             run_step_input,
             spawner=self._spawner,
             transcript_store=self._transcript_store,
-            attempt=1,
+            attempt=step_input.attempt,
         )
         duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 

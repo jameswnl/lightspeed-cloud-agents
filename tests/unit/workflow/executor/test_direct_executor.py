@@ -3135,3 +3135,39 @@ class TestBuildMessageHistoryToolReplay:
         tcp = history[1].parts[0]
         assert isinstance(tcp, ToolCallPart)
         assert tcp.tool_name == ""
+
+
+class TestExecutionContextPrompt:
+    """Execution context is rendered into the direct-executor prompt."""
+
+    def test_execution_context_rendered_in_user_message(self) -> None:
+        """execution_context appears as a labelled block in the prompt."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import _build_messages
+
+        messages = _build_messages(
+            StepInput(
+                prompt="Diagnose the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                execution_context={"env": "staging", "region": "eu"},
+            )
+        )
+
+        user_msg = next(m for m in messages if m["role"] == "user")
+        assert "Execution context" in user_msg["content"]
+        assert "staging" in user_msg["content"]
+
+    def test_no_execution_context_no_block(self) -> None:
+        """No execution_context means no block is appended."""
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.direct import _build_messages
+
+        messages = _build_messages(
+            StepInput(
+                prompt="Diagnose the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
+
+        user_msg = next(m for m in messages if m["role"] == "user")
+        assert "Execution context" not in user_msg["content"]

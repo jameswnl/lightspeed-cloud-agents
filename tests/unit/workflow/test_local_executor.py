@@ -726,3 +726,82 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
             step_spans["s1"].context.trace_id,
             step_spans["s2"].context.trace_id,
         }
+
+
+class TestOneStepWorkflowRunner:
+    """One-step workflows use the identical runner path (issue #268).
+
+    A standalone agent invocation becomes a one-step workflow: submission,
+    execution, completion persistence, and cancellation all flow through
+    the normal workflow APIs with the documented agent/result convention.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_step_runs_to_completion(
+        self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
+    ) -> None:
+        """A bare one-step definition completes with result under 'result'."""
+        import asyncio
+
+        from cloud_agents.workflow.executor.step.base import StepResult
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"summary": "done"},
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        wf_id = await executor.start(_make_input([{"prompt": "Inspect the cluster"}]))
+        await asyncio.wait_for(executor._running[wf_id], timeout=10)
+
+        solo_input = mock_executor.run.call_args_list[0].args[0]
+        assert solo_input.step_name == "agent"
+        assert solo_input.output_key == "result"
+        mock_store.mark_terminal.assert_called_with(wf_id, "completed")
+
+    @pytest.mark.asyncio
+    async def test_one_step_cancellation(
+        self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
+    ) -> None:
+        """Cancelling a running one-step workflow marks it cancelled."""
+        import asyncio
+
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        started = asyncio.Event()
+
+        async def _blocked_run(step_input: Any) -> Any:
+            started.set()
+            await asyncio.Event().wait()
+            from cloud_agents.workflow.executor.step.base import StepResult
+
+            return StepResult(status="completed", output={"late": True})
+
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.side_effect = _blocked_run
+        mocker.patch(
+            "cloud_agents.workflow.executor.graph_translator.get_step_executor",
+            return_value=mock_executor,
+        )
+        mock_store.get.return_value = {
+            "workflow_id": "wf-1",
+            "status": "running",
+        }
+
+        wf_id = await executor.start(_make_input([{"prompt": "Inspect the cluster"}]))
+        await asyncio.wait_for(started.wait(), timeout=10)
+        await executor.cancel(wf_id)
+        # Let the background task unwind through _execute's
+        # CancelledError handler (which marks the run cancelled).
+        import contextlib
+
+        task = executor._running[wf_id]
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=10)
+
+        calls = [c.args for c in mock_store.mark_terminal.call_args_list]
+        assert (wf_id, "cancelled") in calls

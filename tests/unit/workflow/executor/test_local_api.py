@@ -167,6 +167,154 @@ class TestRunWorkflowToolValidation:
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 202
 
+    def test_invalid_definition_provider_returns_422(self) -> None:
+        """Local and Temporal submission paths reject provider extras equally."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "openai", "unknown": "value"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
+    def test_definition_provider_reference_is_forwarded(self) -> None:
+        """A valid definition provider supplies the omitted request provider."""
+        mock_executor = AsyncMock()
+        mock_executor.start.return_value = "wf-definition-provider"
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        provider = mock_executor.start.call_args.args[0]["provider"]
+        assert provider["credentials_secret"] == "OPENAI_API_KEY"
+
+    def test_malformed_request_provider_is_not_dispatched(self) -> None:
+        """Provider validation failures do not start or persist a run."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "sk-" + "not-real",
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
+    def test_non_object_step_returns_422(self) -> None:
+        """Local validation rejects malformed step entries consistently."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [None]},
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [("kind", "Nope"), ("apiVersion", None), ("metadata", "not-an-object")],
+    )
+    def test_invalid_definition_top_level_fields_return_422(
+        self, field: str, value: object
+    ) -> None:
+        """Local schema validation matches the Temporal endpoint."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+        definition: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test-wf"},
+            "spec": {"steps": [{"prompt": "test"}]},
+        }
+        definition[field] = value
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": definition,
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
+    @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
+    def test_non_object_definition_provider_returns_422(
+        self, bad_provider: object
+    ) -> None:
+        """Non-object definition providers return structured 422, not 400."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": bad_provider,
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
     def test_unknown_tools_return_422(self) -> None:
         """Steps referencing unknown tools are rejected with 422."""
         register_tool("kubectl_get", _dummy_func, description="Get K8s resources")
@@ -188,6 +336,7 @@ class TestRunWorkflowToolValidation:
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 422
         assert "nonexistent_tool" in response.json()["detail"]
+        mock_executor.start.assert_not_called()
 
     def test_steps_without_tools_pass(self) -> None:
         """Steps that don't reference any tools pass validation."""

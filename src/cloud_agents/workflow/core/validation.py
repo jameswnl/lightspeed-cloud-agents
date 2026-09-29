@@ -9,6 +9,13 @@ import re
 from typing import Any, Optional
 
 from cloud_agents.workflow.security.content_policy import ContentPolicy, evaluate_content_policy
+from cloud_agents.workflow.core.execution import (
+    apply_one_step_defaults,
+    inference_spec_from_provider_config,
+    reject_secret_bearing_mcp,
+    validate_credential_reference,
+    validate_inference_provider,
+)
 
 
 def _validate_schema(
@@ -53,17 +60,133 @@ def validate_definition(
         A list of error messages. Empty list means valid.
     """
     errors: list[str] = []
-    spec = defn.get("spec", {})
-    steps = spec.get("steps", [])
+    if not isinstance(defn, dict):
+        return ["Workflow definition must be an object"]
 
+    unknown_definition_fields = set(defn) - {
+        "apiVersion",
+        "kind",
+        "metadata",
+        "provider",
+        "skills",
+        "spec",
+        "advisory",
+    }
+    if unknown_definition_fields:
+        errors.append(
+            "Workflow definition contains unknown fields: "
+            + ", ".join(sorted(unknown_definition_fields))
+        )
+
+    spec = defn.get("spec", {})
+    if not isinstance(spec, dict):
+        return errors + ["Workflow spec must be an object"]
+    unknown_spec_fields = set(spec) - {
+        "input_prompt",
+        "steps",
+        "timeout_seconds",
+        "spawn",
+        "spawn_config",
+        "mcp_servers",
+        "allowed_skills",
+        "permissions",
+        "service_account",
+        "context",
+        "escalation",
+    }
+    if unknown_spec_fields:
+        errors.append(
+            "Workflow spec contains unknown fields: "
+            + ", ".join(sorted(unknown_spec_fields))
+        )
+    steps = spec.get("steps", [])
+    if not isinstance(steps, list):
+        return errors + ["Workflow spec steps must be an array"]
     if not steps:
         errors.append("Workflow must have at least one step")
         return errors
 
+    invalid_step_indexes = [
+        index for index, step in enumerate(steps) if not isinstance(step, dict)
+    ]
+    if invalid_step_indexes:
+        return errors + [
+            f"Step {index} must be an object" for index in invalid_step_indexes
+        ]
+
+    # One-step convention (issue #268): a single step may omit
+    # ``name``/``output_key``; default them so the documented shorthand
+    # passes the 422 gate and every downstream check sees the canonical
+    # names, matching both runners (#270).
+    if len(steps) == 1:
+        steps = [apply_one_step_defaults(dict(steps[0]), step_count=1)]
+
+    # Definition-level provider gate (#270): validate the catalog name
+    # and reject secret *values* at submission, before any persistence
+    # or workflow start, so raw tokens cannot enter serialized run state.
+    definition_provider = defn.get("provider")
+    if definition_provider is not None and not isinstance(definition_provider, dict):
+        errors.append(
+            "Definition provider must be an object, "
+            f"got {type(definition_provider).__name__}"
+        )
+    elif isinstance(definition_provider, dict):
+        try:
+            # ``credentials_secret`` is a legitimate reference on the
+            # legacy ProviderConfig shape; validate the name/model
+            # selection and the reference separately.
+            inference_spec_from_provider_config(definition_provider)
+        except ValueError as exc:
+            errors.append(f"Definition provider: {exc}")
+        credentials_secret = definition_provider.get("credentials_secret")
+        if credentials_secret is not None:
+            try:
+                validate_credential_reference(credentials_secret)
+            except ValueError as exc:
+                errors.append(f"Definition provider: {exc}")
+
+    # Workflow-level MCP catalog default (issue #268): steps without
+    # their own ``mcp_servers`` inherit this value at normalization, so
+    # the secret gate below must check the same merged view.
+    workflow_mcp_default = spec.get("mcp_servers")
+
     output_keys: set[str] = set()
     step_names: set[str] = set()
+    allowed_step_fields = {
+        "name",
+        "type",
+        "agent",
+        "prompt",
+        "output_key",
+        "condition",
+        "message",
+        "timeout_seconds",
+        "max_retries",
+        "spawn",
+        "risk_level",
+        "permissions",
+        "parallel_group",
+        "mcp_servers",
+        "spawn_config",
+        "runtime",
+        "role",
+        "instructions",
+        "output_schema",
+        "tools",
+        "context",
+        "service_account",
+        "target_namespaces",
+        "allowed_skills",
+        "inference_provider",
+        "provider",
+    }
 
     for i, step in enumerate(steps):
+        unknown_fields = set(step) - allowed_step_fields
+        if unknown_fields:
+            errors.append(
+                f"Step {i} contains unknown fields: {', '.join(sorted(unknown_fields))}"
+            )
         name = step.get("name")
         if not name:
             errors.append(f"Step {i} is missing required field 'name'")
@@ -74,10 +197,19 @@ def validate_definition(
         step_names.add(name)
 
         output_key = step.get("output_key")
-        if output_key:
-            if output_key in output_keys:
-                errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
+        if not output_key:
+            errors.append(f"Step '{name}' is missing required field 'output_key'")
+        elif output_key in output_keys:
+            errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
+        else:
             output_keys.add(output_key)
+
+        max_retries = step.get("max_retries")
+        if isinstance(max_retries, bool) or (
+            max_retries is not None
+            and (not isinstance(max_retries, int) or max_retries < 0)
+        ):
+            errors.append(f"Step '{name}' max_retries must be a non-negative integer")
 
         prompt = step.get("prompt") or ""
         refs = re.findall(r"\{\{\s*steps\.(\w+)\.", prompt)
@@ -116,6 +248,8 @@ def validate_definition(
         # passes it through to server["name"] -> opaque KeyError.
         # Keep in sync with WorkflowStepSpec.mcp_servers typing.
         mcp_servers = step.get("mcp_servers")
+        if mcp_servers is None:
+            mcp_servers = workflow_mcp_default
         if mcp_servers:
             for j, entry in enumerate(mcp_servers):
                 if isinstance(entry, str):
@@ -132,6 +266,23 @@ def validate_definition(
                     errors.append(
                         f"Step '{name}': mcp_servers entries must be strings or inline configs"
                     )
+
+        # Canonical secret/provider checks (issue #268): fail fast at
+        # submission (422) with the same rules the runners enforce, so
+        # both engines and all API surfaces agree. The secret gate runs
+        # on the MERGED value (step + workflow-level spec default) so a
+        # secret-bearing catalog at spec level is a 422 here, not a
+        # runtime failed step.
+        try:
+            reject_secret_bearing_mcp(mcp_servers)
+        except ValueError as exc:
+            errors.append(f"Step '{name}': {exc}")
+        step_provider = step.get("inference_provider") or step.get("provider")
+        if step_provider is not None:
+            try:
+                validate_inference_provider(dict(step_provider))
+            except ValueError as exc:
+                errors.append(f"Step '{name}': {exc}")
 
     # --- Content policy checks ---
     if content_policy is not None:

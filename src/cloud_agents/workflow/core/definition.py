@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator
 
 from cloud_agents.spawner.base import SpawnConfig
+from cloud_agents.workflow.core.execution import InferenceProviderSpec
 from cloud_agents.workflow.core.models import MCPServerConfig
 from cloud_agents.workflow.core.permissions import PermissionScope
 
@@ -42,16 +43,18 @@ class WorkflowStepSpec(BaseModel):
             CLOUD_AGENTS_SKILLS_PATHS happens to provide.
     """
 
-    name: str
-    type: Literal["agent", "human-approval"]
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    type: Literal["agent", "human-approval"] = "agent"
     agent: Optional[str] = None
     prompt: Optional[str] = None
-    output_key: str
+    output_key: Optional[str] = None
     condition: Optional[str] = None
     message: Optional[str] = None
-    timeout_seconds: int = 3600
-    max_retries: int = Field(default=1, ge=1)
-    spawn: Literal["none", "local", "ephemeral"] = "ephemeral"
+    timeout_seconds: Optional[int] = None
+    max_retries: NonNegativeInt = 0
+    spawn: Optional[Literal["none", "local", "ephemeral"]] = None
     risk_level: Optional[Literal["low", "medium", "high", "critical"]] = None
     permissions: Optional[PermissionScope] = None
     parallel_group: Optional[str] = None
@@ -62,9 +65,11 @@ class WorkflowStepSpec(BaseModel):
     instructions: Optional[str] = None
     output_schema: Optional[dict[str, Any]] = None
     tools: list[str] = Field(default_factory=list)
+    context: Optional[dict[str, Any]] = None
     service_account: Optional[str] = None
     target_namespaces: Optional[list[str]] = None
     allowed_skills: Optional[list[str]] = None
+    inference_provider: Optional[InferenceProviderSpec] = None
 
 
 class WorkflowSpec(BaseModel):
@@ -73,10 +78,23 @@ class WorkflowSpec(BaseModel):
     Attributes:
         input_prompt: Optional initial prompt passed to the first step.
         steps: Ordered list of workflow steps.
+        context: Optional workflow-level execution context merged with
+            per-step ``context`` (step values win per key).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     input_prompt: Optional[str] = None
     steps: list[WorkflowStepSpec] = Field(..., min_length=1)
+    timeout_seconds: Optional[int] = None
+    spawn: Optional[Literal["none", "local", "ephemeral"]] = None
+    spawn_config: Optional[SpawnConfig] = None
+    mcp_servers: Optional[list[str | MCPServerConfig]] = None
+    allowed_skills: Optional[list[str]] = None
+    permissions: Optional[PermissionScope] = None
+    service_account: Optional[str] = None
+    context: Optional[dict[str, Any]] = None
+    escalation: Optional[dict[str, Any]] = None
 
 
 class ProviderSpec(BaseModel):
@@ -85,12 +103,26 @@ class ProviderSpec(BaseModel):
     Attributes:
         name: Provider name (openai, claude, gemini).
         model: Model identifier.
-        credentials_secret: K8s secret name or env var prefix for credentials.
+        credentials_secret: Optional K8s secret name or env var prefix
+            for credentials. Omit it for the issue-#268 contract;
+            runtime credentials resolve separately (see ProviderConfig).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     model: str
-    credentials_secret: str
+    credentials_secret: Optional[str] = None
+
+    @field_validator("credentials_secret")
+    @classmethod
+    def _validate_secret_reference(cls, value: Optional[str]) -> Optional[str]:
+        """Reject secret values in the definition provider reference."""
+        if value is None:
+            return None
+        from cloud_agents.workflow.core.execution import validate_credential_reference
+
+        return validate_credential_reference(value)
 
 
 class SkillsSpec(BaseModel):
@@ -116,6 +148,8 @@ class WorkflowDefinition(BaseModel):
         provider: Default provider for all steps.
         skills: Skills OCI image configuration.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     apiVersion: str
     kind: Literal["AgentWorkflow"]

@@ -14,17 +14,24 @@ from cloud_agents.workflow.core.models import StepResult
 def build_sandbox_context(
     workflow_steps: dict[str, StepResult],
     current_step: dict[str, Any],
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build sandbox context from workflow state and current step config.
 
     Parameters:
         workflow_steps: Completed step results keyed by output_key.
         current_step: Current step definition dict from the workflow YAML.
+        execution_context: User-supplied execution context merged from
+            workflow-level and step-level ``context`` (step wins per
+            key); delivered as the ``executionContext`` section.
 
     Returns:
         Context dict with applicable sections for the sandbox request.
     """
     context: dict[str, Any] = {}
+
+    if execution_context:
+        context["executionContext"] = execution_context
 
     if namespaces := current_step.get("target_namespaces"):
         context["targetNamespaces"] = namespaces

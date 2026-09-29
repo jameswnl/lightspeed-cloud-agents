@@ -387,6 +387,7 @@ async def _run_step_inner(
             context = build_sandbox_context(
                 workflow_steps=prior_steps,
                 current_step=step,
+                execution_context=input.get("execution_context") or {},
             )
 
             request_body: dict[str, Any] = {

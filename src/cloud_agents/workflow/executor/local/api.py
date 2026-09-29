@@ -10,8 +10,9 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
+from cloud_agents.workflow.core.models import ProviderConfig
 from cloud_agents.workflow.executor.base import ApprovalDecision
 from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 
@@ -24,7 +25,7 @@ class RunWorkflowRequest(BaseModel):
     workflow_name: Optional[str] = None
     definition: Optional[dict[str, Any]] = None
     input_prompt: Optional[str] = None
-    provider: Optional[dict[str, Any]] = None
+    provider: Optional[ProviderConfig] = None
     sandbox_image: str = "sandbox:latest"
     skills_image: Optional[str] = None
     skills_paths: Optional[list[str]] = None
@@ -75,7 +76,18 @@ def build_local_router(
                 detail="Workflow definition is required",
             )
 
-        if not request.provider:
+        definition = request.definition
+        provider = request.provider
+        definition_provider = definition.get("provider") if definition else None
+        if provider is None and isinstance(definition_provider, dict):
+            try:
+                provider = ProviderConfig.model_validate(definition_provider)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": [str(exc)]},
+                ) from exc
+        if provider is None and definition_provider is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
@@ -91,19 +103,28 @@ def build_local_router(
                 detail=tool_errors[0],
             )
 
-        if content_policy:
-            from cloud_agents.workflow.core.validation import validate_definition
+        from cloud_agents.workflow.core.validation import validate_definition
 
-            errors = validate_definition(request.definition, content_policy)
-            if errors:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail={"validation_errors": errors},
-                )
+        errors = validate_definition(request.definition, content_policy)
+        if errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": errors},
+            )
+
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": [str(exc)]},
+            ) from exc
 
         input_data: dict[str, Any] = {
             "definition": request.definition,
-            "provider": request.provider,
+            "provider": provider.model_dump(),
             "sandbox_image": request.sandbox_image,
             "skills_image": request.skills_image,
             "skills_paths": request.skills_paths,

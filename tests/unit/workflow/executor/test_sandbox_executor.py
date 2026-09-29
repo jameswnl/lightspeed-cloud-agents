@@ -375,3 +375,37 @@ class TestSandboxExecutor:
         ))
 
         assert result.duration_ms >= 40
+
+
+class TestExecutionContextSandboxDelivery:
+    """execution_context flows into the run_step input for ephemeral steps."""
+
+    @pytest.mark.asyncio
+    async def test_run_step_input_carries_execution_context(
+        self, mocker: MockerFixture
+    ) -> None:
+        """run_step receives execution_context from StepInput."""
+        mock_run_step = mocker.patch(
+            "cloud_agents.workflow.core.step_runner.run_step",
+            return_value={
+                "status": "completed",
+                "output": {"summary": "done"},
+                "transcript": {"step_name": "s1", "events": []},
+            },
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
+
+        executor = SandboxExecutor(spawner=mocker.AsyncMock())
+        await executor.run(StepInput(
+            prompt="Check the cluster",
+            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            workflow_id="wf-1",
+            step_name="diagnose",
+            output_key="diagnosis",
+            execution_context={"env": "staging"},
+        ))
+
+        run_input = mock_run_step.call_args.args[0]
+        assert run_input["execution_context"] == {"env": "staging"}

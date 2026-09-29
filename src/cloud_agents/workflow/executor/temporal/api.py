@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 from temporalio.client import Client, WorkflowExecutionStatus
 
 from cloud_agents.runtime.audit import emit_audit
@@ -258,7 +258,9 @@ def build_temporal_router(
         """Start a new workflow execution."""
         wf_name = request.workflow_name
         if not wf_name and request.definition:
-            wf_name = request.definition.get("metadata", {}).get("name")
+            metadata = request.definition.get("metadata", {})
+            if isinstance(metadata, dict):
+                wf_name = metadata.get("name")
         decision = await authz.authorize(
             caller,
             WorkflowAction.TRIGGER,
@@ -295,7 +297,8 @@ def build_temporal_router(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Either definition or workflow_name is required",
             )
-        if not provider:
+        definition_provider = definition.get("provider")
+        if not provider and definition_provider is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
@@ -324,6 +327,30 @@ def build_temporal_router(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"validation_errors": validation_errors},
+            )
+
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": [str(exc)]},
+            ) from exc
+
+        if provider is None and isinstance(definition_provider, dict):
+            try:
+                provider = ProviderConfig.model_validate(definition_provider)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": [str(exc)]},
+                ) from exc
+        if not provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provider configuration is required",
             )
 
         if request.advisory is not None:
@@ -427,7 +454,13 @@ def build_temporal_router(
                     detail={"validation_errors": validation_errors},
                 )
 
-            defn = WorkflowDefinition.model_validate(body)
+            try:
+                defn = WorkflowDefinition.model_validate(body)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": [str(exc)]},
+                ) from exc
             stored = await definition_store.save(defn)
             return {"name": stored.name, "version": stored.version}
 

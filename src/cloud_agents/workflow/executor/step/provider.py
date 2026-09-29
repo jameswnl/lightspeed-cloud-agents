@@ -21,6 +21,13 @@ _PROVIDER_NAME_MAP: dict[str, str] = {
     "bedrock": "bedrock",
 }
 
+#: Provider names the executors can actually run. Single source of truth
+#: for catalog validation (see ``core.execution.APPROVED_INFERENCE_PROVIDERS``,
+#: which aliases this set): validation here means "the executor knows this
+#: name", while tenant authorization against the approved catalog is
+#: enforced stack-side.
+SUPPORTED_PROVIDER_NAMES: frozenset[str] = frozenset(_PROVIDER_NAME_MAP)
+
 _PROVIDER_ENV_KEYS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
