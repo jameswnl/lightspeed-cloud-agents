@@ -95,7 +95,12 @@ def validate_definition(
     # and reject secret *values* at submission, before any persistence
     # or workflow start, so raw tokens cannot enter serialized run state.
     definition_provider = defn.get("provider")
-    if isinstance(definition_provider, dict):
+    if definition_provider is not None and not isinstance(definition_provider, dict):
+        errors.append(
+            "Definition provider must be an object, "
+            f"got {type(definition_provider).__name__}"
+        )
+    elif isinstance(definition_provider, dict):
         try:
             # ``credentials_secret`` is a legitimate reference on the
             # legacy ProviderConfig shape; validate the name/model

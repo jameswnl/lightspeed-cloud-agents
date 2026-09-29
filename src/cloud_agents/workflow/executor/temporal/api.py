@@ -296,7 +296,7 @@ def build_temporal_router(
                 detail="Either definition or workflow_name is required",
             )
         definition_provider = definition.get("provider")
-        if not provider and not isinstance(definition_provider, dict):
+        if not provider and definition_provider is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",

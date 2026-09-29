@@ -86,6 +86,47 @@ class TestRunWorkflow:
         )
         assert response.status_code == 422
 
+    def test_definition_provider_rejected_by_provider_config_returns_422(
+        self, client: TestClient
+    ) -> None:
+        """Catalog-valid but ProviderConfig-rejected names map to HTTP 422."""
+        # azure passes shared catalog validation (executor supports it) but
+        # fails ProviderConfig's Literal[name], exercising the
+        # ProviderConfig.model_validate() exception handler (not the shared
+        # validation gate that rejects unknown-field inputs earlier).
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {"name": "azure", "model": "gpt-4o"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
+    def test_non_object_definition_provider_returns_422(
+        self, client: TestClient, bad_provider: object
+    ) -> None:
+        """Non-object definition providers return structured 422, not 400."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": bad_provider,
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+        assert response.status_code == 422
+
     def test_start_workflow_calls_temporal(
         self,
         client: TestClient,

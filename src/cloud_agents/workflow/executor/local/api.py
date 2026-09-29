@@ -77,11 +77,10 @@ def build_local_router(
 
         definition = request.definition
         provider = request.provider
-        if provider is None and definition:
-            definition_provider = definition.get("provider")
-            if isinstance(definition_provider, dict):
-                provider = dict(definition_provider)
-        if not provider:
+        definition_provider = definition.get("provider") if definition else None
+        if provider is None and isinstance(definition_provider, dict):
+            provider = dict(definition_provider)
+        if not provider and definition_provider is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provider configuration is required",
