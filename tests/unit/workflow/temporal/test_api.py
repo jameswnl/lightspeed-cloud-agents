@@ -86,6 +86,31 @@ class TestRunWorkflow:
         )
         assert response.status_code == 422
 
+    def test_definition_provider_reference_is_forwarded(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Temporal receives the validated definition-level provider reference."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        workflow_input = mock_client.start_workflow.call_args.args[1]
+        assert workflow_input.provider.credentials_secret == "OPENAI_API_KEY"
+
     def test_non_object_step_returns_422(self, client: TestClient) -> None:
         """Malformed step entries are validation errors, not server errors."""
         response = client.post(

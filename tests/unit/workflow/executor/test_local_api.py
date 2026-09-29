@@ -187,6 +187,60 @@ class TestRunWorkflowToolValidation:
         )
         assert response.status_code == 422
 
+    def test_definition_provider_reference_is_forwarded(self) -> None:
+        """A valid definition provider supplies the omitted request provider."""
+        mock_executor = AsyncMock()
+        mock_executor.start.return_value = "wf-definition-provider"
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "provider": {
+                        "name": "openai",
+                        "model": "gpt-4",
+                        "credentials_secret": "OPENAI_API_KEY",
+                    },
+                    "spec": {"steps": [{"prompt": "test"}]},
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        provider = mock_executor.start.call_args.args[0]["provider"]
+        assert provider["credentials_secret"] == "OPENAI_API_KEY"
+
+    def test_malformed_request_provider_is_not_dispatched(self) -> None:
+        """Provider validation failures do not start or persist a run."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [{"prompt": "test"}]},
+                },
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4",
+                    "credentials_secret": "sk-" + "not-real",
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        mock_executor.start.assert_not_called()
+
     def test_non_object_step_returns_422(self) -> None:
         """Local validation rejects malformed step entries consistently."""
         mock_executor = AsyncMock()
