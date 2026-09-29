@@ -380,6 +380,12 @@ class AgentWorkflow:
             activity_provider["model"] = normalized.inference_provider.model
             if normalized.inference_provider.name != input.provider.name:
                 activity_provider.pop("credentials_secret", None)
+            elif "credentials_secret" not in activity_provider:
+                definition_provider = definition_defaults.get("provider") or {}
+                if isinstance(definition_provider, dict):
+                    reference = definition_provider.get("credentials_secret")
+                    if reference:
+                        activity_provider["credentials_secret"] = reference
 
         # Canonical dispatch (#270): the activity receives the NORMALIZED
         # step -- workflow-default inheritance (spawn, mcp_servers,

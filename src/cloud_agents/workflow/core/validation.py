@@ -60,7 +60,27 @@ def validate_definition(
         A list of error messages. Empty list means valid.
     """
     errors: list[str] = []
+    if not isinstance(defn, dict):
+        return ["Workflow definition must be an object"]
+
+    unknown_definition_fields = set(defn) - {
+        "apiVersion",
+        "kind",
+        "metadata",
+        "provider",
+        "skills",
+        "spec",
+        "advisory",
+    }
+    if unknown_definition_fields:
+        errors.append(
+            "Workflow definition contains unknown fields: "
+            + ", ".join(sorted(unknown_definition_fields))
+        )
+
     spec = defn.get("spec", {})
+    if not isinstance(spec, dict):
+        return errors + ["Workflow spec must be an object"]
     unknown_spec_fields = set(spec) - {
         "input_prompt",
         "steps",

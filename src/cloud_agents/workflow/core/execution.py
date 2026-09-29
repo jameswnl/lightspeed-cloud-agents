@@ -213,6 +213,8 @@ def apply_one_step_defaults(
             definition.
     """
     result = dict(step)
+    if result.get("type") is None:
+        result["type"] = "agent"
     if result.get("name") is None or result.get("output_key") is None:
         if step_count != 1:
             raise ValueError(
@@ -991,13 +993,21 @@ def normalize_workflow_step(
         raise ValueError(f"timeout_seconds must be a positive per-step timeout, got {timeout!r}")
 
     provider_raw = raw.get("inference_provider")
+    provider_from_defaults = False
     if provider_raw is None:
         provider_raw = raw.get("provider")
     if provider_raw is None:
         provider_raw = defaults.get("provider")
+        provider_from_defaults = provider_raw is not None
     inference_provider = None
     if provider_raw is not None:
-        inference_provider = validate_inference_provider(_as_mapping(provider_raw))
+        provider_mapping = _as_mapping(provider_raw)
+        if provider_from_defaults and (
+            "credentials_secret" in provider_mapping or "model_provider" in provider_mapping
+        ):
+            inference_provider = inference_spec_from_provider_config(provider_mapping)
+        else:
+            inference_provider = validate_inference_provider(provider_mapping)
 
     mcp_servers = raw.get("mcp_servers")
     if mcp_servers is None:
@@ -1269,6 +1279,10 @@ def build_step_input(
         # the override provider's default env key resolves instead.
         if provider_name == run_provider.get("name"):
             credentials_secret = run_provider.get("credentials_secret")
+        if credentials_secret is None:
+            definition_provider = _as_mapping((workflow_defaults or {}).get("provider") or {})
+            if definition_provider.get("name") == provider_name:
+                credentials_secret = definition_provider.get("credentials_secret")
     else:
         provider_name = run_provider.get("name", "")
         provider_model = run_provider.get("model", "")
