@@ -102,6 +102,30 @@ class TestRunWorkflow:
         )
         assert response.status_code == 422
 
+    @pytest.mark.parametrize(
+        "field,value",
+        [("kind", "Nope"), ("apiVersion", None), ("metadata", "not-an-object")],
+    )
+    def test_invalid_definition_top_level_fields_return_422(
+        self, client: TestClient, field: str, value: object
+    ) -> None:
+        """Top-level workflow schema errors are rejected before start."""
+        definition: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test-wf"},
+            "spec": {"steps": [{"prompt": "test"}]},
+        }
+        definition[field] = value
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": definition,
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+
     def test_definition_provider_rejected_by_provider_config_returns_422(
         self, client: TestClient
     ) -> None:

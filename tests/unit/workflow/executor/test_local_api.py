@@ -207,6 +207,33 @@ class TestRunWorkflowToolValidation:
         )
         assert response.status_code == 422
 
+    @pytest.mark.parametrize(
+        "field,value",
+        [("kind", "Nope"), ("apiVersion", None), ("metadata", "not-an-object")],
+    )
+    def test_invalid_definition_top_level_fields_return_422(
+        self, field: str, value: object
+    ) -> None:
+        """Local schema validation matches the Temporal endpoint."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+        definition: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": "AgentWorkflow",
+            "metadata": {"name": "test-wf"},
+            "spec": {"steps": [{"prompt": "test"}]},
+        }
+        definition[field] = value
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": definition,
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
     def test_non_object_definition_provider_returns_422(
         self, bad_provider: object

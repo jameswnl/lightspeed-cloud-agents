@@ -112,6 +112,16 @@ def build_local_router(
                 detail={"validation_errors": errors},
             )
 
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": [str(exc)]},
+            ) from exc
+
         input_data: dict[str, Any] = {
             "definition": request.definition,
             "provider": provider.model_dump(),

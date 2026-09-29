@@ -258,7 +258,9 @@ def build_temporal_router(
         """Start a new workflow execution."""
         wf_name = request.workflow_name
         if not wf_name and request.definition:
-            wf_name = request.definition.get("metadata", {}).get("name")
+            metadata = request.definition.get("metadata", {})
+            if isinstance(metadata, dict):
+                wf_name = metadata.get("name")
         decision = await authz.authorize(
             caller,
             WorkflowAction.TRIGGER,
@@ -326,6 +328,16 @@ def build_temporal_router(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"validation_errors": validation_errors},
             )
+
+        from cloud_agents.workflow.core.definition import WorkflowDefinition
+
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"validation_errors": [str(exc)]},
+            ) from exc
 
         if provider is None and isinstance(definition_provider, dict):
             try:
