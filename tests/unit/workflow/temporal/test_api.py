@@ -86,6 +86,22 @@ class TestRunWorkflow:
         )
         assert response.status_code == 422
 
+    def test_non_object_step_returns_422(self, client: TestClient) -> None:
+        """Malformed step entries are validation errors, not server errors."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [None]},
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+
     def test_definition_provider_rejected_by_provider_config_returns_422(
         self, client: TestClient
     ) -> None:
@@ -523,6 +539,40 @@ class TestDefinitionManagement:
                                 },
                             },
                         },
+                    ]
+                },
+            },
+        )
+        assert response.status_code == 422
+
+    def test_post_definition_with_negative_retries_returns_422(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Pydantic model errors are translated to HTTP 422."""
+        from cloud_agents.workflow.core.definition_store import DefinitionStore
+
+        mock_temporal = mocker.MagicMock()
+        store = DefinitionStore()
+        app = FastAPI()
+        router = build_temporal_router(mock_temporal, definition_store=store)
+        app.include_router(router)
+        test_client = TestClient(app, raise_server_exceptions=False)
+
+        response = test_client.post(
+            "/v1/workflows/definitions",
+            json={
+                "apiVersion": "v1",
+                "kind": "AgentWorkflow",
+                "metadata": {"name": "bad-retries"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "s1",
+                            "type": "agent",
+                            "prompt": "test",
+                            "output_key": "r1",
+                            "max_retries": -1,
+                        }
                     ]
                 },
             },

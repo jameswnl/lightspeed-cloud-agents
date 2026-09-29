@@ -442,7 +442,13 @@ def build_temporal_router(
                     detail={"validation_errors": validation_errors},
                 )
 
-            defn = WorkflowDefinition.model_validate(body)
+            try:
+                defn = WorkflowDefinition.model_validate(body)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"validation_errors": [str(exc)]},
+                ) from exc
             stored = await definition_store.save(defn)
             return {"name": stored.name, "version": stored.version}
 

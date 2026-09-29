@@ -187,6 +187,26 @@ class TestRunWorkflowToolValidation:
         )
         assert response.status_code == 422
 
+    def test_non_object_step_returns_422(self) -> None:
+        """Local validation rejects malformed step entries consistently."""
+        mock_executor = AsyncMock()
+        app = _build_test_app(mock_executor)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {"steps": [None]},
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
     def test_non_object_definition_provider_returns_422(
         self, bad_provider: object

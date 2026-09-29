@@ -100,9 +100,19 @@ def validate_definition(
             + ", ".join(sorted(unknown_spec_fields))
         )
     steps = spec.get("steps", [])
+    if not isinstance(steps, list):
+        return errors + ["Workflow spec steps must be an array"]
     if not steps:
         errors.append("Workflow must have at least one step")
         return errors
+
+    invalid_step_indexes = [
+        index for index, step in enumerate(steps) if not isinstance(step, dict)
+    ]
+    if invalid_step_indexes:
+        return errors + [
+            f"Step {index} must be an object" for index in invalid_step_indexes
+        ]
 
     # One-step convention (issue #268): a single step may omit
     # ``name``/``output_key``; default them so the documented shorthand
@@ -193,6 +203,13 @@ def validate_definition(
             errors.append(f"Duplicate output_key: '{output_key}' in step '{name}'")
         else:
             output_keys.add(output_key)
+
+        max_retries = step.get("max_retries")
+        if isinstance(max_retries, bool) or (
+            max_retries is not None
+            and (not isinstance(max_retries, int) or max_retries < 0)
+        ):
+            errors.append(f"Step '{name}' max_retries must be a non-negative integer")
 
         prompt = step.get("prompt") or ""
         refs = re.findall(r"\{\{\s*steps\.(\w+)\.", prompt)
