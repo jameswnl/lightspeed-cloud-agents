@@ -1146,6 +1146,36 @@ class TestPrecedenceChainTemporal:
         assert provider["credentials_secret"] == "test-key"
 
     @pytest.mark.asyncio
+    async def test_definition_credentials_reference_reaches_activity(self) -> None:
+        """Definition credentials reach the activity when run ref is absent."""
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        from cloud_agents.workflow.core.models import ProviderConfig
+
+        mock_execute = AsyncMock()
+        mock_execute.return_value = {"status": "completed", "output": {"ok": True}}
+        mock_now = datetime.now(tz=timezone.utc)
+
+        with (
+            patch("temporalio.workflow.execute_activity", mock_execute),
+            patch("temporalio.workflow.now", return_value=mock_now),
+        ):
+            wf = AgentWorkflow()
+            step = {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "t"}
+            wf_input = _make_input([step])
+            wf_input.provider = ProviderConfig(name="openai", model="gpt-4")
+            wf_input.definition["provider"] = {
+                "name": "openai",
+                "model": "gpt-4o-mini",
+                "credentials_secret": "OPENAI_API_KEY",
+            }
+            await wf._handle_agent_step(step, wf_input)
+
+        provider = mock_execute.call_args_list[0].kwargs["args"][0]["provider"]
+        assert provider["credentials_secret"] == "OPENAI_API_KEY"
+
+    @pytest.mark.asyncio
     async def test_definition_sandbox_image_outranks_run_image(self) -> None:
         """A definition-level spawn_config image beats input.sandbox_image."""
         from datetime import datetime, timezone

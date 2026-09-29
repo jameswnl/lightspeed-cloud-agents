@@ -70,7 +70,9 @@ class TestRunWorkflow:
         assert response.status_code == 202
         assert "workflow_id" in response.json()
 
-    def test_invalid_definition_provider_returns_422(self, client: TestClient) -> None:
+    def test_invalid_definition_provider_returns_422(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
         """Inline provider model errors are translated to HTTP 422."""
         response = client.post(
             "/v1/workflows/run",
@@ -85,6 +87,7 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
 
     def test_definition_provider_reference_is_forwarded(
         self, client: TestClient, mock_client: Any
@@ -111,7 +114,9 @@ class TestRunWorkflow:
         workflow_input = mock_client.start_workflow.call_args.args[1]
         assert workflow_input.provider.credentials_secret == "OPENAI_API_KEY"
 
-    def test_non_object_step_returns_422(self, client: TestClient) -> None:
+    def test_non_object_step_returns_422(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
         """Malformed step entries are validation errors, not server errors."""
         response = client.post(
             "/v1/workflows/run",
@@ -126,13 +131,14 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
 
     @pytest.mark.parametrize(
         "field,value",
         [("kind", "Nope"), ("apiVersion", None), ("metadata", "not-an-object")],
     )
     def test_invalid_definition_top_level_fields_return_422(
-        self, client: TestClient, field: str, value: object
+        self, client: TestClient, mock_client: Any, field: str, value: object
     ) -> None:
         """Top-level workflow schema errors are rejected before start."""
         definition: dict[str, Any] = {
@@ -150,9 +156,10 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
 
     def test_definition_provider_rejected_by_provider_config_returns_422(
-        self, client: TestClient
+        self, client: TestClient, mock_client: Any
     ) -> None:
         """Catalog-valid but ProviderConfig-rejected names map to HTTP 422."""
         # azure passes shared catalog validation (executor supports it) but
@@ -172,6 +179,7 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
 
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
     def test_non_object_definition_provider_returns_422(

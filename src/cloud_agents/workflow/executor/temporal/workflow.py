@@ -380,7 +380,7 @@ class AgentWorkflow:
             activity_provider["model"] = normalized.inference_provider.model
             if normalized.inference_provider.name != input.provider.name:
                 activity_provider.pop("credentials_secret", None)
-            elif "credentials_secret" not in activity_provider:
+            elif not activity_provider.get("credentials_secret"):
                 definition_provider = definition_defaults.get("provider") or {}
                 if isinstance(definition_provider, dict):
                     reference = definition_provider.get("credentials_secret")

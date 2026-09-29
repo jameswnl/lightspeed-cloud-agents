@@ -186,6 +186,7 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        mock_executor.start.assert_not_called()
 
     def test_definition_provider_reference_is_forwarded(self) -> None:
         """A valid definition provider supplies the omitted request provider."""
@@ -260,6 +261,7 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        mock_executor.start.assert_not_called()
 
     @pytest.mark.parametrize(
         "field,value",
@@ -287,6 +289,7 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        mock_executor.start.assert_not_called()
 
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
     def test_non_object_definition_provider_returns_422(
@@ -310,6 +313,7 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        mock_executor.start.assert_not_called()
 
     def test_unknown_tools_return_422(self) -> None:
         """Steps referencing unknown tools are rejected with 422."""

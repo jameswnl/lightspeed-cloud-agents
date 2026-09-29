@@ -225,6 +225,25 @@ class TestPrecedenceChain:
         assert step_input.provider["model"] == "gpt-4o-mini"
         assert step_input.provider["credentials_secret"] == "run-key"
 
+    def test_definition_credentials_reference_reaches_step_input(self) -> None:
+        """A definition provider reference survives canonical normalization."""
+        from cloud_agents.workflow.core.execution import build_step_input
+
+        step_input = build_step_input(
+            {"name": "s1", "output_key": "r1", "prompt": "p"},
+            run_context={
+                "provider": {"name": "openai", "model": "gpt-4o"},
+            },
+            workflow_defaults={
+                "provider": {
+                    "name": "openai",
+                    "model": "gpt-4o-mini",
+                    "credentials_secret": "OPENAI_API_KEY",
+                }
+            },
+        )
+        assert step_input.provider["credentials_secret"] == "OPENAI_API_KEY"
+
     def test_step_provider_outranks_definition_and_run(self) -> None:
         """A step-level override outranks definition and run levels."""
         step_input = self._build(
