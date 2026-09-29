@@ -336,6 +336,7 @@ class TestRunWorkflowToolValidation:
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 422
         assert "nonexistent_tool" in response.json()["detail"]
+        mock_executor.start.assert_not_called()
 
     def test_steps_without_tools_pass(self) -> None:
         """Steps that don't reference any tools pass validation."""

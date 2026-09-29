@@ -183,7 +183,7 @@ class TestRunWorkflow:
 
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
     def test_non_object_definition_provider_returns_422(
-        self, client: TestClient, bad_provider: object
+        self, client: TestClient, mock_client: Any, bad_provider: object
     ) -> None:
         """Non-object definition providers return structured 422, not 400."""
         response = client.post(
@@ -199,6 +199,36 @@ class TestRunWorkflow:
             },
         )
         assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
+
+    def test_unknown_tools_return_422_without_dispatch(
+        self, client: TestClient, mock_client: Any
+    ) -> None:
+        """Tool validation failures do not start a Temporal workflow."""
+        response = client.post(
+            "/v1/workflows/run",
+            json={
+                "definition": {
+                    "apiVersion": "v1",
+                    "kind": "AgentWorkflow",
+                    "metadata": {"name": "test-wf"},
+                    "spec": {
+                        "steps": [
+                            {
+                                "name": "s1",
+                                "type": "agent",
+                                "output_key": "r1",
+                                "prompt": "test",
+                                "tools": ["missing_tool"],
+                            }
+                        ]
+                    },
+                },
+                "provider": {"name": "openai", "model": "gpt-4"},
+            },
+        )
+        assert response.status_code == 422
+        mock_client.start_workflow.assert_not_called()
 
     def test_start_workflow_calls_temporal(
         self,
