@@ -110,9 +110,7 @@ class TestContextBuilding:
             },
         )
         assert "executionResult" in ctx
-        assert ctx["executionResult"]["commands_run"] == [
-            "kubectl rollout restart deploy/api"
-        ]
+        assert ctx["executionResult"]["commands_run"] == ["kubectl rollout restart deploy/api"]
 
     def test_target_namespaces_from_step_config(self) -> None:
         """Target namespaces passed through from step config."""

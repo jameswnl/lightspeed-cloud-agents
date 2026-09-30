@@ -40,9 +40,7 @@ class TestTemporalWorkflowRunnerStart:
     """Tests for starting workflows via Temporal."""
 
     @pytest.mark.asyncio
-    async def test_start_calls_temporal(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_start_calls_temporal(self, executor: Any, mock_client: AsyncMock) -> None:
         """start() calls temporal_client.start_workflow."""
         input_data = {
             "definition": {
@@ -124,9 +122,7 @@ class TestTemporalWorkflowRunnerCancel:
     """Tests for cancellation."""
 
     @pytest.mark.asyncio
-    async def test_cancel_calls_temporal(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_cancel_calls_temporal(self, executor: Any, mock_client: AsyncMock) -> None:
         """cancel() calls handle.cancel()."""
         await executor.cancel("wf-1")
 
@@ -151,9 +147,7 @@ class TestTemporalWorkflowRunnerStatus:
     """Tests for status queries."""
 
     @pytest.mark.asyncio
-    async def test_get_status_queries_workflow(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_get_status_queries_workflow(self, executor: Any, mock_client: AsyncMock) -> None:
         """get_status() queries the Temporal workflow."""
         handle = mock_client.get_workflow_handle.return_value
         handle.query.return_value = {
@@ -194,42 +188,30 @@ class TestTemporalWorkflowRunnerStatus:
             "steps": {},
             "events": [{"type": "workflow.paused"}, {"type": "workflow.completed"}],
         }
-        handle.describe.return_value = MagicMock(
-            status=WorkflowExecutionStatus.COMPLETED
-        )
+        handle.describe.return_value = MagicMock(status=WorkflowExecutionStatus.COMPLETED)
 
         status = await executor.get_status("wf-1")
         assert status.status == "completed"
         assert status.is_terminal is True
 
     @pytest.mark.asyncio
-    async def test_is_terminal_completed(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_is_terminal_completed(self, executor: Any, mock_client: AsyncMock) -> None:
         """Completed workflow is terminal."""
         handle = mock_client.get_workflow_handle.return_value
-        handle.describe.return_value = MagicMock(
-            status=WorkflowExecutionStatus.COMPLETED
-        )
+        handle.describe.return_value = MagicMock(status=WorkflowExecutionStatus.COMPLETED)
 
         assert await executor.is_terminal("wf-1") is True
 
     @pytest.mark.asyncio
-    async def test_is_terminal_timed_out(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_is_terminal_timed_out(self, executor: Any, mock_client: AsyncMock) -> None:
         """Timed out workflow is terminal."""
         handle = mock_client.get_workflow_handle.return_value
-        handle.describe.return_value = MagicMock(
-            status=WorkflowExecutionStatus.TIMED_OUT
-        )
+        handle.describe.return_value = MagicMock(status=WorkflowExecutionStatus.TIMED_OUT)
 
         assert await executor.is_terminal("wf-1") is True
 
     @pytest.mark.asyncio
-    async def test_is_terminal_running(
-        self, executor: Any, mock_client: AsyncMock
-    ) -> None:
+    async def test_is_terminal_running(self, executor: Any, mock_client: AsyncMock) -> None:
         """Running workflow is not terminal."""
         assert await executor.is_terminal("wf-1") is False
 

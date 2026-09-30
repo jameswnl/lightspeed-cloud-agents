@@ -91,9 +91,7 @@ def get_tools(names: list[str]) -> list[Any]:
                 if available == "(none)"
                 else ""
             )
-            raise ValueError(
-                f"Unknown tool '{name}'. Registered tools: {available}.{hint}"
-            )
+            raise ValueError(f"Unknown tool '{name}'. Registered tools: {available}.{hint}")
         defn = _REGISTRY[name]
         tools.append(Tool(defn.func, name=defn.name, description=defn.description))
     return tools

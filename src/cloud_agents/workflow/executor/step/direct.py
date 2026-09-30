@@ -67,9 +67,7 @@ def _build_messages(step_input: StepInput) -> list[dict[str, str]]:
 
     if step_input.execution_context:
         exec_block = json.dumps(step_input.execution_context, indent=2)
-        user_content = (
-            f"{user_content}\n\n--- Execution context ---\n{exec_block}"
-        )
+        user_content = f"{user_content}\n\n--- Execution context ---\n{exec_block}"
 
     if step_input.context:
         context_parts = []
@@ -106,9 +104,7 @@ def _build_user_prompt(step_input: StepInput) -> str:
 
     if step_input.execution_context:
         exec_block = json.dumps(step_input.execution_context, indent=2)
-        user_content = (
-            f"{user_content}\n\n--- Execution context ---\n{exec_block}"
-        )
+        user_content = f"{user_content}\n\n--- Execution context ---\n{exec_block}"
 
     if step_input.context:
         context_parts = []
@@ -297,8 +293,10 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                     tool_call_id=tool_call_id,
                 )
                 # Consecutive tool_calls are parts of the same ModelResponse
-                if history and isinstance(history[-1], ModelResponse) and any(
-                    isinstance(p, ToolCallPart) for p in history[-1].parts
+                if (
+                    history
+                    and isinstance(history[-1], ModelResponse)
+                    and any(isinstance(p, ToolCallPart) for p in history[-1].parts)
                 ):
                     history[-1].parts.append(tool_call_part)
                 else:
@@ -314,8 +312,10 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                     tool_call_id=tool_call_id,
                 )
                 # Consecutive tool_results grouped in same ModelRequest
-                if history and isinstance(history[-1], ModelRequest) and any(
-                    isinstance(p, ToolReturnPart) for p in history[-1].parts
+                if (
+                    history
+                    and isinstance(history[-1], ModelRequest)
+                    and any(isinstance(p, ToolReturnPart) for p in history[-1].parts)
                 ):
                     history[-1].parts.append(return_part)
                 else:
@@ -347,7 +347,11 @@ class DirectExecutor(StepExecutor):
         start_ms = time.monotonic_ns() // 1_000_000
 
         try:
-            skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
+            skills_cap = (
+                get_skills_capability(include=step_input.allowed_skills)
+                if step_input.allowed_skills is not None
+                else None
+            )
             has_conversation = _has_conversation_context(step_input.context)
             if step_input.tools or step_input.mcp_servers or skills_cap or has_conversation:
                 return await self._run_with_agent(step_input, start_ms, skills_cap=skills_cap)
@@ -390,7 +394,11 @@ class DirectExecutor(StepExecutor):
             StreamEvent instances (token deltas followed by complete/error).
         """
         has_conversation = _has_conversation_context(step_input.context)
-        skills_cap_probe = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
+        skills_cap_probe = (
+            get_skills_capability(include=step_input.allowed_skills)
+            if step_input.allowed_skills is not None
+            else None
+        )
         if not (step_input.tools or step_input.mcp_servers or skills_cap_probe or has_conversation):
             async for event in super().run_stream(step_input):
                 yield event
@@ -442,7 +450,11 @@ class DirectExecutor(StepExecutor):
                     active_toolsets.append(active_ts)
 
                 capabilities = [Instrumentation(settings=get_instrumentation_settings())]
-                skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
+                skills_cap = (
+                    get_skills_capability(include=step_input.allowed_skills)
+                    if step_input.allowed_skills is not None
+                    else None
+                )
                 if skills_cap:
                     capabilities.append(skills_cap)
 
@@ -478,9 +490,7 @@ class DirectExecutor(StepExecutor):
                     "output_tokens": output_tokens,
                     "step_name": step_input.step_name,
                     "tools": step_input.tools,
-                    "mcp_servers": [
-                        s.get("name", "") for s in (step_input.mcp_servers or [])
-                    ],
+                    "mcp_servers": [s.get("name", "") for s in (step_input.mcp_servers or [])],
                 },
             ]
 
@@ -569,7 +579,11 @@ class DirectExecutor(StepExecutor):
             # Build capabilities
             capabilities = [Instrumentation(settings=get_instrumentation_settings())]
             if skills_cap is None:
-                skills_cap = get_skills_capability(include=step_input.allowed_skills) if step_input.allowed_skills is not None else None
+                skills_cap = (
+                    get_skills_capability(include=step_input.allowed_skills)
+                    if step_input.allowed_skills is not None
+                    else None
+                )
             if skills_cap:
                 capabilities.append(skills_cap)
 

@@ -274,9 +274,7 @@ class CLISessionLauncher:
                 )
                 raise
 
-    def list_sessions(
-        self, workflow_id: str | None = None
-    ) -> list[CLISessionInfo]:
+    def list_sessions(self, workflow_id: str | None = None) -> list[CLISessionInfo]:
         """List all tracked CLI sessions.
 
         Parameters:
@@ -385,23 +383,21 @@ class CLISessionLauncher:
                     f"(current: {info.status.value})"
                 )
 
-            msg_line = json.dumps({
-                "message": message,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
-            })
+            msg_line = json.dumps(
+                {
+                    "message": message,
+                    "timestamp": datetime.now(tz=UTC).isoformat(),
+                }
+            )
 
             # Read existing content, append new message.
             try:
-                existing = await spawner.read_file(
-                    info.agent_name, _MESSAGE_FILE_PATH
-                )
+                existing = await spawner.read_file(info.agent_name, _MESSAGE_FILE_PATH)
             except FileNotFoundError:
                 existing = ""
 
             new_content = existing + msg_line + "\n"
-            await spawner.write_file(
-                info.agent_name, _MESSAGE_FILE_PATH, new_content
-            )
+            await spawner.write_file(info.agent_name, _MESSAGE_FILE_PATH, new_content)
 
         emit_audit(
             event_type="cli_session_message_sent",

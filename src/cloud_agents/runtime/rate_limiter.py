@@ -15,7 +15,7 @@ import hashlib
 import logging
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from starlette.responses import JSONResponse
 
@@ -122,9 +122,7 @@ class TokenBucket:
         if self.rate <= 0:
             return
         max_age = 2.0 * self.burst / self.rate
-        stale_keys = [
-            k for k, s in self._buckets.items() if now - s.last_refill > max_age
-        ]
+        stale_keys = [k for k, s in self._buckets.items() if now - s.last_refill > max_age]
         for k in stale_keys:
             del self._buckets[k]
 
@@ -194,7 +192,9 @@ class RateLimitMiddleware:
         if not allowed:
             ls_rate_limit_rejections_total.labels(path=path).inc()
             self._maybe_emit_audit(key, path, scope)
-            retry_after = str(max(1, math.ceil(1 / self.limiter.rate))) if self.limiter.rate > 0 else "60"
+            retry_after = (
+                str(max(1, math.ceil(1 / self.limiter.rate))) if self.limiter.rate > 0 else "60"
+            )
             response = JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again later."},

@@ -58,9 +58,7 @@ def _parse_token_map(raw_tokens: list[str]) -> dict[str, float | None]:
     return token_map
 
 
-def _find_matching_token(
-    presented: str, valid_tokens: dict[str, float | None]
-) -> str | None:
+def _find_matching_token(presented: str, valid_tokens: dict[str, float | None]) -> str | None:
     """Find a matching token using constant-time comparison.
 
     Iterates all valid tokens to prevent timing side-channels.

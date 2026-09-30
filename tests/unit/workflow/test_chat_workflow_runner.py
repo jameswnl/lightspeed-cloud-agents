@@ -27,13 +27,15 @@ def mock_run_store_fixture(mocker: MockerFixture) -> AsyncMock:
     """Mock RunStateStore."""
     store = mocker.AsyncMock()
     store.create = mocker.AsyncMock()
-    store.get = mocker.AsyncMock(return_value={
-        "workflow_id": "chat-123",
-        "workflow_name": "chat",
-        "status": "running",
-        "user_id": None,
-        "session_id": None,
-    })
+    store.get = mocker.AsyncMock(
+        return_value={
+            "workflow_id": "chat-123",
+            "workflow_name": "chat",
+            "status": "running",
+            "user_id": None,
+            "session_id": None,
+        }
+    )
     store.update_step = mocker.AsyncMock()
     store.append_event = mocker.AsyncMock()
     store.mark_terminal = mocker.AsyncMock()
@@ -1003,7 +1005,6 @@ class TestAssistantTextExtraction:
         # The original code skips assistant message on None output
         assert len(messages) == 1  # only user message
 
-
     @pytest.mark.asyncio
     async def test_output_response_none_stored_as_empty(
         self,
@@ -1084,7 +1085,6 @@ class TestGetHistoryUnknownConversation:
         with pytest.raises(KeyError, match="not found"):
             await runner.get_history("unknown-conv-id")
 
-
     @pytest.mark.asyncio
     async def test_get_history_missing_run_state_with_transcripts_returns_history(
         self,
@@ -1104,7 +1104,11 @@ class TestGetHistoryUnknownConversation:
                 "step_name": "turn-0",
                 "messages": [
                     {"role": "user", "content": "Hello", "timestamp": "2026-08-24T00:00:00"},
-                    {"role": "assistant", "content": "Hi there", "timestamp": "2026-08-24T00:00:01"},
+                    {
+                        "role": "assistant",
+                        "content": "Hi there",
+                        "timestamp": "2026-08-24T00:00:01",
+                    },
                 ],
             }
         ]
@@ -1157,9 +1161,7 @@ class TestCustomMiddleware:
         )
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = StepResult(
-            status="completed", output={"response": "ok"}
-        )
+        mock_executor.run.return_value = StepResult(status="completed", output={"response": "ok"})
         mocker.patch(
             "cloud_agents.workflow.executor.chat.runner.get_step_executor",
             return_value=mock_executor,
@@ -1196,9 +1198,7 @@ class TestCustomMiddleware:
         )
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = StepResult(
-            status="completed", output={"response": "ok"}
-        )
+        mock_executor.run.return_value = StepResult(status="completed", output={"response": "ok"})
         mocker.patch(
             "cloud_agents.workflow.executor.chat.runner.get_step_executor",
             return_value=mock_executor,
@@ -1253,9 +1253,7 @@ class TestCustomMiddleware:
         )
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = StepResult(
-            status="completed", output={"response": "ok"}
-        )
+        mock_executor.run.return_value = StepResult(status="completed", output={"response": "ok"})
         mocker.patch(
             "cloud_agents.workflow.executor.chat.runner.get_step_executor",
             return_value=mock_executor,
@@ -1285,9 +1283,7 @@ class TestCustomMiddleware:
         )
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = StepResult(
-            status="completed", output={"response": "ok"}
-        )
+        mock_executor.run.return_value = StepResult(status="completed", output={"response": "ok"})
         mocker.patch(
             "cloud_agents.workflow.executor.chat.runner.get_step_executor",
             return_value=mock_executor,
@@ -1341,9 +1337,7 @@ class TestCustomMiddleware:
         )
 
         mock_executor = mocker.AsyncMock()
-        mock_executor.run.return_value = StepResult(
-            status="completed", output={"response": "ok"}
-        )
+        mock_executor.run.return_value = StepResult(status="completed", output={"response": "ok"})
         mocker.patch(
             "cloud_agents.workflow.executor.chat.runner.get_step_executor",
             return_value=mock_executor,
@@ -1642,6 +1636,7 @@ class TestSaveTurnToolMessages:
         assert messages[0]["role"] == "user"
         assert messages[1]["role"] == "assistant"
 
+
 class TestChatWorkflowAllowedSkills:
     """Least-privilege allowed_skills for chat turns (same as workflow steps)."""
 
@@ -1682,4 +1677,3 @@ class TestChatWorkflowAllowedSkills:
             context={},
         )
         assert step_input.allowed_skills == ["k8s-diag", "git-ops"]
-

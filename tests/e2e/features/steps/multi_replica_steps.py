@@ -48,7 +48,11 @@ def _kubectl(*args: str, check: bool = True, timeout: int = KUBECTL_TIMEOUT) -> 
     """
     cmd = ["kubectl", "-n", NAMESPACE, *args]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=check,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=check,
     )
     return result.stdout.strip()
 
@@ -128,48 +132,61 @@ def _submit_workflow(workflow_id: str | None = None) -> dict[str, Any]:
         API response as dict.
     """
     wf_id = workflow_id or f"e2e-multi-{uuid.uuid4().hex[:8]}"
-    payload = json.dumps({
-        "definition": {
-            "kind": "AgentWorkflow",
-            "apiVersion": "v1",
-            "metadata": {"name": "e2e-multi-replica-test"},
-            "spec": {
-                "steps": [
-                    {
-                        "name": "diagnose",
-                        "type": "agent",
-                        "output_key": "diagnosis",
-                        "instructions": "Analyze the system and report findings.",
-                    },
-                    {
-                        "name": "verify",
-                        "type": "agent",
-                        "output_key": "verification",
-                        "instructions": "Verify the diagnosis is correct.",
-                    },
-                ],
+    payload = json.dumps(
+        {
+            "definition": {
+                "kind": "AgentWorkflow",
+                "apiVersion": "v1",
+                "metadata": {"name": "e2e-multi-replica-test"},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "diagnose",
+                            "type": "agent",
+                            "output_key": "diagnosis",
+                            "instructions": "Analyze the system and report findings.",
+                        },
+                        {
+                            "name": "verify",
+                            "type": "agent",
+                            "output_key": "verification",
+                            "instructions": "Verify the diagnosis is correct.",
+                        },
+                    ],
+                },
             },
-        },
-        "workflow_id": wf_id,
-        "provider": {
-            "name": "openai",
-            "model": "gpt-4o-mini",
-            "credentials_secret": "openai-api-key",
-        },
-        "approval_policy": {
-            "auto_approve_risk_levels": ["low", "medium", "high", "critical"],
-        },
-    })
+            "workflow_id": wf_id,
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4o-mini",
+                "credentials_secret": "openai-api-key",
+            },
+            "approval_policy": {
+                "auto_approve_risk_levels": ["low", "medium", "high", "critical"],
+            },
+        }
+    )
     result = subprocess.run(
         [
-            "kubectl", "exec", "-n", NAMESPACE,
-            "deploy/workflow-runner", "--",
-            "curl", "-s", "-X", "POST",
+            "kubectl",
+            "exec",
+            "-n",
+            NAMESPACE,
+            "deploy/workflow-runner",
+            "--",
+            "curl",
+            "-s",
+            "-X",
+            "POST",
             f"http://localhost:{RUNNER_API_PORT}/v1/workflows/run",
-            "-H", "Content-Type: application/json",
-            "-d", payload,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            payload,
         ],
-        capture_output=True, text=True, timeout=WORKFLOW_TIMEOUT,
+        capture_output=True,
+        text=True,
+        timeout=WORKFLOW_TIMEOUT,
         check=True,
     )
     return json.loads(result.stdout)
@@ -186,12 +203,19 @@ def _get_workflow_status(workflow_id: str) -> dict[str, Any]:
     """
     result = subprocess.run(
         [
-            "kubectl", "exec", "-n", NAMESPACE,
-            "deploy/workflow-runner", "--",
-            "curl", "-s",
+            "kubectl",
+            "exec",
+            "-n",
+            NAMESPACE,
+            "deploy/workflow-runner",
+            "--",
+            "curl",
+            "-s",
             f"http://localhost:{RUNNER_API_PORT}/v1/workflows/{workflow_id}",
         ],
-        capture_output=True, text=True, timeout=KUBECTL_TIMEOUT,
+        capture_output=True,
+        text=True,
+        timeout=KUBECTL_TIMEOUT,
         check=True,
     )
     return json.loads(result.stdout)
@@ -283,8 +307,7 @@ def workflow_reaches_step(cluster_state: dict, step_name: str):
             status = _get_workflow_status(wf_id)
             events = status.get("events", [])
             started = [
-                e for e in events
-                if e.get("type") == "step.started" and e.get("step") == step_name
+                e for e in events if e.get("type") == "step.started" and e.get("step") == step_name
             ]
             if started:
                 return
@@ -322,9 +345,9 @@ def activity_re_dispatched(cluster_state: dict):
     current_pods = [p["metadata"]["name"] for p in _get_ready_runner_pods()]
     assert len(current_pods) >= 1, "No ready pods after crash recovery"
     # Deleted pod should be gone; K8s generates a new name for replacements
-    assert deleted not in current_pods, (
-        f"Deleted pod '{deleted}' still present in running pods: {current_pods}"
-    )
+    assert (
+        deleted not in current_pods
+    ), f"Deleted pod '{deleted}' still present in running pods: {current_pods}"
 
 
 @then("the workflow completes end-to-end with all steps succeeded")
@@ -341,9 +364,9 @@ def workflow_completes(cluster_state: dict):
             if status.get("status") == "completed":
                 steps = status.get("steps", {})
                 for step_name, step_data in steps.items():
-                    assert step_data.get("status") == "completed", (
-                        f"Step '{step_name}' status: {step_data.get('status')}"
-                    )
+                    assert (
+                        step_data.get("status") == "completed"
+                    ), f"Step '{step_name}' status: {step_data.get('status')}"
                 return
         except Exception:
             pass
@@ -406,9 +429,7 @@ def orphan_reconciliation_runs(cluster_state: dict):
     logs = _get_pod_logs(new_pod, since="2m")
     # The entrypoint logs orphan cleanup activity
     assert (
-        "orphan" in logs.lower()
-        or "reconcil" in logs.lower()
-        or "startup" in logs.lower()
+        "orphan" in logs.lower() or "reconcil" in logs.lower() or "startup" in logs.lower()
     ), "No orphan reconciliation evidence in new pod logs"
 
 
@@ -431,9 +452,9 @@ def orphaned_sandbox_cleaned():
             and j.get("status", {}).get("succeeded", 0) == 0
             and j.get("status", {}).get("failed", 0) == 0
         ]
-        assert len(orphans) == 0, (
-            f"Found {len(orphans)} orphaned sandbox Job(s) after reconciliation: {orphans}"
-        )
+        assert (
+            len(orphans) == 0
+        ), f"Found {len(orphans)} orphaned sandbox Job(s) after reconciliation: {orphans}"
     except subprocess.CalledProcessError:
         # No jobs found at all means no orphans -- this is expected
         pass
@@ -478,9 +499,7 @@ def all_four_complete(cluster_state: dict):
         if len(completed) < 4:
             time.sleep(5)
 
-    assert len(completed) == 4, (
-        f"Only {len(completed)}/4 workflows completed: {completed}"
-    )
+    assert len(completed) == 4, f"Only {len(completed)}/4 workflows completed: {completed}"
 
 
 @then("workflows were distributed across both replicas")

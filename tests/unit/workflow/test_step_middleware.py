@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, replace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,10 +28,10 @@ from cloud_agents.workflow.executor.step.base import (
     StreamEvent,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_step_input(**overrides: Any) -> StepInput:
     """Build a minimal StepInput for testing."""
@@ -475,9 +474,7 @@ class TestTracingMiddleware:
 
         mw = TracingMiddleware()
         step_input = _make_step_input()
-        result = _make_step_result(
-            status="completed", input_tokens=150, output_tokens=75
-        )
+        result = _make_step_result(status="completed", input_tokens=150, output_tokens=75)
 
         with patch("opentelemetry.trace.get_current_span", return_value=mock_span):
             returned = await mw.after(step_input, result)

@@ -188,9 +188,7 @@ class TestDocEnvVarSync:
         assert "Configuration" in table_text
         assert "Purpose" in table_text
 
-    def test_extraction_finds_known_env_vars(
-        self, activities_source: str
-    ) -> None:
+    def test_extraction_finds_known_env_vars(self, activities_source: str) -> None:
         """Sanity check: extraction must find well-known env vars."""
         code_vars = _extract_code_env_vars_from_activities(activities_source)
         expected_always_present = {
@@ -198,6 +196,4 @@ class TestDocEnvVarSync:
             "LIGHTSPEED_MODEL",
         }
         missing = expected_always_present - code_vars
-        assert not missing, (
-            f"Extraction failed to find known env vars: {sorted(missing)}"
-        )
+        assert not missing, f"Extraction failed to find known env vars: {sorted(missing)}"

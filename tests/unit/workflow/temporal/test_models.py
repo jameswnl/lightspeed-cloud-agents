@@ -18,9 +18,7 @@ class TestProviderConfig:
 
     def test_valid_provider(self) -> None:
         """Valid provider config parses correctly."""
-        cfg = ProviderConfig(
-            name="openai", model="gpt-4", credentials_secret="openai-key"
-        )
+        cfg = ProviderConfig(name="openai", model="gpt-4", credentials_secret="openai-key")
         assert cfg.name == "openai"
         assert cfg.model == "gpt-4"
 
@@ -59,9 +57,7 @@ class TestWorkflowInput:
         inp = WorkflowInput(
             definition={"steps": []},
             workflow_id="wf-1",
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
         )
         assert inp.workflow_id == "wf-1"
         assert inp.sandbox_image == "lightspeed-agentic-sandbox:latest"
@@ -73,9 +69,7 @@ class TestWorkflowInput:
             definition={"steps": [{"name": "s1"}]},
             input_prompt="check cluster",
             workflow_id="wf-2",
-            provider=ProviderConfig(
-                name="claude", model="claude-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="claude", model="claude-4", credentials_secret="k"),
             sandbox_image="custom:v1",
             skills_image="quay.io/skills:latest",
             skills_paths=["/skills/diag"],
@@ -110,9 +104,7 @@ class TestWorkflowStatus:
         status = WorkflowStatus(
             steps={"s1": StepResult(status="completed")},
             events=[
-                WorkflowEvent(
-                    type="step.completed", step="s1", timestamp="2026-01-01T00:00:00Z"
-                )
+                WorkflowEvent(type="step.completed", step="s1", timestamp="2026-01-01T00:00:00Z")
             ],
         )
         assert len(status.events) == 1
@@ -127,9 +119,7 @@ class TestSandboxStepInput:
         inp = SandboxStepInput(
             step={"name": "diagnose", "type": "agent"},
             workflow_id="wf-1",
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
             sandbox_image="sandbox:latest",
         )
         assert inp.workflow_id == "wf-1"
@@ -168,9 +158,7 @@ class TestMCPModels:
             name="sn",
             url="http://mcp.local/sse",
             secret_headers={
-                "Authorization": SecretHeaderRef(
-                    secret_name="mcp-token", key="bearer-token"
-                ),
+                "Authorization": SecretHeaderRef(secret_name="mcp-token", key="bearer-token"),
             },
         )
         assert cfg.secret_headers["Authorization"].secret_name == "mcp-token"
@@ -191,9 +179,7 @@ class TestMCPModels:
         wi = WorkflowInput(
             definition={"spec": {"steps": []}},
             workflow_id="wf-1",
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
             mcp_servers=[
                 MCPServerConfig(name="sn", url="http://mcp.local/sse"),
             ],
@@ -206,9 +192,7 @@ class TestMCPModels:
         wi = WorkflowInput(
             definition={"spec": {"steps": []}},
             workflow_id="wf-1",
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
         )
         assert wi.mcp_servers is None
 

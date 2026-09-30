@@ -185,13 +185,9 @@ class WorkflowRunner(ABC):
         Raises:
             NotImplementedError: If this runner does not support interactive messages.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support interactive messages"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support interactive messages")
 
-    async def send_message_stream(
-        self, workflow_id: str, prompt: str
-    ) -> AsyncIterator:
+    async def send_message_stream(self, workflow_id: str, prompt: str) -> AsyncIterator:
         """Append and execute a step interactively with streaming.
 
         Override for interactive runners (ChatWorkflowRunner).
@@ -206,7 +202,5 @@ class WorkflowRunner(ABC):
         Raises:
             NotImplementedError: If this runner does not support interactive streaming.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support interactive streaming"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support interactive streaming")
         yield  # make it a generator

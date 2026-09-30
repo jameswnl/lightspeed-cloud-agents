@@ -22,7 +22,6 @@ from cloud_agents.storage.run_state_store import RunStateStore
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 from cloud_agents.workflow.executor.temporal.entrypoint import (
-    AUTH_REQUIRED,
     CONTENT_POLICY_PATH,
     _create_spawner,
     _get_auth_dependency,
@@ -150,7 +149,9 @@ def build_local_app() -> FastAPI:
 
         _chat_skills_raw = os.environ.get("CHAT_ALLOWED_SKILLS", "")
         _chat_allowed = (
-            [s.strip() for s in _chat_skills_raw.split(",") if s.strip()] if _chat_skills_raw else None
+            [s.strip() for s in _chat_skills_raw.split(",") if s.strip()]
+            if _chat_skills_raw
+            else None
         )
         chat_config = ChatWorkflowConfig(
             provider={

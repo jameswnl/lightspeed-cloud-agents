@@ -108,7 +108,9 @@ async def main() -> None:
     except RuntimeError as exc:
         print("PASS (1): spawn() failed as expected:\n   ", exc)
     except Exception as exc:  # pragma: no cover - diagnostic path
-        print(f"PASS (1, unexpected exception type {type(exc).__name__}, still a failure):\n   ", exc)
+        print(
+            f"PASS (1, unexpected exception type {type(exc).__name__}, still a failure):\n   ", exc
+        )
 
     provider_id = captured.get("provider_id")
     if not provider_id:
@@ -137,7 +139,9 @@ async def main() -> None:
         sys.exit(1)
     except grpc.RpcError as exc:
         if exc.code() == grpc.StatusCode.NOT_FOUND:
-            print(f"PASS (2): provider '{provider_id}' no longer exists on the gateway -- not orphaned")
+            print(
+                f"PASS (2): provider '{provider_id}' no longer exists on the gateway -- not orphaned"
+            )
         else:
             print(f"FAIL (2): unexpected error looking up provider '{provider_id}':", exc)
             sys.exit(1)
@@ -150,7 +154,9 @@ async def main() -> None:
         sys.exit(1)
     print(f"PASS (3): spawner._provider_ids no longer tracks '{AGENT_NAME}'")
 
-    print("\nALL CHECKS PASSED -- #214 fix confirmed: no orphaned provider after post-create spawn failure")
+    print(
+        "\nALL CHECKS PASSED -- #214 fix confirmed: no orphaned provider after post-create spawn failure"
+    )
 
 
 if __name__ == "__main__":

@@ -56,7 +56,9 @@ class TestRunAlembic:
         """
         from cloud_agents.storage.migrate import run_alembic
 
-        original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+        original_import = (
+            __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        )
 
         def mock_import(name, *args, **kwargs):
             if name in ("alembic", "alembic.command", "alembic.config"):
@@ -73,8 +75,8 @@ class TestRunAlembic:
 
         with (
             patch("cloud_agents.storage.migrate._ALEMBIC_INI") as mock_ini,
-            patch("alembic.command.upgrade") as mock_upgrade,
-            patch("alembic.config.Config") as mock_config_cls,
+            patch("alembic.command.upgrade"),
+            patch("alembic.config.Config"),
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ini.exists.return_value = True

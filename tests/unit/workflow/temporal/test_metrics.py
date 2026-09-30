@@ -18,9 +18,7 @@ class TestMetricsExist:
         """ls_workflow_run_duration_seconds histogram exists."""
         from cloud_agents.workflow.executor.temporal.metrics import ls_workflow_run_duration_seconds
 
-        assert (
-            ls_workflow_run_duration_seconds._name == "ls_workflow_run_duration_seconds"
-        )
+        assert ls_workflow_run_duration_seconds._name == "ls_workflow_run_duration_seconds"
         assert "workflow_name" in ls_workflow_run_duration_seconds._labelnames
 
     def test_step_runs_total_counter(self) -> None:
@@ -33,10 +31,9 @@ class TestMetricsExist:
 
     def test_step_duration_histogram(self) -> None:
         """ls_workflow_step_duration_seconds histogram exists."""
-        from cloud_agents.workflow.executor.temporal.metrics import ls_workflow_step_duration_seconds
-
-        assert (
-            ls_workflow_step_duration_seconds._name
-            == "ls_workflow_step_duration_seconds"
+        from cloud_agents.workflow.executor.temporal.metrics import (
+            ls_workflow_step_duration_seconds,
         )
+
+        assert ls_workflow_step_duration_seconds._name == "ls_workflow_step_duration_seconds"
         assert "step_name" in ls_workflow_step_duration_seconds._labelnames

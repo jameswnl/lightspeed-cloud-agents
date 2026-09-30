@@ -154,15 +154,17 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "check",
-                "type": "agent",
-                "prompt": "check pods",
-                "output_key": "r1",
-                "tools": ["kubectl_get", "http_request"],
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "check",
+                    "type": "agent",
+                    "prompt": "check pods",
+                    "output_key": "r1",
+                    "tools": ["kubectl_get", "http_request"],
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 202
@@ -186,6 +188,10 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        errors = response.json()["detail"]["validation_errors"]
+        assert any(
+            "unknown" in error and "Extra inputs are not permitted" in error for error in errors
+        )
         mock_executor.start.assert_not_called()
 
     def test_definition_provider_reference_is_forwarded(self) -> None:
@@ -240,6 +246,9 @@ class TestRunWorkflowToolValidation:
         )
 
         assert response.status_code == 422
+        error = response.json()["detail"][0]
+        assert error["loc"] == ["body", "provider", "credentials_secret"]
+        assert "looks like a secret value" in error["msg"]
         mock_executor.start.assert_not_called()
 
     def test_non_object_step_returns_422(self) -> None:
@@ -261,6 +270,7 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        assert response.json()["detail"] == {"validation_errors": ["Step 0 must be an object"]}
         mock_executor.start.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -289,12 +299,12 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        errors = response.json()["detail"]["validation_errors"]
+        assert any(field in error for error in errors)
         mock_executor.start.assert_not_called()
 
     @pytest.mark.parametrize("bad_provider", ["not-a-provider", ["openai"], 42])
-    def test_non_object_definition_provider_returns_422(
-        self, bad_provider: object
-    ) -> None:
+    def test_non_object_definition_provider_returns_422(self, bad_provider: object) -> None:
         """Non-object definition providers return structured 422, not 400."""
         mock_executor = AsyncMock()
         app = _build_test_app(mock_executor)
@@ -313,6 +323,10 @@ class TestRunWorkflowToolValidation:
             },
         )
         assert response.status_code == 422
+        expected_type = type(bad_provider).__name__
+        assert response.json()["detail"] == {
+            "validation_errors": [f"Definition provider must be an object, got {expected_type}"]
+        }
         mock_executor.start.assert_not_called()
 
     def test_unknown_tools_return_422(self) -> None:
@@ -323,15 +337,17 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "check",
-                "type": "agent",
-                "prompt": "check pods",
-                "output_key": "r1",
-                "tools": ["kubectl_get", "nonexistent_tool"],
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "check",
+                    "type": "agent",
+                    "prompt": "check pods",
+                    "output_key": "r1",
+                    "tools": ["kubectl_get", "nonexistent_tool"],
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 422
@@ -346,14 +362,16 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "summarize",
-                "type": "agent",
-                "prompt": "summarize the log",
-                "output_key": "r1",
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "summarize",
+                    "type": "agent",
+                    "prompt": "summarize the log",
+                    "output_key": "r1",
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 202
@@ -366,15 +384,17 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "step1",
-                "type": "agent",
-                "prompt": "do something",
-                "output_key": "r1",
-                "tools": [],
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "step1",
+                    "type": "agent",
+                    "prompt": "do something",
+                    "output_key": "r1",
+                    "tools": [],
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 202
@@ -387,22 +407,24 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "step1",
-                "type": "agent",
-                "prompt": "first step",
-                "output_key": "r1",
-                "tools": ["http_request"],
-            },
-            {
-                "name": "step2",
-                "type": "agent",
-                "prompt": "second step",
-                "output_key": "r2",
-                "tools": ["missing_tool"],
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "step1",
+                    "type": "agent",
+                    "prompt": "first step",
+                    "output_key": "r1",
+                    "tools": ["http_request"],
+                },
+                {
+                    "name": "step2",
+                    "type": "agent",
+                    "prompt": "second step",
+                    "output_key": "r2",
+                    "tools": ["missing_tool"],
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         assert response.status_code == 422
@@ -417,15 +439,17 @@ class TestRunWorkflowToolValidation:
         app = _build_test_app(mock_executor)
         client = TestClient(app, raise_server_exceptions=False)
 
-        body = _make_run_body([
-            {
-                "name": "check",
-                "type": "agent",
-                "prompt": "check",
-                "output_key": "r1",
-                "tools": ["bad_tool"],
-            },
-        ])
+        body = _make_run_body(
+            [
+                {
+                    "name": "check",
+                    "type": "agent",
+                    "prompt": "check",
+                    "output_key": "r1",
+                    "tools": ["bad_tool"],
+                },
+            ]
+        )
 
         response = client.post("/v1/workflows/run", json=body)
         detail = response.json()["detail"]

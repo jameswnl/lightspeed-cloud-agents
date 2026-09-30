@@ -11,9 +11,7 @@ from pytest_mock import MockerFixture
 class TestWorkflowEngineSwitch:
     """Tests for WORKFLOW_ENGINE env var routing."""
 
-    def test_local_engine_creates_local_runner(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_local_engine_creates_local_runner(self, mocker: MockerFixture) -> None:
         """WORKFLOW_ENGINE=local creates a LocalWorkflowRunner."""
         mocker.patch.dict(os.environ, {"WORKFLOW_ENGINE": "local"}, clear=False)
 
@@ -49,9 +47,7 @@ class TestWorkflowEngineSwitch:
         with pytest.raises(ValueError, match="TEMPORAL_URL"):
             create_runner()
 
-    def test_alert_trigger_under_local_raises(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_alert_trigger_under_local_raises(self, mocker: MockerFixture) -> None:
         """ALERT_TRIGGER_ENABLED=true under local engine raises."""
         mocker.patch.dict(
             os.environ,
@@ -64,9 +60,7 @@ class TestWorkflowEngineSwitch:
         with pytest.raises(ValueError, match="ALERT_TRIGGER"):
             create_runner()
 
-    def test_schedule_under_local_raises(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_schedule_under_local_raises(self, mocker: MockerFixture) -> None:
         """SCHEDULE_* config under local engine raises."""
         mocker.patch.dict(
             os.environ,
@@ -81,9 +75,7 @@ class TestWorkflowEngineSwitch:
 
     def test_unknown_engine_raises(self, mocker: MockerFixture) -> None:
         """Unknown WORKFLOW_ENGINE value raises."""
-        mocker.patch.dict(
-            os.environ, {"WORKFLOW_ENGINE": "unknown"}, clear=False
-        )
+        mocker.patch.dict(os.environ, {"WORKFLOW_ENGINE": "unknown"}, clear=False)
 
         from cloud_agents.workflow.executor.factory import create_runner
 

@@ -9,7 +9,6 @@ Validates:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -31,9 +30,9 @@ class TestDockerComposeMcpKubectl:
 
     def test_mcp_kubectl_service_exists(self, compose_data: dict) -> None:
         """Compose overlay must define an mcp-kubectl service."""
-        assert "mcp-kubectl" in compose_data.get("services", {}), (
-            "docker-compose.demo.yaml must define mcp-kubectl service"
-        )
+        assert "mcp-kubectl" in compose_data.get(
+            "services", {}
+        ), "docker-compose.demo.yaml must define mcp-kubectl service"
 
     def test_mcp_kubectl_image(self, compose_data: dict) -> None:
         """mcp-kubectl service must use localhost/mcp-kubectl:latest image."""
@@ -50,9 +49,9 @@ class TestDockerComposeMcpKubectl:
         svc = compose_data["services"]["mcp-kubectl"]
         ports = svc.get("ports", [])
         port_strs = [str(p) for p in ports]
-        assert any("8082" in p for p in port_strs), (
-            f"mcp-kubectl must expose port 8082, got: {ports}"
-        )
+        assert any(
+            "8082" in p for p in port_strs
+        ), f"mcp-kubectl must expose port 8082, got: {ports}"
 
 
 class TestMakefileDemoUp:
@@ -90,28 +89,28 @@ class TestDemoDocsRealCluster:
 
     def test_documents_real_cluster_toggle(self, demo_content: str) -> None:
         """DEMO.md must mention the Real Cluster toggle."""
-        assert "real cluster" in demo_content.lower() or "Real Cluster" in demo_content, (
-            "DEMO.md must document the Real Cluster toggle"
-        )
+        assert (
+            "real cluster" in demo_content.lower() or "Real Cluster" in demo_content
+        ), "DEMO.md must document the Real Cluster toggle"
 
     def test_documents_kind_cluster_requirement(self, demo_content: str) -> None:
         """DEMO.md should mention Kind cluster or kubeconfig requirement."""
         lower = demo_content.lower()
-        assert "kind" in lower or "kubeconfig" in lower, (
-            "DEMO.md must mention Kind cluster or kubeconfig requirement for real-cluster mode"
-        )
+        assert (
+            "kind" in lower or "kubeconfig" in lower
+        ), "DEMO.md must mention Kind cluster or kubeconfig requirement for real-cluster mode"
 
     def test_documents_graceful_degradation(self, demo_content: str) -> None:
         """DEMO.md should mention graceful degradation when no cluster is available."""
-        assert "graceful" in demo_content.lower(), (
-            "DEMO.md must mention graceful degradation when no cluster is reachable"
-        )
+        assert (
+            "graceful" in demo_content.lower()
+        ), "DEMO.md must mention graceful degradation when no cluster is reachable"
 
     def test_documents_mcp_kubectl_service(self, demo_content: str) -> None:
         """DEMO.md should mention the mcp-kubectl service."""
-        assert "mcp-kubectl" in demo_content or "mcp kubectl" in demo_content.lower(), (
-            "DEMO.md must mention the mcp-kubectl service"
-        )
+        assert (
+            "mcp-kubectl" in demo_content or "mcp kubectl" in demo_content.lower()
+        ), "DEMO.md must mention the mcp-kubectl service"
 
 
 class TestDashboardRealClusterToggle:
@@ -126,33 +125,29 @@ class TestDashboardRealClusterToggle:
 
     def test_k8s_scenario_has_variants(self, html_content: str) -> None:
         """K8s Incident Response scenario must have a variants map."""
-        assert "variants" in html_content, (
-            "K8s scenario must define a 'variants' map with simulated and realCluster"
-        )
+        assert (
+            "variants" in html_content
+        ), "K8s scenario must define a 'variants' map with simulated and realCluster"
 
     def test_has_simulated_variant(self, html_content: str) -> None:
         """K8s scenario must have a 'simulated' variant."""
-        assert "simulated" in html_content, (
-            "K8s scenario must have a 'simulated' variant"
-        )
+        assert "simulated" in html_content, "K8s scenario must have a 'simulated' variant"
 
     def test_has_real_cluster_variant(self, html_content: str) -> None:
         """K8s scenario must have a 'realCluster' variant."""
-        assert "realCluster" in html_content, (
-            "K8s scenario must have a 'realCluster' variant"
-        )
+        assert "realCluster" in html_content, "K8s scenario must have a 'realCluster' variant"
 
     def test_real_cluster_variant_has_mcp_servers(self, html_content: str) -> None:
         """realCluster variant must reference kubectl MCP server."""
-        assert "mcp__kubectl" in html_content or "mcp-kubectl" in html_content, (
-            "realCluster variant must reference kubectl MCP server"
-        )
+        assert (
+            "mcp__kubectl" in html_content or "mcp-kubectl" in html_content
+        ), "realCluster variant must reference kubectl MCP server"
 
     def test_real_cluster_variant_has_kubectl_url(self, html_content: str) -> None:
         """realCluster variant must have mcp-kubectl URL on port 8082."""
-        assert "mcp-kubectl:8082" in html_content, (
-            "realCluster variant must include mcp-kubectl:8082 URL"
-        )
+        assert (
+            "mcp-kubectl:8082" in html_content
+        ), "realCluster variant must include mcp-kubectl:8082 URL"
 
     def test_toggle_ui_exists(self, html_content: str) -> None:
         """Dashboard must have a toggle UI element (pill/switch)."""
@@ -171,16 +166,12 @@ class TestDashboardRealClusterToggle:
 
     def test_localstorage_persistence(self, html_content: str) -> None:
         """Toggle state must persist in localStorage."""
-        assert "localStorage" in html_content, (
-            "Toggle state must persist via localStorage"
-        )
+        assert "localStorage" in html_content, "Toggle state must persist via localStorage"
 
     def test_select_scenario_reads_toggle(self, html_content: str) -> None:
         """selectScenario must read toggle state to pick variant."""
         # Check that selectScenario references variant logic
-        assert "variant" in html_content, (
-            "selectScenario must read toggle state and pick variant"
-        )
+        assert "variant" in html_content, "selectScenario must read toggle state and pick variant"
 
     def test_real_cluster_fix_step_has_output_schema(self, html_content: str) -> None:
         """realCluster fix step must have output_schema for downstream references."""
@@ -194,13 +185,17 @@ class TestDashboardRealClusterToggle:
         assert fix_idx != -1, "realCluster variant must have a fix step"
         # Check that output_schema appears between fix step and the next step
         next_step_idx = html_content.find("name: 'verify'", fix_idx)
-        fix_section = html_content[fix_idx:next_step_idx] if next_step_idx != -1 else html_content[fix_idx:fix_idx+500]
-        assert "output_schema" in fix_section, (
-            "fix step must have output_schema — verify step references steps.fix.output.summary"
+        fix_section = (
+            html_content[fix_idx:next_step_idx]
+            if next_step_idx != -1
+            else html_content[fix_idx : fix_idx + 500]
         )
+        assert (
+            "output_schema" in fix_section
+        ), "fix step must have output_schema — verify step references steps.fix.output.summary"
 
     def test_real_cluster_variant_has_allowed_tools(self, html_content: str) -> None:
         """realCluster variant steps must have permissions.allowed_tools."""
-        assert "allowed_tools" in html_content, (
-            "realCluster variant must specify allowed_tools per step"
-        )
+        assert (
+            "allowed_tools" in html_content
+        ), "realCluster variant must specify allowed_tools per step"

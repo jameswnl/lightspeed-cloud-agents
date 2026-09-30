@@ -13,9 +13,7 @@ from typing import Any
 
 from cloud_agents.workflow.core.state import WorkflowState
 
-CONDITION_PATTERN = re.compile(
-    r"steps\.(\w+)\.(status|approved|output\.(\w+))\s*(==|!=)?\s*(.*)$"
-)
+CONDITION_PATTERN = re.compile(r"steps\.(\w+)\.(status|approved|output\.(\w+))\s*(==|!=)?\s*(.*)$")
 
 
 def evaluate_condition(condition: str, state: WorkflowState) -> bool:

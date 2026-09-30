@@ -35,22 +35,26 @@ class TestCleanupFailureMetrics:
         mock_response.status_code = 200
         mock_response.json.return_value = {"success": True, "output": {}}
 
-        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient")
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient"
+        )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-
         before = _get_counter_value("ls_sandbox_cleanup_failures", {"step_name": "fail-step"})
 
-        await run_sandbox_step({
-            "step": {"name": "fail-step", "prompt": "test", "output_key": "r1"},
-            "workflow_id": "wf-cleanup-1",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {"name": "fail-step", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-cleanup-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         after = _get_counter_value("ls_sandbox_cleanup_failures", {"step_name": "fail-step"})
         assert after > before
@@ -66,22 +70,26 @@ class TestCleanupFailureMetrics:
         mock_response.status_code = 200
         mock_response.json.return_value = {"success": True, "output": {}}
 
-        mock_http = mocker.patch("cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient")
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient"
+        )
         mock_http.return_value.__aenter__ = mocker.AsyncMock(
             return_value=mocker.MagicMock(post=mocker.AsyncMock(return_value=mock_response)),
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-
         before = _get_counter_value("ls_sandbox_cleanup_failures", {"step_name": "ok-step"})
 
-        await run_sandbox_step({
-            "step": {"name": "ok-step", "prompt": "test", "output_key": "r1"},
-            "workflow_id": "wf-cleanup-2",
-            "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
-            "sandbox_image": "sandbox:latest",
-            "context": {},
-        }, spawner=mock_spawner)
+        await run_sandbox_step(
+            {
+                "step": {"name": "ok-step", "prompt": "test", "output_key": "r1"},
+                "workflow_id": "wf-cleanup-2",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
 
         after = _get_counter_value("ls_sandbox_cleanup_failures", {"step_name": "ok-step"})
         assert after == before
@@ -121,7 +129,9 @@ class TestOrphanCleanupMetrics:
         assert after == before
 
     @pytest.mark.asyncio
-    async def test_partial_destroy_failure_counts_only_successes(self, mocker: MockerFixture) -> None:
+    async def test_partial_destroy_failure_counts_only_successes(
+        self, mocker: MockerFixture
+    ) -> None:
         """Only successfully destroyed orphans are counted in the metric."""
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
@@ -144,7 +154,7 @@ class TestOrphanCleanupMetrics:
 
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after >= before + 2  # 2 succeeded, 1 failed
-        assert after < before + 3   # NOT 3 — the failed one shouldn't count
+        assert after < before + 3  # NOT 3 — the failed one shouldn't count
 
 
 class TestSandboxTimeoutMetrics:

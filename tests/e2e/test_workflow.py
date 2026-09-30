@@ -14,7 +14,6 @@ Run:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from datetime import timedelta
@@ -34,7 +33,9 @@ from cloud_agents.workflow.core.models import ProviderConfig, WorkflowInput
 from cloud_agents.workflow.executor.temporal.workflow import AgentWorkflow
 
 TEMPORAL_URL = os.environ.get("TEMPORAL_E2E_URL", "localhost:7233")
-WORKFLOW_YAML = Path(__file__).parents[2] / "examples" / "workflow-definitions" / "diagnose-fix-workflow.yaml"
+WORKFLOW_YAML = (
+    Path(__file__).parents[2] / "examples" / "workflow-definitions" / "diagnose-fix-workflow.yaml"
+)
 ALL_ACTIVITIES = [run_sandbox_step, build_escalation_activity, send_approval_notification]
 
 

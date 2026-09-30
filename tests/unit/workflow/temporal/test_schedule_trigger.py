@@ -15,7 +15,6 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -157,9 +156,7 @@ class TestScheduleModels:
         inp = ScheduleInput(
             workflow_name="test-wf",
             schedule={"cron": "0 0 * * *"},
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
         )
         assert inp.schedule_id is not None
         assert inp.schedule_id.startswith("sched-")
@@ -175,9 +172,7 @@ class TestScheduleModels:
             schedule_id="my-schedule",
             workflow_name="test-wf",
             schedule={"cron": "0 0 * * *"},
-            provider=ProviderConfig(
-                name="openai", model="gpt-4", credentials_secret="k"
-            ),
+            provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="k"),
         )
         assert inp.schedule_id == "my-schedule"
 
@@ -395,9 +390,7 @@ class TestScheduleCreateEndpoint:
         client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
 
         created_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "schedule_created"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "schedule_created"
         ]
         assert len(created_calls) == 1
         assert created_calls[0][1]["details"]["workflow_name"] == "nightly-report"
@@ -421,9 +414,7 @@ class TestScheduleCreateEndpoint:
         client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
 
         triggered_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "schedule_triggered"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "schedule_triggered"
         ]
         assert len(triggered_calls) == 1
         assert triggered_calls[0][1]["details"]["trigger"] == "schedule_registered"
@@ -515,9 +506,7 @@ class TestScheduleListEndpoint:
         mock_entry.policy.overlap.name = "SKIP"
 
         mock_temporal = mocker.MagicMock()
-        mock_temporal.list_schedules = mocker.AsyncMock(
-            return_value=_async_iter([mock_entry])
-        )
+        mock_temporal.list_schedules = mocker.AsyncMock(return_value=_async_iter([mock_entry]))
 
         app = _build_schedule_app(mock_temporal)
         client = TestClient(app, raise_server_exceptions=False)
@@ -608,9 +597,7 @@ class TestScheduleDeleteEndpoint:
         client.delete("/v1/schedules/sched-abc")
 
         deleted_calls = [
-            c
-            for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "schedule_deleted"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "schedule_deleted"
         ]
         assert len(deleted_calls) == 1
         assert deleted_calls[0][1]["details"]["schedule_id"] == "sched-abc"
@@ -762,13 +749,13 @@ class TestScheduleTriggerEntrypointWiring:
         if response.status_code == 404:
             # Distinguish route-not-found from endpoint-not-found
             body = response.json()
-            assert body.get("detail") != "Not Found", (
-                "Schedule endpoint should be registered but got generic 404"
-            )
+            assert (
+                body.get("detail") != "Not Found"
+            ), "Schedule endpoint should be registered but got generic 404"
         else:
-            assert response.status_code != 405, (
-                f"Schedule endpoint should be registered but got {response.status_code}"
-            )
+            assert (
+                response.status_code != 405
+            ), f"Schedule endpoint should be registered but got {response.status_code}"
 
     def test_entrypoint_passes_content_policy_to_schedule_router(
         self,
@@ -947,9 +934,7 @@ class TestScheduleRBACEnforcement:
         store.get = mocker.AsyncMock(return_value=_make_stored_definition())
 
         authz = self._make_deny_authorizer(mocker)
-        app = _build_schedule_app(
-            mock_temporal, definition_store=store, authorizer=authz
-        )
+        app = _build_schedule_app(mock_temporal, definition_store=store, authorizer=authz)
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)
@@ -1058,9 +1043,7 @@ class TestScheduleContentPolicy:
 
         policy = ContentPolicy(max_prompt_length=5)
 
-        app = _build_schedule_app(
-            mock_temporal, definition_store=store, content_policy=policy
-        )
+        app = _build_schedule_app(mock_temporal, definition_store=store, content_policy=policy)
         client = TestClient(app, raise_server_exceptions=False)
 
         response = client.post("/v1/schedules", json=SAMPLE_SCHEDULE_INPUT)

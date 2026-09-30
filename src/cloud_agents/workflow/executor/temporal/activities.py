@@ -162,9 +162,7 @@ async def _run_direct_or_local_step(
         skills_image=input.get("skills_image"),
         skills_paths=input.get("skills_paths"),
         allowed_skills=step.get("allowed_skills"),
-        mcp_servers=resolve_mcp_servers(
-            step.get("mcp_servers"), input.get("mcp_servers")
-        ),
+        mcp_servers=resolve_mcp_servers(step.get("mcp_servers"), input.get("mcp_servers")),
         workflow_id=input["workflow_id"],
         raw_step=step,
         step_name=step_name,
@@ -464,9 +462,7 @@ async def _run_sandbox_step_inner(
     # MCP server injection — step references servers by name from workflow-level catalog
     # plus inline step-scoped definitions (issue #265).
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    raw_mcp_servers = resolve_mcp_servers(
-        step.get("mcp_servers"), input.get("mcp_servers")
-    )
+    raw_mcp_servers = resolve_mcp_servers(step.get("mcp_servers"), input.get("mcp_servers"))
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:

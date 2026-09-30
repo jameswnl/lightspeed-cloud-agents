@@ -52,8 +52,7 @@ def resolve_path(data: Any, path: str) -> Any:
 
         if not isinstance(current, dict):
             raise ValueError(
-                f"Path '{'.'.join(visited)}' is not a dict, "
-                f"cannot access key '{key}'"
+                f"Path '{'.'.join(visited)}' is not a dict, " f"cannot access key '{key}'"
             )
         if key not in current:
             loc = ".".join(visited) or "root"
@@ -65,8 +64,7 @@ def resolve_path(data: Any, path: str) -> Any:
             idx = int(index_str)
             if not isinstance(current, list):
                 raise ValueError(
-                    f"Path '{'.'.join(visited)}' is not a list, "
-                    f"cannot index with [{idx}]"
+                    f"Path '{'.'.join(visited)}' is not a list, " f"cannot index with [{idx}]"
                 )
             if idx >= len(current):
                 raise ValueError(
@@ -152,9 +150,7 @@ def interpolate(template: str, state: WorkflowState) -> str:
         step_ref = f"steps.{step_name}.output.{path}"
         result = state.steps.get(step_name)
         if result is None or result.output is None:
-            raise ValueError(
-                f"Template references missing step or output: {step_ref}"
-            )
+            raise ValueError(f"Template references missing step or output: {step_ref}")
         if "." not in path and "[" not in path:
             value = result.output.get(path)
         else:

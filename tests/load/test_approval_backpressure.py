@@ -8,7 +8,6 @@ when multiple workflows are waiting simultaneously.
 from __future__ import annotations
 
 import time
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,9 +28,7 @@ def approval_app() -> tuple[FastAPI, MagicMock]:
     handle.query.return_value = MagicMock(
         model_dump=lambda: {
             "steps": {"analyze": {"status": "completed"}},
-            "events": [
-                {"type": "step.waiting_approval", "step": "remediate", "timestamp": "T0"}
-            ],
+            "events": [{"type": "step.waiting_approval", "step": "remediate", "timestamp": "T0"}],
         },
         events=[
             MagicMock(

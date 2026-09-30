@@ -95,9 +95,7 @@ class WebhookPackager:
                 resp.raise_for_status()
             logger.info("Escalation sent to webhook for step '%s'", pkg.step_name)
         except Exception as exc:
-            logger.warning(
-                "Escalation webhook failed for step '%s': %s", pkg.step_name, exc
-            )
+            logger.warning("Escalation webhook failed for step '%s': %s", pkg.step_name, exc)
 
 
 class JiraPackager:
@@ -145,9 +143,7 @@ class JiraPackager:
                 pkg.step_name,
             )
         except Exception as exc:
-            logger.warning(
-                "Jira escalation failed for step '%s': %s", pkg.step_name, exc
-            )
+            logger.warning("Jira escalation failed for step '%s': %s", pkg.step_name, exc)
 
 
 def build_escalation_package(
@@ -256,9 +252,7 @@ def serialize_handoff_context(pkg: EscalationPackage) -> str:
 
     # What failed
     sections.append("## What failed")
-    sections.append(
-        f"Step '{pkg.step_name}' failed."
-    )
+    sections.append(f"Step '{pkg.step_name}' failed.")
     if pkg.escalation.get("failure_history"):
         last_error = pkg.escalation["failure_history"][-1].get("error", "unknown")
         sections.append(f"Last error: {last_error}")
@@ -280,12 +274,8 @@ def serialize_handoff_context(pkg: EscalationPackage) -> str:
                             duration = data.get("duration_ms")
                             input_val = data.get("input", "")
                             duration_str = f" ({duration}ms)" if duration else ""
-                            input_summary = (
-                                str(input_val)[:100] if input_val else ""
-                            )
-                            sections.append(
-                                f"- [{ts}] **{name}**{duration_str}: {input_summary}"
-                            )
+                            input_summary = str(input_val)[:100] if input_val else ""
+                            sections.append(f"- [{ts}] **{name}**{duration_str}: {input_summary}")
                         elif event_type == "error":
                             msg = data.get("message", "unknown error")
                             sections.append(f"- [{ts}] ERROR: {msg}")
@@ -304,9 +294,7 @@ def serialize_handoff_context(pkg: EscalationPackage) -> str:
     sections.append("## Suggested next steps")
     sections.append(f"1. Investigate the root cause of the '{pkg.step_name}' failure")
     if pkg.provider_name:
-        sections.append(
-            f"2. Check the provider ({pkg.provider_name}) for availability issues"
-        )
+        sections.append(f"2. Check the provider ({pkg.provider_name}) for availability issues")
     sections.append("")
 
     # Launch command
@@ -343,9 +331,7 @@ class CLIHandoffPackager:
         launcher: Optional[Any] = None,
         spawner: Optional[Any] = None,
         auto_launch: Optional[bool] = None,
-        sandbox_image: str = (
-            "quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"
-        ),
+        sandbox_image: str = ("quay.io/openshift-lightspeed/lightspeed-agentic-sandbox:latest"),
     ) -> None:
         """Initialize the CLI handoff packager.
 
@@ -387,7 +373,7 @@ class CLIHandoffPackager:
 
             launch_cmd = (
                 f'claude -p "Continue this investigation. '
-                f"Read the context file at {context_file} first.\""
+                f'Read the context file at {context_file} first."'
             )
             logger.info(
                 "CLI handoff ready:\n  Context: %s\n  Launch:  %s",

@@ -138,9 +138,7 @@ class TestGenerateEphemeralCerts:
             san_dns=["pod-1.cloud-agents.svc", "agent-pod-1"],
         )
         server = x509.load_pem_x509_certificate(certs.server_cert_pem)
-        san = server.extensions.get_extension_for_class(
-            x509.SubjectAlternativeName
-        )
+        san = server.extensions.get_extension_for_class(x509.SubjectAlternativeName)
         dns_names = san.value.get_values_for_type(x509.DNSName)
         assert "pod-1.cloud-agents.svc" in dns_names
         assert "agent-pod-1" in dns_names
@@ -156,9 +154,7 @@ class TestGenerateEphemeralCerts:
             san_ips=["127.0.0.1"],
         )
         server = x509.load_pem_x509_certificate(certs.server_cert_pem)
-        san = server.extensions.get_extension_for_class(
-            x509.SubjectAlternativeName
-        )
+        san = server.extensions.get_extension_for_class(x509.SubjectAlternativeName)
         ip_addrs = san.value.get_values_for_type(x509.IPAddress)
         assert ipaddress.IPv4Address("127.0.0.1") in ip_addrs
 
@@ -192,12 +188,20 @@ class TestGenerateEphemeralCerts:
         ca = x509.load_pem_x509_certificate(certs.ca_cert_pem)
         server = x509.load_pem_x509_certificate(certs.server_cert_pem)
         ca_pub_bytes = ca.public_key().public_bytes(
-            encoding=__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]).Encoding.PEM,
-            format=__import__("cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]).PublicFormat.SubjectPublicKeyInfo,
+            encoding=__import__(
+                "cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]
+            ).Encoding.PEM,
+            format=__import__(
+                "cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]
+            ).PublicFormat.SubjectPublicKeyInfo,
         )
         server_pub_bytes = server.public_key().public_bytes(
-            encoding=__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]).Encoding.PEM,
-            format=__import__("cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]).PublicFormat.SubjectPublicKeyInfo,
+            encoding=__import__(
+                "cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]
+            ).Encoding.PEM,
+            format=__import__(
+                "cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]
+            ).PublicFormat.SubjectPublicKeyInfo,
         )
         assert ca_pub_bytes != server_pub_bytes
 

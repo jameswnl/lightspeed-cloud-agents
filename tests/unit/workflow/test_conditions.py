@@ -35,23 +35,17 @@ class TestEvaluateCondition:
 
     def test_approved_true(self) -> None:
         """Test approved == true."""
-        state = _make_state(
-            approve={"status": "completed", "output": {"approved": True}}
-        )
+        state = _make_state(approve={"status": "completed", "output": {"approved": True}})
         assert evaluate_condition("steps.approve.approved == true", state) is True
 
     def test_approved_false(self) -> None:
         """Test approved == false."""
-        state = _make_state(
-            approve={"status": "completed", "output": {"approved": False}}
-        )
+        state = _make_state(approve={"status": "completed", "output": {"approved": False}})
         assert evaluate_condition("steps.approve.approved == true", state) is False
 
     def test_output_field_truthy(self) -> None:
         """Test truthy check on output field."""
-        state = _make_state(
-            diag={"status": "completed", "output": {"issues": ["a", "b"]}}
-        )
+        state = _make_state(diag={"status": "completed", "output": {"issues": ["a", "b"]}})
         assert evaluate_condition("steps.diag.output.issues", state) is True
 
     def test_output_field_falsy(self) -> None:
@@ -61,13 +55,8 @@ class TestEvaluateCondition:
 
     def test_output_boolean_equals(self) -> None:
         """Test output.cluster_healthy == true."""
-        state = _make_state(
-            exec={"status": "completed", "output": {"cluster_healthy": True}}
-        )
-        assert (
-            evaluate_condition("steps.exec.output.cluster_healthy == true", state)
-            is True
-        )
+        state = _make_state(exec={"status": "completed", "output": {"cluster_healthy": True}})
+        assert evaluate_condition("steps.exec.output.cluster_healthy == true", state) is True
 
     def test_and_combinator(self) -> None:
         """Test 'and' combines two conditions."""
@@ -76,9 +65,7 @@ class TestEvaluateCondition:
             b={"status": "completed", "output": {"healthy": True}},
         )
         assert (
-            evaluate_condition(
-                "steps.a.approved == true and steps.b.output.healthy == true", state
-            )
+            evaluate_condition("steps.a.approved == true and steps.b.output.healthy == true", state)
             is True
         )
 
@@ -89,9 +76,7 @@ class TestEvaluateCondition:
             b={"status": "completed"},
         )
         assert (
-            evaluate_condition(
-                "steps.a.status == completed or steps.b.status == completed", state
-            )
+            evaluate_condition("steps.a.status == completed or steps.b.status == completed", state)
             is True
         )
 

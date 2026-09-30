@@ -14,7 +14,6 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -450,8 +449,7 @@ class TestAlertWebhookEndpoint:
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
 
         triggered_calls = [
-            c for c in mock_emit.call_args_list
-            if c[1].get("event_type") == "alert_triggered"
+            c for c in mock_emit.call_args_list if c[1].get("event_type") == "alert_triggered"
         ]
         assert len(triggered_calls) == 1
         details = triggered_calls[0][1]["details"]
@@ -468,7 +466,11 @@ class TestAlertWebhookEndpoint:
 
         second_alert = {
             **SAMPLE_ALERT,
-            "labels": {"alertname": "DiskFull", "severity": "warning", "cloud_agents_workflow": "diagnose-cpu"},
+            "labels": {
+                "alertname": "DiskFull",
+                "severity": "warning",
+                "cloud_agents_workflow": "diagnose-cpu",
+            },
             "fingerprint": "def456",
         }
         multi_payload = {**SAMPLE_PAYLOAD, "alerts": [SAMPLE_ALERT, second_alert]}
@@ -482,8 +484,11 @@ class TestAlertWebhookEndpoint:
 
     def test_auth_enforced_when_configured(self, mocker: MockerFixture) -> None:
         """Auth required when auth_dependency is set."""
+
         def reject_unauthenticated():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+            )
 
         mock_temporal = mocker.MagicMock()
         app = _build_alert_app(mock_temporal, auth_dependency=reject_unauthenticated)
@@ -564,7 +569,9 @@ class TestAlertTriggerAuthorization:
         assert response.json()["workflows_started"] == 1
 
     def test_authz_context_includes_namespace_and_groups(
-        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """WorkflowAuthzContext includes configured namespace and groups."""
         monkeypatch.setenv("ALERT_TRIGGER_NAMESPACE", "prod")
@@ -606,7 +613,8 @@ class TestAlertTriggerAuthorization:
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
 
         denied_calls = [
-            c for c in mock_emit.call_args_list
+            c
+            for c in mock_emit.call_args_list
             if c[1].get("event_type") == "alert_authorization_denied"
         ]
         assert len(denied_calls) == 1
@@ -690,7 +698,8 @@ class TestAlertTriggerContentPolicy:
         client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
 
         violation_calls = [
-            c for c in mock_emit.call_args_list
+            c
+            for c in mock_emit.call_args_list
             if c[1].get("event_type") == "content_policy_violation"
         ]
         assert len(violation_calls) == 1
@@ -708,12 +717,15 @@ class TestAlertTriggerEntrypointWiring:
     """Tests for alert trigger config wiring in entrypoint."""
 
     def test_alert_endpoint_not_registered_when_disabled(
-        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Endpoint not registered when ALERT_TRIGGER_ENABLED=false."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "false")
         import importlib
         import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
+
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
@@ -722,20 +734,24 @@ class TestAlertTriggerEntrypointWiring:
         assert response.status_code in (404, 405)
 
     def test_alert_endpoint_registered_when_enabled(
-        self, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Endpoint registered when ALERT_TRIGGER_ENABLED=true."""
         monkeypatch.setenv("ALERT_TRIGGER_ENABLED", "true")
         import importlib
         import cloud_agents.workflow.executor.temporal.entrypoint as ep_mod
+
         importlib.reload(ep_mod)
 
         app = ep_mod.build_temporal_app()
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/v1/webhooks/alertmanager", json=SAMPLE_PAYLOAD)
-        assert response.status_code not in (404, 405), (
-            f"Alert endpoint should be registered but got {response.status_code}"
-        )
+        assert response.status_code not in (
+            404,
+            405,
+        ), f"Alert endpoint should be registered but got {response.status_code}"
 
 
 # ===========================================================================
@@ -755,6 +771,7 @@ class TestAlertTriggerMetrics:
         mocker.patch("cloud_agents.workflow.triggers.alert_trigger.emit_audit")
 
         from cloud_agents.workflow.executor.temporal.metrics import ls_alert_triggers_total
+
         before = ls_alert_triggers_total.labels(
             workflow_name="diagnose-cpu", status="started"
         )._value.get()

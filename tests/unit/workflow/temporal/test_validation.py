@@ -348,9 +348,7 @@ class TestMCPServersValidation:
         assert len(errors) == 0
 
     def test_valid_inline_passes(self) -> None:
-        errors = validate_definition(
-            self._defn_with_mcp([{"name": "inline", "url": "http://x"}])
-        )
+        errors = validate_definition(self._defn_with_mcp([{"name": "inline", "url": "http://x"}]))
         assert len(errors) == 0
 
     def test_mixed_string_and_inline_passes(self) -> None:
@@ -364,27 +362,19 @@ class TestMCPServersValidation:
         assert any("mcp_servers" in e for e in errors)
 
     def test_inline_missing_name_rejected(self) -> None:
-        errors = validate_definition(
-            self._defn_with_mcp([{"nam": "broken", "url": "http://x"}])
-        )
+        errors = validate_definition(self._defn_with_mcp([{"nam": "broken", "url": "http://x"}]))
         assert any("mcp_servers" in e and "name" in e for e in errors)
 
     def test_inline_missing_url_rejected(self) -> None:
-        errors = validate_definition(
-            self._defn_with_mcp([{"name": "inline"}])
-        )
+        errors = validate_definition(self._defn_with_mcp([{"name": "inline"}]))
         assert any("mcp_servers" in e and "url" in e for e in errors)
 
     def test_inline_empty_name_rejected(self) -> None:
-        errors = validate_definition(
-            self._defn_with_mcp([{"name": "", "url": "http://x"}])
-        )
+        errors = validate_definition(self._defn_with_mcp([{"name": "", "url": "http://x"}]))
         assert any("mcp_servers" in e for e in errors)
 
     def test_non_string_non_dict_rejected(self) -> None:
-        errors = validate_definition(
-            self._defn_with_mcp([123])  # type: ignore[arg-type]
-        )
+        errors = validate_definition(self._defn_with_mcp([123]))  # type: ignore[arg-type]
         assert any("mcp_servers" in e for e in errors)
 
     def test_no_mcp_field_passes(self) -> None:
@@ -424,9 +414,7 @@ class TestCanonicalSubmissionChecks268:
         from cloud_agents.workflow.core.validation import validate_definition
 
         errors = validate_definition(
-            self._defn_with_step(
-                {"mcp_servers": [{"name": "x", "url": "https://t:abc@in/x"}]}
-            )
+            self._defn_with_step({"mcp_servers": [{"name": "x", "url": "https://t:abc@in/x"}]})
         )
         assert any("credentialed" in e for e in errors)
 
@@ -454,9 +442,7 @@ class TestCanonicalSubmissionChecks268:
         from cloud_agents.workflow.core.validation import validate_definition
 
         errors = validate_definition(
-            self._defn_with_step(
-                {"inference_provider": {"name": "evil-proxy", "model": "x"}}
-            )
+            self._defn_with_step({"inference_provider": {"name": "evil-proxy", "model": "x"}})
         )
         assert any("unapproved" in e for e in errors)
 
@@ -465,9 +451,7 @@ class TestCanonicalSubmissionChecks268:
         from cloud_agents.workflow.core.validation import validate_definition
 
         errors = validate_definition(
-            self._defn_with_step(
-                {"inference_provider": {"name": "azure", "model": "gpt-4o"}}
-            )
+            self._defn_with_step({"inference_provider": {"name": "azure", "model": "gpt-4o"}})
         )
         assert errors == []
 
@@ -482,9 +466,7 @@ class TestWorkflowLevelSecretGate:
             "kind": "AgentWorkflow",
             "metadata": {"name": "test"},
             "spec": {
-                "mcp_servers": [
-                    {"name": "leaky", "url": "https://tok:abc@internal/x"}
-                ],
+                "mcp_servers": [{"name": "leaky", "url": "https://tok:abc@internal/x"}],
                 "steps": [
                     {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
                 ],
@@ -501,8 +483,11 @@ class TestWorkflowLevelSecretGate:
             "metadata": {"name": "test"},
             "spec": {
                 "mcp_servers": [
-                    {"name": "leaky", "url": "https://internal/x",
-                     "headers": {"Authorization": "Bearer x"}},
+                    {
+                        "name": "leaky",
+                        "url": "https://internal/x",
+                        "headers": {"Authorization": "Bearer x"},
+                    },
                 ],
                 "steps": [
                     {"name": "s1", "type": "agent", "output_key": "r1", "prompt": "a"},
@@ -565,9 +550,7 @@ class TestDefinitionProviderGate:
         # Assembled at runtime so secret scanners never see a contiguous
         # fake token; the value still exercises the sk- prefix check.
         fake_token = "sk-" + "live-abc123"
-        defn = self._defn(
-            {"name": "openai", "model": "gpt-4", "credentials_secret": fake_token}
-        )
+        defn = self._defn({"name": "openai", "model": "gpt-4", "credentials_secret": fake_token})
         errors = validate_definition(defn)
         assert any("secret value" in e for e in errors)
 
@@ -587,9 +570,7 @@ class TestDefinitionProviderGate:
 
     def test_unknown_definition_provider_field_rejected(self) -> None:
         """Unknown provider fields cannot carry an unvalidated secret."""
-        defn = self._defn(
-            {"name": "openai", "model": "gpt-4", "api_key": "not-a-reference"}
-        )
+        defn = self._defn({"name": "openai", "model": "gpt-4", "api_key": "not-a-reference"})
         errors = validate_definition(defn)
         assert any("unknown provider fields" in e for e in errors)
 

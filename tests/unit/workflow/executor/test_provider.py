@@ -73,9 +73,7 @@ class TestResolveCredentialEnvKey:
     fallback.
     """
 
-    def test_credentials_secret_key_normalized_and_returned(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_credentials_secret_key_normalized_and_returned(self, mocker: MockerFixture) -> None:
         """credentials_secret is normalized to UPPER_SNAKE and returned as the key."""
         from cloud_agents.workflow.executor.step.provider import resolve_credential_env_key
 
@@ -273,16 +271,21 @@ class TestEnsureCredentialsEnv:
         """Azure provider sets AZURE_OPENAI_ENDPOINT from base_url."""
         from cloud_agents.workflow.executor.step.provider import ensure_credentials_env
 
-        env_copy = {k: v for k, v in os.environ.items()
-                    if k not in ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT")}
+        env_copy = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT")
+        }
         env_copy["MY_AZURE_KEY"] = "sk-azure-123"
         mocker.patch.dict(os.environ, env_copy, clear=True)
 
-        ensure_credentials_env({
-            "name": "azure",
-            "credentials_secret": "my-azure-key",
-            "base_url": "https://myorg.openai.azure.com",
-        })
+        ensure_credentials_env(
+            {
+                "name": "azure",
+                "credentials_secret": "my-azure-key",
+                "base_url": "https://myorg.openai.azure.com",
+            }
+        )
 
         assert os.environ.get("AZURE_OPENAI_API_KEY") == "sk-azure-123"
         assert os.environ.get("AZURE_OPENAI_ENDPOINT") == "https://myorg.openai.azure.com"
@@ -291,14 +294,20 @@ class TestEnsureCredentialsEnv:
         """Azure does not overwrite existing AZURE_OPENAI_ENDPOINT."""
         from cloud_agents.workflow.executor.step.provider import ensure_credentials_env
 
-        mocker.patch.dict(os.environ, {
-            "AZURE_OPENAI_API_KEY": "sk-existing",
-            "AZURE_OPENAI_ENDPOINT": "https://existing.azure.com",
-        }, clear=False)
+        mocker.patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_API_KEY": "sk-existing",
+                "AZURE_OPENAI_ENDPOINT": "https://existing.azure.com",
+            },
+            clear=False,
+        )
 
-        ensure_credentials_env({
-            "name": "azure",
-            "base_url": "https://new.azure.com",
-        })
+        ensure_credentials_env(
+            {
+                "name": "azure",
+                "base_url": "https://new.azure.com",
+            }
+        )
 
         assert os.environ.get("AZURE_OPENAI_ENDPOINT") == "https://existing.azure.com"

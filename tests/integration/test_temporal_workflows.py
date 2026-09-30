@@ -59,9 +59,7 @@ def _input(steps, **kwargs):
             "spec": {"steps": steps},
         },
         workflow_id=_wf_id(),
-        provider=ProviderConfig(
-            name="openai", model="gpt-4", credentials_secret="test"
-        ),
+        provider=ProviderConfig(name="openai", model="gpt-4", credentials_secret="test"),
         **kwargs,
     )
 
@@ -91,9 +89,7 @@ async def test_sequential_workflow():
             },
         ]
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -122,9 +118,7 @@ async def test_auto_approval_low_risk():
         ],
         approval_policy={"auto_approve_risk_levels": ["low"]},
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -168,9 +162,7 @@ async def test_mixed_risk_auto_and_manual():
         ],
         approval_policy={"auto_approve_risk_levels": ["low"]},
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -206,9 +198,7 @@ async def test_advisory_mode():
         ],
         advisory=True,
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -235,9 +225,7 @@ async def test_approval_signal():
             },
         ]
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         handle = await client.start_workflow(
             AgentWorkflow.run,
             wf,
@@ -276,9 +264,7 @@ async def test_condition_skips_step():
             },
         ]
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -315,9 +301,7 @@ async def test_parallel_group():
             },
         ]
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         result = await client.execute_workflow(
             AgentWorkflow.run,
             wf,
@@ -344,9 +328,7 @@ async def test_workflow_query():
             },
         ]
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         handle = await client.start_workflow(
             AgentWorkflow.run,
             wf,
@@ -380,9 +362,7 @@ async def test_notification_dispatched_on_pause():
         ],
         approval_policy={"auto_approve_risk_levels": ["low"]},
     )
-    async with Worker(
-        client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES
-    ):
+    async with Worker(client, task_queue=q, workflows=[AgentWorkflow], activities=ALL_ACTIVITIES):
         handle = await client.start_workflow(
             AgentWorkflow.run,
             wf,

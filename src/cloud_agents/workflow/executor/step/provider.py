@@ -54,8 +54,7 @@ def to_model_string(provider: dict[str, Any]) -> str:
     pai_provider = _PROVIDER_NAME_MAP.get(name)
     if pai_provider is None:
         raise ValueError(
-            f"Unknown provider '{name}'. "
-            f"Supported: {', '.join(sorted(_PROVIDER_NAME_MAP))}."
+            f"Unknown provider '{name}'. " f"Supported: {', '.join(sorted(_PROVIDER_NAME_MAP))}."
         )
     return f"{pai_provider}:{model}"
 

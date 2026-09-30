@@ -63,9 +63,7 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
                     # `access` and `rules` are mutually exclusive
                     # (proto/sandbox.proto), so this omits `access` entirely.
                     rules=[
-                        sandbox_pb2.L7Rule(
-                            allow=sandbox_pb2.L7Allow(method=method, path=path)
-                        )
+                        sandbox_pb2.L7Rule(allow=sandbox_pb2.L7Allow(method=method, path=path))
                         for method, path in allowed_requests
                     ],
                 )
@@ -78,8 +76,11 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
 
     return {
         "openai": _profile(
-            "openai", "OpenAI", "OpenAI inference endpoints",
-            "OPENAI_API_KEY", "api.openai.com",
+            "openai",
+            "OpenAI",
+            "OpenAI inference endpoints",
+            "OPENAI_API_KEY",
+            "api.openai.com",
             # pydantic-ai's OpenAIChatModel (default for a bare "openai:..."
             # model string) posts to /v1/chat/completions; OpenAIResponsesModel
             # (only used if a step explicitly configures "openai-responses:...")
@@ -91,8 +92,11 @@ def bundled_provider_profiles() -> dict[str, "openshell_pb2.ProviderProfile"]:
             ],
         ),
         "anthropic": _profile(
-            "anthropic", "Anthropic", "Anthropic inference endpoints",
-            "ANTHROPIC_API_KEY", "api.anthropic.com",
+            "anthropic",
+            "Anthropic",
+            "Anthropic inference endpoints",
+            "ANTHROPIC_API_KEY",
+            "api.anthropic.com",
             # pydantic-ai's AnthropicModel posts to /v1/messages (via
             # client.beta.messages.create -- "beta" is a `?beta=true` query
             # param on that same path, not a different route). Does not

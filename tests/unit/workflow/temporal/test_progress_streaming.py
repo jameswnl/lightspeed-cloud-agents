@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -67,9 +67,7 @@ class TestProgressStreamingWithOpenShell:
     """Tests for progress streaming when spawner is OpenShellSpawner."""
 
     @pytest.mark.asyncio
-    async def test_progress_task_started_for_openshell_spawner(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_progress_task_started_for_openshell_spawner(self, mocker: MockerFixture) -> None:
         """Progress streaming task is started when spawner is OpenShellSpawner."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
@@ -110,16 +108,14 @@ class TestProgressStreamingWithOpenShell:
         # (once from the progress task, plus periodic heartbeat loop)
         heartbeat_calls = mock_heartbeat.call_args_list
         progress_calls = [
-            c for c in heartbeat_calls
-            if c.args and isinstance(c.args[0], dict)
-            and c.args[0].get("event_type") == "tool_call"
+            c
+            for c in heartbeat_calls
+            if c.args and isinstance(c.args[0], dict) and c.args[0].get("event_type") == "tool_call"
         ]
         assert len(progress_calls) >= 1
 
     @pytest.mark.asyncio
-    async def test_progress_heartbeat_is_truncated(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_progress_heartbeat_is_truncated(self, mocker: MockerFixture) -> None:
         """Progress heartbeats contain truncated summaries under 1KB."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
@@ -145,18 +141,16 @@ class TestProgressStreamingWithOpenShell:
         await run_sandbox_step(_make_step_input(), spawner=spawner)
 
         progress_calls = [
-            c for c in mock_heartbeat.call_args_list
-            if c.args and isinstance(c.args[0], dict)
-            and c.args[0].get("event_type") == "tool_call"
+            c
+            for c in mock_heartbeat.call_args_list
+            if c.args and isinstance(c.args[0], dict) and c.args[0].get("event_type") == "tool_call"
         ]
         for call in progress_calls:
             payload = json.dumps(call.args[0])
             assert len(payload) < 1024, f"Heartbeat payload too large: {len(payload)} bytes"
 
     @pytest.mark.asyncio
-    async def test_progress_task_cancelled_on_http_completion(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_progress_task_cancelled_on_http_completion(self, mocker: MockerFixture) -> None:
         """Progress streaming task is cancelled when HTTP result returns."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
@@ -196,9 +190,7 @@ class TestGracefulDegradation:
     """Tests for graceful degradation with non-OpenShell spawners."""
 
     @pytest.mark.asyncio
-    async def test_non_openshell_spawner_skips_progress(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_non_openshell_spawner_skips_progress(self, mocker: MockerFixture) -> None:
         """Non-OpenShell spawners skip progress streaming entirely."""
         mock_spawner = mocker.AsyncMock()
         mock_spawner.spawn.return_value = "http://pod-1:8080"
@@ -214,16 +206,14 @@ class TestGracefulDegradation:
         assert result["status"] == "completed"
         # Only periodic heartbeats, no progress heartbeats
         progress_calls = [
-            c for c in mock_heartbeat.call_args_list
-            if c.args and isinstance(c.args[0], dict)
-            and "event_type" in c.args[0]
+            c
+            for c in mock_heartbeat.call_args_list
+            if c.args and isinstance(c.args[0], dict) and "event_type" in c.args[0]
         ]
         assert len(progress_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_non_openshell_spawner_no_progress(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_non_openshell_spawner_no_progress(self, mocker: MockerFixture) -> None:
         """A non-OpenShell spawner gets no progress streaming."""
         # Just verify isinstance check works by using a plain AsyncMock
         # (which is not an OpenShellSpawner)

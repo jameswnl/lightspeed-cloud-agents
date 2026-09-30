@@ -87,8 +87,7 @@ class ContentSizeLimitMiddleware:
                 status_code=413,
                 content={
                     "detail": (
-                        f"Request body too large. "
-                        f"Maximum: {self.max_content_size} bytes."
+                        f"Request body too large. " f"Maximum: {self.max_content_size} bytes."
                     )
                 },
             )

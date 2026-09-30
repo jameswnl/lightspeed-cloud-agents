@@ -2083,7 +2083,9 @@ class TestDirectExecutorAllowedSkillsDefaults:
     """Least-privilege defaults for allowed_skills (issue #202)."""
 
     @pytest.mark.asyncio
-    async def test_omitted_allowed_skills_does_not_call_get_skills(self, mocker: MockerFixture) -> None:
+    async def test_omitted_allowed_skills_does_not_call_get_skills(
+        self, mocker: MockerFixture
+    ) -> None:
         """Omitted allowed_skills -> get_skills_capability not called, even with env set."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -2092,7 +2094,7 @@ class TestDirectExecutorAllowedSkillsDefaults:
         mock_agent_cls = mocker.patch("cloud_agents.workflow.executor.step.direct.Agent")
         mock_agent_instance = mocker.AsyncMock()
         mock_result = mocker.MagicMock()
-        mock_result.output = "{\"response\": \"hi\"}"
+        mock_result.output = '{"response": "hi"}'
         mock_usage = mocker.MagicMock()
         mock_usage.input_tokens = 5
         mock_usage.output_tokens = 5
@@ -2154,7 +2156,7 @@ class TestDirectExecutorAllowedSkillsDefaults:
         mock_usage.input_tokens = 10
         mock_usage.output_tokens = 5
         mock_result = mocker.MagicMock()
-        mock_result.output = "{\"ok\": true}"
+        mock_result.output = '{"ok": true}'
         mock_result.usage = mock_usage
         mock_agent_cls = mocker.patch("cloud_agents.workflow.executor.step.direct.Agent")
         mock_agent_instance = mocker.AsyncMock()
@@ -2343,9 +2345,7 @@ class TestMessageHistory:
         assert isinstance(history[1], ModelResponse)
 
     @pytest.mark.asyncio
-    async def test_no_conversation_context_no_message_history(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_no_conversation_context_no_message_history(self, mocker: MockerFixture) -> None:
         """Without conversation context, no message_history is passed."""
         from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
@@ -2527,9 +2527,7 @@ class TestRunStreamWithMessageHistory:
         mock_usage.output_tokens = 20
 
         mock_streamed = mocker.MagicMock()
-        mock_streamed.stream_text = mocker.MagicMock(
-            return_value=_async_iter(["Hello", " there"])
-        )
+        mock_streamed.stream_text = mocker.MagicMock(return_value=_async_iter(["Hello", " there"]))
         mock_streamed.get_output = mocker.AsyncMock(return_value="Hello there")
         mock_streamed.usage = mock_usage
         mock_streamed.__aenter__ = mocker.AsyncMock(return_value=mock_streamed)
@@ -2574,11 +2572,9 @@ class TestRunStreamWithMessageHistory:
         mock_agent_cls.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_run_stream_passes_message_history_to_agent(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_run_stream_passes_message_history_to_agent(self, mocker: MockerFixture) -> None:
         """run_stream() passes message_history to agent.run_stream()."""
-        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
@@ -2636,7 +2632,7 @@ class TestRunStreamWithMessageHistory:
         self, mocker: MockerFixture
     ) -> None:
         """run_stream() with conversation context does not flatten context into prompt."""
-        from cloud_agents.workflow.executor.step.base import StepInput, StreamEvent
+        from cloud_agents.workflow.executor.step.base import StepInput
         from cloud_agents.workflow.executor.step.direct import DirectExecutor
 
         mocker.patch(
@@ -2747,9 +2743,7 @@ class TestBuildMessageHistoryToolRoles:
         history = _build_message_history(context)
         assert len(history) == 4
         assert isinstance(history[2], ModelRequest)
-        tool_return_parts = [
-            p for p in history[2].parts if isinstance(p, ToolReturnPart)
-        ]
+        tool_return_parts = [p for p in history[2].parts if isinstance(p, ToolReturnPart)]
         assert len(tool_return_parts) == 1
         assert tool_return_parts[0].content == "some result"
 
@@ -2876,9 +2870,7 @@ class TestBuildMessageHistoryToolReplay:
 
         # Third entry should be a ModelRequest with ToolReturnPart
         assert isinstance(history[2], ModelRequest)
-        tool_return_parts = [
-            p for p in history[2].parts if isinstance(p, ToolReturnPart)
-        ]
+        tool_return_parts = [p for p in history[2].parts if isinstance(p, ToolReturnPart)]
         assert len(tool_return_parts) == 1
         assert tool_return_parts[0].tool_name == "kubectl_get"
         assert tool_return_parts[0].content == "pod-1 Running"
@@ -2938,9 +2930,7 @@ class TestBuildMessageHistoryToolReplay:
         assert isinstance(history[1], ModelResponse)  # tool_call
         assert isinstance(history[1].parts[0], ToolCallPart)
         assert isinstance(history[2], ModelRequest)  # tool_result
-        tool_return_parts = [
-            p for p in history[2].parts if isinstance(p, ToolReturnPart)
-        ]
+        tool_return_parts = [p for p in history[2].parts if isinstance(p, ToolReturnPart)]
         assert len(tool_return_parts) == 1
         assert isinstance(history[3], ModelResponse)  # assistant
         assert isinstance(history[4], ModelRequest)  # user (turn-1)
@@ -2997,8 +2987,7 @@ class TestBuildMessageHistoryToolReplay:
         tool_call_responses = [
             h
             for h in history
-            if isinstance(h, ModelResponse)
-            and any(isinstance(p, ToolCallPart) for p in h.parts)
+            if isinstance(h, ModelResponse) and any(isinstance(p, ToolCallPart) for p in h.parts)
         ]
         assert len(tool_call_responses) == 1
         assert len(tool_call_responses[0].parts) == 2
@@ -3075,9 +3064,7 @@ class TestBuildMessageHistoryToolReplay:
         assert isinstance(tcp, ToolCallPart)
         assert tcp.tool_call_id.startswith("call_read_file")
 
-        trp_parts = [
-            p for p in history[2].parts if isinstance(p, ToolReturnPart)
-        ]
+        trp_parts = [p for p in history[2].parts if isinstance(p, ToolReturnPart)]
         assert trp_parts[0].tool_call_id.startswith("call_read_file")
 
     def test_user_assistant_only_backward_compatible(self) -> None:

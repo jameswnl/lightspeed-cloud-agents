@@ -8,7 +8,7 @@ a configurable timeout. Per-process only (no cross-replica state).
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

@@ -35,8 +35,7 @@ def read_file(path: str, encoding: str = "utf-8") -> str:
             base = Path(_ALLOWED_BASE_DIR).resolve()
             if not resolved.is_relative_to(base):
                 return (
-                    f"Error: path '{path}' is outside allowed directory "
-                    f"'{_ALLOWED_BASE_DIR}'"
+                    f"Error: path '{path}' is outside allowed directory " f"'{_ALLOWED_BASE_DIR}'"
                 )
 
         file_size = resolved.stat().st_size

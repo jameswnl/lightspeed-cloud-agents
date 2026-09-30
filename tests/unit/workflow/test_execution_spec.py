@@ -407,9 +407,7 @@ class TestMcpDefaultParity:
         step_input = build_step_input(
             {"name": "s1", "output_key": "r1", "prompt": "p"},
             run_context={"provider": {"name": "openai", "model": "gpt-4o"}},
-            workflow_defaults={
-                "mcp_servers": [{"name": "cat", "url": "https://internal/x"}]
-            },
+            workflow_defaults={"mcp_servers": [{"name": "cat", "url": "https://internal/x"}]},
         )
         resolved = step_input.mcp_servers
         assert resolved is not None and len(resolved) == 1
@@ -424,9 +422,7 @@ class TestMcpDefaultParity:
             build_step_input(
                 {"name": "s1", "output_key": "r1", "prompt": "p"},
                 run_context={"provider": {"name": "openai", "model": "gpt-4o"}},
-                workflow_defaults={
-                    "mcp_servers": [{"name": "x", "url": "https://t:a@h/p"}]
-                },
+                workflow_defaults={"mcp_servers": [{"name": "x", "url": "https://t:a@h/p"}]},
             )
 
 
@@ -478,7 +474,19 @@ class TestParallelDependencySafety:
                 },
             ]
         )
-        assert chunks == [(None, [{"name": "first", "parallel_group": "g", "prompt": "collect"}]), (None, [{"name": "second", "parallel_group": "g", "prompt": "use {{ steps.first.output.value }}"}])]
+        assert chunks == [
+            (None, [{"name": "first", "parallel_group": "g", "prompt": "collect"}]),
+            (
+                None,
+                [
+                    {
+                        "name": "second",
+                        "parallel_group": "g",
+                        "prompt": "use {{ steps.first.output.value }}",
+                    }
+                ],
+            ),
+        ]
 
     def test_output_key_and_condition_dependencies_serialize_group(self) -> None:
         """Output-key and condition references also impose ordering."""

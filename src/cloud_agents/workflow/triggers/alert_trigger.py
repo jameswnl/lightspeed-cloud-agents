@@ -352,14 +352,10 @@ def build_alert_router(
 
             # Map alert to workflow
             try:
-                workflow_name, input_prompt = map_alert_to_workflow_input(
-                    alert, trigger_config
-                )
+                workflow_name, input_prompt = map_alert_to_workflow_input(alert, trigger_config)
             except ValueError as exc:
                 errors += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name="unknown", status="error"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name="unknown", status="error").inc()
                 logger.warning("Alert mapping failed for '%s': %s", alertname, exc)
                 emit_audit(
                     event_type="alert_validation_failed",
@@ -380,9 +376,7 @@ def build_alert_router(
             )
             if not decision.allowed:
                 errors += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name=workflow_name, status="error"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name=workflow_name, status="error").inc()
                 logger.warning(
                     "Authorization denied for alert '%s' -> workflow '%s': %s",
                     alertname,
@@ -404,9 +398,7 @@ def build_alert_router(
             stored = await definition_store.get(workflow_name)
             if not stored:
                 errors += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name=workflow_name, status="error"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name=workflow_name, status="error").inc()
                 logger.warning(
                     "Workflow definition '%s' not found for alert '%s'",
                     workflow_name,
@@ -430,17 +422,14 @@ def build_alert_router(
             if content_policy is not None:
                 from cloud_agents.workflow.core.validation import validate_definition
 
-                validation_errors = validate_definition(
-                    definition, content_policy=content_policy
-                )
+                validation_errors = validate_definition(definition, content_policy=content_policy)
                 if validation_errors:
                     errors += 1
                     ls_alert_triggers_total.labels(
                         workflow_name=workflow_name, status="error"
                     ).inc()
                     logger.warning(
-                        "Content policy violation for workflow '%s' "
-                        "triggered by alert '%s': %s",
+                        "Content policy violation for workflow '%s' " "triggered by alert '%s': %s",
                         workflow_name,
                         alertname,
                         validation_errors,
@@ -460,9 +449,7 @@ def build_alert_router(
                 provider = ProviderConfig(**stored.definition.provider.model_dump())
             else:
                 errors += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name=workflow_name, status="error"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name=workflow_name, status="error").inc()
                 logger.warning(
                     "Workflow '%s' has no provider configured for alert '%s'",
                     workflow_name,
@@ -507,9 +494,7 @@ def build_alert_router(
                     task_queue=DEFAULT_TASK_QUEUE,
                 )
                 started += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name=workflow_name, status="started"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name=workflow_name, status="started").inc()
                 logger.info(
                     "Started workflow '%s' for alert '%s' (fingerprint=%s)",
                     workflow_id,
@@ -528,9 +513,7 @@ def build_alert_router(
                 )
             except Exception as exc:
                 errors += 1
-                ls_alert_triggers_total.labels(
-                    workflow_name=workflow_name, status="error"
-                ).inc()
+                ls_alert_triggers_total.labels(workflow_name=workflow_name, status="error").inc()
                 logger.error(
                     "Failed to start workflow for alert '%s': %s",
                     alertname,

@@ -82,9 +82,7 @@ def resolve_mcp_servers(
             if server is not None:
                 resolved.append(server)
             else:
-                logger.warning(
-                    "MCP server '%s' not found in catalog -- skipping", item
-                )
+                logger.warning("MCP server '%s' not found in catalog -- skipping", item)
         elif isinstance(item, dict):
             # Inline dict definition -- validated at submission time
             # (validate_definition) so incomplete entries are rejected

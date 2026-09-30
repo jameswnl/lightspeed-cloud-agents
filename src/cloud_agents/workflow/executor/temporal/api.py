@@ -145,9 +145,7 @@ class SendMessageRequest(BaseModel):
         # dramatically after sanitization while still being arbitrarily large
         # as raw input. The 4x multiplier accounts for UTF-8 expansion.
         if len(v.encode("utf-8")) > MAX_MESSAGE_BYTES * 4:
-            raise ValueError(
-                f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes"
-            )
+            raise ValueError(f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes")
 
         # Sanitize control characters
         sanitized = _sanitize_message(v)
@@ -158,9 +156,7 @@ class SendMessageRequest(BaseModel):
 
         # Validate size (in bytes, UTF-8 encoded)
         if len(sanitized.encode("utf-8")) > MAX_MESSAGE_BYTES:
-            raise ValueError(
-                f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes"
-            )
+            raise ValueError(f"Message exceeds maximum size of {MAX_MESSAGE_BYTES} bytes")
 
         return sanitized
 
@@ -432,9 +428,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> dict[str, Any]:
             """Submit a workflow definition to the store."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.MANAGE_DEFS, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.MANAGE_DEFS, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -469,9 +463,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> list[dict[str, Any]]:
             """List all active workflow definitions."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.VIEW_DEFS, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.VIEW_DEFS, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -484,9 +476,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> dict[str, Any]:
             """Get a workflow definition by name."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.VIEW_DEFS, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.VIEW_DEFS, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -616,16 +606,12 @@ def build_temporal_router(
         steps_snapshot: dict[str, Any] = {}
         if hasattr(status_result, "steps"):
             for k, v in status_result.steps.items():
-                steps_snapshot[k] = (
-                    v.model_dump() if hasattr(v, "model_dump") else v
-                )
+                steps_snapshot[k] = v.model_dump() if hasattr(v, "model_dump") else v
 
         events_list: list[dict[str, Any]] = []
         if hasattr(status_result, "events"):
             for e in status_result.events:
-                events_list.append(
-                    e.model_dump() if hasattr(e, "model_dump") else e
-                )
+                events_list.append(e.model_dump() if hasattr(e, "model_dump") else e)
 
         # Pull full transcripts from PostgreSQL when available
         if transcript_store is not None:
@@ -789,11 +775,7 @@ def build_temporal_router(
                     result = await handle.query(AgentWorkflow.get_status)
                     events = result.events if hasattr(result, "events") else []
                     for event in events[seen_count:]:
-                        data = (
-                            event.model_dump()
-                            if hasattr(event, "model_dump")
-                            else event
-                        )
+                        data = event.model_dump() if hasattr(event, "model_dump") else event
                         yield f"data: {json.dumps(data)}\n\n"
                     seen_count = len(events)
 
@@ -857,9 +839,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> list[dict[str, Any]]:
             """List all active CLI sessions."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.VIEW, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.VIEW, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -872,9 +852,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> dict[str, Any]:
             """Get status of a specific CLI session."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.VIEW, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.VIEW, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -892,9 +870,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> dict[str, str]:
             """Terminate a running CLI session."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.CANCEL, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.CANCEL, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 
@@ -952,9 +928,7 @@ def build_temporal_router(
             caller=Depends(get_caller_identity),
         ) -> StreamingResponse:
             """Stream CLI session output via SSE."""
-            decision = await authz.authorize(
-                caller, WorkflowAction.VIEW, WorkflowResource()
-            )
+            decision = await authz.authorize(caller, WorkflowAction.VIEW, WorkflowResource())
             if not decision.allowed:
                 raise HTTPException(status_code=403, detail=decision.reason)
 

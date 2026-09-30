@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
 from cloud_agents.workflow.cli_session import (
-    CLISessionInfo,
     CLISessionLauncher,
     CLISessionStatus,
 )
@@ -26,9 +24,7 @@ def mock_temporal(mocker: MockerFixture) -> Any:
     client = mocker.MagicMock()
     handle = mocker.AsyncMock()
     handle.id = "wf-test-1"
-    handle.query.return_value = mocker.MagicMock(
-        model_dump=lambda: {"steps": {}, "events": []}
-    )
+    handle.query.return_value = mocker.MagicMock(model_dump=lambda: {"steps": {}, "events": []})
     client.start_workflow = mocker.AsyncMock(return_value=handle)
     client.get_workflow_handle.return_value = handle
     return client
@@ -149,9 +145,7 @@ class TestGetCLISession:
         assert data["session_id"] == session_id
         assert data["status"] == "running"
 
-    def test_get_nonexistent_session_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_get_nonexistent_session_returns_404(self, client: TestClient) -> None:
         """Get nonexistent session returns 404."""
         response = client.get("/v1/cli-sessions/nonexistent")
         assert response.status_code == 404
@@ -220,9 +214,7 @@ class TestDeleteCLISession:
         assert info is not None
         assert info.status == CLISessionStatus.TERMINATED
 
-    def test_delete_nonexistent_session_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_delete_nonexistent_session_returns_404(self, client: TestClient) -> None:
         """Delete nonexistent session returns 404."""
         response = client.delete("/v1/cli-sessions/nonexistent")
         assert response.status_code == 404
@@ -242,7 +234,8 @@ class TestDeleteCLISession:
         client.delete(f"/v1/cli-sessions/{session_id}")
 
         terminated_calls = [
-            c for c in mock_emit.call_args_list
+            c
+            for c in mock_emit.call_args_list
             if c[1].get("event_type") == "cli_session_terminated"
         ]
         assert len(terminated_calls) == 1
@@ -454,9 +447,7 @@ class TestPostCLISessionMessage:
 
         spawner.write_file.assert_called_once()
 
-    def test_send_message_nonexistent_session_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_send_message_nonexistent_session_returns_404(self, client: TestClient) -> None:
         """POST to nonexistent session returns 404."""
         response = client.post(
             "/v1/cli-sessions/nonexistent/messages",
@@ -470,10 +461,7 @@ class TestPostCLISessionMessage:
         """POST message with deny-all authorizer returns 403."""
         from cloud_agents.workflow.security.authorization import (
             AuthzDecision,
-            CallerIdentity,
-            WorkflowAction,
             WorkflowAuthorizer,
-            WorkflowResource,
         )
 
         class DenyAllAuthorizer(WorkflowAuthorizer):
@@ -519,8 +507,10 @@ class TestSendMessageStatusGuard:
             json={"message": "hello"},
         )
         assert response.status_code == 409
-        assert "terminated" in response.json()["detail"].lower() or \
-               "cannot send" in response.json()["detail"].lower()
+        assert (
+            "terminated" in response.json()["detail"].lower()
+            or "cannot send" in response.json()["detail"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_send_message_to_failed_session_returns_409(
@@ -603,9 +593,7 @@ class TestSendMessageStatusGuard:
 class TestMessageSizeLimits:
     """Tests for message size limits on SendMessageRequest."""
 
-    def test_message_exceeding_64kb_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_message_exceeding_64kb_returns_422(self, client: TestClient) -> None:
         """Message larger than 64KB returns 422."""
         # 64KB = 65536 bytes; send slightly over
         large_message = "A" * 65537
@@ -631,9 +619,7 @@ class TestMessageSizeLimits:
         # Should pass validation but fail on session lookup
         assert response.status_code == 404
 
-    def test_oversized_raw_input_with_control_chars_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_oversized_raw_input_with_control_chars_returns_422(self, client: TestClient) -> None:
         """Adversarial payload of control chars that shrinks after sanitization is rejected early.
 
         A message of mostly control characters could pass the 64KB check after
@@ -654,9 +640,7 @@ class TestMessageSizeLimits:
         )
         assert response.status_code == 422
 
-    def test_empty_message_returns_422(
-        self, client: TestClient
-    ) -> None:
+    def test_empty_message_returns_422(self, client: TestClient) -> None:
         """Empty message returns 422."""
         response = client.post(
             "/v1/cli-sessions/any-id/messages",
@@ -669,7 +653,8 @@ class TestMessageInputValidation:
     """Tests for message content sanitization and validation."""
 
     def test_control_characters_stripped(
-        self, client: TestClient,
+        self,
+        client: TestClient,
     ) -> None:
         """Control characters are stripped from message content."""
         # Message with control characters (except \n, \r, \t which are allowed)
@@ -683,7 +668,8 @@ class TestMessageInputValidation:
         assert response.status_code == 404
 
     def test_newlines_and_tabs_preserved(
-        self, client: TestClient,
+        self,
+        client: TestClient,
     ) -> None:
         """Newlines, carriage returns, and tabs are preserved."""
         msg = "Hello\nWorld\r\nTest\tTab"
@@ -716,12 +702,15 @@ class TestMessageInputValidation:
 
         # The message written to file should have control chars stripped
         call_args = spawner.write_file.call_args
-        written_content = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("content", "")
+        written_content = (
+            call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("content", "")
+        )
         assert "\x00" not in written_content
         assert "HelloWorld" in written_content
 
     def test_whitespace_only_message_returns_422(
-        self, client: TestClient,
+        self,
+        client: TestClient,
     ) -> None:
         """Message with only whitespace returns 422."""
         response = client.post(
@@ -731,7 +720,8 @@ class TestMessageInputValidation:
         assert response.status_code == 422
 
     def test_valid_unicode_message_accepted(
-        self, client: TestClient,
+        self,
+        client: TestClient,
     ) -> None:
         """Valid unicode message with multi-byte chars passes validation."""
         # Include actual multi-byte characters (emoji, CJK)
@@ -744,7 +734,8 @@ class TestMessageInputValidation:
         assert response.status_code == 404  # passes validation, fails on session lookup
 
     def test_multibyte_message_over_64kb_in_bytes_returns_422(
-        self, client: TestClient,
+        self,
+        client: TestClient,
     ) -> None:
         """Multi-byte message under 64KB char-count but over 64KB byte-count returns 422."""
         # é is 2 bytes in UTF-8; 32769 copies = 65538 bytes > 64KB
@@ -795,9 +786,7 @@ class TestGetCLISessionOutput:
         assert "text/event-stream" in response.headers.get("content-type", "")
         assert "data:" in response.text
 
-    def test_output_nonexistent_session_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_output_nonexistent_session_returns_404(self, client: TestClient) -> None:
         """GET output for nonexistent session returns 404."""
         response = client.get("/v1/cli-sessions/nonexistent/output")
         assert response.status_code == 404

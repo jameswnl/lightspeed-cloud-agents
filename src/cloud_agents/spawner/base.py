@@ -13,12 +13,15 @@ import logging
 import os
 import ssl
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import re
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    from cloud_agents.workflow.security.tls import EphemeralCerts
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +125,7 @@ class AgentSpawner(ABC):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
-        tls_certs: "EphemeralCerts | None" = None,
+        tls_certs: EphemeralCerts | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -214,7 +217,7 @@ class AgentSpawner(ABC):
         read_only: bool = False,
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
-        tls_certs: "EphemeralCerts | None" = None,
+        tls_certs: EphemeralCerts | None = None,
     ) -> str:
         """Implementation-specific pod creation."""
 

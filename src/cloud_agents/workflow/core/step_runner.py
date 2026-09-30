@@ -245,9 +245,7 @@ async def _run_step_inner(
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    raw_mcp_servers = resolve_mcp_servers(
-        step.get("mcp_servers"), input.get("mcp_servers")
-    )
+    raw_mcp_servers = resolve_mcp_servers(step.get("mcp_servers"), input.get("mcp_servers"))
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:

@@ -111,7 +111,9 @@ class TestTranscriptStoreWiring:
     """Tests for TranscriptStore initialization in entrypoint."""
 
     def test_transcript_store_created_when_env_set(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """TranscriptStore is created when TRANSCRIPT_DB_URL is set."""
         monkeypatch.setenv("TRANSCRIPT_DB_URL", "postgresql://localhost/transcripts")
@@ -123,7 +125,9 @@ class TestTranscriptStoreWiring:
         mock_store_cls.from_env.assert_called_once()
 
     def test_transcript_store_not_created_when_env_unset(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """TranscriptStore is None when TRANSCRIPT_DB_URL is not set."""
         monkeypatch.delenv("TRANSCRIPT_DB_URL", raising=False)
@@ -135,7 +139,9 @@ class TestTranscriptStoreWiring:
         mock_store_cls.from_env.assert_called_once()
 
     def test_transcript_store_passed_to_router(
-        self, mocker: MockerFixture, monkeypatch,
+        self,
+        mocker: MockerFixture,
+        monkeypatch,
     ) -> None:
         """TranscriptStore instance is passed to build_temporal_router."""
         monkeypatch.setenv("TRANSCRIPT_DB_URL", "postgresql://localhost/transcripts")
@@ -148,6 +154,7 @@ class TestTranscriptStoreWiring:
             "cloud_agents.workflow.executor.temporal.entrypoint.build_temporal_router",
         )
         from fastapi import APIRouter
+
         mock_router_fn.return_value = APIRouter()
         build_temporal_app(temporal_url="localhost:7233")
         call_kwargs = mock_router_fn.call_args[1]

@@ -31,13 +31,15 @@ class TestSandboxExecutor:
         spawner = mocker.AsyncMock()
         executor = SandboxExecutor(spawner=spawner)
 
-        result = await executor.run(StepInput(
-            prompt="Check the cluster",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            workflow_id="wf-1",
-            step_name="diagnose",
-            output_key="diagnosis",
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Check the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                workflow_id="wf-1",
+                step_name="diagnose",
+                output_key="diagnosis",
+            )
+        )
 
         assert result.status == "completed"
         assert result.output == {"summary": "done"}
@@ -52,11 +54,13 @@ class TestSandboxExecutor:
         executor = SandboxExecutor(spawner=None)
 
         with pytest.raises(ValueError, match="spawner"):
-            await executor.run(StepInput(
-                prompt="test",
-                provider={"name": "openai", "model": "gpt-4o"},
-                step_name="s1",
-            ))
+            await executor.run(
+                StepInput(
+                    prompt="test",
+                    provider={"name": "openai", "model": "gpt-4o"},
+                    step_name="s1",
+                )
+            )
 
     @pytest.mark.asyncio
     async def test_failed_step_maps_correctly(self, mocker: MockerFixture) -> None:
@@ -75,10 +79,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "failed"
         assert result.error == "agent failed"
@@ -128,13 +134,15 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="Check the cluster",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            workflow_id="wf-1",
-            step_name="diagnose",
-            output_key="diagnosis",
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="Check the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                workflow_id="wf-1",
+                step_name="diagnose",
+                output_key="diagnosis",
+            )
+        )
 
         assert result.input_tokens == 26
         assert result.output_tokens == 136
@@ -173,10 +181,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.input_tokens == 30
         assert result.output_tokens == 20
@@ -200,10 +210,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.input_tokens == 0
         assert result.output_tokens == 0
@@ -235,10 +247,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "completed"
         assert result.transcript == []
@@ -247,9 +261,7 @@ class TestSandboxExecutor:
         assert result.cost_usd == 0.0
 
     @pytest.mark.asyncio
-    async def test_result_event_with_non_dict_data_is_skipped(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_result_event_with_non_dict_data_is_skipped(self, mocker: MockerFixture) -> None:
         """A "result" event whose data is not a dict is skipped, not a crash.
 
         Regression test for a CodeRabbit finding on #188 PR 190:
@@ -283,10 +295,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "completed"
         assert result.input_tokens == 10
@@ -335,10 +349,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.status == "completed"
         # First event's non-numeric input_tokens/cost_usd are skipped, but
@@ -369,10 +385,12 @@ class TestSandboxExecutor:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        result = await executor.run(StepInput(
-            prompt="test",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-        ))
+        result = await executor.run(
+            StepInput(
+                prompt="test",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            )
+        )
 
         assert result.duration_ms >= 40
 
@@ -381,9 +399,7 @@ class TestExecutionContextSandboxDelivery:
     """execution_context flows into the run_step input for ephemeral steps."""
 
     @pytest.mark.asyncio
-    async def test_run_step_input_carries_execution_context(
-        self, mocker: MockerFixture
-    ) -> None:
+    async def test_run_step_input_carries_execution_context(self, mocker: MockerFixture) -> None:
         """run_step receives execution_context from StepInput."""
         mock_run_step = mocker.patch(
             "cloud_agents.workflow.core.step_runner.run_step",
@@ -398,14 +414,16 @@ class TestExecutionContextSandboxDelivery:
         from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
 
         executor = SandboxExecutor(spawner=mocker.AsyncMock())
-        await executor.run(StepInput(
-            prompt="Check the cluster",
-            provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
-            workflow_id="wf-1",
-            step_name="diagnose",
-            output_key="diagnosis",
-            execution_context={"env": "staging"},
-        ))
+        await executor.run(
+            StepInput(
+                prompt="Check the cluster",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                workflow_id="wf-1",
+                step_name="diagnose",
+                output_key="diagnosis",
+                execution_context={"env": "staging"},
+            )
+        )
 
         run_input = mock_run_step.call_args.args[0]
         assert run_input["execution_context"] == {"env": "staging"}

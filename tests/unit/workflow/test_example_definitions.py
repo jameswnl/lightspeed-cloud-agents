@@ -7,7 +7,6 @@ the example is wrong and must be fixed.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -64,7 +63,9 @@ class TestExampleWorkflowDefinitions:
         for step in data["spec"]["steps"]:
             assert "name" in step, f"Step missing 'name' in {yaml_path.name}"
             assert "type" in step, f"Step '{step.get('name')}' missing 'type' in {yaml_path.name}"
-            assert "output_key" in step, f"Step '{step.get('name')}' missing 'output_key' in {yaml_path.name}"
+            assert (
+                "output_key" in step
+            ), f"Step '{step.get('name')}' missing 'output_key' in {yaml_path.name}"
 
     def test_no_dead_fields(self, yaml_path: Path) -> None:
         """Steps don't use fields that the Temporal workflow ignores."""

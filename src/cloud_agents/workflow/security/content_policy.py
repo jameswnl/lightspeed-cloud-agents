@@ -101,8 +101,7 @@ def evaluate_content_policy(
                     rule="max_prompt_length",
                     step_name=step_name,
                     reason=(
-                        f"Prompt exceeds {policy.max_prompt_length} chars "
-                        f"(got {len(prompt)})"
+                        f"Prompt exceeds {policy.max_prompt_length} chars " f"(got {len(prompt)})"
                     ),
                 )
             )

@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from typing import Any
 
 import pytest
 
@@ -51,9 +50,9 @@ class TestSubprocessToolBootstrap:
 
         # If bootstrap failed, error would be "Unknown tool 'echo_tool'"
         if result["status"] == "failed":
-            assert "Unknown tool" not in result.get("error", ""), (
-                f"Tool registry bootstrap failed in child process: {result['error']}"
-            )
+            assert "Unknown tool" not in result.get(
+                "error", ""
+            ), f"Tool registry bootstrap failed in child process: {result['error']}"
 
     @pytest.mark.asyncio
     async def test_child_process_fails_without_tools_module(self) -> None:

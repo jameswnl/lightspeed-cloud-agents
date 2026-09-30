@@ -64,9 +64,7 @@ class TestLocalWorkflowRunnerStart:
     """Tests for starting workflows."""
 
     @pytest.mark.asyncio
-    async def test_start_returns_workflow_id(
-        self, executor: Any, mocker: MockerFixture
-    ) -> None:
+    async def test_start_returns_workflow_id(self, executor: Any, mocker: MockerFixture) -> None:
         """start() returns a workflow ID."""
         from cloud_agents.workflow.executor.step.base import StepResult
 
@@ -81,9 +79,11 @@ class TestLocalWorkflowRunnerStart:
             return_value=mock_executor,
         )
 
-        input_data = _make_input([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-        ])
+        input_data = _make_input(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            ]
+        )
 
         wf_id = await executor.start(input_data)
         assert wf_id.startswith("wf-")
@@ -93,13 +93,14 @@ class TestLocalWorkflowRunnerStart:
         self, executor: Any, mock_store: AsyncMock, mocker: MockerFixture
     ) -> None:
         """start() with duplicate workflow_id raises ValueError."""
-        import asyncpg
 
         mock_store.create.side_effect = ValueError("already exists")
 
-        input_data = _make_input([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-        ])
+        input_data = _make_input(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            ]
+        )
         input_data["workflow_id"] = "wf-duplicate"
 
         with pytest.raises(ValueError, match="already exists"):
@@ -116,9 +117,7 @@ class TestLocalWorkflowRunnerStatus:
             await executor.get_status("wf-nonexistent")
 
     @pytest.mark.asyncio
-    async def test_get_status_returns_state(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_get_status_returns_state(self, executor: Any, mock_store: AsyncMock) -> None:
         """get_status() returns WorkflowStatus from store."""
         mock_store.get.return_value = {
             "workflow_id": "wf-1",
@@ -162,10 +161,22 @@ class TestLocalWorkflowRunnerApproval:
                 "apiVersion": "v1",
                 "kind": "AgentWorkflow",
                 "metadata": {"name": "test"},
-                "spec": {"steps": [
-                    {"name": "approve-fix", "type": "human-approval", "output_key": "approval", "message": "Approve?"},
-                    {"name": "fix", "type": "agent", "prompt": "Fix", "output_key": "fix_result"},
-                ]},
+                "spec": {
+                    "steps": [
+                        {
+                            "name": "approve-fix",
+                            "type": "human-approval",
+                            "output_key": "approval",
+                            "message": "Approve?",
+                        },
+                        {
+                            "name": "fix",
+                            "type": "agent",
+                            "prompt": "Fix",
+                            "output_key": "fix_result",
+                        },
+                    ]
+                },
             },
             "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
             "authz_context": {},
@@ -182,9 +193,7 @@ class TestLocalWorkflowRunnerApproval:
         mock_store.resume.assert_called_once_with("wf-1")
 
     @pytest.mark.asyncio
-    async def test_approve_not_paused_raises(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_approve_not_paused_raises(self, executor: Any, mock_store: AsyncMock) -> None:
         """approve() raises RuntimeError if workflow is not paused."""
         from cloud_agents.workflow.executor.base import ApprovalDecision
 
@@ -201,9 +210,7 @@ class TestLocalWorkflowRunnerApproval:
             )
 
     @pytest.mark.asyncio
-    async def test_approve_wrong_step_raises(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_approve_wrong_step_raises(self, executor: Any, mock_store: AsyncMock) -> None:
         """approve() raises RuntimeError if paused at different step."""
         from cloud_agents.workflow.executor.base import ApprovalDecision
 
@@ -224,9 +231,7 @@ class TestLocalWorkflowRunnerCancel:
     """Tests for workflow cancellation."""
 
     @pytest.mark.asyncio
-    async def test_cancel_marks_terminal(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_cancel_marks_terminal(self, executor: Any, mock_store: AsyncMock) -> None:
         """cancel() marks workflow as cancelled."""
         mock_store.get.return_value = {
             "workflow_id": "wf-1",
@@ -237,9 +242,7 @@ class TestLocalWorkflowRunnerCancel:
         mock_store.mark_terminal.assert_called_once_with("wf-1", "cancelled")
 
     @pytest.mark.asyncio
-    async def test_cancel_missing_raises(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_cancel_missing_raises(self, executor: Any, mock_store: AsyncMock) -> None:
         """cancel() raises KeyError for nonexistent workflow."""
         mock_store.get.return_value = None
 
@@ -251,17 +254,13 @@ class TestLocalWorkflowRunnerIsTerminal:
     """Tests for terminal state check."""
 
     @pytest.mark.asyncio
-    async def test_completed_is_terminal(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_completed_is_terminal(self, executor: Any, mock_store: AsyncMock) -> None:
         """Completed workflow is terminal."""
         mock_store.get.return_value = {"status": "completed"}
         assert await executor.is_terminal("wf-1") is True
 
     @pytest.mark.asyncio
-    async def test_running_is_not_terminal(
-        self, executor: Any, mock_store: AsyncMock
-    ) -> None:
+    async def test_running_is_not_terminal(self, executor: Any, mock_store: AsyncMock) -> None:
         """Running workflow is not terminal."""
         mock_store.get.return_value = {"status": "running"}
         assert await executor.is_terminal("wf-1") is False
@@ -271,17 +270,13 @@ class TestLocalWorkflowRunnerSendMessage:
     """Tests for send_message/send_message_stream defaults."""
 
     @pytest.mark.asyncio
-    async def test_send_message_raises_not_implemented(
-        self, executor: Any
-    ) -> None:
+    async def test_send_message_raises_not_implemented(self, executor: Any) -> None:
         """send_message() raises NotImplementedError on predefined runners."""
         with pytest.raises(NotImplementedError, match="does not support interactive messages"):
             await executor.send_message("wf-1", "hello")
 
     @pytest.mark.asyncio
-    async def test_send_message_stream_raises_not_implemented(
-        self, executor: Any
-    ) -> None:
+    async def test_send_message_stream_raises_not_implemented(self, executor: Any) -> None:
         """send_message_stream() raises NotImplementedError on predefined runners."""
         with pytest.raises(NotImplementedError, match="does not support interactive streaming"):
             async for _ in executor.send_message_stream("wf-1", "hello"):
@@ -545,10 +540,12 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
             return_value=mock_executor,
         )
 
-        input_data = _make_input([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-            {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
-        ])
+        input_data = _make_input(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+                {"name": "s2", "type": "agent", "prompt": "test2", "output_key": "r2"},
+            ]
+        )
 
         workflow_id = await executor.start(input_data)
         await executor._running[workflow_id]
@@ -603,9 +600,11 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
             return_value=mock_executor,
         )
 
-        input_data = _make_input([
-            {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
-        ])
+        input_data = _make_input(
+            [
+                {"name": "s1", "type": "agent", "prompt": "test", "output_key": "r1"},
+            ]
+        )
         input_data["session_id"] = "ses-abc"
 
         workflow_id = await executor.start(input_data)
@@ -675,9 +674,7 @@ class TestLocalWorkflowRunnerLiveTraceSharing:
         }
         provider_cfg = {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"}
 
-        workflow_id = await executor.start(
-            {"definition": definition, "provider": provider_cfg}
-        )
+        workflow_id = await executor.start({"definition": definition, "provider": provider_cfg})
         await executor._running[workflow_id]
 
         mock_store.get.return_value = {

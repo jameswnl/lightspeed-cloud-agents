@@ -35,23 +35,13 @@ class TestHelmNetworkPolicy:
     def test_defaults_produce_egress_networkpolicy(self) -> None:
         """Default values produce egress NetworkPolicy manifests."""
         docs = self._template()
-        np_names = [
-            d["metadata"]["name"]
-            for d in docs
-            if d.get("kind") == "NetworkPolicy"
-        ]
-        assert any("egress" in n for n in np_names), (
-            f"No egress NetworkPolicy found in: {np_names}"
-        )
+        np_names = [d["metadata"]["name"] for d in docs if d.get("kind") == "NetworkPolicy"]
+        assert any("egress" in n for n in np_names), f"No egress NetworkPolicy found in: {np_names}"
 
     def test_egress_disabled_omits_egress_policy(self) -> None:
         """Setting egress.enabled=false omits egress NetworkPolicy."""
         docs = self._template(["networkPolicy.egress.enabled=false"])
-        np_names = [
-            d["metadata"]["name"]
-            for d in docs
-            if d.get("kind") == "NetworkPolicy"
-        ]
-        assert not any("egress" in n for n in np_names), (
-            f"Egress NetworkPolicy should not be present: {np_names}"
-        )
+        np_names = [d["metadata"]["name"] for d in docs if d.get("kind") == "NetworkPolicy"]
+        assert not any(
+            "egress" in n for n in np_names
+        ), f"Egress NetworkPolicy should not be present: {np_names}"
