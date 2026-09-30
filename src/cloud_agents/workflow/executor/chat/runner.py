@@ -632,7 +632,11 @@ class ChatWorkflowRunner(WorkflowRunner):
                         metadata={
                             "tool_name": current_tool_name,
                             "args": args,
-                            "tool_call_id": "",
+                            # No tool_call_id in the canonical event
+                            # contract -- omit the key entirely so
+                            # _build_message_history synthesizes one
+                            # (call_<tool>_<n>) instead of replaying an
+                            # empty id to the provider.
                         },
                     ).to_dict()
                 )
@@ -646,7 +650,9 @@ class ChatWorkflowRunner(WorkflowRunner):
                         ),
                         metadata={
                             "tool_name": current_tool_name,
-                            "tool_call_id": "",
+                            # tool_call_id omitted: canonical tool_result
+                            # events carry no id; _build_message_history
+                            # synthesizes the matching fallback.
                         },
                     ).to_dict()
                 )

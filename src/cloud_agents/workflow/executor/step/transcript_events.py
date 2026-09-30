@@ -215,7 +215,7 @@ def transcript_events_from_messages(
                     {
                         "ts": stamp,
                         "type": "tool_result",
-                        "data": {"output": _stringify(part.content)},
+                        "data": {"output": _stringify(part.content)[:MAX_EVENT_FIELD_LENGTH]},
                     }
                 )
             # UserPromptPart / SystemPromptPart / TextPart: not events.
