@@ -41,6 +41,12 @@ from cloud_agents.workflow.executor.step.provider import (
 )
 from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools, load_tools_module
+from cloud_agents.workflow.executor.step.transcript_events import (
+    error_transcript_event,
+    output_text_of,
+    result_transcript_event,
+    transcript_events_from_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +79,7 @@ def main() -> None:
             "status": "failed",
             "error": str(exc),
             "output": None,
-            "transcript": [],
+            "transcript": [error_transcript_event(str(exc))],
             "input_tokens": 0,
             "output_tokens": 0,
         }
@@ -293,12 +299,11 @@ async def _run_with_agent(
     parsed = _parse_content(content, output_schema)
     parsed["input_tokens"] = input_tokens
     parsed["output_tokens"] = output_tokens
-    parsed.setdefault(
-        "transcript",
-        [
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": content or ""},
-        ],
+    parsed["transcript"] = transcript_events_from_messages(
+        result.new_messages(),
+        output_text=output_text_of(content),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
     return parsed
@@ -378,13 +383,13 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
     parsed = _parse_content(content, output_schema)
     parsed["input_tokens"] = input_tokens
     parsed["output_tokens"] = output_tokens
-    parsed.setdefault(
-        "transcript",
-        [
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": content or ""},
-        ],
-    )
+    parsed["transcript"] = [
+        result_transcript_event(
+            output_text=output_text_of(content),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        ),
+    ]
 
     return parsed
 

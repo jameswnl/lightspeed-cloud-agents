@@ -1423,9 +1423,12 @@ class TestSaveTurnToolMessages:
             output={"response": "I ran the tool."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "kubectl_get",
-                    "args": {"namespace": "default"},
+                    "data": {
+                        "name": "kubectl_get",
+                        "input": '{"namespace": "default"}',
+                    },
                 },
             ],
             input_tokens=10,
@@ -1460,9 +1463,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Pods are running."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "kubectl_get", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "kubectl_get",
-                    "output": "pod-1 Running\npod-2 Running",
+                    "data": {"output": "pod-1 Running\npod-2 Running"},
                 },
             ],
             input_tokens=10,
@@ -1497,14 +1505,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Done."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "read_file",
-                    "args": {"path": "/etc/hosts"},
+                    "data": {"name": "read_file", "input": '{"path": "/etc/hosts"}'},
                 },
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "read_file",
-                    "output": "127.0.0.1 localhost",
+                    "data": {"output": "127.0.0.1 localhost"},
                 },
             ],
             input_tokens=10,
@@ -1583,14 +1591,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Here are the pods."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "kubectl_get",
-                    "args": {"resource": "pods"},
+                    "data": {"name": "kubectl_get", "input": '{"resource": "pods"}'},
                 },
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "kubectl_get",
-                    "output": "pod-1 Running",
+                    "data": {"output": "pod-1 Running"},
                 },
             ],
             input_tokens=10,

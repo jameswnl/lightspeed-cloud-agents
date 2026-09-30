@@ -43,6 +43,12 @@ from cloud_agents.workflow.executor.step.native_output import (
     supports_native_output as _supports_native_output,
 )
 from cloud_agents.workflow.executor.step.provider import ensure_credentials_env, to_model_string
+from cloud_agents.workflow.executor.step.transcript_events import (
+    error_transcript_event,
+    output_text_of,
+    result_transcript_event,
+    transcript_events_from_messages,
+)
 from cloud_agents.workflow.executor.step.skills import get_skills_capability
 from cloud_agents.workflow.executor.step.tools import get_tools
 
@@ -367,6 +373,7 @@ class DirectExecutor(StepExecutor):
             return StepResult(
                 status="failed",
                 error=str(exc),
+                transcript=[error_transcript_event(str(exc))],
                 duration_ms=duration_ms,
             )
 
@@ -376,6 +383,7 @@ class DirectExecutor(StepExecutor):
             return StepResult(
                 status="failed",
                 error=str(exc),
+                transcript=[error_transcript_event(str(exc))],
                 duration_ms=duration_ms,
             )
 
@@ -476,23 +484,19 @@ class DirectExecutor(StepExecutor):
 
                     output_text = await streamed.get_output()
                     usage = streamed.usage
+                    new_messages = streamed.new_messages()
 
             input_tokens = getattr(usage, "input_tokens", 0) or 0
             output_tokens = getattr(usage, "output_tokens", 0) or 0
             output = _parse_output(output_text, step_input.output_schema)
             duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
-            transcript = [
-                {
-                    "type": "agent.stream",
-                    "model": step_input.provider.get("model", "unknown"),
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "step_name": step_input.step_name,
-                    "tools": step_input.tools,
-                    "mcp_servers": [s.get("name", "") for s in (step_input.mcp_servers or [])],
-                },
-            ]
+            transcript = transcript_events_from_messages(
+                new_messages,
+                output_text=output_text_of(output_text),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
             step_result = StepResult(
                 status="completed",
@@ -514,7 +518,12 @@ class DirectExecutor(StepExecutor):
             yield StreamEvent(
                 type="error",
                 data={"error": str(exc)},
-                result=StepResult(status="failed", error=str(exc), duration_ms=duration_ms),
+                result=StepResult(
+                    status="failed",
+                    error=str(exc),
+                    transcript=[error_transcript_event(str(exc))],
+                    duration_ms=duration_ms,
+                ),
             )
 
     async def _run_with_agent(
@@ -612,17 +621,12 @@ class DirectExecutor(StepExecutor):
 
         mcp_server_names = [s.get("name", "") for s in (step_input.mcp_servers or [])]
 
-        transcript = [
-            {
-                "type": "agent.run",
-                "model": step_input.provider.get("model", "unknown"),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "step_name": step_input.step_name,
-                "tools": step_input.tools,
-                "mcp_servers": mcp_server_names,
-            },
-        ]
+        transcript = transcript_events_from_messages(
+            result.new_messages(),
+            output_text=output_text_of(content),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
         logger.info(
             "DirectExecutor (agent) completed step '%s' "
@@ -672,13 +676,11 @@ class DirectExecutor(StepExecutor):
         duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
 
         transcript = [
-            {
-                "type": "llm.call",
-                "model": step_input.provider.get("model", "unknown"),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "step_name": step_input.step_name,
-            },
+            result_transcript_event(
+                output_text=output_text_of(content),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
         ]
 
         logger.info(

@@ -609,22 +609,35 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         # Extract tool_call/tool_result events from transcript into
         # ConversationMessage entries so they survive across turns.
+        # Events are canonical ({"ts", "type", "data"}) -- tool names and
+        # payloads live under "data" (see transcript_events.py). The
+        # canonical tool_result event carries no tool name, so the name
+        # is carried forward from the preceding tool_call event.
+        current_tool_name = ""
         for event in result.transcript or []:
             event_type = event.get("type", "")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
             if event_type == "tool_call":
+                current_tool_name = data.get("name", "")
+                args: Any = data.get("input", "")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        pass
                 messages.append(
                     ConversationMessage(
                         role="tool_call",
                         content="",
                         metadata={
-                            "tool_name": event.get("tool_name", ""),
-                            "args": event.get("args", {}),
-                            "tool_call_id": event.get("tool_call_id", ""),
+                            "tool_name": current_tool_name,
+                            "args": args,
+                            "tool_call_id": "",
                         },
                     ).to_dict()
                 )
             elif event_type == "tool_result":
-                output = event.get("output", "")
+                output = data.get("output", "")
                 messages.append(
                     ConversationMessage(
                         role="tool_result",
@@ -632,8 +645,8 @@ class ChatWorkflowRunner(WorkflowRunner):
                             json.dumps(output) if isinstance(output, (dict, list)) else str(output)
                         ),
                         metadata={
-                            "tool_name": event.get("tool_name", ""),
-                            "tool_call_id": event.get("tool_call_id", ""),
+                            "tool_name": current_tool_name,
+                            "tool_call_id": "",
                         },
                     ).to_dict()
                 )
@@ -642,8 +655,10 @@ class ChatWorkflowRunner(WorkflowRunner):
             content = self._extract_assistant_text(result.output)
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
-        # Convert result.transcript dicts to TranscriptEvent objects, mapping
-        # non-standard types (agent.run, agent.stream, llm.call) to "result".
+        # Convert result.transcript dicts to TranscriptEvent objects;
+        # executors now emit canonical events directly (see
+        # transcript_events.py) -- normalize only defends against legacy
+        # flat shapes.
         events = normalize_transcript_events(result.transcript)
 
         # Save to transcript store

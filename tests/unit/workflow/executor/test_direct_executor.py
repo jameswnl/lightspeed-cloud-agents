@@ -265,8 +265,14 @@ class TestDirectExecutorRun:
             )
         )
 
-        assert len(result.transcript) >= 1
-        assert any(e.get("type") == "llm.call" for e in result.transcript)
+        assert len(result.transcript) == 1
+        event = result.transcript[0]
+        assert event["type"] == "result"
+        assert set(event.keys()) == {"ts", "type", "data"}
+        assert event["data"]["text"] == '{"ok": true}'
+        assert event["data"]["input_tokens"] == 50
+        assert event["data"]["output_tokens"] == 20
+        assert event["data"]["cost_usd"] is None
 
     @pytest.mark.asyncio
     async def test_duration_tracked(self, mocker: MockerFixture) -> None:
@@ -1481,9 +1487,12 @@ class TestDirectExecutorWithMCPServers:
         )
 
         assert len(result.transcript) >= 1
-        transcript_entry = result.transcript[0]
-        assert "mcp_servers" in transcript_entry
-        assert transcript_entry["mcp_servers"] == ["kubectl"]
+        # Canonical event contract: no executor-specific keys like
+        # mcp_servers -- the server list lives in the step definition,
+        # not the per-event transcript (parity with spawn: ephemeral).
+        for event in result.transcript:
+            assert set(event.keys()) == {"ts", "type", "data"}
+            assert event["type"] in {"tool_call", "tool_result", "thinking", "result", "error"}
 
 
 async def _async_iter(items: list[str]):
@@ -1564,7 +1573,7 @@ class TestDirectExecutorStreaming:
         assert complete_events[0].result is not None
         assert complete_events[0].result.status == "completed"
         assert len(complete_events[0].result.transcript) >= 1
-        assert complete_events[0].result.transcript[0]["type"] == "agent.stream"
+        assert complete_events[0].result.transcript[0]["type"] == "result"
         assert complete_events[0].result.input_tokens == 80
         assert complete_events[0].result.output_tokens == 30
 
