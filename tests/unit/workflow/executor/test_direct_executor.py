@@ -2892,6 +2892,69 @@ class TestBuildMessageHistoryToolRoles:
         assert calls[1].tool_call_id == results[1].tool_call_id
         assert calls[0].tool_call_id != calls[1].tool_call_id
 
+    @pytest.mark.parametrize("reverse_explicit_returns", [False, True])
+    def test_mixed_explicit_and_synthesized_ids_across_turns(
+        self, reverse_explicit_returns: bool
+    ) -> None:
+        """Explicit returns consume matching calls before ID-less history replays."""
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        old_calls = [
+            {"role": "tool_call", "metadata": {"tool_name": name, "args": {}, "tool_call_id": name}}
+            for name in ("old_a", "old_b")
+        ]
+        # The first old result leaves the ID-less old_a call pending when
+        # explicit returns arrive out of order; removing the queue's head
+        # rather than the matching ID would pair its result incorrectly.
+        old_calls[0]["metadata"].pop("tool_call_id")
+        old_returns = [
+            {"role": "tool_result", "content": "a", "metadata": {"tool_name": "old_a"}},
+            {
+                "role": "tool_result",
+                "content": "b",
+                "metadata": {"tool_name": "old_b", "tool_call_id": "old_b"},
+            },
+        ]
+        if reverse_explicit_returns:
+            old_returns.reverse()
+        context = {
+            "turn-0": {
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Old turn"},
+                        *old_calls,
+                        *old_returns,
+                        {"role": "assistant", "content": "Done"},
+                    ]
+                }
+            },
+            "turn-1": {
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "New turn"},
+                        {"role": "tool_call", "metadata": {"tool_name": "new_tool", "args": {}}},
+                        {
+                            "role": "tool_result",
+                            "content": "new",
+                            "metadata": {"tool_name": "new_tool"},
+                        },
+                    ]
+                }
+            },
+        }
+        history = _build_message_history(context)
+        calls = {p.tool_name: p for m in history for p in m.parts if isinstance(p, ToolCallPart)}
+        returns = {
+            p.tool_name: p for m in history for p in m.parts if isinstance(p, ToolReturnPart)
+        }
+        assert calls.keys() == returns.keys() == {"old_a", "old_b", "new_tool"}
+        for name, call in calls.items():
+            assert call.tool_call_id == returns[name].tool_call_id
+        assert calls["old_b"].tool_call_id == "old_b"
+        assert returns["new_tool"].content == "new"
+
     def test_orphan_tool_result_gets_fallback_id(self) -> None:
         """A result with no preceding call still gets a unique id."""
         from pydantic_ai.messages import ToolReturnPart

@@ -326,6 +326,13 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 tool_name = metadata.get("tool_name", "")
                 if metadata.get("tool_call_id"):
                     tool_call_id = metadata["tool_call_id"]
+                    # Explicit returns may arrive out of order. Remove
+                    # their matching call so later ID-less returns cannot
+                    # consume an already-completed exchange.
+                    for index, (_, pending_id) in enumerate(pending_calls):
+                        if pending_id == tool_call_id:
+                            pending_calls.pop(index)
+                            break
                 elif pending_calls:
                     # Pair with the oldest unpaired call -- ids must match
                     # or providers reject the history.
