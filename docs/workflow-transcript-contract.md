@@ -80,3 +80,10 @@ backward compatibility. The `TranscriptStorePersistenceMiddleware`
 persists each step's `StepTranscript` (events + aggregate usage) through
 the workflow transcript store; one-step and multi-step workflows use the
 same path (`GET /v1/workflows/{id}/transcripts` in lightspeed-stack).
+
+Chat conversation persistence reuses bounded tool events only when the
+arguments are a valid JSON object shorter than the 2000-character input
+limit. Calls with malformed or potentially truncated input and their paired
+results are omitted from provider history; their audit events remain in the
+transcript. Tool outputs in replay remain bounded. Canonical events have no
+call IDs, so results are paired with calls in FIFO order.

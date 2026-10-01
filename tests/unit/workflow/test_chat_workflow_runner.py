@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -1742,3 +1743,62 @@ class TestChatWorkflowAllowedSkills:
             context={},
         )
         assert step_input.allowed_skills == ["k8s-diag", "git-ops"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        [{}],
+        [{"a": 1}, {"b": 2}],
+        [{"content": "x" * 2100}],
+        [{"content": "x" * 2100}, {"b": 2}],
+        [{"a": 1}, {"content": "x" * 2100}, {"c": 3}],
+    ],
+)
+async def test_save_to_replay_tool_exchanges(
+    runner: ChatWorkflowRunner, mock_transcript_store: AsyncMock, inputs: list[dict[str, Any]]
+) -> None:
+    """Replay real message parts with matching identities and valid arguments."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+
+    from cloud_agents.workflow.executor.step.direct import _build_message_history
+    from cloud_agents.workflow.executor.step.transcript_events import (
+        transcript_events_from_messages,
+    )
+
+    calls = [
+        ToolCallPart(tool_name=f"tool_{i}", args=args, tool_call_id=f"id_{i}")
+        for i, args in enumerate(inputs)
+    ]
+    returns = [
+        ToolReturnPart(
+            tool_name=call.tool_name, content=f"output_{i}", tool_call_id=call.tool_call_id
+        )
+        for i, call in enumerate(calls)
+    ]
+    events = transcript_events_from_messages(
+        [ModelResponse(parts=calls), ModelRequest(parts=returns)],
+        output_text="Done",
+        input_tokens=10,
+        output_tokens=5,
+    )
+    await runner._save_turn(
+        "chat-123",
+        "turn-0",
+        "Run tools",
+        StepResult(status="completed", output={"response": "Done"}, transcript=events),
+    )
+    saved = mock_transcript_store.save.call_args.kwargs
+    history = _build_message_history({"turn-0": {"output": {"messages": saved["messages"]}}})
+    replay_calls = [p for m in history for p in m.parts if isinstance(p, ToolCallPart)]
+    replay_returns = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
+    expected = [(i, args) for i, args in enumerate(inputs) if len(json.dumps(args)) < 2000]
+    assert len(replay_calls) == len(replay_returns) == len(expected)
+    for call, returned, (i, args) in zip(replay_calls, replay_returns, expected, strict=True):
+        assert call.args_as_dict() == args
+        assert call.tool_name == returned.tool_name == f"tool_{i}"
+        assert call.tool_call_id == returned.tool_call_id
+        assert returned.content == f"output_{i}"
+    assert len({c.tool_call_id for c in replay_calls}) == len(replay_calls)
+    assert len(saved["transcript"].events) == len(events)

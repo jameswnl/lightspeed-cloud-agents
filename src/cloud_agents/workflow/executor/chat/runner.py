@@ -39,6 +39,9 @@ from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
 
+# Sandbox EventLogger and transcript_events cap tool input at 2000 characters.
+_MAX_TOOL_INPUT_LENGTH = 2000
+
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
@@ -614,18 +617,28 @@ class ChatWorkflowRunner(WorkflowRunner):
         # canonical tool_result event carries no tool name, so each
         # result is paired with the oldest unpaired call's name (FIFO) --
         # correct for sequential and order-preserving parallel calls.
-        pending_tool_names: list[str] = []
+        pending_tool_names: list[str | None] = []
         for event in result.transcript or []:
             event_type = event.get("type", "")
             data = event.get("data") if isinstance(event.get("data"), dict) else {}
             if event_type == "tool_call":
-                pending_tool_names.append(data.get("name", ""))
                 args: Any = data.get("input", "")
+                # Audit input is bounded, so it is not a lossless source of
+                # arguments. Omit an unsafe call AND its paired result from
+                # provider history, while retaining both audit events.
                 if isinstance(args, str):
+                    if len(args) >= _MAX_TOOL_INPUT_LENGTH:
+                        pending_tool_names.append(None)
+                        continue
                     try:
                         args = json.loads(args)
                     except json.JSONDecodeError:
-                        pass
+                        pending_tool_names.append(None)
+                        continue
+                if not isinstance(args, dict):
+                    pending_tool_names.append(None)
+                    continue
+                pending_tool_names.append(data.get("name", ""))
                 messages.append(
                     ConversationMessage(
                         role="tool_call",
@@ -642,7 +655,9 @@ class ChatWorkflowRunner(WorkflowRunner):
                     ).to_dict()
                 )
             elif event_type == "tool_result":
-                paired_name = pending_tool_names.pop(0) if pending_tool_names else ""
+                paired_name = pending_tool_names.pop(0) if pending_tool_names else None
+                if paired_name is None:
+                    continue
                 output = data.get("output", "")
                 messages.append(
                     ConversationMessage(

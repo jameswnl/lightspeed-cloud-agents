@@ -491,3 +491,52 @@ class TestSubprocessChildEmission:
         assert result["status"] == "failed"
         assert [e["type"] for e in result["transcript"]] == ["error"]
         assert result["transcript"][0]["data"] == {"message": "child blew up"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["agent", "model_request"])
+@pytest.mark.parametrize("content", ["not JSON", None, '{"answer": "ok"}'])
+async def test_subprocess_parse_failure_emits_error(mocker: Any, path: str, content: Any) -> None:
+    """Both child execution paths retain usage and expose parsing failures."""
+    from types import SimpleNamespace
+
+    from cloud_agents.workflow.executor.step import subprocess_child
+
+    mocker.patch.object(subprocess_child, "ensure_credentials_env")
+    mocker.patch.object(subprocess_child, "to_model_string", return_value=TestModel())
+    usage = SimpleNamespace(input_tokens=11, output_tokens=7)
+    if path == "agent":
+        agent = mocker.patch.object(subprocess_child, "Agent").return_value
+        agent.run = mocker.AsyncMock(
+            return_value=SimpleNamespace(
+                output=content,
+                usage=usage,
+                new_messages=lambda: [],
+            )
+        )
+    else:
+        mocker.patch.object(
+            subprocess_child,
+            "model_request",
+            new=mocker.AsyncMock(
+                return_value=SimpleNamespace(text=content, usage=usage),
+            ),
+        )
+    input_data = {
+        "prompt": "Return JSON",
+        "provider": {"name": "openai", "model": "gpt-4o"},
+        "output_schema": {"type": "object"},
+    }
+    if path == "agent":
+        result = await subprocess_child._run_with_agent(input_data, [])
+    else:
+        result = await subprocess_child._run_model_request(input_data)
+    assert result["input_tokens"] == 11
+    assert result["output_tokens"] == 7
+    if content == '{"answer": "ok"}':
+        assert result["status"] == "completed"
+        assert [e["type"] for e in result["transcript"]] == ["result"]
+    else:
+        assert result["status"] == "failed"
+        assert [e["type"] for e in result["transcript"]] == ["result", "error"]
+        assert result["transcript"][-1]["data"] == {"message": result["error"]}

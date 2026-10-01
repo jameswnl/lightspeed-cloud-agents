@@ -306,6 +306,9 @@ async def _run_with_agent(
         output_tokens=output_tokens,
     )
 
+    if parsed["status"] == "failed":
+        parsed["transcript"].append(error_transcript_event(parsed["error"]))
+
     return parsed
 
 
@@ -390,6 +393,9 @@ async def _run_model_request(input_data: dict[str, Any]) -> dict[str, Any]:
             output_tokens=output_tokens,
         ),
     ]
+
+    if parsed["status"] == "failed":
+        parsed["transcript"].append(error_transcript_event(parsed["error"]))
 
     return parsed
 
