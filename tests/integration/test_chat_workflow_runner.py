@@ -416,14 +416,14 @@ class TestToolAwareHistory:
                         output={"response": "The pods are running."},
                         transcript=[
                             {
+                                "ts": "2026-10-01T00:00:00+00:00",
                                 "type": "tool_call",
-                                "tool_name": "kubectl_get",
-                                "args": {"resource": "pods"},
+                                "data": {"name": "kubectl_get", "input": '{"resource": "pods"}'},
                             },
                             {
+                                "ts": "2026-10-01T00:00:00+00:00",
                                 "type": "tool_result",
-                                "tool_name": "kubectl_get",
-                                "output": "pod-1 Running\npod-2 Running",
+                                "data": {"output": "pod-1 Running\npod-2 Running"},
                             },
                         ],
                         input_tokens=80,
@@ -476,6 +476,28 @@ class TestToolAwareHistory:
         assert "tool_call" in turn0_roles
         assert "tool_result" in turn0_roles
 
+        # Replay persisted conversation context into the provider message
+        # parts, verifying that tool identity and payload survive the round trip.
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        history = _build_message_history(turn2_input.context)
+        calls = [
+            part for message in history for part in message.parts if isinstance(part, ToolCallPart)
+        ]
+        returns = [
+            part
+            for message in history
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        assert len(calls) == len(returns) == 1
+        assert calls[0].tool_call_id == returns[0].tool_call_id
+        assert calls[0].tool_name == returns[0].tool_name == "kubectl_get"
+        assert calls[0].args_as_dict() == {"resource": "pods"}
+        assert returns[0].content == "pod-1 Running\npod-2 Running"
+
     @pytest.mark.asyncio
     async def test_get_history_includes_tool_messages(
         self,
@@ -493,14 +515,14 @@ class TestToolAwareHistory:
                     output={"response": "Done."},
                     transcript=[
                         {
+                            "ts": "2026-10-01T00:00:00+00:00",
                             "type": "tool_call",
-                            "tool_name": "read_file",
-                            "args": {"path": "/tmp/test"},
+                            "data": {"name": "read_file", "input": '{"path": "/tmp/test"}'},
                         },
                         {
+                            "ts": "2026-10-01T00:00:00+00:00",
                             "type": "tool_result",
-                            "tool_name": "read_file",
-                            "output": "file contents here",
+                            "data": {"output": "file contents here"},
                         },
                     ],
                 )
