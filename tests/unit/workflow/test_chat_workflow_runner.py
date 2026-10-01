@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -1423,9 +1424,12 @@ class TestSaveTurnToolMessages:
             output={"response": "I ran the tool."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "kubectl_get",
-                    "args": {"namespace": "default"},
+                    "data": {
+                        "name": "kubectl_get",
+                        "input": '{"namespace": "default"}',
+                    },
                 },
             ],
             input_tokens=10,
@@ -1460,9 +1464,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Pods are running."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "kubectl_get", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "kubectl_get",
-                    "output": "pod-1 Running\npod-2 Running",
+                    "data": {"output": "pod-1 Running\npod-2 Running"},
                 },
             ],
             input_tokens=10,
@@ -1497,14 +1506,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Done."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "read_file",
-                    "args": {"path": "/etc/hosts"},
+                    "data": {"name": "read_file", "input": '{"path": "/etc/hosts"}'},
                 },
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "read_file",
-                    "output": "127.0.0.1 localhost",
+                    "data": {"output": "127.0.0.1 localhost"},
                 },
             ],
             input_tokens=10,
@@ -1526,6 +1535,63 @@ class TestSaveTurnToolMessages:
 
         tool_result_msg = next(m for m in messages if m["role"] == "tool_result")
         assert tool_result_msg["metadata"]["tool_name"] == "read_file"
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_results_pair_names_fifo(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Parallel results each get their own call's tool name (FIFO).
+
+        Canonical tool_result events carry no name; pairing by "last
+        call's name" would label both results with tool_b. Regression
+        test for the /query/direct follow-up-turn history.
+        """
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Checked both."},
+            transcript=[
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "tool_a", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "tool_b", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_result",
+                    "data": {"output": "a-result"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_result",
+                    "data": {"output": "b-result"},
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Check both")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        result_msgs = [m for m in messages if m["role"] == "tool_result"]
+        assert len(result_msgs) == 2
+        assert result_msgs[0]["metadata"]["tool_name"] == "tool_a"
+        assert result_msgs[1]["metadata"]["tool_name"] == "tool_b"
 
     @pytest.mark.asyncio
     async def test_non_tool_events_not_added_as_messages(
@@ -1583,14 +1649,14 @@ class TestSaveTurnToolMessages:
             output={"response": "Here are the pods."},
             transcript=[
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_call",
-                    "tool_name": "kubectl_get",
-                    "args": {"resource": "pods"},
+                    "data": {"name": "kubectl_get", "input": '{"resource": "pods"}'},
                 },
                 {
+                    "ts": "2026-09-30T00:00:00+00:00",
                     "type": "tool_result",
-                    "tool_name": "kubectl_get",
-                    "output": "pod-1 Running",
+                    "data": {"output": "pod-1 Running"},
                 },
             ],
             input_tokens=10,
@@ -1677,3 +1743,62 @@ class TestChatWorkflowAllowedSkills:
             context={},
         )
         assert step_input.allowed_skills == ["k8s-diag", "git-ops"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        [{}],
+        [{"a": 1}, {"b": 2}],
+        [{"content": "x" * 2100}],
+        [{"content": "x" * 2100}, {"b": 2}],
+        [{"a": 1}, {"content": "x" * 2100}, {"c": 3}],
+    ],
+)
+async def test_save_to_replay_tool_exchanges(
+    runner: ChatWorkflowRunner, mock_transcript_store: AsyncMock, inputs: list[dict[str, Any]]
+) -> None:
+    """Replay real message parts with matching identities and valid arguments."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+
+    from cloud_agents.workflow.executor.step.direct import _build_message_history
+    from cloud_agents.workflow.executor.step.transcript_events import (
+        transcript_events_from_messages,
+    )
+
+    calls = [
+        ToolCallPart(tool_name=f"tool_{i}", args=args, tool_call_id=f"id_{i}")
+        for i, args in enumerate(inputs)
+    ]
+    returns = [
+        ToolReturnPart(
+            tool_name=call.tool_name, content=f"output_{i}", tool_call_id=call.tool_call_id
+        )
+        for i, call in enumerate(calls)
+    ]
+    events = transcript_events_from_messages(
+        [ModelResponse(parts=calls), ModelRequest(parts=returns)],
+        output_text="Done",
+        input_tokens=10,
+        output_tokens=5,
+    )
+    await runner._save_turn(
+        "chat-123",
+        "turn-0",
+        "Run tools",
+        StepResult(status="completed", output={"response": "Done"}, transcript=events),
+    )
+    saved = mock_transcript_store.save.call_args.kwargs
+    history = _build_message_history({"turn-0": {"output": {"messages": saved["messages"]}}})
+    replay_calls = [p for m in history for p in m.parts if isinstance(p, ToolCallPart)]
+    replay_returns = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
+    expected = [(i, args) for i, args in enumerate(inputs) if len(json.dumps(args)) < 2000]
+    assert len(replay_calls) == len(replay_returns) == len(expected)
+    for call, returned, (i, args) in zip(replay_calls, replay_returns, expected, strict=True):
+        assert call.args_as_dict() == args
+        assert call.tool_name == returned.tool_name == f"tool_{i}"
+        assert call.tool_call_id == returned.tool_call_id
+        assert returned.content == f"output_{i}"
+    assert len({c.tool_call_id for c in replay_calls}) == len(replay_calls)
+    assert len(saved["transcript"].events) == len(events)

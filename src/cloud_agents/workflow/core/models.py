@@ -121,9 +121,12 @@ def normalize_transcript_events(raw_events: list[dict[str, Any]] | None) -> list
     - Canonical (e.g. SandboxExecutor, via step_runner._collect_transcript /
       StepTranscript.model_dump()): already `{"ts": ..., "type": ...,
       "data": {...}}`. Used as-is.
-    - Flat (e.g. DirectExecutor's `{"type": "llm.call", "model": ...}`):
-      executor-specific type (not in TranscriptEvent's Literal) and no "ts"
-      or "data" key -- the remaining keys are the payload.
+    - Flat (legacy executor summaries, e.g. a pre-parity
+      `{"type": "llm.call", "model": ...}`): executor-specific type (not in
+      TranscriptEvent's Literal) and no "ts" or "data" key -- the remaining
+      keys are the payload. All current executors emit canonical events
+      (see executor/step/transcript_events.py); this branch is backward
+      compat only.
 
     Treating a canonical event as flat would nest its existing "data" dict
     under a second "data" key, corrupting it; treating a flat event as

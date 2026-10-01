@@ -265,8 +265,14 @@ class TestDirectExecutorRun:
             )
         )
 
-        assert len(result.transcript) >= 1
-        assert any(e.get("type") == "llm.call" for e in result.transcript)
+        assert len(result.transcript) == 1
+        event = result.transcript[0]
+        assert event["type"] == "result"
+        assert set(event.keys()) == {"ts", "type", "data"}
+        assert event["data"]["text"] == '{"ok": true}'
+        assert event["data"]["input_tokens"] == 50
+        assert event["data"]["output_tokens"] == 20
+        assert event["data"]["cost_usd"] is None
 
     @pytest.mark.asyncio
     async def test_duration_tracked(self, mocker: MockerFixture) -> None:
@@ -1481,9 +1487,12 @@ class TestDirectExecutorWithMCPServers:
         )
 
         assert len(result.transcript) >= 1
-        transcript_entry = result.transcript[0]
-        assert "mcp_servers" in transcript_entry
-        assert transcript_entry["mcp_servers"] == ["kubectl"]
+        # Canonical event contract: no executor-specific keys like
+        # mcp_servers -- the server list lives in the step definition,
+        # not the per-event transcript (parity with spawn: ephemeral).
+        for event in result.transcript:
+            assert set(event.keys()) == {"ts", "type", "data"}
+            assert event["type"] in {"tool_call", "tool_result", "thinking", "result", "error"}
 
 
 async def _async_iter(items: list[str]):
@@ -1564,7 +1573,7 @@ class TestDirectExecutorStreaming:
         assert complete_events[0].result is not None
         assert complete_events[0].result.status == "completed"
         assert len(complete_events[0].result.transcript) >= 1
-        assert complete_events[0].result.transcript[0]["type"] == "agent.stream"
+        assert complete_events[0].result.transcript[0]["type"] == "result"
         assert complete_events[0].result.input_tokens == 80
         assert complete_events[0].result.output_tokens == 30
 
@@ -2787,6 +2796,192 @@ class TestBuildMessageHistoryToolRoles:
         history = _build_message_history(context)
         # Only user and assistant (system is unknown, skipped)
         assert len(history) == 2
+
+    def test_tool_call_and_result_ids_pair_without_metadata_ids(self) -> None:
+        """A tool result replays with the SAME id as its tool call.
+
+        Canonical transcript events carry no tool_call_id, so the
+        conversation metadata often has none -- the synthesized fallback
+        must pair call and result (providers reject a result whose id
+        matches no call). Regression test: the counter used to advance
+        on both roles, producing call_<tool>_0 / call_<tool>_1.
+        """
+        from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Run kubectl get pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "kubectl_get", "args": {}},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Running."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        call_part = history[1].parts[0]
+        result_part = history[2].parts[0]
+        assert isinstance(history[1], ModelResponse)
+        assert isinstance(call_part, ToolCallPart)
+        assert isinstance(history[2], ModelRequest)
+        assert isinstance(result_part, ToolReturnPart)
+        assert call_part.tool_call_id == result_part.tool_call_id
+
+    def test_parallel_tool_results_pair_fifo(self) -> None:
+        """Parallel calls pair each result with its own call, in order.
+
+        call A, call B, result A, result B -- each result reuses the id
+        of the oldest unpaired call (FIFO), never crossing payloads.
+        """
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Check both"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "tool_a", "args": {}},
+                        },
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "tool_b", "args": {}},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "a-result",
+                            "metadata": {"tool_name": "tool_a"},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "b-result",
+                            "metadata": {"tool_name": "tool_b"},
+                        },
+                        {"role": "assistant", "content": "Done."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        calls = [p for m in history for p in m.parts if isinstance(p, ToolCallPart)]
+        results = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
+        assert [c.tool_name for c in calls] == ["tool_a", "tool_b"]
+        assert [r.content for r in results] == ["a-result", "b-result"]
+        assert calls[0].tool_call_id == results[0].tool_call_id
+        assert calls[1].tool_call_id == results[1].tool_call_id
+        assert calls[0].tool_call_id != calls[1].tool_call_id
+
+    @pytest.mark.parametrize("reverse_explicit_returns", [False, True])
+    def test_mixed_explicit_and_synthesized_ids_across_turns(
+        self, reverse_explicit_returns: bool
+    ) -> None:
+        """Explicit returns consume matching calls before ID-less history replays."""
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        old_calls = [
+            {"role": "tool_call", "metadata": {"tool_name": name, "args": {}, "tool_call_id": name}}
+            for name in ("old_a", "old_b")
+        ]
+        # The first old result leaves the ID-less old_a call pending when
+        # explicit returns arrive out of order; removing the queue's head
+        # rather than the matching ID would pair its result incorrectly.
+        old_calls[0]["metadata"].pop("tool_call_id")
+        old_returns = [
+            {"role": "tool_result", "content": "a", "metadata": {"tool_name": "old_a"}},
+            {
+                "role": "tool_result",
+                "content": "b",
+                "metadata": {"tool_name": "old_b", "tool_call_id": "old_b"},
+            },
+        ]
+        if reverse_explicit_returns:
+            old_returns.reverse()
+        context = {
+            "turn-0": {
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Old turn"},
+                        *old_calls,
+                        *old_returns,
+                        {"role": "assistant", "content": "Done"},
+                    ]
+                }
+            },
+            "turn-1": {
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "New turn"},
+                        {"role": "tool_call", "metadata": {"tool_name": "new_tool", "args": {}}},
+                        {
+                            "role": "tool_result",
+                            "content": "new",
+                            "metadata": {"tool_name": "new_tool"},
+                        },
+                    ]
+                }
+            },
+        }
+        history = _build_message_history(context)
+        calls = {p.tool_name: p for m in history for p in m.parts if isinstance(p, ToolCallPart)}
+        returns = {
+            p.tool_name: p for m in history for p in m.parts if isinstance(p, ToolReturnPart)
+        }
+        assert calls.keys() == returns.keys() == {"old_a", "old_b", "new_tool"}
+        for name, call in calls.items():
+            assert call.tool_call_id == returns[name].tool_call_id
+        assert calls["old_b"].tool_call_id == "old_b"
+        assert returns["new_tool"].content == "new"
+
+    def test_orphan_tool_result_gets_fallback_id(self) -> None:
+        """A result with no preceding call still gets a unique id."""
+        from pydantic_ai.messages import ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {
+                            "role": "tool_result",
+                            "content": "orphan",
+                            "metadata": {"tool_name": "ghost_tool"},
+                        },
+                        {"role": "assistant", "content": "ok"},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        result_part = history[1].parts[0]
+        assert isinstance(result_part, ToolReturnPart)
+        assert result_part.tool_call_id
 
 
 class TestBuildMessageHistoryToolReplay:

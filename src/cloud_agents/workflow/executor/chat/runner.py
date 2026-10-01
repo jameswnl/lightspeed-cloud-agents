@@ -39,6 +39,9 @@ from cloud_agents.workflow.executor.step.dispatch import get_step_executor
 
 logger = logging.getLogger(__name__)
 
+# Sandbox EventLogger and transcript_events cap tool input at 2000 characters.
+_MAX_TOOL_INPUT_LENGTH = 2000
+
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
@@ -609,22 +612,53 @@ class ChatWorkflowRunner(WorkflowRunner):
 
         # Extract tool_call/tool_result events from transcript into
         # ConversationMessage entries so they survive across turns.
+        # Events are canonical ({"ts", "type", "data"}) -- tool names and
+        # payloads live under "data" (see transcript_events.py). The
+        # canonical tool_result event carries no tool name, so each
+        # result is paired with the oldest unpaired call's name (FIFO) --
+        # correct for sequential and order-preserving parallel calls.
+        pending_tool_names: list[str | None] = []
         for event in result.transcript or []:
             event_type = event.get("type", "")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
             if event_type == "tool_call":
+                args: Any = data.get("input", "")
+                # Audit input is bounded, so it is not a lossless source of
+                # arguments. Omit an unsafe call AND its paired result from
+                # provider history, while retaining both audit events.
+                if isinstance(args, str):
+                    if len(args) >= _MAX_TOOL_INPUT_LENGTH:
+                        pending_tool_names.append(None)
+                        continue
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        pending_tool_names.append(None)
+                        continue
+                if not isinstance(args, dict):
+                    pending_tool_names.append(None)
+                    continue
+                pending_tool_names.append(data.get("name", ""))
                 messages.append(
                     ConversationMessage(
                         role="tool_call",
                         content="",
                         metadata={
-                            "tool_name": event.get("tool_name", ""),
-                            "args": event.get("args", {}),
-                            "tool_call_id": event.get("tool_call_id", ""),
+                            "tool_name": pending_tool_names[-1],
+                            "args": args,
+                            # No tool_call_id in the canonical event
+                            # contract -- omit the key entirely so
+                            # _build_message_history synthesizes one
+                            # (call_<tool>_<n>) instead of replaying an
+                            # empty id to the provider.
                         },
                     ).to_dict()
                 )
             elif event_type == "tool_result":
-                output = event.get("output", "")
+                paired_name = pending_tool_names.pop(0) if pending_tool_names else None
+                if paired_name is None:
+                    continue
+                output = data.get("output", "")
                 messages.append(
                     ConversationMessage(
                         role="tool_result",
@@ -632,8 +666,10 @@ class ChatWorkflowRunner(WorkflowRunner):
                             json.dumps(output) if isinstance(output, (dict, list)) else str(output)
                         ),
                         metadata={
-                            "tool_name": event.get("tool_name", ""),
-                            "tool_call_id": event.get("tool_call_id", ""),
+                            "tool_name": paired_name,
+                            # tool_call_id omitted: canonical tool_result
+                            # events carry no id; _build_message_history
+                            # synthesizes the matching fallback.
                         },
                     ).to_dict()
                 )
@@ -642,8 +678,10 @@ class ChatWorkflowRunner(WorkflowRunner):
             content = self._extract_assistant_text(result.output)
             messages.append(ConversationMessage(role="assistant", content=content).to_dict())
 
-        # Convert result.transcript dicts to TranscriptEvent objects, mapping
-        # non-standard types (agent.run, agent.stream, llm.call) to "result".
+        # Convert result.transcript dicts to TranscriptEvent objects;
+        # executors now emit canonical events directly (see
+        # transcript_events.py) -- normalize only defends against legacy
+        # flat shapes.
         events = normalize_transcript_events(result.transcript)
 
         # Save to transcript store
