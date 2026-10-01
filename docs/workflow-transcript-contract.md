@@ -58,6 +58,18 @@ not relied upon.
 Streaming responses (`StreamEvent` token deltas) are a separate
 transport concern and are not part of this transcript contract.
 
+## Reading result events as a consumer
+
+The NUMBER of `result` events differs by mode (one per run for
+`none`/`local`, one per agent turn for `ephemeral`), so consumers must
+not read only the last one:
+
+- **Token usage**: sum `input_tokens`/`output_tokens` across ALL
+  `result` events (same totals either way).
+- **Cost**: treat `cost_usd: null` as unknown, never as 0 -- only
+  ephemeral reports real cost.
+- **Final answer**: take `text` from the LAST `result` event.
+
 ## Normalization and persistence
 
 `normalize_transcript_events` (`cloud_agents.workflow.core.models`)

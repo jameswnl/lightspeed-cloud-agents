@@ -255,6 +255,14 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
     Iterates context keys in sorted order (turn-0, turn-1, ...) and converts
     each conversation message to the appropriate ModelRequest or ModelResponse.
 
+    Canonical transcript events carry no tool_call_id, so conversation
+    messages often have none either -- synthesized ids pair each
+    ToolReturnPart with its ToolCallPart via a FIFO of pending calls
+    (only tool_call messages advance the id counter). Providers reject a
+    tool result whose id matches no tool call, so call/result ids MUST
+    line up; out-of-order parallel results are paired in call order,
+    the best reconstruction available from id-less events.
+
     Parameters:
         context: Step context dict with conversation turn entries.
 
@@ -263,6 +271,9 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
     """
     history: list[ModelMessage] = []
     tool_call_counter = 0
+    # FIFO of (tool_name, call_id) for calls whose result has not been
+    # paired yet -- see docstring for the pairing contract.
+    pending_calls: list[tuple[str, str]] = []
 
     def _turn_sort_key(k: str) -> int:
         if k.startswith("turn-"):
@@ -291,8 +302,11 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
                 metadata = msg.get("metadata", {})
                 tool_name = metadata.get("tool_name", "")
                 args = metadata.get("args", {})
-                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
+                tool_call_id = metadata.get("tool_call_id") or (
+                    f"call_{tool_name}_{tool_call_counter}"
+                )
                 tool_call_counter += 1
+                pending_calls.append((tool_name, tool_call_id))
                 tool_call_part = ToolCallPart(
                     tool_name=tool_name,
                     args=args,
@@ -310,8 +324,15 @@ def _build_message_history(context: dict[str, Any]) -> list[ModelMessage]:
             elif role == "tool_result":
                 metadata = msg.get("metadata", {})
                 tool_name = metadata.get("tool_name", "")
-                tool_call_id = metadata.get("tool_call_id", f"call_{tool_name}_{tool_call_counter}")
-                tool_call_counter += 1
+                if metadata.get("tool_call_id"):
+                    tool_call_id = metadata["tool_call_id"]
+                elif pending_calls:
+                    # Pair with the oldest unpaired call -- ids must match
+                    # or providers reject the history.
+                    tool_call_id = pending_calls.pop(0)[1]
+                else:
+                    tool_call_id = f"call_{tool_name}_{tool_call_counter}"
+                    tool_call_counter += 1
                 return_part = ToolReturnPart(
                     tool_name=tool_name,
                     content=content if isinstance(content, str) else json.dumps(content),

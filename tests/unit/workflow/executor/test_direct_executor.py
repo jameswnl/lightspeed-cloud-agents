@@ -2797,6 +2797,129 @@ class TestBuildMessageHistoryToolRoles:
         # Only user and assistant (system is unknown, skipped)
         assert len(history) == 2
 
+    def test_tool_call_and_result_ids_pair_without_metadata_ids(self) -> None:
+        """A tool result replays with the SAME id as its tool call.
+
+        Canonical transcript events carry no tool_call_id, so the
+        conversation metadata often has none -- the synthesized fallback
+        must pair call and result (providers reject a result whose id
+        matches no call). Regression test: the counter used to advance
+        on both roles, producing call_<tool>_0 / call_<tool>_1.
+        """
+        from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Run kubectl get pods"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "kubectl_get", "args": {}},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "pod-1 Running",
+                            "metadata": {"tool_name": "kubectl_get"},
+                        },
+                        {"role": "assistant", "content": "Running."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        call_part = history[1].parts[0]
+        result_part = history[2].parts[0]
+        assert isinstance(history[1], ModelResponse)
+        assert isinstance(call_part, ToolCallPart)
+        assert isinstance(history[2], ModelRequest)
+        assert isinstance(result_part, ToolReturnPart)
+        assert call_part.tool_call_id == result_part.tool_call_id
+
+    def test_parallel_tool_results_pair_fifo(self) -> None:
+        """Parallel calls pair each result with its own call, in order.
+
+        call A, call B, result A, result B -- each result reuses the id
+        of the oldest unpaired call (FIFO), never crossing payloads.
+        """
+        from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "Check both"},
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "tool_a", "args": {}},
+                        },
+                        {
+                            "role": "tool_call",
+                            "content": "",
+                            "metadata": {"tool_name": "tool_b", "args": {}},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "a-result",
+                            "metadata": {"tool_name": "tool_a"},
+                        },
+                        {
+                            "role": "tool_result",
+                            "content": "b-result",
+                            "metadata": {"tool_name": "tool_b"},
+                        },
+                        {"role": "assistant", "content": "Done."},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        calls = [p for m in history for p in m.parts if isinstance(p, ToolCallPart)]
+        results = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
+        assert [c.tool_name for c in calls] == ["tool_a", "tool_b"]
+        assert [r.content for r in results] == ["a-result", "b-result"]
+        assert calls[0].tool_call_id == results[0].tool_call_id
+        assert calls[1].tool_call_id == results[1].tool_call_id
+        assert calls[0].tool_call_id != calls[1].tool_call_id
+
+    def test_orphan_tool_result_gets_fallback_id(self) -> None:
+        """A result with no preceding call still gets a unique id."""
+        from pydantic_ai.messages import ToolReturnPart
+
+        from cloud_agents.workflow.executor.step.direct import _build_message_history
+
+        context = {
+            "turn-0": {
+                "status": "completed",
+                "output": {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {
+                            "role": "tool_result",
+                            "content": "orphan",
+                            "metadata": {"tool_name": "ghost_tool"},
+                        },
+                        {"role": "assistant", "content": "ok"},
+                    ]
+                },
+            },
+        }
+
+        history = _build_message_history(context)
+        result_part = history[1].parts[0]
+        assert isinstance(result_part, ToolReturnPart)
+        assert result_part.tool_call_id
+
 
 class TestBuildMessageHistoryToolReplay:
     """Tests for _build_message_history() replaying tool_call/tool_result (#158)."""

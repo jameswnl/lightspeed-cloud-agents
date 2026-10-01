@@ -1536,6 +1536,63 @@ class TestSaveTurnToolMessages:
         assert tool_result_msg["metadata"]["tool_name"] == "read_file"
 
     @pytest.mark.asyncio
+    async def test_parallel_tool_results_pair_names_fifo(
+        self,
+        runner: ChatWorkflowRunner,
+        mock_transcript_store: AsyncMock,
+        mocker: MockerFixture,
+    ) -> None:
+        """Parallel results each get their own call's tool name (FIFO).
+
+        Canonical tool_result events carry no name; pairing by "last
+        call's name" would label both results with tool_b. Regression
+        test for the /query/direct follow-up-turn history.
+        """
+        mock_executor = mocker.AsyncMock()
+        mock_executor.run.return_value = StepResult(
+            status="completed",
+            output={"response": "Checked both."},
+            transcript=[
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "tool_a", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_call",
+                    "data": {"name": "tool_b", "input": "{}"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_result",
+                    "data": {"output": "a-result"},
+                },
+                {
+                    "ts": "2026-09-30T00:00:00+00:00",
+                    "type": "tool_result",
+                    "data": {"output": "b-result"},
+                },
+            ],
+            input_tokens=10,
+            output_tokens=5,
+            duration_ms=100,
+        )
+        mocker.patch(
+            "cloud_agents.workflow.executor.chat.runner.get_step_executor",
+            return_value=mock_executor,
+        )
+
+        await runner.send_message("chat-123", "Check both")
+
+        save_kwargs = mock_transcript_store.save.call_args.kwargs
+        messages = save_kwargs["messages"]
+        result_msgs = [m for m in messages if m["role"] == "tool_result"]
+        assert len(result_msgs) == 2
+        assert result_msgs[0]["metadata"]["tool_name"] == "tool_a"
+        assert result_msgs[1]["metadata"]["tool_name"] == "tool_b"
+
+    @pytest.mark.asyncio
     async def test_non_tool_events_not_added_as_messages(
         self,
         runner: ChatWorkflowRunner,

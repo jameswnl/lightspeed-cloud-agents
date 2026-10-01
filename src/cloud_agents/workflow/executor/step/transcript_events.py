@@ -164,7 +164,9 @@ def transcript_events_from_messages(
     not transcript events (the final text lives in the ``result`` event).
 
     Parameters:
-        messages: ``result.all_messages()`` from a pydantic-ai run.
+        messages: This run's new messages (``result.new_messages()``) --
+            excluding any prior-turn ``message_history`` so multi-turn
+            runs do not re-record earlier turns' tool calls.
         output_text: Final output text of the run.
         input_tokens: Aggregate input token count.
         output_tokens: Aggregate output token count.

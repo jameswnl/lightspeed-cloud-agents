@@ -611,14 +611,15 @@ class ChatWorkflowRunner(WorkflowRunner):
         # ConversationMessage entries so they survive across turns.
         # Events are canonical ({"ts", "type", "data"}) -- tool names and
         # payloads live under "data" (see transcript_events.py). The
-        # canonical tool_result event carries no tool name, so the name
-        # is carried forward from the preceding tool_call event.
-        current_tool_name = ""
+        # canonical tool_result event carries no tool name, so each
+        # result is paired with the oldest unpaired call's name (FIFO) --
+        # correct for sequential and order-preserving parallel calls.
+        pending_tool_names: list[str] = []
         for event in result.transcript or []:
             event_type = event.get("type", "")
             data = event.get("data") if isinstance(event.get("data"), dict) else {}
             if event_type == "tool_call":
-                current_tool_name = data.get("name", "")
+                pending_tool_names.append(data.get("name", ""))
                 args: Any = data.get("input", "")
                 if isinstance(args, str):
                     try:
@@ -630,7 +631,7 @@ class ChatWorkflowRunner(WorkflowRunner):
                         role="tool_call",
                         content="",
                         metadata={
-                            "tool_name": current_tool_name,
+                            "tool_name": pending_tool_names[-1],
                             "args": args,
                             # No tool_call_id in the canonical event
                             # contract -- omit the key entirely so
@@ -641,6 +642,7 @@ class ChatWorkflowRunner(WorkflowRunner):
                     ).to_dict()
                 )
             elif event_type == "tool_result":
+                paired_name = pending_tool_names.pop(0) if pending_tool_names else ""
                 output = data.get("output", "")
                 messages.append(
                     ConversationMessage(
@@ -649,7 +651,7 @@ class ChatWorkflowRunner(WorkflowRunner):
                             json.dumps(output) if isinstance(output, (dict, list)) else str(output)
                         ),
                         metadata={
-                            "tool_name": current_tool_name,
+                            "tool_name": paired_name,
                             # tool_call_id omitted: canonical tool_result
                             # events carry no id; _build_message_history
                             # synthesizes the matching fallback.
