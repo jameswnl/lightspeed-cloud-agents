@@ -245,9 +245,7 @@ async def _run_step_inner(
 
     # MCP server injection
     mcp_secret_mounts: list[tuple[str, str, str]] = []
-    raw_mcp_servers = resolve_mcp_servers(
-        step.get("mcp_servers"), input.get("mcp_servers")
-    )
+    raw_mcp_servers = resolve_mcp_servers(step.get("mcp_servers"), input.get("mcp_servers"))
     if raw_mcp_servers:
         mcp_env_list = []
         for server in raw_mcp_servers:
@@ -389,12 +387,21 @@ async def _run_step_inner(
                 current_step=step,
             )
 
+            # Prefer the executor-provided prompt/system_prompt: these are
+            # the StepInput fields graph_translator built with {{ steps.* }}
+            # templates already interpolated (issue #274 -- the raw step
+            # dict's "prompt"/"instructions" still contain the unrendered
+            # template, so reading them here handed the literal
+            # `{{ steps.X.output.Y }}` text to the sandboxed agent on every
+            # spawn:ephemeral step while spawn:none/local used the
+            # interpolated fields). The raw-step fallback keeps direct
+            # run_step() callers (no StepInput) working unchanged.
             request_body: dict[str, Any] = {
-                "query": step.get("prompt", ""),
+                "query": input.get("prompt") or step.get("prompt", ""),
                 "context": context,
             }
-            if instructions := step.get("instructions"):
-                request_body["systemPrompt"] = instructions
+            if system_prompt := (input.get("system_prompt") or step.get("instructions")):
+                request_body["systemPrompt"] = system_prompt
             if output_schema := step.get("output_schema"):
                 request_body["outputSchema"] = output_schema
             if permissions.get("allowed_tools"):
@@ -482,7 +489,14 @@ async def _run_step_inner(
 
             if not data.get("success", False):
                 _circuit_breaker.record_failure(provider_name)
-                error_msg = data.get("error", "agent returned success=false")
+                # The sandbox app (lightspeed-agentic-sandbox) reports agent
+                # failures in "summary" (RunResponse), not "error" -- without
+                # this fallback every sandbox-side failure surfaced as the
+                # generic "agent returned success=false", hiding the actual
+                # cause (issue #274).
+                error_msg = (
+                    data.get("error") or data.get("summary") or "agent returned success=false"
+                )
                 output_val = data.get("output")
                 if secret_values:
                     error_msg = redact_secrets(str(error_msg), secret_values)

@@ -706,3 +706,124 @@ class TestRunStep:
 
         call_kwargs = mock_spawner.spawn.call_args[1]
         assert call_kwargs["credential_secret_name"] == "MY_TYPOD_KEY"
+
+    @pytest.mark.asyncio
+    async def test_run_step_prefers_interpolated_prompt_over_raw_step(
+        self,
+        mock_spawner: AsyncMock,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Executor-provided prompt/system_prompt win over the raw step dict.
+
+        graph_translator interpolates {{ steps.* }} templates into
+        StepInput.prompt/system_prompt before dispatch; the raw step dict's
+        prompt/instructions still hold the unrendered template. The sandbox
+        request must use the interpolated fields (issue #274) -- reading the
+        raw ones handed the literal template to the sandboxed agent.
+        """
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+        mock_transcript_response = mocker.MagicMock()
+        mock_transcript_response.status_code = 404
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        step_input["step"]["prompt"] = "Fix: {{ steps.triage.output.root_cause }}"
+        step_input["step"]["instructions"] = "raw system prompt"
+        step_input["prompt"] = "Fix: <data>OOMKilled</data>"
+        step_input["system_prompt"] = "interpolated system prompt"
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+        assert result["status"] == "completed"
+
+        body = mock_client.post.call_args[1]["json"]
+        assert body["query"] == "Fix: <data>OOMKilled</data>"
+        assert body["systemPrompt"] == "interpolated system prompt"
+
+    @pytest.mark.asyncio
+    async def test_run_step_prompt_falls_back_to_raw_step(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Direct run_step() callers without StepInput still work: with no
+        executor-provided prompt/system_prompt, the raw step dict's
+        prompt/instructions are used unchanged."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+        assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_run_step_failure_surfaces_summary(
+        self,
+        mock_spawner: AsyncMock,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Sandbox agent failures reported via 'summary' (RunResponse) are
+        surfaced as the step error instead of the generic default (issue #274)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": False,
+            "summary": "Agent error: connection refused",
+        }
+        mock_transcript_response = mocker.MagicMock()
+        mock_transcript_response.status_code = 404
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+        assert result["status"] == "failed"
+        assert result["error"] == "Agent error: connection refused"
+
+    @pytest.mark.asyncio
+    async def test_run_step_failure_generic_when_no_details(
+        self,
+        mock_spawner: AsyncMock,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """No error and no summary still yields the generic default."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": False}
+        mock_transcript_response = mocker.MagicMock()
+        mock_transcript_response.status_code = 404
+        mock_client = mocker.MagicMock()
+        mock_client.post = mocker.AsyncMock(return_value=mock_response)
+        mock_client.get = mocker.AsyncMock(return_value=mock_transcript_response)
+        mock_http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(return_value=mock_client)
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        result = await run_step(step_input, spawner=mock_spawner, attempt=1)
+        assert result["status"] == "failed"
+        assert result["error"] == "agent returned success=false"

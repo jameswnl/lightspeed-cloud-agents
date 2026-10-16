@@ -100,6 +100,14 @@ class SandboxExecutor(StepExecutor):
 
         run_step_input = {
             "step": step_dict,
+            # Interpolated prompt/system_prompt from StepInput (graph_translator
+            # renders {{ steps.* }} templates before dispatch). step_runner
+            # prefers these over the raw step dict's prompt/instructions --
+            # without them, spawn:ephemeral steps received the unrendered
+            # template while spawn:none/local used the interpolated fields
+            # (issue #274).
+            "prompt": step_input.prompt,
+            "system_prompt": step_input.system_prompt,
             "workflow_id": step_input.workflow_id,
             "provider": step_input.provider,
             "sandbox_image": step_input.sandbox_image,

@@ -375,3 +375,50 @@ class TestSandboxExecutor:
         ))
 
         assert result.duration_ms >= 40
+
+    async def test_forwards_interpolated_prompt_to_run_step(
+        self, mocker: MockerFixture
+    ) -> None:
+        """SandboxExecutor forwards StepInput's interpolated prompt/system_prompt.
+
+        StepInput.prompt is the {{ steps.* }}-interpolated prompt built by
+        graph_translator; the raw step dict retains the unrendered template.
+        run_step's input dict must carry the interpolated fields so the
+        sandbox request doesn't ship the literal template (issue #274)."""
+        mock_run_step = mocker.patch(
+            "cloud_agents.workflow.core.step_runner.run_step",
+            return_value={
+                "status": "completed",
+                "output": {"summary": "done"},
+                "transcript": {"step_name": "remediate", "events": []},
+            },
+        )
+
+        from cloud_agents.workflow.executor.step.base import StepInput
+        from cloud_agents.workflow.executor.step.sandbox import SandboxExecutor
+
+        spawner = mocker.AsyncMock()
+        executor = SandboxExecutor(spawner=spawner)
+
+        await executor.run(
+            StepInput(
+                prompt="Fix: <data>OOMKilled</data>",
+                system_prompt="interpolated system prompt",
+                provider={"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+                workflow_id="wf-1",
+                step_name="remediate",
+                output_key="remediate_result",
+                raw_step={
+                    "name": "remediate",
+                    "prompt": "Fix: {{ steps.triage.output.root_cause }}",
+                    "instructions": "raw system prompt",
+                    "output_key": "remediate_result",
+                },
+            )
+        )
+
+        run_input = mock_run_step.call_args[0][0]
+        assert run_input["prompt"] == "Fix: <data>OOMKilled</data>"
+        assert run_input["system_prompt"] == "interpolated system prompt"
+        # Raw step dict travels along unchanged for name/output_key lookups.
+        assert run_input["step"]["prompt"] == "Fix: {{ steps.triage.output.root_cause }}"
