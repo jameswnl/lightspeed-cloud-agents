@@ -291,14 +291,14 @@ async def _run_step_inner(
 
         env_vars["LIGHTSPEED_MCP_SERVERS"] = json.dumps(mcp_env_list)
 
-    # Runner-to-sandbox bearer token auth
+    # Runner-to-sandbox bearer token auth. The token is sent only as an
+    # Authorization header; it is deliberately NOT placed in the sandbox env,
+    # which removes the automatic environment-based exposure of the credential.
     sandbox_auth_enabled = os.environ.get("SANDBOX_AUTH_ENABLED", "false").lower() == "true"
     sandbox_auth_token: str | None = None
     if sandbox_auth_enabled:
         sandbox_auth_token = get_runner_auth_token()
-        if sandbox_auth_token:
-            env_vars["AGENT_API_TOKEN"] = sandbox_auth_token
-        else:
+        if not sandbox_auth_token:
             logger.warning(
                 "SANDBOX_AUTH_ENABLED=true but no auth token available — "
                 "sandbox will run unauthenticated."
