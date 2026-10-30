@@ -1,7 +1,8 @@
 """E2E test: sandbox bearer token authentication.
 
 Validates that the runner-to-sandbox auth flow works end-to-end:
-- Spawned containers receive AGENT_API_TOKEN env var
+- Spawned containers are given AGENT_API_TOKEN by this test itself (the runner
+  no longer injects it into the sandbox env; it only sends a Bearer header)
 - Unauthenticated requests are rejected (401/403)
 - Correctly authenticated requests are accepted
 - Wrong tokens are rejected
@@ -37,7 +38,7 @@ SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "localhost/lightspeed-agentic-sa
 class TestSandboxAuthE2E:
     """E2E tests for sandbox bearer token authentication.
 
-    Spawns a real container with AGENT_API_TOKEN injected,
+    Spawns a real container with AGENT_API_TOKEN passed in the spawn env by the test,
     then validates auth enforcement by making HTTP calls.
     """
 

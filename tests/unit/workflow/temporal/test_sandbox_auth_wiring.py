@@ -1,8 +1,10 @@
 """Unit tests for runner-to-sandbox auth wiring in temporal_activities.py.
 
 Validates that when SANDBOX_AUTH_ENABLED=true:
-1. AGENT_API_TOKEN is injected into sandbox env vars
-2. Authorization: Bearer header is sent on httpx POST
+1. The runner's token is sent as an Authorization: Bearer header on httpx POST
+2. The runner's token never lands in the sandbox environment (no AGENT_API_TOKEN
+   key, and the token value under no key), in either token mode and on both the
+   Temporal and Local (step_runner) paths
 3. Auth is skipped when SANDBOX_AUTH_ENABLED is false/unset
 """
 
@@ -56,24 +58,6 @@ def _mock_http_success(mocker: MockerFixture) -> Any:
 
 class TestSandboxAuthWiring:
     """Tests for runner-to-sandbox auth token injection."""
-
-    @pytest.mark.asyncio
-    async def test_auth_enabled_injects_token_env_var(self, mocker: MockerFixture) -> None:
-        """SANDBOX_AUTH_ENABLED=true injects AGENT_API_TOKEN into sandbox env vars."""
-        mocker.patch.dict(
-            "os.environ",
-            {"SANDBOX_AUTH_ENABLED": "true", "AGENT_API_TOKEN": "test-runner-token"},
-        )
-        mock_spawner = mocker.AsyncMock()
-        mock_spawner.spawn.return_value = "http://pod-1:8080"
-        mock_spawner.wait_ready.return_value = True
-        _mock_http_success(mocker)
-
-        await run_sandbox_step(_make_input(), spawner=mock_spawner)
-
-        spawn_call = mock_spawner.spawn.call_args
-        env_vars = spawn_call[1].get("env", {})
-        assert env_vars.get("AGENT_API_TOKEN") == "test-runner-token"
 
     @pytest.mark.asyncio
     async def test_auth_enabled_sends_bearer_header(self, mocker: MockerFixture) -> None:
@@ -170,7 +154,8 @@ class TestSandboxAuthWiring:
 
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
-        assert env_vars.get("AGENT_API_TOKEN") == "sa-projected-token"
+        assert "AGENT_API_TOKEN" not in env_vars
+        assert "sa-projected-token" not in env_vars.values()
 
         post_call = mock_client_instance.post.call_args
         headers = post_call[1].get("headers", {})
@@ -200,3 +185,86 @@ class TestSandboxAuthWiring:
         post_call = mock_client_instance.post.call_args
         headers = post_call[1].get("headers") or {}
         assert "Authorization" not in headers
+
+
+CANARY = "canary-tok-9f2b7c41d8e0a5136b"
+
+
+async def _run_temporal(mocker: MockerFixture, spawner: Any) -> Any:
+    _, client = _mock_http_success(mocker)
+    await run_sandbox_step(_make_input(), spawner=spawner)
+    return client
+
+
+async def _run_local(mocker: MockerFixture, spawner: Any) -> Any:
+    from cloud_agents.workflow.core.step_runner import _circuit_breaker, run_step
+
+    _circuit_breaker._providers.clear()
+    spawner.get_query_ssl_context = mocker.Mock(return_value=None)
+    response = mocker.MagicMock(status_code=200)
+    response.json.return_value = {"success": True, "output": {"summary": "ok"}}
+    transcript = mocker.MagicMock(status_code=404)
+    client = mocker.MagicMock(
+        post=mocker.AsyncMock(return_value=response),
+        get=mocker.AsyncMock(return_value=transcript),
+    )
+    http = mocker.patch("cloud_agents.workflow.core.step_runner.httpx.AsyncClient")
+    http.return_value.__aenter__ = mocker.AsyncMock(return_value=client)
+    http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+    await run_step(_make_input(), spawner=spawner, attempt=1)
+    return client
+
+
+@pytest.mark.parametrize("runner", [_run_temporal, _run_local], ids=["temporal", "local"])
+@pytest.mark.parametrize("mode", ["shared_secret", "sa_token"])
+class TestRunnerTokenNotInSandboxEnv:
+    """The runner's credential must not be readable from inside the sandbox."""
+
+    def _setup(self, mocker: MockerFixture, tmp_path: Any, mode: str, enabled: bool) -> Any:
+        mocker.patch.dict(
+            "os.environ",
+            {
+                "SANDBOX_AUTH_ENABLED": "true" if enabled else "false",
+                "AUTH_MODE": mode,
+                "OPENAI_API_KEY": "sk-test",
+            },
+        )
+        os.environ.pop("AGENT_API_TOKENS", None)
+        os.environ.pop("AGENT_API_TOKEN", None)
+        if mode == "shared_secret":
+            os.environ["AGENT_API_TOKEN"] = CANARY
+        else:
+            token_file = tmp_path / "token"
+            token_file.write_text(CANARY + "\n")
+            mocker.patch("cloud_agents.runtime.auth.SA_TOKEN_PATH", str(token_file))
+        spawner = mocker.AsyncMock()
+        spawner.spawn.return_value = "http://pod-1:8080"
+        spawner.wait_ready.return_value = True
+        return spawner
+
+    @pytest.mark.asyncio
+    async def test_token_absent_from_spawn_env_but_bearer_header_sent(
+        self, mocker: MockerFixture, tmp_path: Any, mode: str, runner: Any
+    ) -> None:
+        spawner = self._setup(mocker, tmp_path, mode, enabled=True)
+
+        client = await runner(mocker, spawner)
+
+        env_vars = spawner.spawn.call_args[1]["env"]
+        assert "AGENT_API_TOKEN" not in env_vars
+        assert not [k for k, v in env_vars.items() if CANARY in str(v)]
+        headers = client.post.call_args[1]["headers"]
+        assert headers["Authorization"] == f"Bearer {CANARY}"
+
+    @pytest.mark.asyncio
+    async def test_auth_disabled_nothing_changes(
+        self, mocker: MockerFixture, tmp_path: Any, mode: str, runner: Any
+    ) -> None:
+        spawner = self._setup(mocker, tmp_path, mode, enabled=False)
+
+        client = await runner(mocker, spawner)
+
+        env_vars = spawner.spawn.call_args[1]["env"]
+        assert "AGENT_API_TOKEN" not in env_vars
+        assert not [k for k, v in env_vars.items() if CANARY in str(v)]
+        assert "Authorization" not in (client.post.call_args[1].get("headers") or {})
