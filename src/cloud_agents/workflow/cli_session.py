@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 from pydantic import BaseModel
 
 from cloud_agents.runtime.audit import emit_audit
-from cloud_agents.spawner.lifetime import cli_session_lifetime_seconds
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import AgentSpawner
@@ -162,6 +161,9 @@ class CLISessionLauncher:
         }
 
         try:
+            # No lifetime_seconds (so no expires-at label): the timeout monitor
+            # can stop or block, so nothing enforces a latest-use bound, and
+            # startup reconcile must never reap a CLI session sandbox.
             endpoint = await spawner.spawn(
                 agent_name=agent_name,
                 image=image,
@@ -170,13 +172,6 @@ class CLISessionLauncher:
                 service_account=service_account,
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
-                # Only the timeout monitor enforces max_session_seconds;
-                # without it, claim no lifetime so no other replica reaps it.
-                lifetime_seconds=(
-                    cli_session_lifetime_seconds(self.max_session_seconds, self._check_interval)
-                    if self._timeout_task is not None
-                    else None
-                ),
             )
 
             info = CLISessionInfo(

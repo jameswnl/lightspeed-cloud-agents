@@ -266,32 +266,40 @@ class AgentSpawner(ABC):
     ) -> list[str]:
         """Implementation-specific listing of active agents."""
 
-    async def list_active_labels(
+    async def list_sandbox_labels(
         self,
         labels: dict[str, str] | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
-        """List active spawned agent names with each sandbox's labels.
+        """List active sandboxes as (exact sandbox name, labels).
 
         Args:
             labels: Optional label selector to filter results.
 
         Returns:
-            (agent name, labels) pairs for active agents matching the given
-            labels, so callers can filter on label values a selector can't
+            One pair per sandbox, keyed by a name destroy_sandbox() deletes
+            exactly, so callers can filter on label values a selector can't
             express (e.g. reconcile_orphaned_sandboxes()' expiry check).
         """
-        return await self._do_list_active_labels(labels)
+        return await self._do_list_sandbox_labels(labels)
 
-    async def _do_list_active_labels(
+    async def _do_list_sandbox_labels(
         self,
         labels: dict[str, str] | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
         """Default for spawners that can't report labels: empty labels each.
 
-        Startup reconciliation treats a sandbox with no owner/expiry labels
-        as legacy and never destroys it, so this default is fail-safe.
+        Startup reconciliation never destroys a sandbox without an expiry
+        label, so this default is fail-safe.
         """
         return [(name, {}) for name in await self._do_list_active(labels)]
+
+    async def destroy_sandbox(self, sandbox_name: str) -> None:
+        """Destroy exactly the sandbox list_sandbox_labels() reported by this name."""
+        await self._do_destroy_sandbox(sandbox_name)
+
+    async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
+        """Default: names from the default listing are agent names."""
+        await self.destroy(sandbox_name)
 
     async def read_file(self, agent_name: str, path: str) -> str:
         """Read a file from a spawned agent container.

@@ -24,8 +24,9 @@ from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.lifetime import (
-    DEFAULT_STEP_TIMEOUT_SECONDS,
+    SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
     SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
+    run_timeout_seconds,
     step_sandbox_lifetime_seconds,
 )
 from cloud_agents.workflow.notifiers.escalation import LogPackager
@@ -538,7 +539,7 @@ async def _run_sandbox_step_inner(
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
-    http_timeout = float(permissions.get("timeout_seconds", DEFAULT_STEP_TIMEOUT_SECONDS))
+    http_timeout = run_timeout_seconds(step)
 
     if spawner is None:
         logger.info("No spawner configured — returning stub result for '%s'", step_name)
@@ -657,11 +658,30 @@ async def _run_sandbox_step_inner(
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     try:
-                        response = await client.post(
-                            f"{endpoint}/v1/agent/run",
-                            json=request_body,
-                            headers=http_headers or None,
+                        # httpx's timeout is per read; enforce http_timeout as
+                        # an overall local deadline rather than relying on
+                        # heartbeat-delivered cancellation.
+                        async with asyncio.timeout(http_timeout):
+                            response = await client.post(
+                                f"{endpoint}/v1/agent/run",
+                                json=request_body,
+                                headers=http_headers or None,
+                            )
+                    except TimeoutError:
+                        from cloud_agents.workflow.executor.temporal.metrics import (
+                            ls_sandbox_timeout_total,
                         )
+
+                        ls_sandbox_timeout_total.labels(step_name=step_name, reason="timeout").inc()
+                        emit_audit(
+                            event_type="sandbox_timeout",
+                            workflow_id=workflow_id,
+                            step_name=step_name,
+                            details={"pod_name": pod_name, "reason": "timeout"},
+                        )
+                        # str(TimeoutError()) is empty, which the secret
+                        # redaction below would turn into a blank error.
+                        raise TimeoutError(f"Agent run timed out after {http_timeout:g}s") from None
                     except ssl.SSLError as tls_exc:
                         emit_audit(
                             event_type="tls_error",
@@ -703,7 +723,10 @@ async def _run_sandbox_step_inner(
             output_key = step.get("output_key", step_name)
             if transcript_store is not None and transcript.events:
                 try:
-                    await transcript_store.save(workflow_id, output_key, transcript)
+                    # Runs before destroy, so it's bounded like every other
+                    # phase in the sandbox lifetime (cloud_agents.spawner.lifetime).
+                    async with asyncio.timeout(SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS):
+                        await transcript_store.save(workflow_id, output_key, transcript)
                 except Exception:
                     logger.warning(
                         "Failed to save transcript to store for step '%s'",

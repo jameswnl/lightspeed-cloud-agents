@@ -437,16 +437,25 @@ class TestSpawnConfig:
             SpawnConfig(cpu_limit="5000m")
 
 
-class TestListActiveLabelsDefault:
+class TestListSandboxLabelsDefault:
     """Spawners without label support report no labels, so reconcile treats
-    their sandboxes as legacy and never destroys them."""
+    their sandboxes as having no expiry and never destroys them."""
 
     @pytest.mark.asyncio
     async def test_default_returns_empty_labels(self) -> None:
         spawner = MockSpawner()
         await spawner.spawn("a1", "img", env={})
 
-        assert await spawner.list_active_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]
+        assert await spawner.list_sandbox_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]
+
+    @pytest.mark.asyncio
+    async def test_default_destroy_sandbox_destroys_that_name(self) -> None:
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={})
+
+        await spawner.destroy_sandbox("a1")
+
+        assert spawner.destroyed == ["a1"]
 
 
 class TestSpawnForwardsLifetime:

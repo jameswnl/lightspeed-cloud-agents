@@ -377,8 +377,8 @@ class TestRunSandboxStep:
 
     @pytest.mark.asyncio
     async def test_spawn_gets_per_step_lifetime(self, mocker: MockerFixture) -> None:
-        """The sandbox's lifetime covers this step's own timeout, so a long
-        step's expires-at outlasts its start_to_close_timeout."""
+        """The sandbox's lifetime covers this step's enforced run deadline
+        (permissions.timeout_seconds), so a long run's expires-at outlasts it."""
         from cloud_agents.spawner.lifetime import step_sandbox_lifetime_seconds
 
         mock_spawner = mocker.AsyncMock()
@@ -399,7 +399,12 @@ class TestRunSandboxStep:
         )
         mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
 
-        step = {"name": "s1", "prompt": "check", "output_key": "r1", "timeout_seconds": 200_000}
+        step = {
+            "name": "s1",
+            "prompt": "check",
+            "output_key": "r1",
+            "permissions": {"timeout_seconds": 200_000},
+        }
         await run_sandbox_step(
             {
                 "step": step,

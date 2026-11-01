@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import ssl
 import time
@@ -28,10 +29,10 @@ import httpx
 from cloud_agents.spawner.base import AgentSpawner
 from cloud_agents.spawner.lifetime import (
     EXPIRES_AT_LABEL_KEY,
-    OWNER_INSTANCE_LABEL_KEY,
     RESERVED_LABEL_KEYS,
     SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
     SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+    SANDBOX_SPAWN_DEADLINE_SECONDS,
     SPAWNED_BY_LABEL,
 )
 
@@ -176,18 +177,10 @@ class OpenShellSpawner(AgentSpawner):
     # (issue #224). Shared with reconcile via cloud_agents.spawner.lifetime.
     _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = SPAWNED_BY_LABEL
 
-    # Identifies which runner replica spawned a sandbox (value: the
-    # owner_instance constructor arg, wired from RUNNER_INSTANCE_ID) so
-    # reconcile_orphaned_sandboxes() only destroys this replica's own orphans,
-    # never another live replica's sandboxes. Omitted when owner_instance is
-    # unset.
-    _OWNER_INSTANCE_LABEL_KEY: ClassVar[str] = OWNER_INSTANCE_LABEL_KEY
-
     # Unix seconds after which the sandbox has outlived any legitimate use
-    # (spawn time + max(lifetime_seconds, min_lifetime_seconds) + skew). Lets
-    # any replica's reconcile_orphaned_sandboxes() reap sandboxes left by a
-    # replaced pod, whose owner-instance value will never come back. Omitted
-    # when the caller passes no lifetime_seconds.
+    # (spawn time + max(lifetime_seconds, min_lifetime_seconds) + skew). Any
+    # replica's reconcile_orphaned_sandboxes() may reap a sandbox once it's
+    # past this. Omitted when the caller passes no lifetime_seconds.
     _EXPIRES_AT_LABEL_KEY: ClassVar[str] = EXPIRES_AT_LABEL_KEY
 
     # Baked into the sandbox image (lightspeed-agentic-sandbox's
@@ -303,7 +296,6 @@ class OpenShellSpawner(AgentSpawner):
         bearer_token_provider: Callable[[], str] | None = None,
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
-        owner_instance: str = "",
         min_lifetime_seconds: int = 0,
         expiry_skew_seconds: int = 600,
         clock: Callable[[], float] = time.time,
@@ -352,22 +344,19 @@ class OpenShellSpawner(AgentSpawner):
                 (see _DEFAULT_EXTRA_ENV). A derived image with a
                 different layout, or no need for this at all, should
                 override this (pass {} to disable). See issue #192.
-            owner_instance: Stable identity of this runner replica (e.g. its
-                pod name), attached to every sandbox as the
-                _OWNER_INSTANCE_LABEL_KEY label so startup reconciliation
-                can tell this replica's orphans apart from other replicas'
-                live sandboxes. Empty means no owner label is attached.
             min_lifetime_seconds: Floor for a sandbox's expiry: the
                 _EXPIRES_AT_LABEL_KEY label is spawn time +
                 max(spawn()'s lifetime_seconds, this) + expiry_skew_seconds,
                 so startup reconciliation on any replica can reap it once
                 expired. Only applies when spawn() is given lifetime_seconds.
+                An operational margin (how soon orphans may be reaped), not
+                what makes expiry safe -- that's the enforced deadlines in
+                lifetime_seconds.
             expiry_skew_seconds: Margin added to every expiry for clock skew
                 between replicas.
             clock: Returns the current unix time; injectable for tests.
         """
         super().__init__(**kwargs)
-        self._owner_instance = owner_instance
         for name, value in (
             ("min_lifetime_seconds", min_lifetime_seconds),
             ("expiry_skew_seconds", expiry_skew_seconds),
@@ -1071,25 +1060,28 @@ class OpenShellSpawner(AgentSpawner):
         # Merge caller labels with the fixed spawned-by label and the
         # agent_name recovery label; both always win over caller-supplied
         # labels of the same key so a caller can't accidentally suppress
-        # orphan discovery (issue #224). Caller-supplied owner-instance /
-        # expires-at are always dropped: only this spawner's own config may
-        # mark a sandbox as owned by, or expired for, a runner replica.
+        # orphan discovery (issue #224). Caller-supplied expires-at (and the
+        # retired owner-instance) are always dropped: only this spawner may
+        # mark a sandbox as expired for every replica.
         sandbox_labels = {
             **{k: v for k, v in (labels or {}).items() if k not in RESERVED_LABEL_KEYS},
             **self._SPAWNED_BY_LABEL,
             self._AGENT_NAME_LABEL_KEY: agent_name,
         }
-        if self._owner_instance:
-            sandbox_labels[self._OWNER_INSTANCE_LABEL_KEY] = self._owner_instance
+        # The spawn budget starts at the same instant expires-at is stamped,
+        # so the label covers create plus every post-create phase below.
+        stamped_at = self._clock()
+        spawn_deadline = asyncio.get_running_loop().time() + SANDBOX_SPAWN_DEADLINE_SECONDS
         if lifetime_seconds is None:
             logger.debug(
-                "No lifetime_seconds for agent '%s' — no expires-at label; only its "
-                "owner instance's startup reconcile can reap it",
+                "No lifetime_seconds for agent '%s' — no expires-at label; startup "
+                "reconcile will never reap it",
                 agent_name,
             )
         else:
+            # Rounded up: flooring would expire the sandbox up to 1s early.
             sandbox_labels[self._EXPIRES_AT_LABEL_KEY] = str(
-                int(self._clock())
+                math.ceil(stamped_at)
                 + max(lifetime_seconds, self._min_lifetime_seconds)
                 + self._expiry_skew_seconds
             )
@@ -1119,75 +1111,81 @@ class OpenShellSpawner(AgentSpawner):
         else:
             self._build_baseline_filesystem_policy(spec, allowed_skills=allowed_skills)
 
+        # Cancelling the awaiting coroutine on timeout doesn't stop a
+        # blocking SDK call already running in its worker thread: a
+        # CreateSandbox may still complete remotely after we give up. Such a
+        # sandbox carries its expires-at label and is reaped once expired.
+        created_name: str | None = None
         try:
-            sandbox_ref = await asyncio.to_thread(
-                self._client.create,
-                workspace=self._workspace,
-                spec=spec,
-                labels=sandbox_labels,
-            )
-            sandbox_name = sandbox_ref.name
-            sandbox_id = sandbox_ref.id
-            self._sandbox_names[agent_name] = sandbox_name
-            self._sandbox_ids[agent_name] = sandbox_id
+            async with asyncio.timeout_at(spawn_deadline):
+                sandbox_ref = await asyncio.to_thread(
+                    self._client.create,
+                    workspace=self._workspace,
+                    spec=spec,
+                    labels=sandbox_labels,
+                )
+                sandbox_name = created_name = sandbox_ref.name
+                sandbox_id = sandbox_ref.id
+                self._sandbox_names[agent_name] = sandbox_name
+                self._sandbox_ids[agent_name] = sandbox_id
 
-            await asyncio.to_thread(
-                self._client.wait_ready,
-                sandbox_name,
-                workspace=self._workspace,
-                timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
-            )
+                await asyncio.to_thread(
+                    self._client.wait_ready,
+                    sandbox_name,
+                    workspace=self._workspace,
+                    timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
+                )
 
-            # Credential Provider already created and attached via spec.providers
-            # before sandbox creation (see above) -- no post-create injection needed.
-            # The old _inject_credentials path (CreateProvider + Attach after
-            # wait_ready with real env) is removed to avoid exposing the real
-            # credential in spec.environment (issue #199).
+                # Credential Provider already created and attached via spec.providers
+                # before sandbox creation (see above) -- no post-create injection needed.
+                # The old _inject_credentials path (CreateProvider + Attach after
+                # wait_ready with real env) is removed to avoid exposing the real
+                # credential in spec.environment (issue #199).
 
-            if mcp_secret_mounts:
-                await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
+                if mcp_secret_mounts:
+                    await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
 
-            # Advisory (read_only=True) spawns use _build_filesystem_policy(),
-            # which grants blanket "/" read but no write outside /tmp,
-            # /home/agent, /var/log, MCP, and credentials -- not
-            # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
-            # the same EACCES this method now raises loudly for, so advisory
-            # spawns skip materialize entirely and list _SKILLS_ROOT (the
-            # master) directly below instead -- consistent with advisory
-            # mode's existing documented semantics that its blanket read
-            # grant already covers all of /skills regardless of
-            # allowed_skills, since advisory is an integrity boundary
-            # (no-write), not a confidentiality one.
-            if allowed_skills and not read_only:
-                await self._materialize_allowed_skills(sandbox_id, allowed_skills)
+                # Advisory (read_only=True) spawns use _build_filesystem_policy(),
+                # which grants blanket "/" read but no write outside /tmp,
+                # /home/agent, /var/log, MCP, and credentials -- not
+                # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
+                # the same EACCES this method now raises loudly for, so advisory
+                # spawns skip materialize entirely and list _SKILLS_ROOT (the
+                # master) directly below instead -- consistent with advisory
+                # mode's existing documented semantics that its blanket read
+                # grant already covers all of /skills regardless of
+                # allowed_skills, since advisory is an integrity boundary
+                # (no-write), not a confidentiality one.
+                if allowed_skills and not read_only:
+                    await self._materialize_allowed_skills(sandbox_id, allowed_skills)
 
-            # self._extra_env first, then the caller's own env on top, so an
-            # explicit caller-provided value (e.g. a different derived image's
-            # PYTHONPATH) wins on collision rather than being silently
-            # overridden by the spawner's own default (issue #192).
-            # Filter credential keys from server_env as well -- start_server
-            # execs inside the sandbox, so env there would also expose the
-            # real credential to the sandboxed process (issue #199).
-            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
-            server_env = {**self._extra_env, **filtered_env}
-            if read_only:
-                server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
-            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
+                # self._extra_env first, then the caller's own env on top, so an
+                # explicit caller-provided value (e.g. a different derived image's
+                # PYTHONPATH) wins on collision rather than being silently
+                # overridden by the spawner's own default (issue #192).
+                # Filter credential keys from server_env as well -- start_server
+                # execs inside the sandbox, so env there would also expose the
+                # real credential to the sandboxed process (issue #199).
+                filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
+                server_env = {**self._extra_env, **filtered_env}
+                if read_only:
+                    server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
+                await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
 
-            endpoint, virtual_host = await self._expose_service(
-                sandbox_name,
-                port=8080,
-            )
-            self._virtual_hosts[sandbox_name] = virtual_host
+                endpoint, virtual_host = await self._expose_service(
+                    sandbox_name,
+                    port=8080,
+                )
+                self._virtual_hosts[sandbox_name] = virtual_host
 
-            ready = await self._wait_ready_with_host(
-                endpoint,
-                virtual_host,
-                timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
-            )
-            if not ready:
-                raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
-        except Exception:
+                ready = await self._wait_ready_with_host(
+                    endpoint,
+                    virtual_host,
+                    timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+                )
+                if not ready:
+                    raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
+        except Exception as exc:
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
                 "deleting sandbox to prevent orphan",
@@ -1200,8 +1198,13 @@ class OpenShellSpawner(AgentSpawner):
             # BEFORE deleting the provider itself -- the gateway refuses
             # DeleteProvider while it's still attached to a sandbox
             # (FAILED_PRECONDITION), which previously leaked the provider
-            # on every post-create failure (issue #214).
-            await self._cleanup_sandbox(agent_name, sandbox_name)
+            # on every post-create failure (issue #214). Best-effort, and only
+            # for the exact sandbox CreateSandbox returned: if it never
+            # returned, its identity is unknown and no delete is guessed.
+            if created_name is not None:
+                await self._cleanup_sandbox(agent_name, created_name)
+            else:
+                self._provider_ids.pop(agent_name, None)
             if provider_id:
                 try:
                     await self._delete_provider(provider_id)
@@ -1212,6 +1215,13 @@ class OpenShellSpawner(AgentSpawner):
                     logger.warning(
                         "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
                     )
+            if isinstance(exc, TimeoutError):
+                # str(TimeoutError()) is empty; callers' secret redaction
+                # would turn that into a blank error.
+                raise TimeoutError(
+                    f"Spawning sandbox for agent '{agent_name}' exceeded its "
+                    f"{SANDBOX_SPAWN_DEADLINE_SECONDS}s deadline"
+                ) from None
             raise
 
         logger.info(
@@ -2082,18 +2092,43 @@ class OpenShellSpawner(AgentSpawner):
             of being silently dropped -- destroy() falls back to treating
             such a name literally, so this remains cleanable.
         """
-        return [name for name, _ in await self._do_list_active_labels(labels)]
+        return [
+            ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name
+            for ref in await self._list_refs(labels)
+        ]
 
-    async def _do_list_active_labels(
+    async def _do_list_sandbox_labels(
         self,
         labels: dict[str, str] | None = None,
     ) -> list[tuple[str, dict[str, str]]]:
-        """List active sandboxes as (agent name, labels) from one gateway call.
+        """List (exact gateway sandbox name, labels) from one gateway call.
 
-        Same query and name recovery as _do_list_active(); also returns each
-        sandbox's labels so reconcile_orphaned_sandboxes() can partition by
-        owner-instance/expires-at client-side.
+        Unlike _do_list_active(), names are the sandboxes' own unique gateway
+        names, not their agent-name label (which several refs can share), so
+        reconcile_orphaned_sandboxes() can delete exactly the refs it selects
+        via _do_destroy_sandbox().
         """
+        return [(ref.name, dict(ref.labels)) for ref in await self._list_refs(labels)]
+
+    async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
+        """Delete exactly this gateway sandbox, with no agent-name expansion.
+
+        A sandbox tracked by this process goes through destroy() for the full
+        provider/task cleanup (its tracked path deletes only the tracked
+        name); an untracked one is deleted by name and nothing else.
+        """
+        agent_name = next(
+            (agent for agent, name in self._sandbox_names.items() if name == sandbox_name),
+            None,
+        )
+        if agent_name is not None:
+            await self.destroy(agent_name)
+            return
+        await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
+        logger.info("Destroyed OpenShell sandbox '%s'", sandbox_name)
+
+    async def _list_refs(self, labels: dict[str, str] | None = None) -> list[Any]:
+        """ListSandboxes for this workspace, filtered by a label selector."""
         label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
         refs = await asyncio.to_thread(
             self._client.list,
@@ -2105,7 +2140,4 @@ class OpenShellSpawner(AgentSpawner):
             # ever legitimately exceeds this.
             limit=1000,
         )
-        return [
-            (ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name, dict(ref.labels))
-            for ref in refs
-        ]
+        return list(refs)

@@ -26,8 +26,9 @@ from cloud_agents.runtime.tracing import get_tracer, inject_traceparent
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.lifetime import (
-    DEFAULT_STEP_TIMEOUT_SECONDS,
+    SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
     SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
+    run_timeout_seconds,
     step_sandbox_lifetime_seconds,
 )
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
@@ -318,7 +319,7 @@ async def _run_step_inner(
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
-    http_timeout = float(permissions.get("timeout_seconds", DEFAULT_STEP_TIMEOUT_SECONDS))
+    http_timeout = run_timeout_seconds(step)
 
     if spawner is None:
         logger.info("No spawner configured — returning stub result for '%s'", step_name)
@@ -496,7 +497,10 @@ async def _run_step_inner(
             output_key = step.get("output_key", step_name)
             if transcript_store is not None and transcript.events:
                 try:
-                    await transcript_store.save(workflow_id, output_key, transcript)
+                    # Runs before destroy, so it's bounded like every other
+                    # phase in the sandbox lifetime (cloud_agents.spawner.lifetime).
+                    async with asyncio.timeout(SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS):
+                        await transcript_store.save(workflow_id, output_key, transcript)
                 except Exception:
                     logger.warning(
                         "Failed to save transcript to store for step '%s'",

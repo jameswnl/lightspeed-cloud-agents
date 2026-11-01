@@ -37,7 +37,6 @@ _OPENSHELL_EXTRA_PARAMS = frozenset(
         "max_pods",
         "extra_readable_paths",
         "extra_env",
-        "owner_instance",
         "min_lifetime_seconds",
         "expiry_skew_seconds",
     }

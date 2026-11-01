@@ -40,8 +40,6 @@ services:
     environment:
       WORKFLOW_ENGINE: local
       WORKFLOW_SPAWNER: openshell
-      # Stable per-runner identity for scoping startup orphan cleanup
-      RUNNER_INSTANCE_ID: workflow-runner
       OPENSHELL_GATEWAY_URL: ${OPENSHELL_GATEWAY_URL:?set to your separately-deployed OpenShell gateway address}
       AUTH_REQUIRED: "false"
       RUN_STATE_DB_URL: postgresql://workflow:workflow-pass@postgres:5432/cloud_agents

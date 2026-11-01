@@ -65,8 +65,6 @@ services:
       TEMPORAL_URL: temporal-server:7233
       TEMPORAL_NAMESPACE: default
       WORKFLOW_SPAWNER: openshell
-      # Stable per-runner identity for scoping startup orphan cleanup
-      RUNNER_INSTANCE_ID: workflow-runner
       OPENSHELL_GATEWAY_URL: ${OPENSHELL_GATEWAY_URL:?set to your separately-deployed OpenShell gateway address}
       AUTH_REQUIRED: "false"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

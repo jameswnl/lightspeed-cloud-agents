@@ -472,46 +472,6 @@ class TestOpenShellSpawnerSpawn:
             "cloud-agents/agent-name": "agent-1",
         }
 
-    @pytest.mark.asyncio
-    async def test_spawn_attaches_owner_instance_label(self, mocker: MockerFixture) -> None:
-        """owner_instance is stamped as cloud-agents/owner-instance so
-        reconcile_orphaned_sandboxes() only destroys this replica's sandboxes,
-        and it wins over a caller-supplied label of the same key."""
-        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
-
-        class SandboxRef:
-            id: str = "test-id"
-
-            def __init__(self, name):
-                self.name = name
-
-        mock_client = mocker.Mock()
-        mock_client.create.return_value = SandboxRef("sb")
-        mock_client.wait_ready.return_value = SandboxRef("sb")
-        mock_client.exec_stream = lambda *a, **k: iter([])
-
-        spawner = OpenShellSpawner(openshell_client=mock_client, owner_instance="runner-a")
-        mocker.patch.object(
-            spawner, "_expose_service", return_value=("http://gateway:17670", "host")
-        )
-
-        async def mock_ready(*args, **kwargs):
-            return True
-
-        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
-        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
-
-        await spawner.spawn(
-            "agent-1", "sandbox:latest", env={}, labels={"cloud-agents/owner-instance": "spoof"}
-        )
-
-        create_kwargs = mock_client.create.call_args.kwargs
-        assert create_kwargs["labels"] == {
-            "spawned-by": "workflow-runner",
-            "cloud-agents/agent-name": "agent-1",
-            "cloud-agents/owner-instance": "runner-a",
-        }
-
     @staticmethod
     def _spawner_with_mocks(mocker: MockerFixture, **kwargs: Any):
         """OpenShellSpawner with gateway calls mocked, for label assertions."""
@@ -554,7 +514,8 @@ class TestOpenShellSpawnerSpawn:
         await spawner.spawn("agent-1", "sandbox:latest", env={}, lifetime_seconds=200_000)
 
         labels = mock_client.create.call_args.kwargs["labels"]
-        assert labels["cloud-agents/expires-at"] == str(1_700_000_000 + 200_000 + 600)
+        # Rounded up, never down: flooring the stamp would expire it early.
+        assert labels["cloud-agents/expires-at"] == str(1_700_000_001 + 200_000 + 600)
 
     @pytest.mark.asyncio
     async def test_spawn_expires_at_floors_at_min_lifetime(self, mocker: MockerFixture) -> None:
@@ -569,7 +530,7 @@ class TestOpenShellSpawnerSpawn:
 
     @pytest.mark.asyncio
     async def test_spawn_without_lifetime_has_no_expiry(self, mocker: MockerFixture) -> None:
-        """No lifetime from the caller -> no expires-at (only the owner may reap
+        """No lifetime from the caller -> no expires-at (startup reconcile never reaps
         it); the spawner never guesses a lifetime."""
         spawner, mock_client = self._spawner_with_mocks(
             mocker, min_lifetime_seconds=86400, clock=lambda: 1000.0
@@ -591,9 +552,9 @@ class TestOpenShellSpawnerSpawn:
     async def test_spawn_strips_reserved_caller_labels_when_unconfigured(
         self, mocker: MockerFixture
     ) -> None:
-        """Caller-supplied owner-instance/expires-at labels are always dropped,
-        even when the spawner has no owner or lifetime to stamp -- otherwise a
-        caller could make a sandbox look owned by (or expired for) a replica."""
+        """Caller-supplied expires-at (and the retired owner-instance) labels
+        are always dropped, even with no lifetime to stamp -- otherwise a
+        caller could make a sandbox look expired to every replica."""
         spawner, mock_client = self._spawner_with_mocks(mocker)
 
         await spawner.spawn(
@@ -1302,11 +1263,12 @@ class TestOpenShellSpawnerListActive:
         )
 
     @pytest.mark.asyncio
-    async def test_list_active_labels_returns_names_with_labels(
+    async def test_list_sandbox_labels_returns_exact_sandbox_names(
         self, mocker: MockerFixture
     ) -> None:
-        """One ListSandboxes call yields each agent name with its labels, so
-        reconcile can partition by owner/expiry client-side."""
+        """One ListSandboxes call yields each sandbox's exact gateway name (not
+        its agent-name label, which several refs may share) with its labels,
+        so reconcile can select and delete exactly the expired refs."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         mock_client = mocker.Mock()
@@ -1316,10 +1278,10 @@ class TestOpenShellSpawnerListActive:
         ]
         spawner = OpenShellSpawner(openshell_client=mock_client)
 
-        result = await spawner.list_active_labels({"spawned-by": "workflow-runner"})
+        result = await spawner.list_sandbox_labels({"spawned-by": "workflow-runner"})
 
         assert result == [
-            ("agent-1", {"cloud-agents/agent-name": "agent-1", "k": "v"}),
+            ("petname-1", {"cloud-agents/agent-name": "agent-1", "k": "v"}),
             ("petname-2", {}),
         ]
         mock_client.list.assert_called_once_with(
@@ -1327,6 +1289,20 @@ class TestOpenShellSpawnerListActive:
             label_selector="spawned-by=workflow-runner",
             limit=1000,
         )
+
+    @pytest.mark.asyncio
+    async def test_destroy_sandbox_deletes_only_that_ref(self, mocker: MockerFixture) -> None:
+        """No re-expansion by agent-name label: an untracked sandbox name is
+        deleted as-is, without listing other refs."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        await spawner.destroy_sandbox("petname-1")
+
+        mock_client.list.assert_not_called()
+        mock_client.delete.assert_called_once_with("petname-1", workspace=spawner._workspace)
 
     @pytest.mark.asyncio
     async def test_list_active_without_labels_sends_no_selector(

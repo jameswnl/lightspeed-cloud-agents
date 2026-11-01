@@ -128,7 +128,7 @@ class TestRunStep:
         from cloud_agents.spawner.lifetime import step_sandbox_lifetime_seconds
         from cloud_agents.workflow.core.step_runner import run_step
 
-        step_input["step"]["timeout_seconds"] = 150_000
+        step_input["step"]["permissions"] = {"timeout_seconds": 150_000}
         await run_step(step_input, spawner=mock_spawner, attempt=1)
 
         lifetime = mock_spawner.spawn.call_args[1]["lifetime_seconds"]

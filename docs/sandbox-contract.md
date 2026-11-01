@@ -129,64 +129,74 @@ Spawned sandbox pods carry these labels for lifecycle management:
 | `cloud-agents/attempt` | Retry attempt number |
 | `spawned-by` | `workflow-runner` (always set) |
 | `cloud-agents/agent-name` | Agent name (always set; the gateway assigns the sandbox name) |
-| `cloud-agents/owner-instance` | Runner replica's identity: `RUNNER_INSTANCE_ID`, else `HOSTNAME` (set only when one is available) |
-| `cloud-agents/expires-at` | Unix seconds: spawn time + max(per-sandbox lifetime, `SANDBOX_MIN_LIFETIME_SECONDS`) + `SANDBOX_EXPIRY_SKEW_SECONDS` (set only when the caller passes a lifetime) |
+| `cloud-agents/expires-at` | Unix seconds: ceil(spawn time) + max(per-sandbox lifetime, `SANDBOX_MIN_LIFETIME_SECONDS`) + `SANDBOX_EXPIRY_SKEW_SECONDS` (set only when the caller passes a lifetime) |
 
 Used for: label-based orphan cleanup after worker crashes. On startup a runner
-makes one `spawned-by=workflow-runner` listing and destroys sandboxes whose
-`cloud-agents/owner-instance` matches its own identity (the Helm chart sets
-`RUNNER_INSTANCE_ID` to the pod name), plus any sandbox whose
-`cloud-agents/expires-at` is in the past regardless of owner (e.g. left by a
-replaced pod). Other replicas' unexpired sandboxes, sandboxes with no
-`expires-at` label and sandboxes with a malformed `expires-at` are left alone
-and logged. With no identity, only expired sandboxes are destroyed.
-Caller-supplied `owner-instance` / `expires-at` labels are always dropped.
+lists `spawned-by=workflow-runner` sandboxes once and destroys exactly those
+(by their unique gateway sandbox name, never by agent name) whose
+`cloud-agents/expires-at` is in the past, whichever runner spawned them.
+Expiry is the only criterion: a runner identity can't prove a sandbox's
+previous owner is gone. Sandboxes with no `expires-at` and sandboxes with a
+malformed one are left alone and logged. Caller-supplied `expires-at` labels
+(and the retired `cloud-agents/owner-instance`) are always dropped.
 
-**Per-sandbox lifetime** (`cloud_agents/spawner/lifetime.py`). `expires-at`
-must never be earlier than the sandbox's latest legitimate end, so each spawn
-call site passes its own lifetime:
+**Assumptions.** Expiry is only as safe as the deadlines behind it: it relies
+on every phase that can use a sandbox after `expires-at` is stamped being
+bounded by an enforced wall-clock deadline, plus clocks between replicas
+agreeing within `SANDBOX_EXPIRY_SKEW_SECONDS`. Labels alone guarantee
+nothing.
 
-- Workflow steps (Temporal activity and local engine): max(step
-  `timeout_seconds`, `permissions.timeout_seconds`; each defaulting to 600)
-  + 300s gateway ready wait + 60s HTTP ready wait + 180s activity heartbeat
-  timeout (a timed-out activity only learns of cancellation via a heartbeat)
-  + 30s transcript fetch (its own wall-clock bound) + 120s destroy grace. The
-  local engine enforces the HTTP timeout as an overall deadline on the run
-  call, since httpx's own timeout is per read. Each retry attempt spawns a new sandbox (the attempt
-  number is part of the `ca-` name; the activity itself runs with
-  `maximum_attempts=1`), so the lifetime is per attempt.
-- CLI sessions: `max_session_seconds` + the timeout monitor's check interval
-  + 300s + 60s + 120s, but only while the launcher's timeout monitor is
-  running; otherwise no lifetime (and no `expires-at`) is set.
-- A spawn with no lifetime gets no `expires-at`, so only its owner can reap it.
+**Per-sandbox lifetime** (`cloud_agents/spawner/lifetime.py`), the sum of the
+enforced deadlines measured from when `expires-at` is stamped:
 
-`SANDBOX_MIN_LIFETIME_SECONDS` (default 86400) is a floor, not a cap: it only
-delays how soon another replica may reap an orphan. `SANDBOX_EXPIRY_SKEW_SECONDS`
-(default 600) covers clock skew between replicas. Both must be non-negative
-integers or startup fails.
+- **Spawn: 420s** (`SANDBOX_SPAWN_DEADLINE_SECONDS`). One `asyncio` deadline in
+  `OpenShellSpawner._do_spawn` that starts at the same instant `expires-at` is
+  stamped and covers CreateSandbox (30s SDK RPC timeout), the 300s gateway
+  ready wait, the 60s HTTP readiness check and ~30s of post-create
+  exec/expose calls (MCP secret writes, skill materialization, server start,
+  ExposeService). On timeout the spawn fails, and the sandbox is deleted on a
+  best-effort basis if CreateSandbox returned its name. Cancelling the
+  awaiting coroutine doesn't stop a blocking SDK call already running in a
+  worker thread, so a CreateSandbox can still complete remotely after the
+  deadline. That sandbox exists with its `expires-at` label and is reaped
+  once expired. If its name is unknown, no delete is guessed.
+- **Run: `permissions.timeout_seconds`** (default 600). Both engines enforce it
+  as an overall deadline on `POST /v1/agent/run`, since httpx's own timeout is
+  per read. Temporal's `start_to_close_timeout` can only end a step earlier.
+- **Transcript fetch: 30s, transcript-store save: 30s.**
+- **Destroy grace: 120s.** A margin, not a safety requirement: once the
+  transcript save finishes the sandbox is no longer used.
 
-**Identity.** An explicit `RUNNER_INSTANCE_ID` must be a valid label value or
-startup fails. The `HOSTNAME` fallback logs a warning: runners sharing a host
-network (same hostname) must each set a distinct `RUNNER_INSTANCE_ID`. An
-invalid `HOSTNAME` only disables own-instance cleanup. Bare-process dev runs
-with neither variable set skip own-instance cleanup (expired sandboxes are
-still reaped); the Podman compose files set `RUNNER_INSTANCE_ID`.
+Each retry attempt spawns a new sandbox (the attempt number is part of the
+`ca-` name; the activity runs with `maximum_attempts=1`), so the lifetime is
+per attempt. A lifecycle without an enforced latest-use bound gets no
+lifetime and no `expires-at`, so startup reconcile never reaps it. CLI
+sessions are one: their timeout monitor can stop or block.
 
-**Upgrades and rollbacks.** Runners from before owner scoping destroy *every*
-`spawned-by=workflow-runner` sandbox on startup, including new runners' live
-ones. Don't run old and new runner versions side by side for long: finish the
-rollout promptly, or use a `Recreate` deployment strategy. A rollback carries
-the same risk in reverse.
+`SANDBOX_MIN_LIFETIME_SECONDS` (default 86400) and `SANDBOX_EXPIRY_SKEW_SECONDS`
+(default 600) are operational margins, not enforcement: the floor only delays
+how soon an expired orphan is reaped, and the skew covers clock differences
+between replicas. Both must be non-negative integers or startup fails.
 
-**Legacy sandboxes.** Sandboxes spawned by older runners carry neither
-`owner-instance` nor `expires-at` and are never reaped automatically. Once no
-old-version runner (and no workflow it started) is still running, clean them
-up once with the OpenShell SDK (add the TLS/bearer-token arguments your
-gateway needs, as in `cloud_agents/spawner/factory.py`):
+**Upgrades and rollbacks.** Runners from before expiry-based reconcile destroy
+*every* `spawned-by=workflow-runner` sandbox on startup, so a single old
+runner starting up can destroy live sandboxes of new runners. Stop and drain
+all old runners **before** any new runner admits work. Running both versions
+side by side for any length of time isn't safe. A rollback needs the same
+order in reverse: stop and drain the new runners before starting old ones.
+
+**Legacy sandboxes.** Sandboxes spawned by older runners carry no `expires-at`
+and are never reaped automatically. Once no old-version runner (and no
+workflow it started) is still running, clean them up once with the OpenShell
+SDK (add the TLS/bearer-token arguments your gateway needs, as in
+`cloud_agents/spawner/factory.py`). CLI session sandboxes also lack
+`expires-at` by design, so the script skips them. Run it with `DRY_RUN = True`
+first:
 
 ```python
 from openshell import SandboxClient
 
+DRY_RUN = True
 client = SandboxClient(endpoint="<gateway host:port>")
 legacy, offset, page = [], 0, 100
 while True:
@@ -199,14 +209,15 @@ while True:
     legacy += [
         ref.name
         for ref in refs
-        if "cloud-agents/owner-instance" not in ref.labels
-        and "cloud-agents/expires-at" not in ref.labels
+        if "cloud-agents/expires-at" not in ref.labels
+        and ref.labels.get("cloud-agents/session-type") != "cli-handoff"
     ]
     if len(refs) < page:
         break
     offset += page
 # Delete after listing so deletions don't shift later pages.
 for name in legacy:
-    print("deleting", name)
-    client.delete(name, workspace="default")
+    print("would delete" if DRY_RUN else "deleting", name)
+    if not DRY_RUN:
+        client.delete(name, workspace="default")
 ```

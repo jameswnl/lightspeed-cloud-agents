@@ -175,3 +175,109 @@ class TestStepRunnerPostDeadline:
             if c.kwargs.get("event_type") == "sandbox_timeout"
         ]
         assert timeout_events and timeout_events[0]["details"]["reason"] == "timeout"
+
+
+class TestTemporalPostDeadline:
+    @pytest.mark.asyncio
+    async def test_trickling_post_bounded_with_clear_redacted_error(
+        self, mocker: MockerFixture
+    ) -> None:
+        """The Temporal activity enforces http_timeout locally too, rather than
+        relying on heartbeat-delivered cancellation."""
+        secret = "sk-live-very-secret-value"
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=False)
+        from cloud_agents.workflow.executor.temporal import activities
+
+        audit = mocker.patch.object(activities, "emit_audit")
+        spawner = mocker.AsyncMock()
+        spawner.spawn.return_value = "http://pod-1:8080"
+        spawner.wait_ready.return_value = True
+        spawner.get_query_ssl_context = mocker.Mock(return_value=None)
+
+        async def trickle(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        _patch_client(mocker, activities.__name__, mocker.MagicMock(post=trickle))
+
+        with pytest.raises(Exception) as exc_info:
+            await _bounded(
+                activities.run_sandbox_step(
+                    {
+                        "step": {
+                            "name": "slow",
+                            "prompt": "p",
+                            "output_key": "o",
+                            "permissions": {"timeout_seconds": 0.05},
+                        },
+                        "workflow_id": "wf-1",
+                        "provider": {
+                            "name": "openai",
+                            "model": "gpt-4o",
+                            "credentials_secret": "OPENAI_API_KEY",
+                        },
+                        "sandbox_image": "sandbox:latest",
+                        "context": {},
+                    },
+                    spawner=spawner,
+                )
+            )
+
+        message = str(exc_info.value)
+        assert "timed out after 0.05s" in message
+        assert secret not in message
+        spawner.destroy.assert_called_once()
+        assert any(
+            c.kwargs.get("event_type") == "sandbox_timeout"
+            and c.kwargs["details"]["reason"] == "timeout"
+            for c in audit.call_args_list
+        )
+
+
+class TestTranscriptSaveDeadline:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module", RUNNER_MODULES)
+    async def test_hanging_transcript_store_bounded(
+        self, mocker: MockerFixture, module: str
+    ) -> None:
+        """The transcript-store write runs before destroy, so it's bounded too
+        (best-effort: a timeout only logs)."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        mod = importlib.import_module(module)
+        mocker.patch.object(mod, "SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS", 0.05)
+
+        spawner = mocker.AsyncMock()
+        spawner.spawn.return_value = "http://pod-1:8080"
+        spawner.wait_ready.return_value = True
+        spawner.get_query_ssl_context = mocker.Mock(return_value=None)
+
+        run_response = mocker.MagicMock(status_code=200)
+        run_response.json.return_value = {"success": True, "output": {}}
+        events = mocker.MagicMock(status_code=200, text='{"type":"result","data":{}}\n')
+        client = mocker.MagicMock(
+            post=mocker.AsyncMock(return_value=run_response),
+            get=mocker.AsyncMock(return_value=events),
+        )
+        _patch_client(mocker, module, client)
+
+        store = mocker.MagicMock()
+
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        store.save = hang
+        step_input = {
+            "step": {"name": "s", "prompt": "p", "output_key": "o"},
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+        if module.endswith("step_runner"):
+            call = mod.run_step(step_input, spawner=spawner, attempt=1, transcript_store=store)
+        else:
+            call = mod.run_sandbox_step(step_input, spawner=spawner, transcript_store=store)
+
+        result = await _bounded(call)
+
+        assert result["status"] == "completed"
+        spawner.destroy.assert_called_once()

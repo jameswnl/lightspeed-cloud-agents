@@ -26,7 +26,7 @@ class TestBuildSpawnerOpenShell:
         assert spawner._tls_ca == ""
         assert spawner._bearer_token == ""
 
-    def test_owner_instance_forwarded(self, mocker: MockerFixture) -> None:
+    def test_lifetime_settings_forwarded(self, mocker: MockerFixture) -> None:
         """Owner/lifetime settings reach OpenShellSpawner (stamped as labels on spawn)."""
         from cloud_agents.spawner.factory import build_spawner
 
@@ -35,12 +35,10 @@ class TestBuildSpawnerOpenShell:
         spawner = build_spawner(
             "openshell",
             gateway_url="gw:17670",
-            owner_instance="runner-a",
             min_lifetime_seconds=7200,
             expiry_skew_seconds=30,
         )
 
-        assert spawner._owner_instance == "runner-a"
         assert spawner._min_lifetime_seconds == 7200
         assert spawner._expiry_skew_seconds == 30
 

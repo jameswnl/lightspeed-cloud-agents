@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -21,11 +20,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
-from cloud_agents.spawner.lifetime import (
-    EXPIRES_AT_LABEL_KEY,
-    OWNER_INSTANCE_LABEL_KEY,
-    SPAWNED_BY_LABEL,
-)
+from cloud_agents.spawner.lifetime import EXPIRES_AT_LABEL_KEY, SPAWNED_BY_LABEL
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
@@ -80,53 +75,13 @@ def _build_tls_config():
 
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
-# Kubernetes label value syntax; owner-instance is stamped as a sandbox label.
-_LABEL_VALUE_RE = re.compile(r"^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$")
-
-# Floor for every sandbox's expires-at label, on top of its own per-sandbox
-# lifetime (cloud_agents.spawner.lifetime). Safety comes from the per-sandbox
-# lifetime, so any non-negative value is safe; the floor only delays how soon
-# another replica may reap an orphan.
+# Operational margins on every sandbox's expires-at label, not enforcement:
+# expiry safety comes from the per-sandbox lifetime (the enforced deadlines in
+# cloud_agents.spawner.lifetime). The floor only delays how soon an expired
+# orphan may be reaped.
 DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS = 86400
 # Added to every expires-at for clock skew between replicas.
 DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS = 600
-
-
-def _runner_instance_id() -> str:
-    """Resolve this runner replica's stable identity for sandbox ownership.
-
-    RUNNER_INSTANCE_ID (the Helm chart sets it to the pod name), else
-    HOSTNAME, else "". The value is stamped on every sandbox as an owner label
-    and scopes startup reconciliation to this replica's own orphans.
-
-    Raises:
-        ValueError: If RUNNER_INSTANCE_ID is set but isn't a legal label value.
-            An unusable HOSTNAME fallback only logs a warning and returns "".
-    """
-    explicit = os.environ.get("RUNNER_INSTANCE_ID", "")
-    if explicit:
-        if not _LABEL_VALUE_RE.match(explicit):
-            raise ValueError(
-                f"RUNNER_INSTANCE_ID={explicit!r} is not a valid label value "
-                "(max 63 chars of [A-Za-z0-9-_.], alphanumeric at both ends)"
-            )
-        return explicit
-    hostname = os.environ.get("HOSTNAME", "")
-    if hostname and not _LABEL_VALUE_RE.match(hostname):
-        logger.warning(
-            "HOSTNAME=%r is not a valid label value — set RUNNER_INSTANCE_ID; "
-            "own-instance sandbox cleanup disabled",
-            hostname,
-        )
-        return ""
-    if hostname:
-        logger.warning(
-            "RUNNER_INSTANCE_ID not set — using HOSTNAME=%r as runner identity. "
-            "Runners sharing a host network (same hostname) must each set a "
-            "distinct RUNNER_INSTANCE_ID, or they will reap each other's sandboxes",
-            hostname,
-        )
-    return hostname
 
 
 def _non_negative_int_env(name: str, default: int) -> int:
@@ -155,7 +110,7 @@ def _sandbox_expiry_skew_seconds() -> int:
     return _non_negative_int_env("SANDBOX_EXPIRY_SKEW_SECONDS", DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS)
 
 
-def _create_spawner(owner_instance: str = ""):
+def _create_spawner():
     """Create spawner based on environment config.
 
     Thin env-var-reading wrapper around cloud_agents.spawner.factory.build_spawner
@@ -182,7 +137,6 @@ def _create_spawner(owner_instance: str = ""):
             tls_cert=os.environ.get("OPENSHELL_TLS_CERT", ""),
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
-            owner_instance=owner_instance,
             min_lifetime_seconds=_sandbox_min_lifetime_seconds(),
             expiry_skew_seconds=_sandbox_expiry_skew_seconds(),
         )
@@ -195,44 +149,31 @@ def _create_spawner(owner_instance: str = ""):
 
 
 async def reconcile_orphaned_sandboxes(
-    spawner: AgentSpawner | None, owner_instance: str = "", now: float | None = None
+    spawner: AgentSpawner | None, now: float | None = None
 ) -> None:
-    """Destroy orphaned sandboxes left from a previous crash.
+    """Destroy expired orphaned sandboxes left from a previous crash.
 
     On startup, lists sandboxes labelled "spawned-by=workflow-runner" once and
-    destroys those that either carry this replica's
-    "cloud-agents/owner-instance=<owner_instance>" label, or whose
-    "cloud-agents/expires-at" is in the past regardless of owner (e.g. left
-    by a replaced pod whose name never comes back). This prevents resource
-    leaks after unclean shutdowns without touching sandboxes that other live
-    runner replicas are still using.
+    destroys exactly those whose "cloud-agents/expires-at" is in the past,
+    whichever runner spawned them. Expiry is the only criterion: no runner
+    identity can prove a sandbox's previous owner is gone, so an unexpired
+    sandbox may still be in use by a live replica.
 
-    Other replicas' unexpired sandboxes, sandboxes with no expires-at label
-    (spawned before expiry labelling existed) and sandboxes with a malformed
-    expires-at are left alone and logged. When owner_instance is empty only
-    expired sandboxes are destroyed.
+    Sandboxes with no expires-at label (spawned before expiry labelling
+    existed, or with no enforced lifetime, e.g. CLI sessions) and sandboxes
+    with a malformed one are left alone and logged.
 
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
-        owner_instance: This replica's identity (see _runner_instance_id()).
-            Must match the value the spawner stamps on sandboxes it creates.
         now: Current unix time; defaults to time.time(). Injectable for tests.
     """
     if spawner is None:
         return
-    if not owner_instance:
-        logger.warning(
-            "RUNNER_INSTANCE_ID/HOSTNAME not set — skipping own-instance orphan "
-            "cleanup (only expired sandboxes will be destroyed)"
-        )
     now = time.time() if now is None else now
 
     orphans = []
     no_expiry = 0
-    for name, labels in await spawner.list_active_labels(SPAWNED_BY_LABEL):
-        if owner_instance and labels.get(OWNER_INSTANCE_LABEL_KEY) == owner_instance:
-            orphans.append(name)
-            continue
+    for name, labels in await spawner.list_sandbox_labels(SPAWNED_BY_LABEL):
         expires_at = labels.get(EXPIRES_AT_LABEL_KEY)
         if expires_at is None:
             no_expiry += 1
@@ -249,17 +190,13 @@ async def reconcile_orphaned_sandboxes(
         if expired:
             orphans.append(name)
     if no_expiry:
-        logger.info(
-            "Leaving %d sandbox(es) with no expires-at label untouched "
-            "(legacy, or owned by another runner instance)",
-            no_expiry,
-        )
+        logger.info("Leaving %d sandbox(es) with no expires-at label untouched", no_expiry)
     cleaned = 0
     failed_names = []
     for name in orphans:
         logger.warning("Destroying orphaned sandbox '%s'", name)
         try:
-            await spawner.destroy(name)
+            await spawner.destroy_sandbox(name)
             cleaned += 1
         except Exception as exc:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
@@ -352,8 +289,7 @@ def build_temporal_app(
     configure_logging()
     init_tracing("workflow-runner")
 
-    owner_instance = _runner_instance_id()
-    spawner = _create_spawner(owner_instance)
+    spawner = _create_spawner()
     transcript_store = TranscriptStore.from_env()
     if transcript_store is not None:
         logger.info("Transcript store configured (TRANSCRIPT_DB_URL set)")
@@ -365,7 +301,7 @@ def build_temporal_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
-        await reconcile_orphaned_sandboxes(spawner, owner_instance)
+        await reconcile_orphaned_sandboxes(spawner)
 
         # Connect transcript store (best-effort: failures are non-fatal)
         if transcript_store is not None:
