@@ -172,6 +172,13 @@ class OpenShellSpawner(AgentSpawner):
     # _materialize_allowed_skills().
     _MATERIALIZE_SKILLS_SCRIPT: ClassVar[str] = "/usr/local/bin/materialize-skills.sh"
 
+    # The gateway caps a whole inbound gRPC message at 1 MiB, and an
+    # ExecSandboxRequest carries its stdin inline, so a secret file
+    # written via exec stdin must fit in one request. Leaves headroom for
+    # the command, sandbox id, and protobuf framing. See
+    # _write_secret_file().
+    _MAX_EXEC_STDIN_BYTES: ClassVar[int] = 1024 * 1024 - 64 * 1024
+
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
         """Validate extra_readable_paths before they reach a Landlock policy.
@@ -1036,8 +1043,11 @@ class OpenShellSpawner(AgentSpawner):
         if credential_secret_name:
             cred_keys.add(credential_secret_name)
             cred_keys.add(credential_secret_name.upper().replace("-", "_"))
+        # MCP secrets are delivered as files (_inject_mcp_secrets()), never
+        # via the sandbox environment.
+        mcp_secret_keys = {secret_name for secret_name, _, _ in mcp_secret_mounts or []}
         for key, value in env.items():
-            if key in cred_keys:
+            if key in cred_keys or key in mcp_secret_keys:
                 continue
             spec.environment[key] = value
         if provider_id:
@@ -1098,9 +1108,14 @@ class OpenShellSpawner(AgentSpawner):
             # overridden by the spawner's own default (issue #192).
             # Filter credential keys from server_env as well -- start_server
             # execs inside the sandbox, so env there would also expose the
-            # real credential to the sandboxed process (issue #199).
-            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
-            server_env = {**self._extra_env, **filtered_env}
+            # real credential to the sandboxed process (issue #199). MCP
+            # secrets are likewise filtered: they were already delivered as
+            # files above, and exec env is inlined into the gateway's
+            # command string. Filtering happens after the merge so an
+            # extra_env entry can't reintroduce one of these keys.
+            secret_keys = cred_keys | mcp_secret_keys
+            merged_env = {**self._extra_env, **env}
+            server_env = {k: v for k, v in merged_env.items() if k not in secret_keys}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
@@ -1604,7 +1619,7 @@ class OpenShellSpawner(AgentSpawner):
 
             await self._exec_mkdir(sandbox_id, mount_path)
             file_path = posixpath.join(mount_path, key)
-            await self._do_write_file(agent_name, file_path, secret_value)
+            await self._write_secret_file(sandbox_id, file_path, secret_value)
             logger.info(
                 "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
                 mount_path,
@@ -1612,17 +1627,71 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
             )
 
-    async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
-        """Create a directory inside the sandbox."""
+    async def _write_secret_file(self, sandbox_id: str, path: str, content: str) -> None:
+        """Write a secret file inside the sandbox, passing its bytes on exec stdin.
 
-        def _sync_mkdir() -> None:
-            for _ in self._client.exec_stream(
+        Unlike _do_write_file(), the content never appears in the exec
+        command or env: the gateway joins those into a single command
+        string and logs a prefix of it, so anything placed there can end
+        up in gateway logs. The path is passed as a positional argument
+        to a fixed script rather than interpolated into it, and the file
+        is created owner-only (umask 077).
+
+        Raises:
+            RuntimeError: If the content exceeds _MAX_EXEC_STDIN_BYTES, the
+                exec fails, or the write exits nonzero. exec_stream() does
+                not raise on a nonzero exit by itself (see
+                _materialize_allowed_skills()).
+        """
+        data = content.encode()
+        if len(data) > self._MAX_EXEC_STDIN_BYTES:
+            raise RuntimeError(
+                f"Secret for {path} is {len(data)} bytes, which exceeds the "
+                f"{self._MAX_EXEC_STDIN_BYTES}-byte limit for exec stdin delivery"
+            )
+
+        cmd = ["sh", "-c", 'umask 077; cat > "$1"', "sh", path]
+        try:
+
+            def _sync_exec() -> Any:
+                result = None
+                for item in self._client.exec_stream(sandbox_id, cmd, stdin=data):
+                    if hasattr(item, "exit_code"):
+                        result = item
+                return result
+
+            result = await asyncio.to_thread(_sync_exec)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"Failed to write {path} to sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
+
+    async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
+        """Create a directory inside the sandbox.
+
+        Raises:
+            RuntimeError: If mkdir exits nonzero.
+        """
+
+        def _sync_mkdir() -> Any:
+            result = None
+            for item in self._client.exec_stream(
                 sandbox_id,
                 ["mkdir", "-p", path],
             ):
-                pass
+                if hasattr(item, "exit_code"):
+                    result = item
+            return result
 
-        await asyncio.to_thread(_sync_mkdir)
+        result = await asyncio.to_thread(_sync_mkdir)
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"mkdir {path} failed in sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def _materialize_allowed_skills(self, sandbox_id: str, allowed_skills: list[str]) -> None:
         """Copy the allowed_skills subset into the provider-listable skills dir.

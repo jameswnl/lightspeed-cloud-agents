@@ -3422,7 +3422,7 @@ class TestMCPSecretInjection:
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
         mock_mkdir = mocker.patch.object(spawner, "_exec_mkdir")
-        mock_write = mocker.patch.object(spawner, "_do_write_file")
+        mock_write = mocker.patch.object(spawner, "_write_secret_file")
 
         mounts = [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")]
 
@@ -3434,7 +3434,7 @@ class TestMCPSecretInjection:
 
         mock_mkdir.assert_called_once_with("uuid-1", "/var/secrets/mcp/kubectl/")
         mock_write.assert_called_once_with(
-            "agent-1",
+            "uuid-1",
             "/var/secrets/mcp/kubectl/api-key",
             "secret-value",
         )
@@ -3448,13 +3448,369 @@ class TestMCPSecretInjection:
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
-        mock_write = mocker.patch.object(spawner, "_do_write_file")
+        mock_write = mocker.patch.object(spawner, "_write_secret_file")
 
         mounts = [("missing-secret", "key", "/var/secrets/mcp/s/")]
 
         await spawner._inject_mcp_secrets("agent-1", mounts, {})
 
         mock_write.assert_not_called()
+
+    @staticmethod
+    def _recording_exec_stream(
+        calls: list[dict[str, Any]],
+        fail_writes: bool = False,
+        write_exit_code: int = 0,
+        mkdir_exit_code: int = 0,
+    ):
+        """Recording stub matching openshell 0.0.111's SandboxClient.exec_stream().
+
+        Real signature: exec_stream(sandbox_id, command, *, workdir=None,
+        env=None, stdin=None, timeout_seconds=None) -> Iterator[ExecChunk |
+        ExecResult]. Keyword-only parameters are kept keyword-only so a call
+        that doesn't match the real SDK fails here too.
+        """
+
+        class _ExecResult:
+            stdout = ""
+
+            def __init__(self, exit_code: int) -> None:
+                self.exit_code = exit_code
+                self.stderr = "" if exit_code == 0 else "Permission denied"
+
+        def exec_stream(
+            sandbox_id: str,
+            command: Any,
+            *,
+            workdir: str | None = None,
+            env: Any = None,
+            stdin: bytes | None = None,
+            timeout_seconds: int | None = None,
+        ) -> Iterator[Any]:
+            calls.append(
+                {
+                    "sandbox_id": sandbox_id,
+                    "command": list(command),
+                    "workdir": workdir,
+                    "env": dict(env or {}),
+                    "stdin": stdin,
+                }
+            )
+            if fail_writes and command[0] != "mkdir":
+                raise ConnectionError("sandbox unreachable")
+            is_mkdir = command[0] == "mkdir"
+            yield _ExecResult(mkdir_exit_code if is_mkdir else write_exit_code)
+
+        return exec_stream
+
+    @pytest.mark.asyncio
+    async def test_secret_value_delivered_via_stdin_not_command_or_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No exec command or env carries the secret (raw or base64); stdin does.
+
+        The gateway inlines exec env/command into one string and logs a
+        prefix of it, so secret material must only travel on stdin.
+        """
+        import base64
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        await spawner._inject_mcp_secrets(
+            "agent-1",
+            [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            {"my-secret": secret},
+        )
+
+        encoded = base64.b64encode(secret.encode()).decode()
+        assert calls, "expected at least one exec call"
+        for call in calls:
+            haystack = " ".join(call["command"]) + " " + " ".join(call["env"].values())
+            assert secret not in haystack
+            assert encoded not in haystack
+            assert encoded[:16] not in haystack
+
+        stdin_calls = [c for c in calls if c["stdin"]]
+        assert len(stdin_calls) == 1
+        write_call = stdin_calls[0]
+        assert write_call["stdin"] == secret.encode()
+        assert write_call["sandbox_id"] == "uuid-1"
+        assert "/var/secrets/mcp/kubectl/api-key" in write_call["command"]
+        # File is created owner-only (no group/other access).
+        assert "umask 077" in " ".join(write_call["command"])
+
+    @pytest.mark.asyncio
+    async def test_rejects_secret_exceeding_exec_stdin_cap(self, mocker: MockerFixture) -> None:
+        """A secret too large for one exec request fails clearly, before any write."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        # The gateway caps a whole exec request (stdin included) at 1 MiB.
+        oversize = "x" * (1024 * 1024)
+
+        with pytest.raises(RuntimeError, match="exceeds"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("big-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"big-secret": oversize},
+            )
+
+        assert not [c for c in calls if c["stdin"]]
+
+    @pytest.mark.asyncio
+    async def test_exec_failure_raises_runtime_error(self, mocker: MockerFixture) -> None:
+        """An exec transport failure while writing surfaces as RuntimeError."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, fail_writes=True)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": "secret-value"},
+            )
+
+    @staticmethod
+    def _make_spawner_for_spawn(
+        mocker: MockerFixture, exec_stream: Any, extra_env: dict[str, str] | None = None
+    ) -> Any:
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream = exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, extra_env=extra_env)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(spawner, "start_server", new_callable=mocker.AsyncMock)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+        mocker.patch.object(spawner, "_wait_ready_with_host", return_value=True)
+        return spawner, mock_client
+
+    @pytest.mark.asyncio
+    async def test_oversize_secret_during_spawn_deletes_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Rejecting an oversize secret goes through spawn()'s orphan cleanup."""
+
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls)
+        )
+        # The gateway caps a whole exec request (stdin included) at 1 MiB.
+        oversize = "x" * (1024 * 1024)
+
+        with pytest.raises(RuntimeError, match="exceeds"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"big-secret": oversize},
+                mcp_secret_mounts=[("big-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+
+    @pytest.mark.asyncio
+    async def test_write_failure_during_spawn_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """A failed secret write goes through spawn()'s orphan cleanup."""
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls, fail_writes=True)
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"my-secret": "secret-value"},
+                mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_not_forwarded_to_server_exec_env(self, mocker: MockerFixture) -> None:
+        """MCP secret values are written to their file only, not start_server's exec env."""
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        spawner, _ = self._make_spawner_for_spawn(mocker, self._recording_exec_stream(calls))
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"my-secret": secret, "LIGHTSPEED_MODEL": "m"},
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        server_env = spawner.start_server.call_args.kwargs["env"]
+        assert "my-secret" not in server_env
+        assert secret not in server_env.values()
+        assert server_env["LIGHTSPEED_MODEL"] == "m"
+        # The secret still reaches its file, via stdin.
+        assert [c["stdin"] for c in calls if c["stdin"]] == [secret.encode()]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_raises_without_secret(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from the secret write raises; the message omits the secret."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, write_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="Failed to write") as exc_info:
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": secret},
+            )
+
+        assert secret not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_nonzero_mkdir_exit_raises(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from mkdir raises before the secret is written."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, mkdir_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="mkdir"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": "secret-value"},
+            )
+
+        assert not [c for c in calls if c["stdin"]]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_during_spawn_deletes_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A nonzero secret-write exit goes through spawn()'s orphan cleanup."""
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls, write_exit_code=1)
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"my-secret": "secret-value"},
+                mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+        spawner.start_server.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extra_env_cannot_reintroduce_secret_keys_into_server_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """extra_env keys matching a credential or MCP secret key are filtered too."""
+        calls: list[dict[str, Any]] = []
+        spawner, _ = self._make_spawner_for_spawn(
+            mocker,
+            self._recording_exec_stream(calls),
+            extra_env={
+                "my-secret": "extra-env-mcp-value",
+                "OPENAI_API_KEY": "extra-env-cred-value",
+                "PYTHONPATH": "/opt/lightspeed/src",
+            },
+        )
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={
+                "LIGHTSPEED_PROVIDER": "openai",
+                "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                "my-secret": "secret-value",
+            },
+            credential_secret_name="openai-api-key",
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        server_env = spawner.start_server.call_args.kwargs["env"]
+        assert "my-secret" not in server_env
+        assert "OPENAI_API_KEY" not in server_env
+        assert server_env["PYTHONPATH"] == "/opt/lightspeed/src"
+        assert server_env["LIGHTSPEED_PROVIDER"] == "openai"
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_not_copied_into_spec_environment(self, mocker: MockerFixture) -> None:
+        """MCP secret values never reach spec.environment, like provider credentials."""
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls)
+        )
+        spec = mocker.MagicMock()
+        spec.environment = {}
+        spec.providers = []
+        from openshell._proto import openshell_pb2
+
+        mocker.patch.object(openshell_pb2, "SandboxSpec", return_value=spec)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"my-secret": secret, "LIGHTSPEED_MODEL": "m"},
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        assert mock_client.create.call_args.kwargs["spec"] is spec
+        assert "my-secret" not in spec.environment
+        assert secret not in spec.environment.values()
+        assert spec.environment["LIGHTSPEED_MODEL"] == "m"
 
 
 class TestTLSAndServiceAccountSkipped:
