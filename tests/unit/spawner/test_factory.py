@@ -26,6 +26,22 @@ class TestBuildSpawnerOpenShell:
         assert spawner._tls_ca == ""
         assert spawner._bearer_token == ""
 
+    def test_lifetime_settings_forwarded(self, mocker: MockerFixture) -> None:
+        """Owner/lifetime settings reach OpenShellSpawner (stamped as labels on spawn)."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner(
+            "openshell",
+            gateway_url="gw:17670",
+            min_lifetime_seconds=7200,
+            expiry_skew_seconds=30,
+        )
+
+        assert spawner._min_lifetime_seconds == 7200
+        assert spawner._expiry_skew_seconds == 30
+
     def test_strips_http_scheme_from_gateway_url(self, mocker: MockerFixture) -> None:
         """http(s):// prefix is stripped before building the gRPC endpoint."""
         from cloud_agents.spawner.factory import build_spawner

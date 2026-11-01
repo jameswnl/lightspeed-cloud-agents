@@ -1,5 +1,7 @@
 """Unit tests for AgentSpawner base class."""
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -435,3 +437,50 @@ class TestSpawnConfig:
         """Millicore CPU above 4000m is rejected."""
         with pytest.raises(ValidationError, match="cpu_limit"):
             SpawnConfig(cpu_limit="5000m")
+
+
+class TestListSandboxLabelsDefault:
+    """Spawners without label support report no labels, so reconcile treats
+    their sandboxes as having no expiry and never destroys them."""
+
+    @pytest.mark.asyncio
+    async def test_default_returns_empty_labels(self) -> None:
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={})
+
+        assert await spawner.list_sandbox_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]
+
+    @pytest.mark.asyncio
+    async def test_default_destroy_sandbox_not_implemented(self) -> None:
+        """No agent-name fallback: a spawner must implement exact deletion
+        together with list_sandbox_labels()."""
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={})
+
+        with pytest.raises(NotImplementedError):
+            await spawner.destroy_sandbox("a1")
+
+        assert spawner.destroyed == []
+
+    @pytest.mark.asyncio
+    async def test_cancelled_spawn_restores_active_count(self) -> None:
+        class SlowSpawner(MockSpawner):
+            async def _do_spawn(self, *args, **kwargs):
+                await asyncio.sleep(3600)
+
+        spawner = SlowSpawner()
+        task = asyncio.create_task(spawner.spawn("a1", "img", env={}))
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert spawner._active_count == 0
+
+
+class TestSpawnForwardsLifetime:
+    @pytest.mark.asyncio
+    async def test_lifetime_seconds_forwarded_to_do_spawn(self) -> None:
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={}, lifetime_seconds=1234)
+        assert spawner.last_do_spawn_kwargs["lifetime_seconds"] == 1234

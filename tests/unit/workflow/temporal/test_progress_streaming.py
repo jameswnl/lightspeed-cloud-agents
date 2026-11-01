@@ -53,8 +53,17 @@ def _mock_http_success(mocker: MockerFixture) -> MagicMock:
     mock_http = mocker.patch(
         "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
     )
+
+    async def post(*args, **kwargs):
+        # A real agent run takes time; yield so the progress task gets to run
+        # (an AsyncMock returns without ever suspending).
+        await asyncio.sleep(0.05)
+        return mock_response
+
     mock_client_instance = mocker.MagicMock(
-        post=mocker.AsyncMock(return_value=mock_response),
+        post=mocker.AsyncMock(side_effect=post),
+        # The transcript fetch runs after every successful run.
+        get=mocker.AsyncMock(return_value=mocker.MagicMock(status_code=404)),
     )
     mock_http.return_value.__aenter__ = mocker.AsyncMock(
         return_value=mock_client_instance,
@@ -193,6 +202,9 @@ class TestGracefulDegradation:
     async def test_non_openshell_spawner_skips_progress(self, mocker: MockerFixture) -> None:
         """Non-OpenShell spawners skip progress streaming entirely."""
         mock_spawner = mocker.AsyncMock()
+        # Sync on the real spawner; an AsyncMock attribute would return an
+        # un-awaited coroutine.
+        mock_spawner.get_query_ssl_context = mocker.Mock(return_value=None)
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
 
@@ -218,6 +230,9 @@ class TestGracefulDegradation:
         # Just verify isinstance check works by using a plain AsyncMock
         # (which is not an OpenShellSpawner)
         mock_spawner = mocker.AsyncMock()
+        # Sync on the real spawner; an AsyncMock attribute would return an
+        # un-awaited coroutine.
+        mock_spawner.get_query_ssl_context = mocker.Mock(return_value=None)
         mock_spawner.spawn.return_value = "http://pod-1:8080"
         mock_spawner.wait_ready.return_value = True
 
