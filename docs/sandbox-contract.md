@@ -153,7 +153,22 @@ hung gateway can't stall startup or the reaper. If listing stops early (page
 cap, or a page fails after the first), the sandboxes already listed are still
 reaped -- selection is per sandbox -- and a failed page is then raised (at
 startup, as a failed first page always was). A periodic run's errors are
-logged, never raised. `ls_sandbox_reap_failures_total` has the
+logged, never raised.
+
+**Scan cursor.** Startup reconcile scans from offset 0, bounded by the page
+cap. The periodic reaper then continues from where startup stopped, keeping
+an in-memory cursor across runs, so a long prefix of retained sandboxes
+(unexpired, legacy, malformed) can't starve expired ones further down: each
+run lists up to 10 pages from the cursor and wraps to 0 once it reaches the
+end of the listing. The next cursor is the offset after the last page,
+minus the sandboxes the run deleted (later refs shift left by that many),
+minus one page: re-listing the last page tolerates up to a page of refs
+before the cursor being deleted by others (e.g. steps destroying their own
+sandboxes) between runs. Re-seeing a ref is harmless because selection is
+per ref, and every full pass ends with a wrap to 0, so a ref missed by drift
+in one pass is listed in a later one. A run whose list page fails keeps the
+cursor where it was. The cursor isn't persisted: a restarted runner scans
+from 0 again at startup. `ls_sandbox_reap_failures_total` has the
 `SandboxReapFailure` alert (see `docs/operations/runbook.md`). Failed or timed-out calls are counted in
 `ls_sandbox_reap_failures_total{operation="list"|"delete"}`, reaped
 sandboxes in `ls_sandbox_orphans_cleaned_total`. The reaper is cancelled on

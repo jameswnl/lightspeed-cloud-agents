@@ -94,7 +94,8 @@ DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS = 300
 # Bound on each gateway call (list page, delete) a reconcile run makes, so a
 # hung gateway can't stall startup or the reaper.
 SANDBOX_REAP_CALL_TIMEOUT_SECONDS = 30
-# Cap on list pages per reconcile run; sandboxes past it wait for a later run.
+# Cap on list pages per reconcile run. Startup scans from offset 0; the
+# periodic reaper then continues from where the previous run stopped.
 SANDBOX_REAP_MAX_PAGES = 10
 
 
@@ -170,8 +171,12 @@ def _create_spawner():
 
 
 async def reconcile_orphaned_sandboxes(
-    spawner: AgentSpawner | None, now: float | None = None, *, trigger: str = "startup"
-) -> None:
+    spawner: AgentSpawner | None,
+    now: float | None = None,
+    *,
+    trigger: str = "startup",
+    offset: int = 0,
+) -> int:
     """Destroy expired orphaned sandboxes left from a previous crash.
 
     Runs on startup and then periodically (start_sandbox_reaper()). Lists
@@ -187,16 +192,30 @@ async def reconcile_orphaned_sandboxes(
 
     Each list page and each delete is bounded by
     SANDBOX_REAP_CALL_TIMEOUT_SECONDS, and a run lists at most
-    SANDBOX_REAP_MAX_PAGES pages. If listing stops early (page cap, or a page
-    fails), the sandboxes already listed are still reaped: selection is per
-    sandbox, so a partial listing never widens it. Several replicas may
-    reconcile at once; the spawner treats deleting an already-deleted sandbox
-    as success.
+    SANDBOX_REAP_MAX_PAGES pages starting at offset. If listing stops early
+    (page cap, or a page fails), the sandboxes already listed are still
+    reaped: selection is per sandbox, so a partial listing never widens it.
+    Several replicas may reconcile at once; the spawner treats deleting an
+    already-deleted sandbox as success.
+
+    The return value is where the next run should start, so a capped scan
+    is resumable rather than restarting at 0 and starving sandboxes past the
+    cap: 0 once the listing's end was reached (wrap around), otherwise the
+    offset after the last page minus the sandboxes this run deleted (later
+    refs shift left by that many) minus the last page's length. Re-listing
+    the last page tolerates up to a page of refs before the cursor being
+    deleted by others between runs; re-seeing a ref is harmless because
+    selection is per ref, and every full pass ends with a wrap to 0, so a
+    ref missed by drift in one pass is listed in a later one.
 
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
         now: Current unix time; defaults to time.time(). Injectable for tests.
         trigger: "startup" or "reaper", for logs and the audit event.
+        offset: Listing offset to start from (0, or a previous return value).
+
+    Returns:
+        The offset for the next run to start from.
 
     Raises:
         Exception: If a list page fails or times out (counted in
@@ -205,7 +224,7 @@ async def reconcile_orphaned_sandboxes(
             raised.
     """
     if spawner is None:
-        return
+        return 0
     from cloud_agents.workflow.executor.temporal.metrics import (
         ls_sandbox_orphans_cleaned_total,
         ls_sandbox_reap_failures_total,
@@ -215,11 +234,12 @@ async def reconcile_orphaned_sandboxes(
 
     listed: list[tuple[str, dict[str, str]]] = []
     list_error: Exception | None = None
-    offset: int | None = 0
+    page: list[tuple[str, dict[str, str]]] = []
+    next_offset: int | None = offset
     for _ in range(SANDBOX_REAP_MAX_PAGES):
         try:
-            page, offset = await await_within(
-                spawner.list_sandbox_labels_page(SPAWNED_BY_LABEL, offset or 0),
+            page, next_offset = await await_within(
+                spawner.list_sandbox_labels_page(SPAWNED_BY_LABEL, next_offset or 0),
                 SANDBOX_REAP_CALL_TIMEOUT_SECONDS,
                 what="Orphaned sandbox list page",
             )
@@ -231,12 +251,13 @@ async def reconcile_orphaned_sandboxes(
             list_error = exc
             break
         listed.extend(page)
-        if offset is None:
+        if next_offset is None:
             break
     else:
-        logger.warning(
-            "Stopped listing sandboxes after %d page(s); the rest wait for a later run",
+        logger.info(
+            "Listed %d page(s) from offset %d; the next reaper run continues from there",
             SANDBOX_REAP_MAX_PAGES,
+            offset,
         )
     orphans = []
     no_expiry = 0
@@ -291,6 +312,9 @@ async def reconcile_orphaned_sandboxes(
         )
     if list_error is not None:
         raise list_error
+    if next_offset is None:
+        return 0
+    return max(offset, next_offset - cleaned - len(page))
 
 
 def start_sandbox_reaper(
@@ -298,6 +322,7 @@ def start_sandbox_reaper(
     interval: float,
     *,
     clock: Callable[[], float] = time.time,
+    offset: int = 0,
 ) -> asyncio.Task[None] | None:
     """Start re-running reconcile_orphaned_sandboxes() every interval seconds.
 
@@ -306,6 +331,12 @@ def start_sandbox_reaper(
     previous run is still in progress is skipped. Each run's gateway calls
     are bounded, and its errors are logged, never raised.
 
+    The reaper keeps an in-memory listing cursor: each run continues from
+    the offset the previous run returned (the first from offset, i.e. where
+    startup reconcile stopped), wrapping to 0 at the listing's end. A run
+    that fails keeps the cursor where it was. The cursor isn't persisted: a
+    restarted process scans from 0 again at startup.
+
     Returns:
         The reaper task, for stop_sandbox_reaper(); None if there's no
         spawner or interval is 0 (disabled).
@@ -313,7 +344,9 @@ def start_sandbox_reaper(
     if spawner is None or interval == 0:
         return None
     logger.info("Sandbox reaper started (every %gs)", interval)
-    return asyncio.create_task(_reap_periodically(spawner, interval, clock), name="sandbox-reaper")
+    return asyncio.create_task(
+        _reap_periodically(spawner, interval, clock, offset), name="sandbox-reaper"
+    )
 
 
 async def stop_sandbox_reaper(task: asyncio.Task[None] | None) -> None:
@@ -323,26 +356,32 @@ async def stop_sandbox_reaper(task: asyncio.Task[None] | None) -> None:
 
 
 async def _reap_periodically(
-    spawner: AgentSpawner, interval: float, clock: Callable[[], float]
+    spawner: AgentSpawner, interval: float, clock: Callable[[], float], offset: int
 ) -> None:
-    run: asyncio.Task[None] | None = None
+    run: asyncio.Task[int] | None = None
     try:
         while True:
             await asyncio.sleep(interval)
-            if run is not None and not run.done():
-                logger.warning("Skipping sandbox reaper run: previous run still in progress")
-                continue
-            run = asyncio.create_task(_reap_once(spawner, clock))
+            if run is not None:
+                if not run.done():
+                    logger.warning("Skipping sandbox reaper run: previous run still in progress")
+                    continue
+                offset = run.result()
+            run = asyncio.create_task(_reap_once(spawner, clock, offset))
     finally:
         if run is not None and not run.done():
             await cancel_within(run, what="Sandbox reaper run")
 
 
-async def _reap_once(spawner: AgentSpawner, clock: Callable[[], float]) -> None:
+async def _reap_once(spawner: AgentSpawner, clock: Callable[[], float], offset: int) -> int:
+    """One reaper run from offset; returns the next cursor (unchanged on failure)."""
     try:
-        await reconcile_orphaned_sandboxes(spawner, now=clock(), trigger="reaper")
+        return await reconcile_orphaned_sandboxes(
+            spawner, now=clock(), trigger="reaper", offset=offset
+        )
     except Exception as exc:
         logger.error("Sandbox reaper run failed: %s", exc)
+        return offset
 
 
 CONTENT_POLICY_PATH = os.environ.get("CONTENT_POLICY_PATH", "")
@@ -433,7 +472,9 @@ def build_temporal_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
-        await reconcile_orphaned_sandboxes(spawner)
+        # Startup scans from offset 0 (bounded by SANDBOX_REAP_MAX_PAGES); the
+        # reaper continues from where it stopped.
+        reap_offset = await reconcile_orphaned_sandboxes(spawner)
         reaper = None
 
         # Connect transcript store (best-effort: failures are non-fatal)
@@ -448,7 +489,7 @@ def build_temporal_app(
                 )
 
         try:
-            reaper = start_sandbox_reaper(spawner, reap_interval)
+            reaper = start_sandbox_reaper(spawner, reap_interval, offset=reap_offset)
             tls_config = _build_tls_config()
             connect_kwargs: dict = {
                 "target_host": temporal_url,

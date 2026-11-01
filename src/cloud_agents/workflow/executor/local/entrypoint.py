@@ -68,8 +68,10 @@ def build_local_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect stores and clean up orphans on startup."""
-        await reconcile_orphaned_sandboxes(spawner)
-        reaper = start_sandbox_reaper(spawner, reap_interval)
+        # Startup scans from offset 0 (bounded by SANDBOX_REAP_MAX_PAGES); the
+        # reaper continues from where it stopped.
+        reap_offset = await reconcile_orphaned_sandboxes(spawner)
+        reaper = start_sandbox_reaper(spawner, reap_interval, offset=reap_offset)
         try:
             if transcript_store:
                 try:

@@ -987,11 +987,12 @@ class TestPagedListing:
         gateway = _FakeGateway(self._expired(5))
         spawner = _real_spawner(mocker, gateway)
 
-        with caplog.at_level("WARNING"):
-            await reconcile_orphaned_sandboxes(spawner, now=NOW)
+        with caplog.at_level("INFO"):
+            resume = await reconcile_orphaned_sandboxes(spawner, now=NOW)
 
         assert sorted(gateway.deleted) == ["sb-0", "sb-1", "sb-2", "sb-3"]
         assert "2 page(s)" in caplog.text
+        assert resume == 0  # all 4 listed were deleted; sb-4 is now at index 0
 
     @pytest.mark.asyncio
     async def test_base_spawner_lists_as_one_page(self) -> None:
@@ -1014,6 +1015,193 @@ class TestPagedListing:
                 pass
 
         assert await Minimal().list_sandbox_labels_page() == ([("a1", {})], None)
+
+
+def _retained_prefix() -> list[_FakeRef]:
+    """Five refs reconcile must keep: unexpired, legacy, no-expiry, malformed."""
+    return [
+        _FakeRef("sb-live1", _labels("ca-l1", FUTURE)),
+        _FakeRef("sb-legacy", {"spawned-by": "workflow-runner"}),
+        _FakeRef("sb-noexp", _labels("ca-n")),
+        _FakeRef("sb-weird", _labels("ca-w", "soon")),
+        _FakeRef("sb-live2", _labels("ca-l2", FUTURE)),
+    ]
+
+
+class TestResumableScan:
+    """With a page cap, each periodic run continues from where the previous
+    one stopped (wrapping to 0 at the end), so a long prefix of retained
+    sandboxes can't starve expired ones further down the listing."""
+
+    @pytest.fixture(autouse=True)
+    def _small_pages(self, mocker):
+        from cloud_agents.spawner import lifetime
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mocker.patch.object(OpenShellSpawner, "_LIST_PAGE_SIZE", 2)
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_MAX_PAGES", 2)
+        mocker.patch.object(lifetime, "SANDBOX_CANCEL_GRACE_SECONDS", 0.2)
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_CALL_TIMEOUT_SECONDS", 0.5)
+
+    @staticmethod
+    def _counting(gateway: _FakeGateway) -> list[int]:
+        """Record the offset of every list call."""
+        offsets: list[int] = []
+        real_list = gateway.list
+
+        def list_(**kwargs):
+            offsets.append(kwargs["offset"])
+            return real_list(**kwargs)
+
+        gateway.list = list_
+        return offsets
+
+    @pytest.mark.asyncio
+    async def test_retained_prefix_does_not_starve_tail_across_ticks(self, mocker) -> None:
+        prefix = _retained_prefix()
+        gateway = _FakeGateway([*prefix, _FakeRef("sb-tail", _labels("ca-t", PAST))])
+        offsets = self._counting(gateway)
+        spawner = _real_spawner(mocker, gateway)
+        start = time.monotonic()
+
+        task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=_AdvancingClock(step=0))
+        try:
+            await _until(lambda: gateway.deleted)
+        finally:
+            await entrypoint.stop_sandbox_reaper(task)
+
+        assert gateway.deleted == ["sb-tail"]
+        assert set(gateway.refs) == {r.name for r in prefix}
+        assert max(offsets) >= 4  # got past the 2-page budget
+        assert time.monotonic() - start < 3
+
+    @pytest.mark.asyncio
+    async def test_offset_zero_every_run_would_starve(self, mocker) -> None:
+        """Control: without the cursor (every run from 0) sb-tail is never
+        listed, which is the starvation the cursor fixes."""
+        gateway = _FakeGateway([*_retained_prefix(), _FakeRef("sb-tail", _labels("ca-t", PAST))])
+        spawner = _real_spawner(mocker, gateway)
+
+        for _ in range(5):
+            await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=0)
+
+        assert gateway.deleted == []
+
+    @pytest.mark.asyncio
+    async def test_cursor_reaches_tail_within_bounded_runs(self, mocker) -> None:
+        gateway = _FakeGateway([*_retained_prefix(), _FakeRef("sb-tail", _labels("ca-t", PAST))])
+        spawner = _real_spawner(mocker, gateway)
+
+        offset, runs = 0, 0
+        while not gateway.deleted:
+            offset = await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=offset)
+            runs += 1
+            assert runs <= 4
+
+    @pytest.mark.asyncio
+    async def test_own_deletions_shift_resume_offset(self, mocker) -> None:
+        """Deleting k listed refs shifts later refs k places left; resuming
+        at the old next offset would skip the expired refs that moved in."""
+        expired = [_FakeRef(f"sb-e{i}", _labels(f"ca-e{i}", PAST)) for i in range(6)]
+        retained = [_FakeRef(f"sb-r{i}", _labels(f"ca-r{i}", FUTURE)) for i in range(6)]
+        gateway = _FakeGateway([*expired, *retained])
+        spawner = _real_spawner(mocker, gateway)
+
+        offset = await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=0)
+        assert sorted(gateway.deleted) == [f"sb-e{i}" for i in range(4)]
+        assert offset == 0  # not 4: sb-e4, sb-e5 now sit at 0 and 1
+
+        await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=offset)
+        assert sorted(gateway.deleted) == [f"sb-e{i}" for i in range(6)]
+
+    @pytest.mark.asyncio
+    async def test_external_deletions_between_runs_skip_nothing(self, mocker) -> None:
+        """Up to a page of refs before the cursor deleted by others between
+        runs (e.g. steps destroying their sandboxes) doesn't skip anything:
+        each run re-lists its last page."""
+        retained = [_FakeRef(f"sb-r{i}", _labels(f"ca-r{i}", FUTURE)) for i in range(4)]
+        gateway = _FakeGateway(
+            [*retained, _FakeRef("sb-tail", _labels("ca-t", PAST)), *_retained_prefix()]
+        )
+        spawner = _real_spawner(mocker, gateway)
+
+        offset = await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=0)
+        for name in ("sb-r0", "sb-r1"):  # destroyed by their own steps
+            del gateway.refs[name]
+        await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=offset)
+
+        assert gateway.deleted == ["sb-tail"]
+
+    @pytest.mark.asyncio
+    async def test_wraps_to_zero_after_end(self, mocker) -> None:
+        gateway = _FakeGateway(_retained_prefix())
+        spawner = _real_spawner(mocker, gateway)
+
+        offset, seen = 0, []
+        for _ in range(4):
+            offset = await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=offset)
+            seen.append(offset)
+        assert 0 in seen[1:]  # wrapped after reaching the end
+
+        # A ref that expires before the cursor is reaped after the wrap.
+        gateway.refs["sb-live1"].labels[EXPIRES_KEY] = PAST
+        for _ in range(4):
+            offset = await reconcile_orphaned_sandboxes(spawner, now=NOW, offset=offset)
+        assert gateway.deleted == ["sb-live1"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_replica_deletions_are_harmless(self, mocker) -> None:
+        """Two replicas with independent cursors over the same gateway: each
+        expired ref is deleted once, NOT_FOUND counts as success, nothing
+        retained is deleted."""
+        prefix = _retained_prefix()
+        tail = [_FakeRef(f"sb-t{i}", _labels(f"ca-t{i}", PAST)) for i in range(3)]
+        gateway = _SharedGateway([*prefix, *tail])
+        replica_a = _real_spawner(mocker, gateway)
+        replica_b = _real_spawner(mocker, gateway)
+        before = _counter("ls_sandbox_reap_failures_total", {"operation": "delete"})
+
+        a = b = 0
+        for _ in range(5):
+            a, b = await asyncio.gather(
+                reconcile_orphaned_sandboxes(replica_a, now=NOW, offset=a),
+                reconcile_orphaned_sandboxes(replica_b, now=NOW, offset=b),
+            )
+
+        assert sorted(set(gateway.deleted)) == ["sb-t0", "sb-t1", "sb-t2"]
+        assert set(gateway.refs) == {r.name for r in prefix}
+        assert _counter("ls_sandbox_reap_failures_total", {"operation": "delete"}) == before
+
+    @pytest.mark.asyncio
+    async def test_failed_page_keeps_cursor(self, mocker) -> None:
+        """A run whose page fails raises; the reaper retries from the same
+        cursor rather than advancing past refs it never listed."""
+        gateway = _HangingListGateway(
+            [*_retained_prefix(), _FakeRef("sb-tail", _labels("ca-t", PAST))], hang_on=(2,)
+        )
+        offsets = self._counting(gateway)
+        spawner = _real_spawner(mocker, gateway)
+
+        try:
+            assert await entrypoint._reap_once(spawner, lambda: NOW, 0) == 0  # failed
+            assert await entrypoint._reap_once(spawner, lambda: NOW, 0) == 2
+        finally:
+            gateway.release.set()
+        assert offsets[:2] == [0, 2] and offsets[2] == 0
+
+    @pytest.mark.asyncio
+    async def test_reaper_starts_from_given_offset(self, mocker) -> None:
+        gateway = _FakeGateway(_retained_prefix())
+        offsets = self._counting(gateway)
+        spawner = _real_spawner(mocker, gateway)
+
+        task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, offset=4)
+        try:
+            await _until(lambda: offsets)
+        finally:
+            await entrypoint.stop_sandbox_reaper(task)
+
+        assert offsets[0] == 4
 
 
 class TestReaperIntervalSetting:
@@ -1096,6 +1284,41 @@ class TestReaperInLifespans:
         await asyncio.sleep(0)
 
         assert _reaper_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_local_lifespan_seeds_reaper_with_startup_cursor(
+        self, mocker, monkeypatch
+    ) -> None:
+        from cloud_agents.workflow.executor.local import entrypoint as local_entrypoint
+
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "3600")
+        spawner = _fake_spawner({})
+        mocker.patch.object(local_entrypoint, "_create_spawner", return_value=spawner)
+        mocker.patch.object(local_entrypoint, "reconcile_orphaned_sandboxes", return_value=7)
+        start = mocker.spy(local_entrypoint, "start_sandbox_reaper")
+        app = local_entrypoint.build_local_app()
+
+        async with app.router.lifespan_context(app):
+            pass
+
+        assert start.call_args.kwargs["offset"] == 7
+
+    @pytest.mark.asyncio
+    async def test_temporal_lifespan_seeds_reaper_with_startup_cursor(
+        self, mocker, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "3600")
+        monkeypatch.delenv("TRANSCRIPT_DB_URL", raising=False)
+        mocker.patch.object(entrypoint, "_create_spawner", return_value=_fake_spawner({}))
+        mocker.patch.object(entrypoint.Client, "connect", side_effect=RuntimeError("no temporal"))
+        mocker.patch.object(entrypoint, "reconcile_orphaned_sandboxes", return_value=7)
+        start = mocker.spy(entrypoint, "start_sandbox_reaper")
+        app = entrypoint.build_temporal_app()
+
+        async with app.router.lifespan_context(app):
+            pass
+
+        assert start.call_args.kwargs["offset"] == 7
 
     @pytest.mark.asyncio
     async def test_lifespan_reaper_disabled(self, mocker, monkeypatch) -> None:
