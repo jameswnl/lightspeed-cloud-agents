@@ -368,6 +368,12 @@ class OpenShellSpawner(AgentSpawner):
         """
         super().__init__(**kwargs)
         self._owner_instance = owner_instance
+        for name, value in (
+            ("min_lifetime_seconds", min_lifetime_seconds),
+            ("expiry_skew_seconds", expiry_skew_seconds),
+        ):
+            if value < 0:
+                raise ValueError(f"{name} must not be negative, got {value}")
         self._min_lifetime_seconds = min_lifetime_seconds
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock

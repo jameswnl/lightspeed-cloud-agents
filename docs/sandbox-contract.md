@@ -150,11 +150,14 @@ call site passes its own lifetime:
   `timeout_seconds`, `permissions.timeout_seconds`; each defaulting to 600)
   + 300s gateway ready wait + 60s HTTP ready wait + 180s activity heartbeat
   timeout (a timed-out activity only learns of cancellation via a heartbeat)
-  + 120s destroy grace. Each retry attempt spawns a new sandbox (the attempt
+  + 30s transcript fetch (its own wall-clock bound) + 120s destroy grace. The
+  local engine enforces the HTTP timeout as an overall deadline on the run
+  call, since httpx's own timeout is per read. Each retry attempt spawns a new sandbox (the attempt
   number is part of the `ca-` name; the activity itself runs with
   `maximum_attempts=1`), so the lifetime is per attempt.
 - CLI sessions: `max_session_seconds` + the timeout monitor's check interval
-  + 300s + 60s + 120s.
+  + 300s + 60s + 120s, but only while the launcher's timeout monitor is
+  running; otherwise no lifetime (and no `expires-at`) is set.
 - A spawn with no lifetime gets no `expires-at`, so only its owner can reap it.
 
 `SANDBOX_MIN_LIFETIME_SECONDS` (default 86400) is a floor, not a cap: it only
@@ -185,8 +188,25 @@ gateway needs, as in `cloud_agents/spawner/factory.py`):
 from openshell import SandboxClient
 
 client = SandboxClient(endpoint="<gateway host:port>")
-for ref in client.list(workspace="default", label_selector="spawned-by=workflow-runner", limit=1000):
-    if "cloud-agents/owner-instance" not in ref.labels and "cloud-agents/expires-at" not in ref.labels:
-        print("deleting", ref.name)
-        client.delete(ref.name, workspace="default")
+legacy, offset, page = [], 0, 100
+while True:
+    refs = client.list(
+        workspace="default",
+        label_selector="spawned-by=workflow-runner",
+        limit=page,
+        offset=offset,
+    )
+    legacy += [
+        ref.name
+        for ref in refs
+        if "cloud-agents/owner-instance" not in ref.labels
+        and "cloud-agents/expires-at" not in ref.labels
+    ]
+    if len(refs) < page:
+        break
+    offset += page
+# Delete after listing so deletions don't shift later pages.
+for name in legacy:
+    print("deleting", name)
+    client.delete(name, workspace="default")
 ```

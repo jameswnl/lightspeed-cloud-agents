@@ -109,6 +109,7 @@ class TestCLISessionLauncherLaunch:
         spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
 
         launcher = CLISessionLauncher(max_session_seconds=7200)
+        launcher.start_timeout_monitor(spawner)
         await launcher.launch(
             spawner=spawner,
             context_markdown="# ctx",
@@ -120,6 +121,25 @@ class TestCLISessionLauncherLaunch:
         lifetime = spawner.spawn.call_args.kwargs["lifetime_seconds"]
         assert lifetime == cli_session_lifetime_seconds(7200, launcher._check_interval)
         assert lifetime > 7200
+        await launcher.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_launch_without_timeout_monitor_has_no_lifetime(self) -> None:
+        """Without the timeout monitor nothing enforces max_session_seconds, so
+        no lifetime (no expiry) is claimed -- only the owner may reap it."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        launcher = CLISessionLauncher(max_session_seconds=7200)
+        await launcher.launch(
+            spawner=spawner,
+            context_markdown="# ctx",
+            prompt="p",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-abc",
+        )
+
+        assert spawner.spawn.call_args.kwargs["lifetime_seconds"] is None
 
     @pytest.mark.asyncio
     async def test_launch_returns_session_id(self) -> None:

@@ -579,6 +579,14 @@ class TestOpenShellSpawnerSpawn:
 
         assert "cloud-agents/expires-at" not in mock_client.create.call_args.kwargs["labels"]
 
+    @pytest.mark.parametrize("kwargs", [{"min_lifetime_seconds": -1}, {"expiry_skew_seconds": -1}])
+    def test_negative_lifetime_settings_rejected(self, mocker: MockerFixture, kwargs) -> None:
+        """A negative floor/skew could stamp an expiry before the sandbox's end."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        with pytest.raises(ValueError, match=next(iter(kwargs))):
+            OpenShellSpawner(openshell_client=mocker.Mock(), **kwargs)
+
     @pytest.mark.asyncio
     async def test_spawn_strips_reserved_caller_labels_when_unconfigured(
         self, mocker: MockerFixture

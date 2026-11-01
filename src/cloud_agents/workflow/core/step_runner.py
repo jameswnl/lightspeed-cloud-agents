@@ -27,6 +27,7 @@ from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.lifetime import (
     DEFAULT_STEP_TIMEOUT_SECONDS,
+    SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
     step_sandbox_lifetime_seconds,
 )
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
@@ -77,11 +78,17 @@ async def _collect_transcript(
     empty = StepTranscript(step_name=step_name)
 
     try:
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await client.get(
-                f"{endpoint}/v1/agent/events",
-                headers=http_headers or None,
-            )
+        # Own short bound rather than the step-sized run timeout, as a
+        # wall-clock deadline (httpx's timeout is per read), so the fetch fits
+        # the sandbox lifetime in cloud_agents.spawner.lifetime.
+        async with asyncio.timeout(SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(
+                **{**client_kwargs, "timeout": SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS}
+            ) as client:
+                response = await client.get(
+                    f"{endpoint}/v1/agent/events",
+                    headers=http_headers or None,
+                )
 
         if response.status_code == 404:
             return empty
@@ -435,11 +442,15 @@ async def _run_step_inner(
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     try:
-                        response = await client.post(
-                            f"{endpoint}/v1/agent/run",
-                            json=request_body,
-                            headers=http_headers or None,
-                        )
+                        # httpx's timeout is per read; enforce http_timeout as
+                        # an overall deadline (the local engine has no other
+                        # wall-clock bound on the step).
+                        async with asyncio.timeout(http_timeout):
+                            response = await client.post(
+                                f"{endpoint}/v1/agent/run",
+                                json=request_body,
+                                headers=http_headers or None,
+                            )
                     except (ssl.SSLError, httpx.ConnectError) as tls_exc:
                         emit_audit(
                             event_type="tls_error",

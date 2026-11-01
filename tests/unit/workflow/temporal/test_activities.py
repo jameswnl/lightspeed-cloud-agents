@@ -457,7 +457,9 @@ class TestRunSandboxStep:
             spawner=mock_spawner,
         )
 
-        http_init_call = mock_http.call_args
+        # First client is the POST /v1/agent/run; the transcript fetch after it
+        # uses its own short timeout.
+        http_init_call = mock_http.call_args_list[0]
         assert http_init_call[1].get("timeout") == 120.0
 
 

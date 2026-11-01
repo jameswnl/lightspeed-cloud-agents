@@ -170,8 +170,12 @@ class CLISessionLauncher:
                 service_account=service_account,
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
-                lifetime_seconds=cli_session_lifetime_seconds(
-                    self.max_session_seconds, self._check_interval
+                # Only the timeout monitor enforces max_session_seconds;
+                # without it, claim no lifetime so no other replica reaps it.
+                lifetime_seconds=(
+                    cli_session_lifetime_seconds(self.max_session_seconds, self._check_interval)
+                    if self._timeout_task is not None
+                    else None
                 ),
             )
 

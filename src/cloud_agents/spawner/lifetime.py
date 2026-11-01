@@ -37,6 +37,9 @@ SANDBOX_HTTP_READY_TIMEOUT_SECONDS = 60
 # run_sandbox_step's heartbeat_timeout (temporal/workflow.py): cancellation
 # after start_to_close_timeout reaches the activity only via a heartbeat.
 SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS = 180
+# Wall-clock bound on the post-run GET /v1/agent/events transcript fetch,
+# which runs after the Temporal heartbeat loop has stopped.
+SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS = 30
 # Time for the finally-block destroy() to run after the step ends.
 SANDBOX_DESTROY_GRACE_SECONDS = 120
 
@@ -48,8 +51,9 @@ def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
     (Temporal start_to_close_timeout) and permissions.timeout_seconds (the
     sandbox HTTP call timeout, the only bound on the local engine), plus the
     spawn readiness waits, the heartbeat delay before a timed-out activity
-    sees cancellation, and destroy grace. Each retry attempt spawns a fresh
-    sandbox (attempt is part of compute_pod_name()), so this is per attempt.
+    sees cancellation, the transcript fetch, and destroy grace. Each retry
+    attempt spawns a fresh sandbox (attempt is part of compute_pod_name()),
+    so this is per attempt.
     """
     permissions = step.get("permissions") or {}
     run_seconds = max(
@@ -61,6 +65,7 @@ def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
         + SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS
         + SANDBOX_HTTP_READY_TIMEOUT_SECONDS
         + SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS
+        + SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS
         + SANDBOX_DESTROY_GRACE_SECONDS
     )
 

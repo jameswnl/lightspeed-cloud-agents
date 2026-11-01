@@ -25,6 +25,7 @@ from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.lifetime import (
     DEFAULT_STEP_TIMEOUT_SECONDS,
+    SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
     step_sandbox_lifetime_seconds,
 )
 from cloud_agents.workflow.notifiers.escalation import LogPackager
@@ -318,11 +319,17 @@ async def _collect_transcript(
     empty = StepTranscript(step_name=step_name)
 
     try:
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await client.get(
-                f"{endpoint}/v1/agent/events",
-                headers=http_headers or None,
-            )
+        # Own short bound rather than the step-sized run timeout, as a
+        # wall-clock deadline (httpx's timeout is per read), so the fetch fits
+        # the sandbox lifetime in cloud_agents.spawner.lifetime.
+        async with asyncio.timeout(SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(
+                **{**client_kwargs, "timeout": SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS}
+            ) as client:
+                response = await client.get(
+                    f"{endpoint}/v1/agent/events",
+                    headers=http_headers or None,
+                )
 
         if response.status_code == 404:
             logger.debug("Event log not found for step '%s' (HTTP 404)", step_name)

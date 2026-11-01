@@ -9,8 +9,8 @@ from cloud_agents.spawner.lifetime import (
 )
 
 # Everything around the step's own run time: gateway ready wait + HTTP ready
-# wait + Temporal heartbeat timeout + destroy grace.
-STEP_OVERHEAD = 300 + 60 + 180 + 120
+# wait + Temporal heartbeat timeout + transcript collection + destroy grace.
+STEP_OVERHEAD = 300 + 60 + 180 + 30 + 120
 
 
 class TestStepSandboxLifetime:
@@ -36,6 +36,7 @@ class TestStepSandboxLifetime:
         assert lifetime.SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS == 300
         assert lifetime.SANDBOX_HTTP_READY_TIMEOUT_SECONDS == 60
         assert lifetime.SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS == 180
+        assert lifetime.SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS == 30
 
 
 class TestCliSessionLifetime:
