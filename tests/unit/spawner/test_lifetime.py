@@ -6,8 +6,10 @@ from cloud_agents.spawner import lifetime
 from cloud_agents.spawner.lifetime import run_timeout_seconds, step_sandbox_lifetime_seconds
 
 # Enforced deadlines around the run itself: spawn budget + transcript fetch +
-# transcript save, plus destroy grace.
-STEP_OVERHEAD = 420 + 30 + 30 + 120
+# transcript save, a cancel grace for each of the four bounded I/O phases
+# (run call, progress cleanup, transcript fetch, transcript save), plus
+# destroy grace.
+STEP_OVERHEAD = 420 + 30 + 30 + 4 * 5 + 120
 
 
 class TestRunTimeout:
@@ -45,3 +47,4 @@ class TestStepSandboxLifetime:
         assert lifetime.DEFAULT_STEP_TIMEOUT_SECONDS == 600
         assert lifetime.SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS == 30
         assert lifetime.SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS == 30
+        assert lifetime.SANDBOX_CANCEL_GRACE_SECONDS == 5

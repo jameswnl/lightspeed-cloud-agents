@@ -13,12 +13,28 @@ the sandbox after expires-at is stamped (spawn budget, run call, transcript
 fetch and save) plus destroy grace; the spawner adds a clock-skew margin.
 Lifecycles without an enforced latest-use bound (e.g. CLI sessions) pass no
 lifetime and get no expiry, so startup reconcile never reaps them.
+
+Each post-spawn I/O phase runs through await_within(): the work runs as a
+task that's waited on for at most its deadline, then cancelled and waited on
+for at most SANDBOX_CANCEL_GRACE_SECONDS. Cooperative I/O (httpx, asyncpg,
+asyncio) stops within that grace. A task still running after it is
+uncooperative: it's abandoned (logged, never awaited again) and the caller
+fails or moves on without touching the sandbox from that phase again.
+Python can't preempt arbitrary code, so abandoned work may keep running in
+the background; the bound is on how long the step keeps using the sandbox.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, TypeVar
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # Attached to every sandbox so reconcile can find sandboxes spawned by a
 # previous process instance via ListSandboxes(label_selector=...) (issue #224).
@@ -50,6 +66,9 @@ SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS = 180
 SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS = 30
 # ... and on persisting it to the transcript store, before destroy.
 SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS = 30
+# After a phase's deadline: how long to wait for its cancelled task to
+# finish (e.g. an HTTP client's close) before abandoning it.
+SANDBOX_CANCEL_GRACE_SECONDS = 5
 # Margin for the remaining in-process work and the finally-block destroy();
 # not a safety requirement, since a sandbox is no longer used once the
 # transcript save has finished.
@@ -65,14 +84,65 @@ def run_timeout_seconds(step: dict[str, Any]) -> float:
 def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
     """Latest legitimate use of one workflow step attempt's sandbox, measured
     from when expires-at is stamped: the sum of the enforced spawn, run,
-    transcript fetch and transcript save deadlines, plus destroy grace. Each
-    retry attempt spawns a fresh sandbox (attempt is part of
-    compute_pod_name()), so this is per attempt.
+    transcript fetch and transcript save deadlines, a cancel grace for each
+    of the four bounded post-spawn phases (run, progress cleanup, transcript
+    fetch, transcript save), plus destroy grace. Each retry attempt spawns a
+    fresh sandbox (attempt is part of compute_pod_name()), so this is per
+    attempt.
     """
     return (
         SANDBOX_SPAWN_DEADLINE_SECONDS
         + math.ceil(run_timeout_seconds(step))
         + SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS
         + SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS
+        + 4 * SANDBOX_CANCEL_GRACE_SECONDS
         + SANDBOX_DESTROY_GRACE_SECONDS
     )
+
+
+async def await_within(work: Awaitable[T], timeout: float, *, what: str) -> T:
+    """Await work for at most timeout + SANDBOX_CANCEL_GRACE_SECONDS.
+
+    Runs work as a task rather than under asyncio.timeout(): a timeout fires
+    once, so cleanup that runs after it (e.g. a client __aexit__) would get
+    no bound of its own.
+
+    Raises:
+        TimeoutError: If work didn't finish within timeout. It is cancelled
+            and, if still running after the cancel grace, abandoned.
+    """
+    task = asyncio.ensure_future(work)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        await cancel_within(task, what=what)
+        raise
+    if task in done:
+        return task.result()
+    await cancel_within(task, what=what)
+    raise TimeoutError(f"{what} timed out after {timeout:g}s")
+
+
+async def cancel_within(task: asyncio.Future[Any], *, what: str) -> None:
+    """Cancel task and wait at most SANDBOX_CANCEL_GRACE_SECONDS for it.
+
+    A task that hasn't finished by then is abandoned: logged and never
+    awaited again. Its eventual result or error is consumed, not raised.
+    """
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=SANDBOX_CANCEL_GRACE_SECONDS)
+    if task in done:
+        _consume(task)
+        return
+    logger.warning(
+        "%s did not stop within %ss of cancellation — abandoning it",
+        what,
+        SANDBOX_CANCEL_GRACE_SECONDS,
+    )
+    task.add_done_callback(_consume)
+
+
+def _consume(task: asyncio.Future[Any]) -> None:
+    """Retrieve a finished task's outcome so asyncio doesn't log it as lost."""
+    if not task.cancelled():
+        task.exception()

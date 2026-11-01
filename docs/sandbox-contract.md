@@ -160,12 +160,32 @@ enforced deadlines measured from when `expires-at` is stamped:
   worker thread, so a CreateSandbox can still complete remotely after the
   deadline. That sandbox exists with its `expires-at` label and is reaped
   once expired. If its name is unknown, no delete is guessed.
-- **Run: `permissions.timeout_seconds`** (default 600). Both engines enforce it
-  as an overall deadline on `POST /v1/agent/run`, since httpx's own timeout is
-  per read. Temporal's `start_to_close_timeout` can only end a step earlier.
-- **Transcript fetch: 30s, transcript-store save: 30s.**
+- **Run: `permissions.timeout_seconds`** (default 600) **+ 5s cancel grace.**
+  Both engines enforce it as an overall deadline on `POST /v1/agent/run`
+  *including the HTTP client's close*, since httpx's own timeout is per read.
+  Temporal's `start_to_close_timeout` can only end a step earlier.
+- **Progress-stream cleanup: 5s cancel grace.**
+- **Transcript fetch: 30s + 5s grace** (including its client's close).
+  **Transcript-store save: 30s + 5s grace.**
 - **Destroy grace: 120s.** A margin, not a safety requirement: once the
   transcript save finishes the sandbox is no longer used.
+
+So a step's lifetime is 420 + run timeout + 30 + 30 + 4 × 5 + 120 seconds.
+
+**Bounded vs. abandoned work.** Each post-spawn phase runs through
+`await_within()`/`cancel_within()` (`spawner/lifetime.py`). The work runs as
+a task that's waited on for at most its deadline. Then it's cancelled and
+waited on for at most `SANDBOX_CANCEL_GRACE_SECONDS` (5s). Cooperative I/O
+(httpx, asyncpg, asyncio) stops within that grace and is fully bounded. A
+task still running after the grace is uncooperative: it's abandoned (logged,
+never awaited again) and the step fails or moves on without using the
+sandbox from that phase again. In particular, a timed-out run never goes on
+to fetch the transcript. Python can't preempt arbitrary code, so abandoned
+work may keep running in the background. The bound is on how long the step
+itself keeps using the sandbox, not a hard guarantee about uncooperative
+code. The spawn budget uses `asyncio.timeout_at` around SDK calls made via
+`asyncio.to_thread` (cancellation returns immediately; see above) and the
+readiness check.
 
 Each retry attempt spawns a new sandbox (the attempt number is part of the
 `ca-` name; the activity runs with `maximum_attempts=1`), so the lifetime is

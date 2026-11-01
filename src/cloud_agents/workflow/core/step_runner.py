@@ -12,7 +12,6 @@ No temporalio imports. Both Temporal and local executors call this module.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -28,6 +27,8 @@ from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.lifetime import (
     SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
     SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
+    await_within,
+    cancel_within,
     run_timeout_seconds,
     step_sandbox_lifetime_seconds,
 )
@@ -81,15 +82,20 @@ async def _collect_transcript(
     try:
         # Own short bound rather than the step-sized run timeout, as a
         # wall-clock deadline (httpx's timeout is per read), so the fetch fits
-        # the sandbox lifetime in cloud_agents.spawner.lifetime.
-        async with asyncio.timeout(SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS):
+        # the sandbox lifetime in cloud_agents.spawner.lifetime. Run via
+        # await_within() so a stalled client close is bounded too.
+        async def _fetch() -> httpx.Response:
             async with httpx.AsyncClient(
                 **{**client_kwargs, "timeout": SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS}
             ) as client:
-                response = await client.get(
+                return await client.get(
                     f"{endpoint}/v1/agent/events",
                     headers=http_headers or None,
                 )
+
+        response = await await_within(
+            _fetch(), SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS, what=f"Transcript fetch for '{step_name}'"
+        )
 
         if response.status_code == 404:
             return empty
@@ -440,29 +446,14 @@ async def _run_step_inner(
                         _stream_progress(spawner, sandbox_id, on_progress)
                     )
 
-            try:
+            async def _run_call() -> httpx.Response:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     try:
-                        # httpx's timeout is per read; enforce http_timeout as
-                        # an overall deadline (the local engine has no other
-                        # wall-clock bound on the step).
-                        async with asyncio.timeout(http_timeout):
-                            response = await client.post(
-                                f"{endpoint}/v1/agent/run",
-                                json=request_body,
-                                headers=http_headers or None,
-                            )
-                    except TimeoutError:
-                        ls_sandbox_timeout_total.labels(step_name=step_name, reason="timeout").inc()
-                        emit_audit(
-                            event_type="sandbox_timeout",
-                            workflow_id=workflow_id,
-                            step_name=step_name,
-                            details={"pod_name": pod_name, "reason": "timeout"},
+                        return await client.post(
+                            f"{endpoint}/v1/agent/run",
+                            json=request_body,
+                            headers=http_headers or None,
                         )
-                        # str(TimeoutError()) is empty, which the secret
-                        # redaction below would turn into a blank error.
-                        raise TimeoutError(f"Agent run timed out after {http_timeout:g}s") from None
                     except (ssl.SSLError, httpx.ConnectError) as tls_exc:
                         emit_audit(
                             event_type="tls_error",
@@ -478,11 +469,26 @@ async def _run_step_inner(
                             error_type="ssl_error",
                         ).inc()
                         raise
+
+            try:
+                try:
+                    # Covers the client's close too, and abandons a close that
+                    # ignores cancellation; httpx's own timeout is per read.
+                    response = await await_within(_run_call(), http_timeout, what="Agent run")
+                except TimeoutError:
+                    ls_sandbox_timeout_total.labels(step_name=step_name, reason="timeout").inc()
+                    emit_audit(
+                        event_type="sandbox_timeout",
+                        workflow_id=workflow_id,
+                        step_name=step_name,
+                        details={"pod_name": pod_name, "reason": "timeout"},
+                    )
+                    # str(TimeoutError()) is empty, which the secret
+                    # redaction below would turn into a blank error.
+                    raise TimeoutError(f"Agent run timed out after {http_timeout:g}s") from None
             finally:
                 if progress_task is not None:
-                    progress_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await progress_task
+                    await cancel_within(progress_task, what=f"Progress stream for '{step_name}'")
 
             if response.status_code == 502:
                 _circuit_breaker.record_failure(provider_name)
@@ -499,8 +505,11 @@ async def _run_step_inner(
                 try:
                     # Runs before destroy, so it's bounded like every other
                     # phase in the sandbox lifetime (cloud_agents.spawner.lifetime).
-                    async with asyncio.timeout(SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS):
-                        await transcript_store.save(workflow_id, output_key, transcript)
+                    await await_within(
+                        transcript_store.save(workflow_id, output_key, transcript),
+                        SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
+                        what="Transcript save",
+                    )
                 except Exception:
                     logger.warning(
                         "Failed to save transcript to store for step '%s'",
