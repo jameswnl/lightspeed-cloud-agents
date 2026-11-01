@@ -52,8 +52,10 @@ _DEFAULT_SERVER_COMMAND = [
     "8080",
 ]
 
-# Path where the sandbox agent writes structured JSONL events
-_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
+# Path where the sandbox agent writes structured JSONL events -- must match
+# the AGENT_EVENT_LOG value the runner injects (temporal/activities.py,
+# core/step_runner.py); the sandbox only writes to $AGENT_EVENT_LOG.
+_EVENT_LOG_PATH = "/tmp/agent-events.jsonl"
 
 
 class OpenShellSpawner(AgentSpawner):
@@ -1702,9 +1704,9 @@ class OpenShellSpawner(AgentSpawner):
                 # exec_stream is now a sync iterator — wrap in to_thread
                 def _sync_consume():
                     for item in self._client.exec_stream(sandbox_name, command, env=env):
-                        # item is ExecChunk or ExecResult
-                        if hasattr(item, "chunk"):
-                            chunk = item.chunk
+                        # item is ExecChunk(stream, data: bytes) or ExecResult
+                        if hasattr(item, "data"):
+                            chunk = item.data.decode("utf-8", errors="replace")
                         else:
                             # ExecResult — log final status
                             logger.debug("Server exec ended [%s]: %s", sandbox_name, item)
@@ -1741,7 +1743,7 @@ class OpenShellSpawner(AgentSpawner):
             Parsed JSONL event dicts from the agent event log.
         """
         tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
-        partial = ""
+        partial = b""
 
         # Use a queue to communicate between thread and async code
         import queue
@@ -1753,25 +1755,27 @@ class OpenShellSpawner(AgentSpawner):
             nonlocal partial
             try:
                 for item in self._client.exec_stream(sandbox_name, tail_cmd):
-                    # item is ExecChunk or ExecResult
-                    if hasattr(item, "chunk"):
-                        chunk = item.chunk
-                    else:
+                    # item is ExecChunk(stream, data: bytes) or ExecResult
+                    if not hasattr(item, "data"):
                         # ExecResult — stream ended
                         break
+                    if item.stream != "stdout":
+                        # tail's own diagnostics, not event JSON
+                        continue
 
-                    data = partial + chunk
+                    # Buffer bytes, not str: a chunk may end mid UTF-8 character
+                    data = partial + item.data
                     # Split but keep partial last line if chunk doesn't end with newline
-                    lines = data.split("\n")
+                    lines = data.split(b"\n")
                     # If data doesn't end with newline, last element is a partial line
-                    if not data.endswith("\n"):
+                    if not data.endswith(b"\n"):
                         partial = lines[-1]
                         lines = lines[:-1]
                     else:
-                        partial = ""
+                        partial = b""
 
-                    for line in lines:
-                        line = line.strip()
+                    for raw_line in lines:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
                         if not line:
                             continue
                         try:
@@ -1879,13 +1883,14 @@ class OpenShellSpawner(AgentSpawner):
         if not sandbox_id:
             raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
 
-        chunks: list[str] = []
+        chunks: list[bytes] = []
         try:
 
             def _sync_exec():
                 for item in self._client.exec_stream(sandbox_id, ["cat", path]):
-                    if hasattr(item, "chunk"):
-                        chunks.append(item.chunk)
+                    # ExecChunk(stream, data: bytes); stderr is cat's error text
+                    if hasattr(item, "data") and item.stream == "stdout":
+                        chunks.append(item.data)
 
             await asyncio.to_thread(_sync_exec)
         except Exception as exc:
@@ -1893,7 +1898,7 @@ class OpenShellSpawner(AgentSpawner):
                 raise FileNotFoundError(f"File not found: {path}") from exc
             raise
 
-        content = "".join(chunks)
+        content = b"".join(chunks).decode("utf-8", errors="replace")
         if not content and not chunks:
             raise FileNotFoundError(f"File not found or empty: {path}")
         return content
