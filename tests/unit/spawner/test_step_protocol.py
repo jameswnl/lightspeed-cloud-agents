@@ -549,42 +549,42 @@ class TestMapOutcome:
         assert "untrusted" in out.diagnostic
         assert not is_transient_failure(out.error)
 
-    def test_file_diagnostic_carries_summary_bounded(self):
-        record = _result(body={"success": True, "summary": "x" * 100_000})
-        out = map_outcome(4, _empty(), json.dumps(record).encode())
-
-        assert "xxx" in out.diagnostic
-        assert len(out.diagnostic) < 1000
-
-    def test_file_diagnostic_prefers_error_field(self):
-        record = _result(502, {"error": "Agent timed out after 1000ms"})
-        out = map_outcome(4, _empty(), json.dumps(record).encode())
-
-        assert "Agent timed out after 1000ms" in out.diagnostic
-        # Untrusted file text stays out of `error`, which run_with_retries classifies.
-        assert "timed out" not in out.error and "502" not in out.error
-
-    def test_stdout_result_does_not_taint_lease(self):
-        assert not map_outcome(0, _ok_stdout()).taint_lease
-
     @pytest.mark.parametrize(
-        "data",
+        "body",
         [
-            b"",
-            b"planted",
-            json.dumps(_event()).encode(),
-            b'{"v":1,"type":"result"',
-            json.dumps(_result(body={"success": "yes", "summary": "s"})).encode(),
-            b'{"v":1,"type":"result","status_code":200,"body":{"success":true,"summary":"s","x":NaN}}',
-            b"\xff" + FILE_OK,
+            # Secrets straddling the old 200-char cut, in error and summary.
+            {"success": False, "summary": "s" * 190 + "SECRETabcdefghij", "error": "e"},
+            {"success": True, "summary": "ok", "error": "e" * 195 + "SECRETabcdefghij"},
+            {"success": True, "summary": "SECRET" + "q" * 500},  # longer than the old limit
+            {"success": True, "summary": "☃SECRET☃" * 40},  # multibyte
+            {"success": True, "summary": "s", "SECRETkey": 1},  # agent-chosen key
+            {"error": "SECRET timed out 502 connection"},
+            {"success": True, "summary": "s", "SECRETabcdefghij": "SECRETabcdefghij"},
+            {"success": False, "summary": "s", "error": {"SECRET": ["SECRET"]}},
+            {"error": ["SECRET"], "summary": {"SECRET": 1}, "detail": 7},
         ],
     )
-    def test_exit4_invalid_file_is_violation(self, data):
-        # Exit 4 promises a complete result.json; anything else is tampering.
-        out = map_outcome(4, _empty(), data)
+    def test_file_diagnostic_has_no_file_text(self, body):
+        status = 200 if "success" in body else 502
+        data = json.dumps(_result(status, body), ensure_ascii=False).encode()
+        for exit_code in (4, None):
+            out = map_outcome(exit_code, _empty(), data)
 
-        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
-        assert out.taint_lease
+            assert out.reason == "result_unverified"
+            assert "SECRET" not in out.diagnostic
+            assert "☃" not in out.diagnostic and "timed out" not in out.diagnostic
+            assert "qqqq" not in out.diagnostic and "ssss" not in out.diagnostic
+            assert f"status={status}" in out.diagnostic
+            assert f"bytes={len(data)}" in out.diagnostic
+
+    def test_file_diagnostic_metadata(self):
+        body = {"success": False, "summary": "s", "error": "e", "rootCause": "x", "other": 1}
+        out = map_outcome(4, _empty(), json.dumps(_result(body=body)).encode())
+
+        assert out.diagnostic == (
+            "untrusted result.json: status=200 success=False has_error=True has_summary=True "
+            f"has_detail=False has_output=False other_keys=2 bytes={len(json.dumps(_result(body=body)))}"
+        )
 
     def test_exit4_unreadable_file_fails(self):
         out = map_outcome(4, _empty(), None)
