@@ -229,6 +229,55 @@ class TestOpenShellSpawnerStartServer:
             "Server output [sandbox-1]: hello from stdout",
         ]
 
+    @pytest.mark.asyncio
+    async def test_start_server_log_records_are_single_line(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """Embedded newlines in server output can't forge extra log lines."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter(
+            [_exec_chunk("first\nINFO forged record\r\nlast\n", stream="stderr")]
+        )
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        with caplog.at_level(logging.DEBUG, logger="cloud_agents.spawner.openshell_spawner"):
+            await spawner.start_server("sandbox-1", ["uvicorn"])
+            await spawner._server_tasks["sandbox-1"]
+
+        output_lines = [r.getMessage() for r in caplog.records if "Server output" in r.msg]
+        assert output_lines == [
+            "Server output [sandbox-1]: first",
+            "Server output [sandbox-1]: INFO forged record",
+            "Server output [sandbox-1]: last",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_start_server_exit_logs_only_exit_code(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """The final ExecResult's aggregated stdout/stderr is not logged."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter(
+            [_ExecResult(exit_code=3, stdout="secret-stdout", stderr="secret-stderr")]
+        )
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        with caplog.at_level(logging.DEBUG, logger="cloud_agents.spawner.openshell_spawner"):
+            await spawner.start_server("sandbox-1", ["uvicorn"])
+            await spawner._server_tasks["sandbox-1"]
+
+        assert "secret-stdout" not in caplog.text
+        assert "secret-stderr" not in caplog.text
+        assert "Server exec ended [sandbox-1]: exit_code=3" in caplog.text
+
 
 class TestOpenShellSpawnerStreamProgress:
     """Tests for stream_progress() async generator."""
@@ -367,19 +416,25 @@ class TestOpenShellSpawnerStreamProgress:
         assert call_args["cmd"] == ["tail", "-F", "/tmp/agent-events.jsonl"]
 
     @pytest.mark.asyncio
-    async def test_stream_progress_tails_path_the_sandbox_writes(self) -> None:
-        """The tailed file is the one the runner points AGENT_EVENT_LOG at.
+    async def test_stream_progress_tails_shared_event_log_path(self, mocker: MockerFixture) -> None:
+        """The tailed file is the shared AGENT_EVENT_LOG_PATH.
 
         The sandbox's EventLogger only writes to $AGENT_EVENT_LOG, which both
-        engines set from their own _EVENT_LOG_PATH; tailing any other path
-        streams nothing.
+        engines set from the same constant (asserted in test_step_runner.py and
+        temporal/test_activities.py); tailing any other path streams nothing.
         """
-        from cloud_agents.spawner import openshell_spawner
-        from cloud_agents.workflow.core import step_runner
-        from cloud_agents.workflow.executor.temporal import activities
+        from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        assert openshell_spawner._EVENT_LOG_PATH == activities._EVENT_LOG_PATH
-        assert openshell_spawner._EVENT_LOG_PATH == step_runner._EVENT_LOG_PATH
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter([])
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        async for _ in spawner.stream_progress("sandbox-1"):
+            pass
+
+        assert AGENT_EVENT_LOG_PATH == "/tmp/agent-events.jsonl"
+        assert mock_client.exec_stream.call_args[0][1] == ["tail", "-F", AGENT_EVENT_LOG_PATH]
 
     @pytest.mark.asyncio
     async def test_stream_progress_ignores_stderr(self, mocker: MockerFixture) -> None:
@@ -494,6 +549,43 @@ class TestOpenShellSpawnerReadFile:
 
         with pytest.raises(FileNotFoundError):
             await spawner._do_read_file("agent-1", "/tmp/x")
+
+    @pytest.mark.asyncio
+    async def test_read_file_other_failure_raises_oserror(self, mocker: MockerFixture) -> None:
+        """A non-ENOENT `cat` failure is an OSError, not "file not found"."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk("cat: /tmp/x: Permission denied\n", stream="stderr"),
+                _ExecResult(exit_code=1, stdout="", stderr="cat: /tmp/x: Permission denied\n"),
+            ],
+        )
+
+        with pytest.raises(OSError, match="Permission denied") as exc_info:
+            await spawner._do_read_file("agent-1", "/tmp/x")
+        assert not isinstance(exc_info.value, FileNotFoundError)
+
+    @pytest.mark.asyncio
+    async def test_read_file_partial_output_on_failure_is_not_returned(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Output truncated by a mid-read failure raises instead of returning."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk('{"a": 1}\n{"b"'),
+                _exec_chunk("cat: /tmp/x: Input/output error\n", stream="stderr"),
+                _ExecResult(
+                    exit_code=1,
+                    stdout='{"a": 1}\n{"b"',
+                    stderr="cat: /tmp/x: Input/output error\n",
+                ),
+            ],
+        )
+
+        with pytest.raises(OSError, match="Input/output error") as exc_info:
+            await spawner._do_read_file("agent-1", "/tmp/x")
+        assert not isinstance(exc_info.value, FileNotFoundError)
 
 
 class TestOpenShellSpawnerWriteFile:

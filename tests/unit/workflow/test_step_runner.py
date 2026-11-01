@@ -115,6 +115,25 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
+    async def test_run_step_sets_shared_agent_event_log(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """AGENT_EVENT_LOG is the shared path OpenShellSpawner.stream_progress() tails."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert call_kwargs["env"]["AGENT_EVENT_LOG"] == AGENT_EVENT_LOG_PATH
+
+    @pytest.mark.asyncio
     async def test_run_step_forwards_otel_endpoint_to_sandbox(
         self,
         mock_spawner: AsyncMock,
