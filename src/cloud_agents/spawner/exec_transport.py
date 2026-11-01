@@ -57,7 +57,7 @@ class ExecCall:
             async for stream, data in call:
                 ...
         call.exit_code  # None if the stream ended without an exit event
-        call.error      # the gRPC error that ended the stream, if any
+        call.error      # what ended the stream early (gRPC or reader error), if any
 
     Leaving the block, including by exception or task cancellation, cancels the
     call. That does not stop the process: a non-interactive exec outlives its
@@ -98,7 +98,9 @@ class ExecCall:
             raise ValueError("command must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
-        check_exec_message_size(stdin, dict(env or {}), list(command))
+        check_exec_message_size(
+            stdin, dict(env or {}), list(command), sandbox_id=sandbox_id, workdir=workdir
+        )
         self._request = openshell_pb2.ExecSandboxRequest(
             sandbox_id=sandbox_id,
             command=list(command),
@@ -110,7 +112,7 @@ class ExecCall:
         self._channel_factory = channel_factory
         self._deadline = timeout_seconds + GRPC_DEADLINE_HEADROOM_SECONDS
         self.exit_code: int | None = None
-        self.error: grpc.RpcError | None = None
+        self.error: Exception | None = None
         self._channel: grpc.Channel | None = None
         self._call: Any = None
         self._thread: threading.Thread | None = None
@@ -126,7 +128,12 @@ class ExecCall:
     async def __aenter__(self) -> ExecCall:
         self._loop = asyncio.get_running_loop()
         self._pump_done = self._loop.create_future()
-        self._channel = await asyncio.to_thread(self._channel_factory)
+        creating = asyncio.ensure_future(asyncio.to_thread(self._channel_factory))
+        try:
+            self._channel = await asyncio.shield(creating)
+        except asyncio.CancelledError:
+            creating.add_done_callback(_close_created_channel)
+            raise
         try:
             stub = openshell_pb2_grpc.OpenShellStub(self._channel)
             self._call = stub.ExecSandbox(self._request, timeout=self._deadline)
@@ -144,12 +151,14 @@ class ExecCall:
         return self._chunks()
 
     async def _chunks(self) -> AsyncIterator[tuple[str, bytes]]:
-        while not self._finished:
+        while not (self._finished or self._closed):
             item = await self._queue.get()
             self._credits.release()
             if item is _EOF:
                 self._finished = True
-            elif isinstance(item, grpc.RpcError):
+            elif self._closed:
+                return
+            elif isinstance(item, Exception):
                 self.error = item
             elif item[0] == "exit":
                 self.exit_code = item[1]
@@ -161,18 +170,20 @@ class ExecCall:
         if self._closed:
             return
         self._closed = True
+        self._queue.put_nowait(_EOF)  # wake a consumer waiting in _chunks()
         if self._call is not None:
             self._call.cancel()
         self._credits.release(_MAX_QUEUED_CHUNKS + 1)  # unblock a waiting _put()
-        if self._pump_done is not None:
-            try:
+        try:
+            if self._pump_done is not None:
                 await await_within(
                     self._pump_done, SANDBOX_CANCEL_GRACE_SECONDS, what="exec reader thread"
                 )
-            except SandboxDeadlineExceeded:
-                logger.warning("exec reader thread still running after cancel; abandoning it")
-        if self._channel is not None:
-            self._channel.close()
+        except SandboxDeadlineExceeded:
+            logger.warning("exec reader thread still running after cancel; abandoning it")
+        finally:
+            if self._channel is not None:
+                self._channel.close()
 
     def _pump(self) -> None:
         """Reader thread: move gRPC events to the queue until EOF, error or close."""
@@ -187,7 +198,7 @@ class ExecCall:
                     continue
                 if not self._put(item):
                     return
-        except grpc.RpcError as exc:
+        except Exception as exc:  # grpc.RpcError, or a bug: either way not a clean end
             self._put(exc)
         finally:
             self._put(_EOF)
@@ -209,6 +220,12 @@ class ExecCall:
         except RuntimeError:  # event loop closed
             return False
         return True
+
+
+def _close_created_channel(creating: asyncio.Future[grpc.Channel]) -> None:
+    """Close a channel whose creation finished after __aenter__ was cancelled."""
+    if not creating.cancelled() and creating.exception() is None:
+        creating.result().close()
 
 
 async def exec_capture(

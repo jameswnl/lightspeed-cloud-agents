@@ -19,8 +19,10 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 import tracemalloc
+from unittest import mock
 
 import pytest
 
@@ -133,13 +135,57 @@ class TestExecCall:
         assert req.timeout_seconds == 30
         assert req.stdin == b"from-stdin"
 
-    async def test_unknown_command_is_transport_error(self, channel_factory):
-        async with ExecCall(
-            channel_factory, SANDBOX_ID, ["/nonexistent/binary"], timeout_seconds=30
-        ) as call:
-            assert [s async for s, _ in call if s == "stdout"] == []
+    async def test_unknown_command_exits_127(self, channel_factory):
+        """The gateway runs the command through a shell, so a missing binary is exit 127."""
+        exit_code, stdout, stderr = await exec_capture(
+            channel_factory,
+            SANDBOX_ID,
+            ["/nonexistent/binary"],
+            timeout_seconds=30,
+            max_stdout=1024,
+        )
+        assert exit_code == 127
+        assert stdout == b""
+        assert b"/nonexistent/binary" in stderr
+
+    async def test_reader_exception_is_recorded_as_error(self):
+        """A non-gRPC failure in the reader thread must not look like a clean end."""
+
+        class BrokenCall:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise ValueError("decode failed")
+
+            def cancel(self):
+                pass
+
+        channel = mock.Mock()
+        channel.unary_stream.return_value = lambda _request, timeout: BrokenCall()
+        async with ExecCall(lambda: channel, SANDBOX_ID, ["true"], timeout_seconds=30) as call:
+            assert [c async for c in call] == []
         assert call.exit_code is None
-        assert call.error.code() == grpc.StatusCode.INVALID_ARGUMENT
+        assert isinstance(call.error, ValueError)
+        channel.close.assert_called_once()
+
+    async def test_cancel_during_channel_creation_closes_channel(self):
+        release = threading.Event()
+        channel = mock.Mock()
+
+        def slow_factory():
+            release.wait(10)
+            return channel
+
+        call = ExecCall(slow_factory, SANDBOX_ID, ["true"], timeout_seconds=30)
+        task = asyncio.create_task(call.__aenter__())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        await _wait_for(lambda: channel.close.called, timeout=5)
+        channel.unary_stream.assert_not_called()
 
     def test_rejects_empty_command_and_missing_timeout(self, channel_factory):
         with pytest.raises(ValueError, match="command"):
@@ -171,7 +217,7 @@ class TestRequestSize:
         while lo < hi:
             mid = (lo + hi + 1) // 2
             try:
-                check_exec_message_size(b"x" * mid, env, argv)
+                check_exec_message_size(b"x" * mid, env, argv, sandbox_id=SANDBOX_ID, workdir="/")
                 lo = mid
             except StepRequestTooLarge:
                 hi = mid - 1
@@ -243,6 +289,24 @@ class TestCancel:
         await _wait_for(lambda: gateway.execs[0].disconnected)
         # Non-interactive exec: the process outlives the call until teardown.
         assert gateway.execs[0].proc.poll() is None
+
+    async def test_aclose_wakes_a_concurrent_consumer(self, gateway, channel_factory):
+        call = ExecCall(channel_factory, SANDBOX_ID, ["sleep", "30"], timeout_seconds=60)
+        async with call:
+
+            async def consume():
+                return [c async for c in call]
+
+            consumer = asyncio.create_task(consume())
+            await _wait_for(lambda: gateway.execs and gateway.execs[0].proc is not None)
+            await asyncio.sleep(0.1)  # consumer is waiting on the queue
+            await call.aclose()
+            done, _ = await asyncio.wait({consumer}, timeout=2)
+            assert consumer in done, "consumer still waiting after aclose()"
+            assert [s for s, _ in consumer.result() if s == "stdout"] == []
+            # Iterating a closed call ends at once.
+            assert await asyncio.wait_for(consume(), timeout=1) == []
+        assert call.exit_code is None
 
     async def test_aclose_after_completion_is_noop(self, channel_factory):
         call = ExecCall(channel_factory, SANDBOX_ID, ["true"], timeout_seconds=30)

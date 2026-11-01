@@ -78,15 +78,29 @@ def new_run_dir(step_id: str, run_root: str = RUN_ROOT) -> str:
     return f"{run_root}/{step_id}-{secrets.token_hex(8)}"
 
 
-def check_exec_message_size(stdin: bytes, env: dict[str, str], argv: list[str]) -> None:
-    """Raise StepRequestTooLarge unless stdin + env + argv fit one gateway exec message.
+def check_exec_message_size(
+    stdin: bytes,
+    env: dict[str, str],
+    argv: list[str],
+    *,
+    sandbox_id: str = "",
+    workdir: str = "",
+) -> None:
+    """Raise StepRequestTooLarge unless the whole exec request fits one gateway message.
 
     An estimate with generous framing overhead; the gateway decodes at most
     GATEWAY_MAX_MESSAGE_BYTES per ExecSandboxRequest, env and argv included.
     """
     env_bytes = sum(len(k.encode()) + len(v.encode()) + _FIELD_OVERHEAD for k, v in env.items())
     argv_bytes = sum(len(a.encode()) + _FIELD_OVERHEAD for a in argv)
-    size = len(stdin) + env_bytes + argv_bytes + _MESSAGE_OVERHEAD
+    size = (
+        len(stdin)
+        + env_bytes
+        + argv_bytes
+        + len(sandbox_id.encode())
+        + len(workdir.encode())
+        + _MESSAGE_OVERHEAD
+    )
     if size > GATEWAY_MAX_MESSAGE_BYTES:
         raise StepRequestTooLarge(
             f"exec request is about {size} bytes (stdin {len(stdin)}, env {env_bytes}, "

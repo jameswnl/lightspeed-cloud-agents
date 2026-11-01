@@ -51,6 +51,8 @@ jobs:
       STEPCLI_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
+      # Pinned to a commit on the personal fork, where the step CLI lives until
+      # it is merged into openshift/lightspeed-agentic-sandbox.
       - name: Check out the sandbox step CLI
         uses: actions/checkout@v4
         with:
@@ -64,7 +66,7 @@ jobs:
       - name: Install Python 3.14
         run: uv python install 3.14
       - name: Install dependencies
-        run: uv sync --group dev --extra openshell
+        run: uv sync --frozen --group dev --extra openshell
       - name: Install the sandbox
         working-directory: lightspeed-agentic-sandbox
         run: uv sync --frozen --extra dev

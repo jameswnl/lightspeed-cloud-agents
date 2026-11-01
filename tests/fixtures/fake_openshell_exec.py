@@ -4,15 +4,18 @@ A real localhost gRPC server built from the openshell 0.0.111 wheel's
 ``openshell_pb2_grpc``. Each exec runs its command as a real host subprocess. It
 emulates the gateway behaviour the exec transport depends on:
 
-- The child env is cleared and rebuilt from a small base plus the request's
-  ``environment``, like the supervisor's ``env_clear()`` (see
-  ``OpenShellSpawner._DEFAULT_EXTRA_ENV``). The base here is a stand-in, not the
-  supervisor's real allowlist.
+- The command is inlined as sorted ``ENV=val ... argv`` and run through
+  ``/bin/sh -c``, as the gateway runs it through the sandbox user's login shell.
+  So the request's ``environment`` reaches the child only via those inline
+  assignments, and a missing binary is the shell's exit 127 with a message on
+  stderr, not an RPC error.
+- The shell's own env is cleared and rebuilt from a small base, like the
+  supervisor's ``env_clear()`` (see ``OpenShellSpawner._DEFAULT_EXTRA_ENV``).
+  The base here is a stand-in, not the supervisor's real allowlist.
 - Inbound messages are capped at 1 MiB, the whole ``ExecSandboxRequest``
   including stdin. The inlined command string is capped at 256 KiB.
-- The command is inlined as sorted ``ENV=val ... argv`` and its first 120
-  characters are logged and kept as ``ExecRecord.preview``. The quoting is
-  approximate.
+- The first 120 characters of the inlined command are logged and kept as
+  ``ExecRecord.preview``. The quoting is approximate.
 - stdin is written to the child and closed. stdout and stderr are streamed as
   they arrive, then one exit event (a signal becomes 128 + n).
 - Non-interactive disconnect: when the client goes away, the server stops
@@ -22,7 +25,7 @@ emulates the gateway behaviour the exec transport depends on:
 Children are forked from this gRPC process, so their stderr may start with gRPC
 fork-handler log lines, much as a real exec's stderr carries login-shell noise.
 
-Not emulated: the login shell, Landlock, ``timeout_seconds`` enforcement (it is
+Not emulated: login-shell startup files (``-l``), Landlock, ``timeout_seconds`` enforcement (it is
 only recorded), and provider placeholders.
 """
 
@@ -97,17 +100,15 @@ class FakeOpenShellGateway(openshell_pb2_grpc.OpenShellServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "command exceeds 256 KiB")
 
         base = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.path.expanduser("~")}
-        try:
-            proc = subprocess.Popen(  # noqa: S603 - test harness runs the requested argv
-                list(request.command),
-                env={**base, **request.environment},
-                cwd=request.workdir or "/",
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except OSError as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"exec failed: {exc}")
+        proc = subprocess.Popen(  # noqa: S603 - test harness runs the requested command
+            ["/bin/sh", "-c", command],
+            env=base,
+            cwd=request.workdir or "/",
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,  # so stop() can kill the shell and its children
+        )
         record.proc = proc
         threading.Thread(target=_write_stdin, args=(proc, request.stdin), daemon=True).start()
 
@@ -157,10 +158,7 @@ def _write_stdin(proc: subprocess.Popen, data: bytes) -> None:
 
 def _kill(proc: subprocess.Popen) -> None:
     try:
-        if os.getpgid(proc.pid) == proc.pid:  # the step CLI calls setsid()
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except ProcessLookupError:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # gone, or (macOS) only a zombie left
         pass
     proc.wait()

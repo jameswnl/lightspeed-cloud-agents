@@ -260,3 +260,10 @@ class TestExecMessageSize:
     def test_argv_counts(self):
         with pytest.raises(StepRequestTooLarge):
             check_exec_message_size(b"", {}, ["a" * GATEWAY_MAX_MESSAGE_BYTES])
+
+    @pytest.mark.parametrize("field", ["sandbox_id", "workdir"])
+    def test_sandbox_id_and_workdir_count(self, field):
+        stdin = b"x" * (GATEWAY_MAX_MESSAGE_BYTES - 2048)
+        check_exec_message_size(stdin, {}, [])
+        with pytest.raises(StepRequestTooLarge):
+            check_exec_message_size(stdin, {}, [], **{field: "d" * 2048})
