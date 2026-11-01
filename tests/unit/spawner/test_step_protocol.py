@@ -586,6 +586,28 @@ class TestMapOutcome:
             f"has_detail=False has_output=False other_keys=2 bytes={len(json.dumps(_result(body=body)))}"
         )
 
+    def test_stdout_result_does_not_taint_lease(self):
+        assert not map_outcome(0, _ok_stdout()).taint_lease
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            b"",
+            b"planted",
+            json.dumps(_event()).encode(),
+            b'{"v":1,"type":"result"',
+            json.dumps(_result(body={"success": "yes", "summary": "s"})).encode(),
+            b'{"v":1,"type":"result","status_code":200,"body":{"success":true,"summary":"s","x":NaN}}',
+            b"\xff" + FILE_OK,
+        ],
+    )
+    def test_exit4_invalid_file_is_violation(self, data):
+        # Exit 4 promises a complete result.json; anything else is tampering.
+        out = map_outcome(4, _empty(), data)
+
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
+        assert out.taint_lease
+
     def test_exit4_unreadable_file_fails(self):
         out = map_outcome(4, _empty(), None)
 
