@@ -33,7 +33,14 @@ _KNOWN_SPAWNER_TYPES = ("openshell",)
 # lightspeed-stack Pydantic model_dump() with `type`/`sandbox_image`/etc.
 # mixed in) without needing to hand-pick fields first.
 _OPENSHELL_EXTRA_PARAMS = frozenset(
-    {"max_pods", "extra_readable_paths", "extra_env", "owner_instance", "max_lifetime_seconds"}
+    {
+        "max_pods",
+        "extra_readable_paths",
+        "extra_env",
+        "owner_instance",
+        "min_lifetime_seconds",
+        "expiry_skew_seconds",
+    }
 )
 
 

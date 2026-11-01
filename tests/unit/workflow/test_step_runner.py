@@ -115,6 +115,27 @@ class TestRunStep:
         assert call_kwargs["env"]["LIGHTSPEED_MODEL"] == "gpt-4o"
 
     @pytest.mark.asyncio
+    async def test_run_step_passes_per_step_lifetime(
+        self,
+        mock_spawner: AsyncMock,
+        mock_http_success: None,
+        step_input: dict[str, Any],
+        mocker: MockerFixture,
+    ) -> None:
+        """Local engine sandboxes get the same per-step lifetime as Temporal."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+
+        from cloud_agents.spawner.lifetime import step_sandbox_lifetime_seconds
+        from cloud_agents.workflow.core.step_runner import run_step
+
+        step_input["step"]["timeout_seconds"] = 150_000
+        await run_step(step_input, spawner=mock_spawner, attempt=1)
+
+        lifetime = mock_spawner.spawn.call_args[1]["lifetime_seconds"]
+        assert lifetime == step_sandbox_lifetime_seconds(step_input["step"])
+        assert lifetime >= 150_000
+
+    @pytest.mark.asyncio
     async def test_run_step_forwards_otel_endpoint_to_sandbox(
         self,
         mock_spawner: AsyncMock,

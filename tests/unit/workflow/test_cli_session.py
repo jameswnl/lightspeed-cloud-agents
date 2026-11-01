@@ -101,6 +101,27 @@ class TestCLISessionLauncherLaunch:
         assert agent_name.startswith("cli-")
 
     @pytest.mark.asyncio
+    async def test_launch_lifetime_follows_max_session_seconds(self) -> None:
+        """CLI sandboxes get an expiry covering the session's own max duration."""
+        from cloud_agents.spawner.lifetime import cli_session_lifetime_seconds
+
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        launcher = CLISessionLauncher(max_session_seconds=7200)
+        await launcher.launch(
+            spawner=spawner,
+            context_markdown="# ctx",
+            prompt="p",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-abc",
+        )
+
+        lifetime = spawner.spawn.call_args.kwargs["lifetime_seconds"]
+        assert lifetime == cli_session_lifetime_seconds(7200, launcher._check_interval)
+        assert lifetime > 7200
+
+    @pytest.mark.asyncio
     async def test_launch_returns_session_id(self) -> None:
         """launch() returns a unique session ID."""
         spawner = AsyncMock()

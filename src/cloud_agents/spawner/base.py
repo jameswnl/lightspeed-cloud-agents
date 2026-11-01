@@ -126,6 +126,7 @@ class AgentSpawner(ABC):
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
         tls_certs: EphemeralCerts | None = None,
+        lifetime_seconds: int | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -166,6 +167,11 @@ class AgentSpawner(ABC):
             mcp_secret_mounts: List of (secret_name, key, mount_path) tuples
                 for MCP server Secret-backed auth headers.
             tls_certs: Optional ephemeral TLS certs to inject into sandbox.
+            lifetime_seconds: Latest legitimate life of this sandbox (see
+                cloud_agents.spawner.lifetime). OpenShellSpawner stamps an
+                expiry label from it so any replica's startup reconcile can
+                reap the sandbox once expired; None means no expiry, so only
+                the owning replica can reap it.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -195,6 +201,7 @@ class AgentSpawner(ABC):
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
                 tls_certs=tls_certs,
+                lifetime_seconds=lifetime_seconds,
             )
             return endpoint
         except Exception:

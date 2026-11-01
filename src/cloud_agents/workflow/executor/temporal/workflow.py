@@ -16,6 +16,10 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
+    from cloud_agents.spawner.lifetime import (
+        DEFAULT_STEP_TIMEOUT_SECONDS,
+        SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS,
+    )
     from cloud_agents.workflow.security.advisory import AdvisoryEnforcer
     from cloud_agents.workflow.security.auto_approve import ApprovalPolicy, classify_step_risk
     from cloud_agents.workflow.core.conditions import evaluate_condition
@@ -354,7 +358,7 @@ class AgentWorkflow:
             return result
         step_name = normalized.name
         output_key = normalized.output_key
-        timeout_seconds = normalized.timeout_seconds or 600
+        timeout_seconds = normalized.timeout_seconds or DEFAULT_STEP_TIMEOUT_SECONDS
         max_retries = normalized.max_retries
         # Sandbox-image precedence (issue #268): step spawn_config →
         # definition spawn_config → run-level input image. The run-level
@@ -435,7 +439,7 @@ class AgentWorkflow:
                     }
                 ],
                 start_to_close_timeout=timedelta(seconds=timeout_seconds),
-                heartbeat_timeout=timedelta(seconds=180),
+                heartbeat_timeout=timedelta(seconds=SANDBOX_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
 

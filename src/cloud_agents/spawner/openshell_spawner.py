@@ -26,6 +26,14 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 import httpx
 
 from cloud_agents.spawner.base import AgentSpawner
+from cloud_agents.spawner.lifetime import (
+    EXPIRES_AT_LABEL_KEY,
+    OWNER_INSTANCE_LABEL_KEY,
+    RESERVED_LABEL_KEYS,
+    SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
+    SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+    SPAWNED_BY_LABEL,
+)
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import SpawnConfig
@@ -165,23 +173,22 @@ class OpenShellSpawner(AgentSpawner):
     # Attached to every sandbox at create time (merged with caller-supplied
     # labels) so reconcile_orphaned_sandboxes() can find sandboxes spawned by
     # a *previous* process instance via ListSandboxes(label_selector=...)
-    # (issue #224). Must match the label reconcile_orphaned_sandboxes() in
-    # workflow/executor/temporal/entrypoint.py filters on.
-    _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = {"spawned-by": "workflow-runner"}
+    # (issue #224). Shared with reconcile via cloud_agents.spawner.lifetime.
+    _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = SPAWNED_BY_LABEL
 
     # Identifies which runner replica spawned a sandbox (value: the
     # owner_instance constructor arg, wired from RUNNER_INSTANCE_ID) so
     # reconcile_orphaned_sandboxes() only destroys this replica's own orphans,
     # never another live replica's sandboxes. Omitted when owner_instance is
-    # unset. Must match the key reconcile_orphaned_sandboxes() filters on.
-    _OWNER_INSTANCE_LABEL_KEY: ClassVar[str] = "cloud-agents/owner-instance"
+    # unset.
+    _OWNER_INSTANCE_LABEL_KEY: ClassVar[str] = OWNER_INSTANCE_LABEL_KEY
 
     # Unix seconds after which the sandbox has outlived any legitimate use
-    # (spawn time + max_lifetime_seconds). Lets any replica's
-    # reconcile_orphaned_sandboxes() reap sandboxes left by a replaced pod,
-    # whose owner-instance value will never come back. Omitted when
-    # max_lifetime_seconds is unset. Must match the key reconcile filters on.
-    _EXPIRES_AT_LABEL_KEY: ClassVar[str] = "cloud-agents/expires-at"
+    # (spawn time + max(lifetime_seconds, min_lifetime_seconds) + skew). Lets
+    # any replica's reconcile_orphaned_sandboxes() reap sandboxes left by a
+    # replaced pod, whose owner-instance value will never come back. Omitted
+    # when the caller passes no lifetime_seconds.
+    _EXPIRES_AT_LABEL_KEY: ClassVar[str] = EXPIRES_AT_LABEL_KEY
 
     # Baked into the sandbox image (lightspeed-agentic-sandbox's
     # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
@@ -297,7 +304,8 @@ class OpenShellSpawner(AgentSpawner):
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
         owner_instance: str = "",
-        max_lifetime_seconds: int | None = None,
+        min_lifetime_seconds: int = 0,
+        expiry_skew_seconds: int = 600,
         clock: Callable[[], float] = time.time,
         **kwargs: Any,
     ) -> None:
@@ -349,17 +357,19 @@ class OpenShellSpawner(AgentSpawner):
                 _OWNER_INSTANCE_LABEL_KEY label so startup reconciliation
                 can tell this replica's orphans apart from other replicas'
                 live sandboxes. Empty means no owner label is attached.
-            max_lifetime_seconds: Longest legitimate life of a sandbox this
-                spawner creates. Attached to every sandbox as the
-                _EXPIRES_AT_LABEL_KEY label (spawn time + this value) so
-                startup reconciliation on any replica can reap it once
-                expired. None means no expiry label is attached (the sandbox
-                is then never reaped by another replica).
+            min_lifetime_seconds: Floor for a sandbox's expiry: the
+                _EXPIRES_AT_LABEL_KEY label is spawn time +
+                max(spawn()'s lifetime_seconds, this) + expiry_skew_seconds,
+                so startup reconciliation on any replica can reap it once
+                expired. Only applies when spawn() is given lifetime_seconds.
+            expiry_skew_seconds: Margin added to every expiry for clock skew
+                between replicas.
             clock: Returns the current unix time; injectable for tests.
         """
         super().__init__(**kwargs)
         self._owner_instance = owner_instance
-        self._max_lifetime_seconds = max_lifetime_seconds
+        self._min_lifetime_seconds = min_lifetime_seconds
+        self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
         self._client = openshell_client
         self._workspace = workspace
@@ -914,6 +924,7 @@ class OpenShellSpawner(AgentSpawner):
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
         tls_certs: "EphemeralCerts | None" = None,
+        lifetime_seconds: int | None = None,
     ) -> str:
         """Create an OpenShell sandbox, start HTTP server, return endpoint."""
         from openshell._proto import openshell_pb2
@@ -1051,20 +1062,30 @@ class OpenShellSpawner(AgentSpawner):
                 )
                 raise
 
-        # Merge caller labels with the fixed spawned-by label, the
-        # agent_name recovery label and the owner-instance/expires-at labels;
-        # all always win over caller-supplied labels of the same key so a
-        # caller can't accidentally suppress orphan discovery (issue #224).
+        # Merge caller labels with the fixed spawned-by label and the
+        # agent_name recovery label; both always win over caller-supplied
+        # labels of the same key so a caller can't accidentally suppress
+        # orphan discovery (issue #224). Caller-supplied owner-instance /
+        # expires-at are always dropped: only this spawner's own config may
+        # mark a sandbox as owned by, or expired for, a runner replica.
         sandbox_labels = {
-            **(labels or {}),
+            **{k: v for k, v in (labels or {}).items() if k not in RESERVED_LABEL_KEYS},
             **self._SPAWNED_BY_LABEL,
             self._AGENT_NAME_LABEL_KEY: agent_name,
         }
         if self._owner_instance:
             sandbox_labels[self._OWNER_INSTANCE_LABEL_KEY] = self._owner_instance
-        if self._max_lifetime_seconds is not None:
+        if lifetime_seconds is None:
+            logger.debug(
+                "No lifetime_seconds for agent '%s' — no expires-at label; only its "
+                "owner instance's startup reconcile can reap it",
+                agent_name,
+            )
+        else:
             sandbox_labels[self._EXPIRES_AT_LABEL_KEY] = str(
-                int(self._clock()) + self._max_lifetime_seconds
+                int(self._clock())
+                + max(lifetime_seconds, self._min_lifetime_seconds)
+                + self._expiry_skew_seconds
             )
 
         spec = openshell_pb2.SandboxSpec(
@@ -1108,7 +1129,7 @@ class OpenShellSpawner(AgentSpawner):
                 self._client.wait_ready,
                 sandbox_name,
                 workspace=self._workspace,
-                timeout_seconds=300,
+                timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
             )
 
             # Credential Provider already created and attached via spec.providers
@@ -1156,7 +1177,7 @@ class OpenShellSpawner(AgentSpawner):
             ready = await self._wait_ready_with_host(
                 endpoint,
                 virtual_host,
-                timeout=60.0,
+                timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
             )
             if not ready:
                 raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")

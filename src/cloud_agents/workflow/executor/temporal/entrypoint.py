@@ -21,6 +21,11 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
+from cloud_agents.spawner.lifetime import (
+    EXPIRES_AT_LABEL_KEY,
+    OWNER_INSTANCE_LABEL_KEY,
+    SPAWNED_BY_LABEL,
+)
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
@@ -78,14 +83,13 @@ SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 # Kubernetes label value syntax; owner-instance is stamped as a sandbox label.
 _LABEL_VALUE_RE = re.compile(r"^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$")
 
-DEFAULT_SANDBOX_MAX_LIFETIME_SECONDS = 86400
-# Floor for SANDBOX_MAX_LIFETIME_SECONDS: the longest sandbox life this runner
-# creates with default settings -- a CLI session's DEFAULT_MAX_SESSION_SECONDS
-# (3600; agent steps default to timeout_seconds=600) plus OpenShellSpawner's
-# 300s gateway wait_ready. Per-workflow step timeout_seconds has no upper
-# bound in the schema, so a step configured longer than the lifetime can't be
-# caught here and may be reaped by another replica's startup reconcile.
-_MIN_SANDBOX_MAX_LIFETIME_SECONDS = 3600 + 300
+# Floor for every sandbox's expires-at label, on top of its own per-sandbox
+# lifetime (cloud_agents.spawner.lifetime). Safety comes from the per-sandbox
+# lifetime, so any non-negative value is safe; the floor only delays how soon
+# another replica may reap an orphan.
+DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS = 86400
+# Added to every expires-at for clock skew between replicas.
+DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS = 600
 
 
 def _runner_instance_id() -> str:
@@ -115,29 +119,40 @@ def _runner_instance_id() -> str:
             hostname,
         )
         return ""
+    if hostname:
+        logger.warning(
+            "RUNNER_INSTANCE_ID not set — using HOSTNAME=%r as runner identity. "
+            "Runners sharing a host network (same hostname) must each set a "
+            "distinct RUNNER_INSTANCE_ID, or they will reap each other's sandboxes",
+            hostname,
+        )
     return hostname
 
 
-def _sandbox_max_lifetime_seconds() -> int:
-    """Parse and validate SANDBOX_MAX_LIFETIME_SECONDS (default 86400).
-
-    Raises:
-        ValueError: If not an integer or below _MIN_SANDBOX_MAX_LIFETIME_SECONDS
-            -- a shorter lifetime would let reconcile reap live sandboxes.
-    """
-    raw = os.environ.get("SANDBOX_MAX_LIFETIME_SECONDS", "")
+def _non_negative_int_env(name: str, default: int) -> int:
+    """Parse a non-negative integer env var, failing startup on bad values."""
+    raw = os.environ.get(name, "")
     if not raw:
-        return DEFAULT_SANDBOX_MAX_LIFETIME_SECONDS
+        return default
     try:
         value = int(raw)
     except ValueError:
-        raise ValueError(f"SANDBOX_MAX_LIFETIME_SECONDS={raw!r} is not an integer") from None
-    if value < _MIN_SANDBOX_MAX_LIFETIME_SECONDS:
-        raise ValueError(
-            f"SANDBOX_MAX_LIFETIME_SECONDS={value} is below the minimum "
-            f"{_MIN_SANDBOX_MAX_LIFETIME_SECONDS} (longest default sandbox life)"
-        )
+        raise ValueError(f"{name}={raw!r} is not an integer") from None
+    if value < 0:
+        raise ValueError(f"{name}={value} must not be negative")
     return value
+
+
+def _sandbox_min_lifetime_seconds() -> int:
+    """SANDBOX_MIN_LIFETIME_SECONDS (default 86400): floor for sandbox expiry."""
+    return _non_negative_int_env(
+        "SANDBOX_MIN_LIFETIME_SECONDS", DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS
+    )
+
+
+def _sandbox_expiry_skew_seconds() -> int:
+    """SANDBOX_EXPIRY_SKEW_SECONDS (default 600): clock-skew margin on expiry."""
+    return _non_negative_int_env("SANDBOX_EXPIRY_SKEW_SECONDS", DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS)
 
 
 def _create_spawner(owner_instance: str = ""):
@@ -153,7 +168,7 @@ def _create_spawner(owner_instance: str = ""):
             e.g. a leftover "kubernetes"/"podman" value from an unmigrated
             deploy manifest (or a typo) would otherwise silently disable
             ephemeral spawning instead of refusing to start. Also raised for
-            an invalid SANDBOX_MAX_LIFETIME_SECONDS.
+            an invalid SANDBOX_MIN_LIFETIME_SECONDS / SANDBOX_EXPIRY_SKEW_SECONDS.
     """
     if SPAWNER_TYPE == "openshell":
         from cloud_agents.spawner.factory import build_spawner
@@ -168,7 +183,8 @@ def _create_spawner(owner_instance: str = ""):
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
             owner_instance=owner_instance,
-            max_lifetime_seconds=_sandbox_max_lifetime_seconds(),
+            min_lifetime_seconds=_sandbox_min_lifetime_seconds(),
+            expiry_skew_seconds=_sandbox_expiry_skew_seconds(),
         )
     if SPAWNER_TYPE == "":
         logger.info("No spawner configured — sandbox activity will use stub mode")
@@ -211,15 +227,13 @@ async def reconcile_orphaned_sandboxes(
         )
     now = time.time() if now is None else now
 
-    # Label keys must match OpenShellSpawner._SPAWNED_BY_LABEL,
-    # _OWNER_INSTANCE_LABEL_KEY and _EXPIRES_AT_LABEL_KEY.
     orphans = []
     no_expiry = 0
-    for name, labels in await spawner.list_active_labels({"spawned-by": "workflow-runner"}):
-        if owner_instance and labels.get("cloud-agents/owner-instance") == owner_instance:
+    for name, labels in await spawner.list_active_labels(SPAWNED_BY_LABEL):
+        if owner_instance and labels.get(OWNER_INSTANCE_LABEL_KEY) == owner_instance:
             orphans.append(name)
             continue
-        expires_at = labels.get("cloud-agents/expires-at")
+        expires_at = labels.get(EXPIRES_AT_LABEL_KEY)
         if expires_at is None:
             no_expiry += 1
             continue

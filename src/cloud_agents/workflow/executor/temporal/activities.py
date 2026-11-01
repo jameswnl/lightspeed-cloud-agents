@@ -23,6 +23,10 @@ from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.spawner.lifetime import (
+    DEFAULT_STEP_TIMEOUT_SECONDS,
+    step_sandbox_lifetime_seconds,
+)
 from cloud_agents.workflow.notifiers.escalation import LogPackager
 from cloud_agents.workflow.notifiers.notifier import NullNotifier
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
@@ -527,7 +531,7 @@ async def _run_sandbox_step_inner(
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
-    http_timeout = float(permissions.get("timeout_seconds", 600))
+    http_timeout = float(permissions.get("timeout_seconds", DEFAULT_STEP_TIMEOUT_SECONDS))
 
     if spawner is None:
         logger.info("No spawner configured — returning stub result for '%s'", step_name)
@@ -580,6 +584,7 @@ async def _run_sandbox_step_inner(
                 credential_secret_name=credential_env_key,
                 mcp_secret_mounts=mcp_secret_mounts or None,
                 tls_certs=tls_certs,
+                lifetime_seconds=step_sandbox_lifetime_seconds(step),
             )
             ready = await spawner.wait_ready(
                 endpoint,

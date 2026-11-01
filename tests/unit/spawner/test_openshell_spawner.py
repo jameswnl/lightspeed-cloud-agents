@@ -512,11 +512,9 @@ class TestOpenShellSpawnerSpawn:
             "cloud-agents/owner-instance": "runner-a",
         }
 
-    @pytest.mark.asyncio
-    async def test_spawn_attaches_expires_at_label(self, mocker: MockerFixture) -> None:
-        """max_lifetime_seconds is stamped as cloud-agents/expires-at (unix
-        seconds of spawn time + lifetime) so any replica's reconcile can reap
-        the sandbox once it is past its maximum legitimate life."""
+    @staticmethod
+    def _spawner_with_mocks(mocker: MockerFixture, **kwargs: Any):
+        """OpenShellSpawner with gateway calls mocked, for label assertions."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -530,11 +528,7 @@ class TestOpenShellSpawnerSpawn:
         mock_client.wait_ready.return_value = SandboxRef("sb")
         mock_client.exec_stream = lambda *a, **k: iter([])
 
-        spawner = OpenShellSpawner(
-            openshell_client=mock_client,
-            max_lifetime_seconds=7200,
-            clock=lambda: 1_700_000_000.9,
-        )
+        spawner = OpenShellSpawner(openshell_client=mock_client, **kwargs)
         mocker.patch.object(
             spawner, "_expose_service", return_value=("http://gateway:17670", "host")
         )
@@ -544,14 +538,72 @@ class TestOpenShellSpawnerSpawn:
 
         mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
         mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        return spawner, mock_client
 
-        await spawner.spawn(
-            "agent-1", "sandbox:latest", env={}, labels={"cloud-agents/expires-at": "9999999999"}
+    @pytest.mark.asyncio
+    async def test_spawn_expires_at_uses_per_sandbox_lifetime(self, mocker: MockerFixture) -> None:
+        """expires-at = clock + max(lifetime_seconds, min_lifetime) + skew, so a
+        step longer than the global minimum still gets its full lifetime."""
+        spawner, mock_client = self._spawner_with_mocks(
+            mocker,
+            min_lifetime_seconds=86400,
+            expiry_skew_seconds=600,
+            clock=lambda: 1_700_000_000.9,
         )
 
+        await spawner.spawn("agent-1", "sandbox:latest", env={}, lifetime_seconds=200_000)
+
         labels = mock_client.create.call_args.kwargs["labels"]
-        assert labels["cloud-agents/expires-at"] == "1700007200"
-        assert "cloud-agents/owner-instance" not in labels
+        assert labels["cloud-agents/expires-at"] == str(1_700_000_000 + 200_000 + 600)
+
+    @pytest.mark.asyncio
+    async def test_spawn_expires_at_floors_at_min_lifetime(self, mocker: MockerFixture) -> None:
+        spawner, mock_client = self._spawner_with_mocks(
+            mocker, min_lifetime_seconds=86400, expiry_skew_seconds=600, clock=lambda: 1000.0
+        )
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={}, lifetime_seconds=60)
+
+        labels = mock_client.create.call_args.kwargs["labels"]
+        assert labels["cloud-agents/expires-at"] == str(1000 + 86400 + 600)
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_lifetime_has_no_expiry(self, mocker: MockerFixture) -> None:
+        """No lifetime from the caller -> no expires-at (only the owner may reap
+        it); the spawner never guesses a lifetime."""
+        spawner, mock_client = self._spawner_with_mocks(
+            mocker, min_lifetime_seconds=86400, clock=lambda: 1000.0
+        )
+
+        await spawner.spawn("agent-1", "sandbox:latest", env={})
+
+        assert "cloud-agents/expires-at" not in mock_client.create.call_args.kwargs["labels"]
+
+    @pytest.mark.asyncio
+    async def test_spawn_strips_reserved_caller_labels_when_unconfigured(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Caller-supplied owner-instance/expires-at labels are always dropped,
+        even when the spawner has no owner or lifetime to stamp -- otherwise a
+        caller could make a sandbox look owned by (or expired for) a replica."""
+        spawner, mock_client = self._spawner_with_mocks(mocker)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={},
+            labels={
+                "cloud-agents/owner-instance": "runner-b",
+                "cloud-agents/expires-at": "1",
+                "keep": "me",
+            },
+        )
+
+        assert mock_client.create.call_args.kwargs["labels"] == {
+            "keep": "me",
+            "spawned-by": "workflow-runner",
+            "cloud-agents/agent-name": "agent-1",
+        }
 
     @pytest.mark.asyncio
     async def test_spawn_with_credential_does_not_expose_real_value(

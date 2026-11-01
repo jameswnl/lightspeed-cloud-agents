@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 from pydantic import BaseModel
 
 from cloud_agents.runtime.audit import emit_audit
+from cloud_agents.spawner.lifetime import cli_session_lifetime_seconds
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import AgentSpawner
@@ -169,6 +170,9 @@ class CLISessionLauncher:
                 service_account=service_account,
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
+                lifetime_seconds=cli_session_lifetime_seconds(
+                    self.max_session_seconds, self._check_interval
+                ),
             )
 
             info = CLISessionInfo(

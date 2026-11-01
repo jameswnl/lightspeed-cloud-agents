@@ -447,3 +447,11 @@ class TestListActiveLabelsDefault:
         await spawner.spawn("a1", "img", env={})
 
         assert await spawner.list_active_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]
+
+
+class TestSpawnForwardsLifetime:
+    @pytest.mark.asyncio
+    async def test_lifetime_seconds_forwarded_to_do_spawn(self) -> None:
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={}, lifetime_seconds=1234)
+        assert spawner.last_do_spawn_kwargs["lifetime_seconds"] == 1234
