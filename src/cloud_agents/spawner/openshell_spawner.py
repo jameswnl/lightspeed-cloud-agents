@@ -1046,8 +1046,11 @@ class OpenShellSpawner(AgentSpawner):
         if credential_secret_name:
             cred_keys.add(credential_secret_name)
             cred_keys.add(credential_secret_name.upper().replace("-", "_"))
+        # MCP secrets are delivered as files (_inject_mcp_secrets()), never
+        # via the sandbox environment.
+        mcp_secret_keys = {secret_name for secret_name, _, _ in mcp_secret_mounts or []}
         for key, value in env.items():
-            if key in cred_keys:
+            if key in cred_keys or key in mcp_secret_keys:
                 continue
             spec.environment[key] = value
         if provider_id:
@@ -1112,7 +1115,6 @@ class OpenShellSpawner(AgentSpawner):
             # secrets are likewise filtered: they were already delivered as
             # files above, and exec env is inlined into the gateway's
             # command string.
-            mcp_secret_keys = {secret_name for secret_name, _, _ in mcp_secret_mounts or []}
             filtered_env = {
                 k: v for k, v in env.items() if k not in cred_keys and k not in mcp_secret_keys
             }
@@ -1639,8 +1641,10 @@ class OpenShellSpawner(AgentSpawner):
         is created owner-only (umask 077).
 
         Raises:
-            RuntimeError: If the content exceeds _MAX_EXEC_STDIN_BYTES or
-                the exec fails.
+            RuntimeError: If the content exceeds _MAX_EXEC_STDIN_BYTES, the
+                exec fails, or the write exits nonzero. exec_stream() does
+                not raise on a nonzero exit by itself (see
+                _materialize_allowed_skills()).
         """
         data = content.encode()
         if len(data) > self._MAX_EXEC_STDIN_BYTES:
@@ -1652,25 +1656,45 @@ class OpenShellSpawner(AgentSpawner):
         cmd = ["sh", "-c", 'umask 077; cat > "$1"', "sh", path]
         try:
 
-            def _sync_exec() -> None:
-                for _ in self._client.exec_stream(sandbox_id, cmd, stdin=data):
-                    pass
+            def _sync_exec() -> Any:
+                result = None
+                for item in self._client.exec_stream(sandbox_id, cmd, stdin=data):
+                    if hasattr(item, "exit_code"):
+                        result = item
+                return result
 
-            await asyncio.to_thread(_sync_exec)
+            result = await asyncio.to_thread(_sync_exec)
         except Exception as exc:
             raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"Failed to write {path} to sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
-        """Create a directory inside the sandbox."""
+        """Create a directory inside the sandbox.
 
-        def _sync_mkdir() -> None:
-            for _ in self._client.exec_stream(
+        Raises:
+            RuntimeError: If mkdir exits nonzero.
+        """
+
+        def _sync_mkdir() -> Any:
+            result = None
+            for item in self._client.exec_stream(
                 sandbox_id,
                 ["mkdir", "-p", path],
             ):
-                pass
+                if hasattr(item, "exit_code"):
+                    result = item
+            return result
 
-        await asyncio.to_thread(_sync_mkdir)
+        result = await asyncio.to_thread(_sync_mkdir)
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"mkdir {path} failed in sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def _materialize_allowed_skills(self, sandbox_id: str, allowed_skills: list[str]) -> None:
         """Copy the allowed_skills subset into the provider-listable skills dir.

@@ -3182,7 +3182,12 @@ class TestMCPSecretInjection:
         mock_write.assert_not_called()
 
     @staticmethod
-    def _recording_exec_stream(calls: list[dict[str, Any]], fail_writes: bool = False):
+    def _recording_exec_stream(
+        calls: list[dict[str, Any]],
+        fail_writes: bool = False,
+        write_exit_code: int = 0,
+        mkdir_exit_code: int = 0,
+    ):
         """Recording stub matching openshell 0.0.111's SandboxClient.exec_stream().
 
         Real signature: exec_stream(sandbox_id, command, *, workdir=None,
@@ -3192,9 +3197,11 @@ class TestMCPSecretInjection:
         """
 
         class _ExecResult:
-            exit_code = 0
             stdout = ""
-            stderr = ""
+
+            def __init__(self, exit_code: int) -> None:
+                self.exit_code = exit_code
+                self.stderr = "" if exit_code == 0 else "Permission denied"
 
         def exec_stream(
             sandbox_id: str,
@@ -3216,7 +3223,8 @@ class TestMCPSecretInjection:
             )
             if fail_writes and command[0] != "mkdir":
                 raise ConnectionError("sandbox unreachable")
-            yield _ExecResult()
+            is_mkdir = command[0] == "mkdir"
+            yield _ExecResult(mkdir_exit_code if is_mkdir else write_exit_code)
 
         return exec_stream
 
@@ -3396,6 +3404,98 @@ class TestMCPSecretInjection:
         assert server_env["LIGHTSPEED_MODEL"] == "m"
         # The secret still reaches its file, via stdin.
         assert [c["stdin"] for c in calls if c["stdin"]] == [secret.encode()]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_raises_without_secret(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from the secret write raises; the message omits the secret."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, write_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="Failed to write") as exc_info:
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": secret},
+            )
+
+        assert secret not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_nonzero_mkdir_exit_raises(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from mkdir raises before the secret is written."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, mkdir_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="mkdir"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": "secret-value"},
+            )
+
+        assert not [c for c in calls if c["stdin"]]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_during_spawn_deletes_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A nonzero secret-write exit goes through spawn()'s orphan cleanup."""
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls, write_exit_code=1)
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"my-secret": "secret-value"},
+                mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+        spawner.start_server.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_not_copied_into_spec_environment(self, mocker: MockerFixture) -> None:
+        """MCP secret values never reach spec.environment, like provider credentials."""
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls)
+        )
+        spec = mocker.MagicMock()
+        spec.environment = {}
+        spec.providers = []
+        from openshell._proto import openshell_pb2
+
+        mocker.patch.object(openshell_pb2, "SandboxSpec", return_value=spec)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"my-secret": secret, "LIGHTSPEED_MODEL": "m"},
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        assert mock_client.create.call_args.kwargs["spec"] is spec
+        assert "my-secret" not in spec.environment
+        assert secret not in spec.environment.values()
+        assert spec.environment["LIGHTSPEED_MODEL"] == "m"
 
 
 class TestTLSAndServiceAccountSkipped:
