@@ -140,6 +140,21 @@ previous owner is gone. Sandboxes with no `expires-at` and sandboxes with a
 malformed one are left alone and logged. Caller-supplied `expires-at` labels
 (and the retired `cloud-agents/owner-instance`) are always dropped.
 
+**Periodic reaper.** Startup reconcile alone would leave a crashed replica's
+sandboxes until some runner restarts, so every runner (Temporal and local
+entrypoints) also re-runs the same reconcile every `REAPER_INTERVAL_SECONDS`
+(default 300; `0` disables it; must be a non-negative integer or startup
+fails). Runs are single-flight: a tick that fires while the previous run is
+still in progress is skipped. Every reconcile run, startup or periodic,
+bounds the list and each delete at 30s (`SANDBOX_REAP_CALL_TIMEOUT_SECONDS`
+in `temporal/entrypoint.py`, via `await_within()`), so a hung gateway can't
+stall startup or the reaper. A periodic run's errors are logged, never
+raised. Failed or timed-out calls are counted in
+`ls_sandbox_reap_failures_total{operation="list"|"delete"}`, reaped
+sandboxes in `ls_sandbox_orphans_cleaned_total`. The reaper is cancelled on
+app shutdown. Replicas reap concurrently, so a delete that finds the
+sandbox already gone (gRPC `NOT_FOUND`) counts as success.
+
 **Assumptions.** Expiry is only as safe as the deadlines behind it: it relies
 on every phase that can use a sandbox after `expires-at` is stamped being
 bounded by an enforced wall-clock deadline, plus clocks between replicas
@@ -193,7 +208,7 @@ code.
 Each retry attempt spawns a new sandbox (the attempt number is part of the
 `ca-` name; the activity runs with `maximum_attempts=1`), so the lifetime is
 per attempt. A lifecycle without an enforced latest-use bound gets no
-lifetime and no `expires-at`, so startup reconcile never reaps it. CLI
+lifetime and no `expires-at`, so reconcile never reaps it. CLI
 sessions are one: their timeout monitor can stop or block.
 
 `SANDBOX_MIN_LIFETIME_SECONDS` (default 86400) and `SANDBOX_EXPIRY_SKEW_SECONDS`

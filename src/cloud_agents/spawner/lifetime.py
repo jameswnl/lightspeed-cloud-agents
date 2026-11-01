@@ -1,18 +1,18 @@
 """Sandbox expiry labels and the enforced deadlines they're computed from.
 
 Shared by OpenShellSpawner (which stamps the labels at spawn time),
-reconcile_orphaned_sandboxes() (which filters on them at startup) and the
-spawn call sites that compute each sandbox's lifetime. Kept dependency-free
-so the Temporal workflow module can import it.
+reconcile_orphaned_sandboxes() (which filters on them at startup and
+periodically) and the spawn call sites that compute each sandbox's lifetime.
+Kept dependency-free so the Temporal workflow module can import it.
 
 A sandbox's cloud-agents/expires-at label must never be earlier than its
-latest legitimate use, or another replica's startup reconcile could destroy
-it while still in use. Each workflow step therefore passes a lifetime equal
+latest legitimate use, or another replica's reconcile could destroy it
+while still in use. Each workflow step therefore passes a lifetime equal
 to the sum of the wall-clock deadlines enforced on everything that can use
 the sandbox after expires-at is stamped (spawn budget, run call, transcript
 fetch and save) plus destroy grace; the spawner adds a clock-skew margin.
 Lifecycles without an enforced latest-use bound (e.g. CLI sessions) pass no
-lifetime and get no expiry, so startup reconcile never reaps them.
+lifetime and get no expiry, so reconcile never reaps them.
 
 Spawn and each post-spawn I/O phase run through await_within(): the work runs as a
 task that's waited on for at most its deadline, then cancelled and waited on

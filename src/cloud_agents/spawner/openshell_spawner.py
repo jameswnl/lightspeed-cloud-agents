@@ -2241,7 +2241,12 @@ class OpenShellSpawner(AgentSpawner):
         A sandbox tracked by this process goes through destroy() for the full
         provider/task cleanup (its tracked path deletes only the tracked
         name); an untracked one is deleted by name and nothing else.
+
+        A sandbox that's already gone (NOT_FOUND, e.g. another replica's
+        reconcile deleted it first) counts as destroyed.
         """
+        import grpc
+
         agent_name = next(
             (agent for agent, name in self._sandbox_names.items() if name == sandbox_name),
             None,
@@ -2249,7 +2254,13 @@ class OpenShellSpawner(AgentSpawner):
         if agent_name is not None:
             await self.destroy(agent_name)
             return
-        await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
+        try:
+            await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.NOT_FOUND:
+                raise
+            logger.info("OpenShell sandbox '%s' already deleted", sandbox_name)
+            return
         logger.info("Destroyed OpenShell sandbox '%s'", sandbox_name)
 
     async def _list_refs(self, labels: dict[str, str] | None = None) -> list[Any]:

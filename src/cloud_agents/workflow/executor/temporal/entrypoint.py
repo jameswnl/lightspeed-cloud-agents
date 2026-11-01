@@ -8,10 +8,11 @@ Usage: uvicorn agents.workflow.temporal_entrypoint:app --host 0.0.0.0 --port 808
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -20,7 +21,12 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
-from cloud_agents.spawner.lifetime import EXPIRES_AT_LABEL_KEY, SPAWNED_BY_LABEL
+from cloud_agents.spawner.lifetime import (
+    EXPIRES_AT_LABEL_KEY,
+    SPAWNED_BY_LABEL,
+    await_within,
+    cancel_within,
+)
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
@@ -82,6 +88,12 @@ SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS = 86400
 # Added to every expires-at for clock skew between replicas.
 DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS = 600
+# How often each replica re-runs reconcile to reap sandboxes that expired
+# since startup; 0 disables the periodic reaper.
+DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS = 300
+# Bound on each gateway call (list, delete) a reconcile run makes, so a hung
+# gateway can't stall startup or the reaper.
+SANDBOX_REAP_CALL_TIMEOUT_SECONDS = 30
 
 
 def _non_negative_int_env(name: str, default: int) -> int:
@@ -108,6 +120,11 @@ def _sandbox_min_lifetime_seconds() -> int:
 def _sandbox_expiry_skew_seconds() -> int:
     """SANDBOX_EXPIRY_SKEW_SECONDS (default 600): clock-skew margin on expiry."""
     return _non_negative_int_env("SANDBOX_EXPIRY_SKEW_SECONDS", DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS)
+
+
+def _sandbox_reap_interval_seconds() -> int:
+    """REAPER_INTERVAL_SECONDS (default 300): periodic reaper interval, 0 disables."""
+    return _non_negative_int_env("REAPER_INTERVAL_SECONDS", DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS)
 
 
 def _create_spawner():
@@ -149,31 +166,56 @@ def _create_spawner():
 
 
 async def reconcile_orphaned_sandboxes(
-    spawner: AgentSpawner | None, now: float | None = None
+    spawner: AgentSpawner | None, now: float | None = None, *, trigger: str = "startup"
 ) -> None:
     """Destroy expired orphaned sandboxes left from a previous crash.
 
-    On startup, lists sandboxes labelled "spawned-by=workflow-runner" once and
-    destroys exactly those whose "cloud-agents/expires-at" is in the past,
-    whichever runner spawned them. Expiry is the only criterion: no runner
-    identity can prove a sandbox's previous owner is gone, so an unexpired
-    sandbox may still be in use by a live replica.
+    Runs on startup and then periodically (start_sandbox_reaper()). Lists
+    sandboxes labelled "spawned-by=workflow-runner" once and destroys exactly
+    those whose "cloud-agents/expires-at" is in the past, whichever runner
+    spawned them. Expiry is the only criterion: no runner identity can prove a
+    sandbox's previous owner is gone, so an unexpired sandbox may still be in
+    use by a live replica.
 
     Sandboxes with no expires-at label (spawned before expiry labelling
     existed, or with no enforced lifetime, e.g. CLI sessions) and sandboxes
     with a malformed one are left alone and logged.
 
+    The list and each delete are bounded by SANDBOX_REAP_CALL_TIMEOUT_SECONDS.
+    Several replicas may reconcile at once; the spawner treats deleting an
+    already-deleted sandbox as success.
+
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
         now: Current unix time; defaults to time.time(). Injectable for tests.
+        trigger: "startup" or "reaper", for logs and the audit event.
+
+    Raises:
+        Exception: If listing sandboxes fails or times out (counted in
+            ls_sandbox_reap_failures_total). Delete failures are logged and
+            counted, not raised.
     """
     if spawner is None:
         return
+    from cloud_agents.workflow.executor.temporal.metrics import (
+        ls_sandbox_orphans_cleaned_total,
+        ls_sandbox_reap_failures_total,
+    )
+
     now = time.time() if now is None else now
 
+    try:
+        listed = await await_within(
+            spawner.list_sandbox_labels(SPAWNED_BY_LABEL),
+            SANDBOX_REAP_CALL_TIMEOUT_SECONDS,
+            what="Orphaned sandbox list",
+        )
+    except Exception:
+        ls_sandbox_reap_failures_total.labels(operation="list").inc()
+        raise
     orphans = []
     no_expiry = 0
-    for name, labels in await spawner.list_sandbox_labels(SPAWNED_BY_LABEL):
+    for name, labels in listed:
         expires_at = labels.get(EXPIRES_AT_LABEL_KEY)
         if expires_at is None:
             no_expiry += 1
@@ -196,7 +238,11 @@ async def reconcile_orphaned_sandboxes(
     for name in orphans:
         logger.warning("Destroying orphaned sandbox '%s'", name)
         try:
-            await spawner.destroy_sandbox(name)
+            await await_within(
+                spawner.destroy_sandbox(name),
+                SANDBOX_REAP_CALL_TIMEOUT_SECONDS,
+                what=f"Orphaned sandbox '{name}' delete",
+            )
             cleaned += 1
         except NotImplementedError:
             # Never fall back to agent-name destroy(): it may not be exact.
@@ -206,18 +252,70 @@ async def reconcile_orphaned_sandboxes(
             failed_names.append(name)
         except Exception as exc:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
+            ls_sandbox_reap_failures_total.labels(operation="delete").inc()
             failed_names.append(name)
     if orphans:
-        logger.info("Cleaned up %d/%d orphaned sandbox(es) on startup", cleaned, len(orphans))
+        logger.info("Cleaned up %d/%d orphaned sandbox(es) on %s", cleaned, len(orphans), trigger)
         from cloud_agents.runtime.audit import emit_audit
-        from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_orphans_cleaned_total
 
         ls_sandbox_orphans_cleaned_total.inc(cleaned)
         emit_audit(
             event_type="orphan_cleanup",
-            workflow_id="startup",
+            workflow_id=trigger,
             details={"count": cleaned, "failed": failed_names, "total_found": len(orphans)},
         )
+
+
+def start_sandbox_reaper(
+    spawner: AgentSpawner | None,
+    interval: float,
+    *,
+    clock: Callable[[], float] = time.time,
+) -> asyncio.Task[None] | None:
+    """Start re-running reconcile_orphaned_sandboxes() every interval seconds.
+
+    Startup reconcile alone leaves a crashed replica's sandboxes until some
+    runner restarts. Runs are single-flight: a tick that fires while the
+    previous run is still in progress is skipped. Each run's gateway calls
+    are bounded, and its errors are logged, never raised.
+
+    Returns:
+        The reaper task, for stop_sandbox_reaper(); None if there's no
+        spawner or interval is 0 (disabled).
+    """
+    if spawner is None or interval == 0:
+        return None
+    logger.info("Sandbox reaper started (every %gs)", interval)
+    return asyncio.create_task(_reap_periodically(spawner, interval, clock), name="sandbox-reaper")
+
+
+async def stop_sandbox_reaper(task: asyncio.Task[None] | None) -> None:
+    """Cancel the reaper (and any run in progress) on shutdown."""
+    if task is not None:
+        await cancel_within(task, what="Sandbox reaper")
+
+
+async def _reap_periodically(
+    spawner: AgentSpawner, interval: float, clock: Callable[[], float]
+) -> None:
+    run: asyncio.Task[None] | None = None
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            if run is not None and not run.done():
+                logger.warning("Skipping sandbox reaper run: previous run still in progress")
+                continue
+            run = asyncio.create_task(_reap_once(spawner, clock))
+    finally:
+        if run is not None and not run.done():
+            await cancel_within(run, what="Sandbox reaper run")
+
+
+async def _reap_once(spawner: AgentSpawner, clock: Callable[[], float]) -> None:
+    try:
+        await reconcile_orphaned_sandboxes(spawner, now=clock(), trigger="reaper")
+    except Exception as exc:
+        logger.error("Sandbox reaper run failed: %s", exc)
 
 
 CONTENT_POLICY_PATH = os.environ.get("CONTENT_POLICY_PATH", "")
@@ -302,12 +400,14 @@ def build_temporal_app(
     else:
         logger.info("Transcript store disabled (TRANSCRIPT_DB_URL not set)")
     worker_config = build_worker_config(spawner=spawner, transcript_store=transcript_store)
+    reap_interval = _sandbox_reap_interval_seconds()
     temporal_client_holder: dict[str, Client] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
         await reconcile_orphaned_sandboxes(spawner)
+        reaper = start_sandbox_reaper(spawner, reap_interval)
 
         # Connect transcript store (best-effort: failures are non-fatal)
         if transcript_store is not None:
@@ -358,6 +458,7 @@ def build_temporal_app(
             )
             yield
         finally:
+            await stop_sandbox_reaper(reaper)
             # Close transcript store on shutdown
             if transcript_store is not None:
                 try:

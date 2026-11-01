@@ -26,7 +26,10 @@ from cloud_agents.workflow.executor.temporal.entrypoint import (
     _create_spawner,
     _get_auth_dependency,
     _load_content_policy,
+    _sandbox_reap_interval_seconds,
     reconcile_orphaned_sandboxes,
+    start_sandbox_reaper,
+    stop_sandbox_reaper,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,25 +63,29 @@ def build_local_app() -> FastAPI:
         run_state_store=run_state_store,
         transcript_store=transcript_store,
     )
+    reap_interval = _sandbox_reap_interval_seconds()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect stores and clean up orphans on startup."""
         await reconcile_orphaned_sandboxes(spawner)
+        reaper = start_sandbox_reaper(spawner, reap_interval)
+        try:
+            if transcript_store:
+                try:
+                    await transcript_store.connect()
+                except Exception as exc:
+                    logger.warning("Failed to connect transcript store: %s", exc)
 
-        if transcript_store:
-            try:
-                await transcript_store.connect()
-            except Exception as exc:
-                logger.warning("Failed to connect transcript store: %s", exc)
+            if run_state_store:
+                await run_state_store.connect()
+                paused = await executor.recover_paused()
+                if paused:
+                    logger.info("Found %d paused workflows on startup", len(paused))
 
-        if run_state_store:
-            await run_state_store.connect()
-            paused = await executor.recover_paused()
-            if paused:
-                logger.info("Found %d paused workflows on startup", len(paused))
-
-        yield
+            yield
+        finally:
+            await stop_sandbox_reaper(reaper)
 
         if transcript_store:
             try:

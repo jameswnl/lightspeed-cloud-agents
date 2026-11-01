@@ -47,7 +47,13 @@ ls_sandbox_timeout_total = Counter(
 
 ls_sandbox_orphans_cleaned_total = Counter(
     "ls_sandbox_orphans_cleaned_total",
-    "Number of orphaned sandbox containers cleaned up on startup",
+    "Number of expired orphaned sandboxes cleaned up by startup reconcile or the reaper",
+)
+
+ls_sandbox_reap_failures_total = Counter(
+    "ls_sandbox_reap_failures_total",
+    "Number of failed or timed-out gateway calls during orphaned sandbox reconcile",
+    ["operation"],
 )
 
 ls_rate_limit_rejections_total = Counter(

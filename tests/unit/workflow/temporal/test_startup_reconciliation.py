@@ -648,3 +648,338 @@ class TestMcpSecretsInsideSpawnBudget:
 
         assert "MCP_TOKEN" not in seen["env"]
         assert seen["env"]["PLAIN"] == "ok"
+
+
+# --- Periodic expired-only reaper -------------------------------------------
+
+
+class _AdvancingClock:
+    """Fake clock: each reading is `step` seconds after the previous one."""
+
+    def __init__(self, start: float = NOW, step: float = 10.0) -> None:
+        self.readings: list[float] = []
+        self._next = start
+        self._step = step
+
+    def __call__(self) -> float:
+        value = self._next
+        self._next += self._step
+        self.readings.append(value)
+        return value
+
+
+class _NotFound(Exception):
+    """Stand-in for the grpc.RpcError DeleteSandbox raises for a missing name."""
+
+    def code(self):
+        import grpc
+
+        return grpc.StatusCode.NOT_FOUND
+
+
+class _SharedGateway(_FakeGateway):
+    """Gateway whose DeleteSandbox fails with NOT_FOUND for a missing name,
+    like a sandbox another replica already deleted."""
+
+    def delete(self, name, *, workspace):
+        if name not in self.refs:
+            import grpc
+
+            class NotFound(grpc.RpcError, _NotFound):
+                pass
+
+            raise NotFound()
+        super().delete(name, workspace=workspace)
+
+
+class _HangingListGateway(_FakeGateway):
+    """Gateway whose first `hang` list calls block until released."""
+
+    def __init__(self, refs: list[_FakeRef] | None = None, hang: int = 1) -> None:
+        super().__init__(refs)
+        self.release = threading.Event()
+        self.list_calls = 0
+        self._hang = hang
+
+    def list(self, **kwargs):
+        self.list_calls += 1
+        if self.list_calls <= self._hang:
+            self.release.wait(10)
+        return super().list(**kwargs)
+
+
+async def _until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition not reached in time"
+        await asyncio.sleep(0.01)
+
+
+def _counter(name: str, labels: dict[str, str] | None = None) -> float:
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(name, labels or {}) or 0.0
+
+
+INTERVAL = 0.02
+
+
+class TestPeriodicReaper:
+    """start_sandbox_reaper() re-runs reconcile_orphaned_sandboxes() every
+    interval, so orphans expire into deletion without a runner restart."""
+
+    @pytest.fixture(autouse=True)
+    def _short_bounds(self, mocker):
+        from cloud_agents.spawner import lifetime
+
+        mocker.patch.object(lifetime, "SANDBOX_CANCEL_GRACE_SECONDS", 0.2)
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_CALL_TIMEOUT_SECONDS", 0.2)
+
+    @pytest.mark.asyncio
+    async def test_expired_reaped_on_later_tick(self, mocker) -> None:
+        gateway = _FakeGateway([_FakeRef("sb-soon", _labels("ca-a", str(int(NOW) + 25)))])
+        spawner = _real_spawner(mocker, gateway)
+        clock = _AdvancingClock()
+
+        task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=clock)
+        try:
+            await _until(lambda: gateway.deleted)
+        finally:
+            await entrypoint.stop_sandbox_reaper(task)
+
+        assert gateway.deleted == ["sb-soon"]
+        # Not reaped on the ticks at NOW, NOW+10, NOW+20, only once past expiry.
+        assert len(clock.readings) >= 4
+
+    @pytest.mark.asyncio
+    async def test_unexpired_legacy_and_malformed_kept(self, mocker) -> None:
+        gateway = _FakeGateway(
+            [
+                _FakeRef("sb-expired", _labels("ca-a", PAST)),
+                _FakeRef("sb-live", _labels("ca-b", str(int(NOW) + 10**6))),
+                _FakeRef("sb-legacy", {"spawned-by": "workflow-runner"}),
+                _FakeRef("sb-noexpiry", _labels("ca-c")),
+                _FakeRef("sb-weird", _labels("ca-d", "soon")),
+            ]
+        )
+        spawner = _real_spawner(mocker, gateway)
+        clock = _AdvancingClock()
+
+        task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=clock)
+        try:
+            await _until(lambda: len(clock.readings) >= 4)
+        finally:
+            await entrypoint.stop_sandbox_reaper(task)
+
+        assert gateway.deleted == ["sb-expired"]
+        assert set(gateway.refs) == {"sb-live", "sb-legacy", "sb-noexpiry", "sb-weird"}
+
+    @pytest.mark.asyncio
+    async def test_overlapping_tick_skipped(self, mocker, caplog) -> None:
+        """A tick that fires while the previous run is still in progress is
+        skipped rather than starting a second, concurrent run."""
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_CALL_TIMEOUT_SECONDS", 30)
+        gateway = _HangingListGateway([_FakeRef("sb-expired", _labels("ca-a", PAST))])
+        spawner = _real_spawner(mocker, gateway)
+
+        with caplog.at_level("WARNING"):
+            task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=_AdvancingClock())
+            try:
+                await asyncio.sleep(INTERVAL * 10)
+                assert gateway.list_calls == 1
+                assert "previous run still in progress" in caplog.text
+                gateway.release.set()
+                await _until(lambda: gateway.deleted)
+            finally:
+                gateway.release.set()
+                await entrypoint.stop_sandbox_reaper(task)
+
+        assert gateway.deleted == ["sb-expired"]
+
+    @pytest.mark.asyncio
+    async def test_hung_list_bounded_and_counted(self, mocker, caplog) -> None:
+        """A list call that never returns is abandoned at its deadline; the
+        failure is logged and counted, and a later run still reaps."""
+        gateway = _HangingListGateway([_FakeRef("sb-expired", _labels("ca-a", PAST))])
+        spawner = _real_spawner(mocker, gateway)
+        before = _counter("ls_sandbox_reap_failures_total", {"operation": "list"})
+
+        with caplog.at_level("ERROR"):
+            task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=_AdvancingClock())
+            try:
+                await _until(lambda: gateway.deleted)
+            finally:
+                await entrypoint.stop_sandbox_reaper(task)
+                gateway.release.set()
+
+        assert gateway.deleted == ["sb-expired"]
+        assert gateway.list_calls >= 2
+        assert _counter("ls_sandbox_reap_failures_total", {"operation": "list"}) == before + 1
+        assert "Sandbox reaper run failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_hung_delete_bounded_and_counted(self, mocker) -> None:
+        release = threading.Event()
+        gateway = _FakeGateway(
+            [
+                _FakeRef("sb-stuck", _labels("ca-a", PAST)),
+                _FakeRef("sb-ok", _labels("ca-b", PAST)),
+            ]
+        )
+        real_delete = gateway.delete
+
+        def delete(name, *, workspace):
+            if name == "sb-stuck":
+                release.wait(10)
+            real_delete(name, workspace=workspace)
+
+        gateway.delete = delete
+        spawner = _real_spawner(mocker, gateway)
+        before = _counter("ls_sandbox_reap_failures_total", {"operation": "delete"})
+
+        start = time.monotonic()
+        try:
+            await reconcile_orphaned_sandboxes(spawner, now=NOW)
+        finally:
+            release.set()
+
+        assert time.monotonic() - start < 2
+        assert "sb-ok" in gateway.deleted
+        assert _counter("ls_sandbox_reap_failures_total", {"operation": "delete"}) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_replicas_not_found_is_success(self, mocker, caplog) -> None:
+        """Two replicas reap the same expired sandbox: whichever deletes it
+        second gets NOT_FOUND, which counts as success, not a failure."""
+        gateway = _SharedGateway([_FakeRef("sb-expired", _labels("ca-a", PAST))])
+        replica_a = _real_spawner(mocker, gateway)
+        replica_b = _real_spawner(mocker, gateway)
+        # Both replicas list before either deletes.
+        listed = [(r.name, dict(r.labels)) for r in gateway.refs.values()]
+        mocker.patch.object(replica_a, "list_sandbox_labels", return_value=listed)
+        mocker.patch.object(replica_b, "list_sandbox_labels", return_value=listed)
+        before = _counter("ls_sandbox_reap_failures_total", {"operation": "delete"})
+
+        with caplog.at_level("WARNING"):
+            await reconcile_orphaned_sandboxes(replica_a, now=NOW, trigger="reaper")
+            await reconcile_orphaned_sandboxes(replica_b, now=NOW, trigger="reaper")
+
+        assert gateway.deleted == ["sb-expired"]
+        assert _counter("ls_sandbox_reap_failures_total", {"operation": "delete"}) == before
+        assert "Failed to destroy" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_destroy_sandbox_not_found_does_not_raise(self, mocker) -> None:
+        spawner = _real_spawner(mocker, _SharedGateway())
+
+        await spawner.destroy_sandbox("sb-gone")
+
+    @pytest.mark.asyncio
+    async def test_destroy_sandbox_other_rpc_error_raises(self, mocker) -> None:
+        import grpc
+
+        class Unavailable(grpc.RpcError):
+            def code(self):
+                return grpc.StatusCode.UNAVAILABLE
+
+        gateway = _FakeGateway()
+        gateway.delete = MagicMock(side_effect=Unavailable())
+        spawner = _real_spawner(mocker, gateway)
+
+        with pytest.raises(grpc.RpcError):
+            await spawner.destroy_sandbox("sb-x")
+
+    @pytest.mark.asyncio
+    async def test_disabled_when_interval_zero(self, mocker) -> None:
+        spawner = _real_spawner(mocker, _FakeGateway())
+
+        assert entrypoint.start_sandbox_reaper(spawner, 0) is None
+        assert entrypoint.start_sandbox_reaper(None, INTERVAL) is None
+        await entrypoint.stop_sandbox_reaper(None)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_idle_reaper(self, mocker) -> None:
+        spawner = _real_spawner(mocker, _FakeGateway())
+        task = entrypoint.start_sandbox_reaper(spawner, 3600)
+
+        await entrypoint.stop_sandbox_reaper(task)
+
+        assert task.done()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_mid_run_within_grace(self, mocker) -> None:
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_CALL_TIMEOUT_SECONDS", 30)
+        gateway = _HangingListGateway([_FakeRef("sb-expired", _labels("ca-a", PAST))])
+        spawner = _real_spawner(mocker, gateway)
+        task = entrypoint.start_sandbox_reaper(spawner, INTERVAL, clock=_AdvancingClock())
+        await _until(lambda: gateway.list_calls == 1)
+
+        start = time.monotonic()
+        try:
+            await entrypoint.stop_sandbox_reaper(task)
+        finally:
+            gateway.release.set()
+
+        assert time.monotonic() - start < 1
+        assert task.done()
+        assert gateway.deleted == []
+
+
+class TestReaperIntervalSetting:
+    def test_default(self, monkeypatch) -> None:
+        monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
+        assert entrypoint._sandbox_reap_interval_seconds() == 300
+
+    def test_configured(self, monkeypatch) -> None:
+        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "0")
+        assert entrypoint._sandbox_reap_interval_seconds() == 0
+
+    @pytest.mark.parametrize("bad", ["abc", "-1", "1.5"])
+    def test_invalid_fails_startup(self, monkeypatch, bad) -> None:
+        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", bad)
+        with pytest.raises(ValueError, match="REAPER_INTERVAL_SECONDS"):
+            entrypoint._sandbox_reap_interval_seconds()
+
+
+def _reaper_tasks() -> list[asyncio.Task]:
+    return [t for t in asyncio.all_tasks() if t.get_name() == "sandbox-reaper" and not t.done()]
+
+
+class TestReaperInLifespans:
+    """Both entrypoints start the reaper after startup reconcile and cancel
+    it on shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_local_lifespan(self, mocker, monkeypatch) -> None:
+        from cloud_agents.workflow.executor.local import entrypoint as local_entrypoint
+
+        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "3600")
+        mocker.patch.object(local_entrypoint, "_create_spawner", return_value=_fake_spawner({}))
+        app = local_entrypoint.build_local_app()
+
+        async with app.router.lifespan_context(app):
+            assert len(_reaper_tasks()) == 1
+        assert _reaper_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_temporal_lifespan(self, mocker, monkeypatch) -> None:
+        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "3600")
+        monkeypatch.delenv("TRANSCRIPT_DB_URL", raising=False)
+        mocker.patch.object(entrypoint, "_create_spawner", return_value=_fake_spawner({}))
+        mocker.patch.object(entrypoint.Client, "connect", side_effect=RuntimeError("no temporal"))
+        app = entrypoint.build_temporal_app()
+
+        async with app.router.lifespan_context(app):
+            assert len(_reaper_tasks()) == 1
+        assert _reaper_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_lifespan_reaper_disabled(self, mocker, monkeypatch) -> None:
+        from cloud_agents.workflow.executor.local import entrypoint as local_entrypoint
+
+        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "0")
+        mocker.patch.object(local_entrypoint, "_create_spawner", return_value=_fake_spawner({}))
+        app = local_entrypoint.build_local_app()
+
+        async with app.router.lifespan_context(app):
+            assert _reaper_tasks() == []
