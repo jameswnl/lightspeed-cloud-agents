@@ -30,25 +30,21 @@ from typing import Any
 import grpc
 from openshell._proto import openshell_pb2, openshell_pb2_grpc
 
+from cloud_agents.spawner.exec_request import check_exec_message_size
+from cloud_agents.spawner.lifetime import (
+    SANDBOX_CANCEL_GRACE_SECONDS,
+    SandboxDeadlineExceeded,
+    await_within,
+)
 from cloud_agents.spawner.step_protocol import MAX_STDERR_TAIL, StepProtocolReader
 from cloud_agents.workflow.core.models import TranscriptEvent
 
 logger = logging.getLogger(__name__)
 
-# The gateway caps a whole inbound gRPC message at 1 MiB, and ExecSandboxRequest
-# carries stdin inline, so the serialized request must fit.
-GATEWAY_MAX_MESSAGE_BYTES = 1024 * 1024
 # Same headroom as the SDK adds over timeout_seconds for SSH setup and teardown.
 GRPC_DEADLINE_HEADROOM_SECONDS = 10
-# How long aclose() waits for the reader thread after cancelling the call.
-# TODO: use lifetime.cancel_within once the reconcile-scope PR (#278) lands.
-CLOSE_GRACE_SECONDS = 5
 _MAX_QUEUED_CHUNKS = 16
 _EOF = object()
-
-
-class ExecRequestTooLarge(ValueError):
-    """The ExecSandboxRequest is over the gateway's message cap; nothing was sent."""
 
 
 class ExecCall:
@@ -83,7 +79,8 @@ class ExecCall:
         stdin: Written to the process's stdin, which is then closed.
 
     Raises:
-        ExecRequestTooLarge: The request exceeds GATEWAY_MAX_MESSAGE_BYTES.
+        StepRequestTooLarge: The request may exceed the gateway's message cap
+            (``check_exec_message_size``); nothing is sent.
     """
 
     def __init__(
@@ -101,6 +98,7 @@ class ExecCall:
             raise ValueError("command must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        check_exec_message_size(stdin, dict(env or {}), list(command))
         self._request = openshell_pb2.ExecSandboxRequest(
             sandbox_id=sandbox_id,
             command=list(command),
@@ -109,11 +107,6 @@ class ExecCall:
             timeout_seconds=timeout_seconds,
             stdin=stdin,
         )
-        if (size := self._request.ByteSize()) > GATEWAY_MAX_MESSAGE_BYTES:
-            raise ExecRequestTooLarge(
-                f"exec request is {size} bytes, over the gateway's "
-                f"{GATEWAY_MAX_MESSAGE_BYTES}-byte message limit"
-            )
         self._channel_factory = channel_factory
         self._deadline = timeout_seconds + GRPC_DEADLINE_HEADROOM_SECONDS
         self.exit_code: int | None = None
@@ -122,6 +115,7 @@ class ExecCall:
         self._call: Any = None
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._pump_done: asyncio.Future[None] | None = None
         self._queue: asyncio.Queue = asyncio.Queue()
         # One credit per queued item: the reader thread blocks when the
         # consumer falls _MAX_QUEUED_CHUNKS behind.
@@ -131,6 +125,7 @@ class ExecCall:
 
     async def __aenter__(self) -> ExecCall:
         self._loop = asyncio.get_running_loop()
+        self._pump_done = self._loop.create_future()
         self._channel = await asyncio.to_thread(self._channel_factory)
         try:
             stub = openshell_pb2_grpc.OpenShellStub(self._channel)
@@ -169,10 +164,13 @@ class ExecCall:
         if self._call is not None:
             self._call.cancel()
         self._credits.release(_MAX_QUEUED_CHUNKS + 1)  # unblock a waiting _put()
-        if self._thread is not None:
-            await asyncio.to_thread(self._thread.join, CLOSE_GRACE_SECONDS)
-            if self._thread.is_alive():
-                logger.warning("exec reader thread still running after cancel")
+        if self._pump_done is not None:
+            try:
+                await await_within(
+                    self._pump_done, SANDBOX_CANCEL_GRACE_SECONDS, what="exec reader thread"
+                )
+            except SandboxDeadlineExceeded:
+                logger.warning("exec reader thread still running after cancel; abandoning it")
         if self._channel is not None:
             self._channel.close()
 
@@ -193,6 +191,14 @@ class ExecCall:
             self._put(exc)
         finally:
             self._put(_EOF)
+            try:
+                self._loop.call_soon_threadsafe(self._set_pump_done)
+            except RuntimeError:  # event loop closed
+                pass
+
+    def _set_pump_done(self) -> None:
+        if not self._pump_done.done():  # await_within cancels it on timeout
+            self._pump_done.set_result(None)
 
     def _put(self, item: object) -> bool:
         self._credits.acquire()

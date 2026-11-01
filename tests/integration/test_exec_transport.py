@@ -29,11 +29,14 @@ pytest.importorskip("openshell")
 import grpc  # noqa: E402
 from openshell._proto import openshell_pb2, openshell_pb2_grpc  # noqa: E402
 
-from cloud_agents.spawner.exec_request import build_step_request  # noqa: E402
-from cloud_agents.spawner.exec_transport import (  # noqa: E402
+from cloud_agents.spawner.exec_request import (  # noqa: E402
     GATEWAY_MAX_MESSAGE_BYTES,
+    StepRequestTooLarge,
+    build_step_request,
+    check_exec_message_size,
+)
+from cloud_agents.spawner.exec_transport import (  # noqa: E402
     ExecCall,
-    ExecRequestTooLarge,
     exec_capture,
     read_step_exec,
 )
@@ -43,6 +46,7 @@ from cloud_agents.spawner.step_protocol import (  # noqa: E402
     MAX_STDOUT_TOTAL,
     StepProtocolReader,
     map_outcome,
+    needs_result_file,
 )
 from tests.fixtures.fake_openshell_exec import (  # noqa: E402
     FakeOpenShellGateway,
@@ -161,16 +165,39 @@ class TestRequestSize:
                 return req.stdin
             n += gap
 
+    @staticmethod
+    def _largest_allowed_stdin(env: dict[str, str], argv: list[str]) -> int:
+        lo, hi = 0, GATEWAY_MAX_MESSAGE_BYTES
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            try:
+                check_exec_message_size(b"x" * mid, env, argv)
+                lo = mid
+            except StepRequestTooLarge:
+                hi = mid - 1
+        return lo
+
     async def test_over_limit_rejected_before_sending(self, gateway, channel_factory):
-        stdin = self._stdin_for_size(GATEWAY_MAX_MESSAGE_BYTES + 1)
-        with pytest.raises(ExecRequestTooLarge):
-            ExecCall(channel_factory, SANDBOX_ID, ["true"], stdin=stdin, timeout_seconds=30)
+        env = {"GIVEN": "yes"}
+        n = self._largest_allowed_stdin(env, ["true"]) + 1
+        with pytest.raises(StepRequestTooLarge):
+            ExecCall(
+                channel_factory, SANDBOX_ID, ["true"], env=env, stdin=b"x" * n, timeout_seconds=30
+            )
         assert gateway.execs == []
 
-    async def test_at_limit_accepted_by_gateway(self, channel_factory):
-        stdin = self._stdin_for_size(GATEWAY_MAX_MESSAGE_BYTES)
+    async def test_largest_allowed_request_accepted_by_gateway(self, channel_factory):
+        """check_exec_message_size is conservative: what it allows fits the 1 MiB cap."""
+        env = {"GIVEN": "yes"}
+        n = self._largest_allowed_stdin(env, ["true"])
         exit_code, _, _ = await exec_capture(
-            channel_factory, SANDBOX_ID, ["true"], stdin=stdin, timeout_seconds=30, max_stdout=1
+            channel_factory,
+            SANDBOX_ID,
+            ["true"],
+            env=env,
+            stdin=b"x" * n,
+            timeout_seconds=30,
+            max_stdout=1,
         )
         assert exit_code == 0
 
@@ -349,7 +376,18 @@ class TestStepCLI:
         outcome = map_outcome(exit_code, reader)
         assert (outcome.status, outcome.reason) == ("error", "deadline")
 
-    async def test_stdout_closed_exit_4_reads_result_file(self, channel_factory, run_root):
+    async def _read_result_file(self, channel_factory, run_dir: str):
+        return await exec_capture(
+            channel_factory,
+            SANDBOX_ID,
+            ["sh", "-c", 'cat -- "$1/result.json"', "sh", run_dir],
+            timeout_seconds=15,
+            max_stdout=MAX_RESULT_LINE + 1,
+        )
+
+    async def test_stdout_closed_exit_4_result_file_is_diagnostic_only(
+        self, channel_factory, run_root
+    ):
         """The CLI's stdout pipe is closed before it writes; result.json comes from a second exec."""
         req = self._request(run_root)
         close_stdout = (
@@ -360,21 +398,60 @@ class TestStepCLI:
         exit_code, reader, _ = await self._run(channel_factory, argv, req, run_root)
         assert exit_code == 4
         assert reader.result is None
+        assert needs_result_file(exit_code, reader)
 
-        read_exit, result_file, _ = await exec_capture(
-            channel_factory,
-            SANDBOX_ID,
-            ["sh", "-c", 'cat -- "$1/result.json"', "sh", req.run_dir],
-            timeout_seconds=15,
-            max_stdout=MAX_RESULT_LINE + 1,
-        )
+        read_exit, result_file, _ = await self._read_result_file(channel_factory, req.run_dir)
         assert read_exit == 0
         outcome = map_outcome(exit_code, reader, result_file)
         assert (outcome.status, outcome.reason, outcome.result_source) == (
-            "completed",
-            "ok",
+            "failed",
+            "result_unverified",
             "file",
         )
+        assert outcome.taint_lease
+        assert outcome.body is None
+        assert outcome.diagnostic.startswith("untrusted result.json: status=200 success=True")
+        assert "has_summary=True" in outcome.diagnostic
+        assert "mock result" not in outcome.diagnostic  # no text from the file
+
+    async def test_lost_transport_result_file_is_diagnostic_only(
+        self, gateway, channel_factory, run_root
+    ):
+        """The call is cancelled before the CLI writes; it publishes result.json anyway."""
+        req = self._request(run_root)
+        reader = StepProtocolReader()
+        call = ExecCall(
+            channel_factory,
+            SANDBOX_ID,
+            self._argv("ok"),
+            env=self._env(run_root),
+            stdin=req.stdin,
+            timeout_seconds=60,
+        )
+
+        async def run():
+            async with call:
+                await read_step_exec(call, reader)
+
+        task = asyncio.create_task(run())
+        await _wait_for(lambda: gateway.execs and gateway.execs[0].proc is not None)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        reader.finish()
+        assert call.exit_code is None
+        # The gateway doesn't kill it: the CLI hits a closed stdout and still publishes.
+        assert gateway.execs[0].proc.wait(timeout=30) == 4
+
+        read_exit, result_file, _ = await self._read_result_file(channel_factory, req.run_dir)
+        assert read_exit == 0
+        outcome = map_outcome(call.exit_code, reader, result_file)
+        assert (outcome.status, outcome.reason, outcome.result_source) == (
+            "failed",
+            "result_unverified",
+            "file_after_transport_loss",
+        )
+        assert outcome.taint_lease
 
     async def test_cancel_mid_run_leaves_process_to_teardown(
         self, gateway, channel_factory, run_root
