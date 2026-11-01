@@ -41,3 +41,32 @@ jobs:
         run: uv run pytest tests/unit/workflow/test_example_definitions.py -v
       - name: Validate DEMO.md YAML
         run: uv run pytest tests/unit/workflow/test_demo_yaml.py -v
+  stepcli:
+    # Exec transport against a fake gateway that runs the real sandbox step CLI.
+    # No secrets, images or containers: the sandbox is a pinned public checkout.
+    runs-on: ubuntu-latest
+    env:
+      LIGHTSPEED_SANDBOX_REPO: ${{ github.workspace }}/lightspeed-agentic-sandbox
+      LIGHTSPEED_SANDBOX_PYTHON: ${{ github.workspace }}/lightspeed-agentic-sandbox/.venv/bin/python
+      STEPCLI_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the sandbox step CLI
+        uses: actions/checkout@v4
+        with:
+          repository: jameswnl/lightspeed-agentic-sandbox
+          ref: bca5ad0156a92271cebd47f69245f1cd0a6058b0
+          path: lightspeed-agentic-sandbox
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Install Python 3.14
+        run: uv python install 3.14
+      - name: Install dependencies
+        run: uv sync --group dev --extra openshell
+      - name: Install the sandbox
+        working-directory: lightspeed-agentic-sandbox
+        run: uv sync --frozen --extra dev
+      - name: Run exec transport tests
+        run: uv run pytest tests/integration/test_exec_transport.py -v --tb=short

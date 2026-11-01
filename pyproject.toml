@@ -53,6 +53,7 @@ load = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["stepcli: runs the real sandbox step CLI (needs LIGHTSPEED_SANDBOX_REPO/_PYTHON)"]
 
 [tool.ruff]
 line-length = 100
