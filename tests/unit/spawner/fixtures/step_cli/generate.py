@@ -52,7 +52,7 @@ SCENARIOS = {
         ("failed", "rejected", None),
     ),
     "rejected_run_dir": ("ok", {}, {}, [], False, False, ("failed", "rundir_rejected", None)),
-    "stdout_closed": ("ok", {}, {}, [], True, True, ("completed", "ok", "file")),
+    "stdout_closed": ("ok", {}, {}, [], True, True, ("failed", "result_unverified", "file")),
     "hard_deadline": (
         "stubborn",
         {"timeout_seconds": 1},

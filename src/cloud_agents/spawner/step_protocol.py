@@ -10,12 +10,18 @@ The agent's tools run as the CLI's uid, so every stdout line and result.json
 is untrusted: parsed strictly (no NaN/Infinity, no duplicate keys, no extra
 keys), bounded in size, and validated before use. A same-uid descendant that
 ``setsid``s out can outlive the CLI and replace files in the agent-owned
-runDir, so result.json is trusted less than the result line, which the CLI
-writes on a private fd: it is only used when the exit code says the line could
-not be delivered (exit 4), and a file-sourced result taints a warm sandbox.
+runDir. So ``completed`` comes only from a valid result line, which the CLI
+writes on a private fd. result.json is read only after exit 4 or a lost stream,
+as a diagnostic: the step fails and the sandbox is tainted.
 
 Pure module: no I/O. The exec transport feeds chunks in and reads the result
 file when :func:`needs_result_file` says so.
+
+Notes for the exec caller:
+
+- Run the CLI with ``python3 -I`` (isolated: also ignores ``PYTHON*`` env and
+  user site-packages), not just ``-P``.
+- Never reuse a warm sandbox after an outcome with ``taint_lease`` set.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import (
@@ -45,6 +51,7 @@ MAX_PREPROTOCOL_NOISE = 64 * 1024  # login-shell output before the CLI starts
 MAX_TRANSCRIPT_EVENTS = 10_000
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 MAX_STDERR_TAIL = 16 * 1024
+_MAX_DIAGNOSTIC = 200
 MAX_JSON_DEPTH = 64  # the CLI's records nest about 4 deep
 _MAX_PID_LINE = 32
 
@@ -251,6 +258,9 @@ class StepProtocolReader:
         Redaction runs before the final truncation, on a window twice that size.
         If the window was cut, a prefix as long as the longest secret is dropped
         first, so a secret cut at the window start can't leave a suffix behind.
+        Known limits: it is plain substring matching on decoded text, so secrets
+        that are encoded, escaped or split across writes with other text are not
+        caught, and the final cut may split a redaction placeholder.
         """
         text = bytes(self._stderr_tail).decode("utf-8", errors="replace")
         if self._stderr_cut:
@@ -347,15 +357,22 @@ class StepOutcome:
 
     ``status``:
         ``completed`` -- shape ``body`` into the step output exactly as the HTTP path does.
-        ``failed`` -- return a failed step (not retried); ``body`` is set when the agent
-            reported ``success: false``. Also used for deterministic, agent-inducible
-            failures (protocol violations, exit 3), which a retry would repeat and which
-            must not open the provider circuit breaker for other workflows.
-        ``error`` -- raise ``RuntimeError(error)`` so ``run_with_retries`` retries, as for
-            an HTTP 502 today.
+        ``failed`` -- return a failed step; ``body`` is set when the agent reported
+            ``success: false``. ``run_with_retries`` classifies ``error`` here too, so an
+            agent- or sandbox-supplied error text can still be transient, as on HTTP
+            today; the fixed texts this module writes never are. Also used for
+            deterministic, agent-inducible failures (protocol violations, exit 3), which
+            a retry would repeat and which must not open the provider circuit breaker.
+        ``error`` -- raise ``RuntimeError(error)``. ``run_with_retries`` reruns the step
+            only if ``is_transient_failure(error)``, which holds only for the 502 outcome
+            (as for an HTTP 502 today). The rest (lost stream, exit 124, killed,
+            unexpected exit) fail the step without a rerun, so side effects never repeat.
     ``breaker``: record ``success``/``failure`` on the provider circuit breaker, or nothing.
     ``taint_lease``: the sandbox may be tampered with; a warm lease must not be reused.
-        Always set for results read from result.json.
+        Always set after exit 4 or a lost stream.
+    ``diagnostic``: untrusted, bounded summary of result.json for logs. Not redacted:
+        the caller must redact it before logging. Never put into ``error``, which
+        ``run_with_retries`` classifies.
     """
 
     status: Literal["completed", "failed", "error"]
@@ -365,14 +382,17 @@ class StepOutcome:
     breaker: Literal["success", "failure"] | None = None
     result_source: Literal["stdout", "file", "file_after_transport_loss"] | None = None
     taint_lease: bool = False
+    diagnostic: str | None = None
 
 
 def needs_result_file(exit_code: int | None, reader: StepProtocolReader) -> bool:
-    """Whether the runner should read ``runDir/result.json`` for this exec.
+    """Whether the runner should read ``runDir/result.json`` for diagnostics.
 
     Only on exit 4 (published but not delivered) or transport loss (``exit_code
-    is None``, after the exec is torn down). Exit 0 promises the result line was
-    delivered, and other exits make no promise about the file (step-cli.md rule 9).
+    is None``, after the exec is torn down). The file never decides the outcome:
+    the step fails either way, because a same-uid descendant can replace it.
+    Exit 0 promises the result line was delivered, and other exits make no
+    promise about the file (step-cli.md rule 9).
     """
     if reader.abort_reason or reader.violation:
         return False
@@ -442,26 +462,28 @@ def map_outcome(
 
 
 def _from_file(exit_code: int | None, data: bytes | None) -> StepOutcome:
-    """Exit 4 or transport loss: use result.json, which always taints the lease."""
+    """Exit 4 or transport loss: the result line is lost, and result.json isn't trusted.
+
+    Never completes and never retries: the step fails, the sandbox is tainted, and
+    a valid file only feeds ``diagnostic``.
+    """
     lost = exit_code is None
     source = "file_after_transport_loss" if lost else "file"
     record = None
     if data is not None and len(data) <= MAX_RESULT_LINE:
         record = _parse_record(data)
     if isinstance(record, ResultRecord):
-        outcome = replace(_from_result(record, source), taint_lease=True)
-        if lost and outcome.status == "completed":
-            # With no exit code nothing says the CLI published this file rather
-            # than a surviving descendant, so never complete from it. Raise
-            # instead: run_with_retries reruns the step in a fresh sandbox.
-            return StepOutcome(
-                "error",
-                "transport_lost",
-                error="lost exec stream; success in result.json is not trusted",
-                result_source=source,
-                taint_lease=True,
-            )
-        return outcome
+        body = record.body
+        detail = str(body.get("error") or body.get("summary") or "")[:_MAX_DIAGNOSTIC]
+        success = f" success={body['success']}" if record.status_code == 200 else ""
+        return StepOutcome(
+            "failed",
+            "result_unverified",
+            error="step result line not received; result.json is not trusted",
+            result_source=source,
+            taint_lease=True,
+            diagnostic=f"untrusted result.json: {record.status_code}{success}: {detail}",
+        )
     if lost:
         return StepOutcome(
             "error",
@@ -472,7 +494,7 @@ def _from_file(exit_code: int | None, data: bytes | None) -> StepOutcome:
         )
     if data is None:
         return StepOutcome(
-            "error",
+            "failed",
             "no_result",
             error="step CLI exited 4 but result.json could not be read",
             taint_lease=True,
