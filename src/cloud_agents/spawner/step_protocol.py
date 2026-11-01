@@ -51,7 +51,9 @@ MAX_PREPROTOCOL_NOISE = 64 * 1024  # login-shell output before the CLI starts
 MAX_TRANSCRIPT_EVENTS = 10_000
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 MAX_STDERR_TAIL = 16 * 1024
-_MAX_DIAGNOSTIC = 200
+# Hardcoded result.json body keys reported as has_<key> in diagnostics; any
+# other key is only counted, never named (a key can itself be a secret).
+_DIAGNOSTIC_KEYS = ("error", "summary", "detail", "output")
 MAX_JSON_DEPTH = 64  # the CLI's records nest about 4 deep
 _MAX_PID_LINE = 32
 
@@ -370,9 +372,11 @@ class StepOutcome:
     ``breaker``: record ``success``/``failure`` on the provider circuit breaker, or nothing.
     ``taint_lease``: the sandbox may be tampered with; a warm lease must not be reused.
         Always set after exit 4 or a lost stream.
-    ``diagnostic``: untrusted, bounded summary of result.json for logs. Not redacted:
-        the caller must redact it before logging. Never put into ``error``, which
-        ``run_with_retries`` classifies.
+    ``diagnostic``: bounded metadata about result.json for logs: fixed vocabulary plus
+        validated scalars (status code, success flag on 200, presence of a hardcoded
+        set of keys, count of other keys, byte size). It holds no string from the
+        file, not even key names, so nothing in it needs redacting. It never goes
+        into ``error``, which ``run_with_retries`` classifies.
     """
 
     status: Literal["completed", "failed", "error"]
@@ -465,7 +469,7 @@ def _from_file(exit_code: int | None, data: bytes | None) -> StepOutcome:
     """Exit 4 or transport loss: the result line is lost, and result.json isn't trusted.
 
     Never completes and never retries: the step fails, the sandbox is tainted, and
-    a valid file only feeds ``diagnostic``.
+    a valid file only feeds ``diagnostic``, as metadata without any of its text.
     """
     lost = exit_code is None
     source = "file_after_transport_loss" if lost else "file"
@@ -474,15 +478,20 @@ def _from_file(exit_code: int | None, data: bytes | None) -> StepOutcome:
         record = _parse_record(data)
     if isinstance(record, ResultRecord):
         body = record.body
-        detail = str(body.get("error") or body.get("summary") or "")[:_MAX_DIAGNOSTIC]
         success = f" success={body['success']}" if record.status_code == 200 else ""
+        present = " ".join(f"has_{k}={k in body}" for k in _DIAGNOSTIC_KEYS)
+        other_keys = len(body.keys() - {"success", *_DIAGNOSTIC_KEYS})
+        diagnostic = (
+            f"untrusted result.json: status={record.status_code}{success} {present} "
+            f"other_keys={other_keys} bytes={len(data)}"
+        )
         return StepOutcome(
             "failed",
             "result_unverified",
             error="step result line not received; result.json is not trusted",
             result_source=source,
             taint_lease=True,
-            diagnostic=f"untrusted result.json: {record.status_code}{success}: {detail}",
+            diagnostic=diagnostic,
         )
     if lost:
         return StepOutcome(
