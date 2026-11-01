@@ -108,7 +108,7 @@ class TestOrphanCleanupMetrics:
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
-        await reconcile_orphaned_sandboxes(mock_spawner)
+        await reconcile_orphaned_sandboxes(mock_spawner, owner_instance="runner-a")
 
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after >= before + 2
@@ -123,7 +123,7 @@ class TestOrphanCleanupMetrics:
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
-        await reconcile_orphaned_sandboxes(mock_spawner)
+        await reconcile_orphaned_sandboxes(mock_spawner, owner_instance="runner-a")
 
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after == before
@@ -150,7 +150,7 @@ class TestOrphanCleanupMetrics:
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
-        await reconcile_orphaned_sandboxes(mock_spawner)
+        await reconcile_orphaned_sandboxes(mock_spawner, owner_instance="runner-a")
 
         after = _get_counter_value("ls_sandbox_orphans_cleaned")
         assert after >= before + 2  # 2 succeeded, 1 failed

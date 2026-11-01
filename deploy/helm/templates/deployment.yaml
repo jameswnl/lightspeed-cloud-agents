@@ -29,6 +29,11 @@ spec:
               value: {{ .Values.temporal.namespace | quote }}
             - name: WORKFLOW_SPAWNER
               value: {{ .Values.spawner.type | quote }}
+            # Scopes startup orphan cleanup to this pod's own sandboxes
+            - name: RUNNER_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: OPENSHELL_GATEWAY_URL
               value: {{ .Values.spawner.gatewayUrl | quote }}
             - name: OPENSHELL_WORKSPACE

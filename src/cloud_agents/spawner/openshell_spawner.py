@@ -168,6 +168,13 @@ class OpenShellSpawner(AgentSpawner):
     # workflow/executor/temporal/entrypoint.py filters on.
     _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = {"spawned-by": "workflow-runner"}
 
+    # Identifies which runner replica spawned a sandbox (value: the
+    # owner_instance constructor arg, wired from RUNNER_INSTANCE_ID) so
+    # reconcile_orphaned_sandboxes() only destroys this replica's own orphans,
+    # never another live replica's sandboxes. Omitted when owner_instance is
+    # unset. Must match the key reconcile_orphaned_sandboxes() filters on.
+    _OWNER_INSTANCE_LABEL_KEY: ClassVar[str] = "cloud-agents/owner-instance"
+
     # Baked into the sandbox image (lightspeed-agentic-sandbox's
     # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
     # into LIGHTSPEED_SKILLS_DIR so providers' directory-listing-based
@@ -281,6 +288,7 @@ class OpenShellSpawner(AgentSpawner):
         bearer_token_provider: Callable[[], str] | None = None,
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
+        owner_instance: str = "",
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -326,8 +334,14 @@ class OpenShellSpawner(AgentSpawner):
                 (see _DEFAULT_EXTRA_ENV). A derived image with a
                 different layout, or no need for this at all, should
                 override this (pass {} to disable). See issue #192.
+            owner_instance: Stable identity of this runner replica (e.g. its
+                pod name), attached to every sandbox as the
+                _OWNER_INSTANCE_LABEL_KEY label so startup reconciliation
+                can tell this replica's orphans apart from other replicas'
+                live sandboxes. Empty means no owner label is attached.
         """
         super().__init__(**kwargs)
+        self._owner_instance = owner_instance
         self._client = openshell_client
         self._workspace = workspace
         self._endpoint = endpoint
@@ -1018,15 +1032,17 @@ class OpenShellSpawner(AgentSpawner):
                 )
                 raise
 
-        # Merge caller labels with the fixed spawned-by label and the
-        # agent_name recovery label; both always win over caller-supplied
-        # labels of the same key so a caller can't accidentally suppress
-        # orphan discovery (issue #224).
+        # Merge caller labels with the fixed spawned-by label, the
+        # agent_name recovery label and the owner-instance label; all always
+        # win over caller-supplied labels of the same key so a caller can't
+        # accidentally suppress orphan discovery (issue #224).
         sandbox_labels = {
             **(labels or {}),
             **self._SPAWNED_BY_LABEL,
             self._AGENT_NAME_LABEL_KEY: agent_name,
         }
+        if self._owner_instance:
+            sandbox_labels[self._OWNER_INSTANCE_LABEL_KEY] = self._owner_instance
 
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(

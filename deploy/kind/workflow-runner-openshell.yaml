@@ -44,6 +44,11 @@ spec:
               value: "default"
             - name: WORKFLOW_SPAWNER
               value: "openshell"
+            # Scopes startup orphan cleanup to this pod's own sandboxes
+            - name: RUNNER_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: OPENSHELL_GATEWAY_URL
               value: "CHANGEME.example.com:17670"  # your OpenShell gateway address
             - name: AUTH_REQUIRED

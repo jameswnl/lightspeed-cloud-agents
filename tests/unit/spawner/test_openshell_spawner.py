@@ -473,6 +473,46 @@ class TestOpenShellSpawnerSpawn:
         }
 
     @pytest.mark.asyncio
+    async def test_spawn_attaches_owner_instance_label(self, mocker: MockerFixture) -> None:
+        """owner_instance is stamped as cloud-agents/owner-instance so
+        reconcile_orphaned_sandboxes() only destroys this replica's sandboxes,
+        and it wins over a caller-supplied label of the same key."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("sb")
+        mock_client.wait_ready.return_value = SandboxRef("sb")
+        mock_client.exec_stream = lambda *a, **k: iter([])
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, owner_instance="runner-a")
+        mocker.patch.object(
+            spawner, "_expose_service", return_value=("http://gateway:17670", "host")
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
+        await spawner.spawn(
+            "agent-1", "sandbox:latest", env={}, labels={"cloud-agents/owner-instance": "spoof"}
+        )
+
+        create_kwargs = mock_client.create.call_args.kwargs
+        assert create_kwargs["labels"] == {
+            "spawned-by": "workflow-runner",
+            "cloud-agents/agent-name": "agent-1",
+            "cloud-agents/owner-instance": "runner-a",
+        }
+
+    @pytest.mark.asyncio
     async def test_spawn_with_credential_does_not_expose_real_value(
         self, mocker: MockerFixture
     ) -> None:

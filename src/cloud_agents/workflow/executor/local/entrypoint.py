@@ -23,6 +23,7 @@ from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.executor.local.executor import LocalWorkflowRunner
 from cloud_agents.workflow.executor.temporal.entrypoint import (
     CONTENT_POLICY_PATH,
+    RUNNER_INSTANCE_ID,
     _create_spawner,
     _get_auth_dependency,
     _load_content_policy,
@@ -64,7 +65,7 @@ def build_local_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect stores and clean up orphans on startup."""
-        await reconcile_orphaned_sandboxes(spawner)
+        await reconcile_orphaned_sandboxes(spawner, RUNNER_INSTANCE_ID)
 
         if transcript_store:
             try:

@@ -73,6 +73,12 @@ def _build_tls_config():
 
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
+# Stable identity of this runner replica (the Helm chart sets it to the pod
+# name). Stamped on every sandbox as an owner label and used to scope startup
+# reconciliation to this replica's own orphans. Unset = reconcile destroys
+# nothing (fail-safe for multi-replica deployments).
+RUNNER_INSTANCE_ID = os.environ.get("RUNNER_INSTANCE_ID", "")
+
 
 def _create_spawner():
     """Create spawner based on environment config.
@@ -100,6 +106,7 @@ def _create_spawner():
             tls_cert=os.environ.get("OPENSHELL_TLS_CERT", ""),
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
+            owner_instance=RUNNER_INSTANCE_ID,
         )
     if SPAWNER_TYPE == "":
         logger.info("No spawner configured — sandbox activity will use stub mode")
@@ -109,19 +116,49 @@ def _create_spawner():
     )
 
 
-async def reconcile_orphaned_sandboxes(spawner: AgentSpawner | None) -> None:
-    """Destroy orphaned sandbox containers left from a previous crash.
+async def reconcile_orphaned_sandboxes(
+    spawner: AgentSpawner | None, owner_instance: str = ""
+) -> None:
+    """Destroy this replica's orphaned sandboxes left from a previous crash.
 
-    On startup, scans for containers/Jobs with the "spawned-by=workflow-runner"
-    label and destroys them. This prevents resource leaks after unclean shutdowns.
+    On startup, scans for sandboxes labelled "spawned-by=workflow-runner"
+    *and* "cloud-agents/owner-instance=<owner_instance>" and destroys them.
+    This prevents resource leaks after unclean shutdowns without touching
+    sandboxes that other live runner replicas are still using.
+
+    Sandboxes carrying spawned-by but a different owner (another replica) or
+    no owner label at all (spawned before owner labelling existed) are left
+    alone and only counted in a log line: there is no way to tell from here
+    whether their owner is still alive. When owner_instance is empty nothing
+    is destroyed.
 
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
+        owner_instance: This replica's RUNNER_INSTANCE_ID. Must match the
+            value the spawner stamps on sandboxes it creates.
     """
     if spawner is None:
         return
 
-    orphans = await spawner.list_active({"spawned-by": "workflow-runner"})
+    # Must match OpenShellSpawner._SPAWNED_BY_LABEL / _OWNER_INSTANCE_LABEL_KEY.
+    spawned_by = {"spawned-by": "workflow-runner"}
+    if owner_instance:
+        orphans = await spawner.list_active(
+            {**spawned_by, "cloud-agents/owner-instance": owner_instance}
+        )
+    else:
+        logger.warning(
+            "RUNNER_INSTANCE_ID not set — skipping orphaned sandbox cleanup "
+            "(cannot tell this replica's sandboxes from other replicas')"
+        )
+        orphans = []
+    untouched = len(set(await spawner.list_active(spawned_by)) - set(orphans))
+    if untouched:
+        logger.info(
+            "Leaving %d sandbox(es) owned by other runner instances or with "
+            "no owner label untouched",
+            untouched,
+        )
     cleaned = 0
     failed_names = []
     for name in orphans:
@@ -232,7 +269,7 @@ def build_temporal_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
-        await reconcile_orphaned_sandboxes(spawner)
+        await reconcile_orphaned_sandboxes(spawner, RUNNER_INSTANCE_ID)
 
         # Connect transcript store (best-effort: failures are non-fatal)
         if transcript_store is not None:

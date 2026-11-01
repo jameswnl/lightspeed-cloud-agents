@@ -127,5 +127,13 @@ Spawned sandbox pods carry these labels for lifecycle management:
 | `cloud-agents/workflow-id` | Workflow execution ID |
 | `cloud-agents/step-name` | Step name within the workflow |
 | `cloud-agents/attempt` | Retry attempt number |
+| `spawned-by` | `workflow-runner` (always set) |
+| `cloud-agents/agent-name` | Agent name (always set; the gateway assigns the sandbox name) |
+| `cloud-agents/owner-instance` | Runner replica's `RUNNER_INSTANCE_ID` (set only when configured) |
 
-Used for: label-based orphan cleanup after worker crashes.
+Used for: label-based orphan cleanup after worker crashes. On startup a runner
+destroys only sandboxes whose `cloud-agents/owner-instance` matches its own
+`RUNNER_INSTANCE_ID` (the Helm chart sets it to the pod name). Sandboxes owned
+by other replicas, or with no owner label (spawned before this label existed),
+are left alone and only counted in a log line. With `RUNNER_INSTANCE_ID` unset,
+startup cleanup destroys nothing.

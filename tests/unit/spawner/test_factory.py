@@ -26,6 +26,16 @@ class TestBuildSpawnerOpenShell:
         assert spawner._tls_ca == ""
         assert spawner._bearer_token == ""
 
+    def test_owner_instance_forwarded(self, mocker: MockerFixture) -> None:
+        """owner_instance reaches OpenShellSpawner (stamped as an owner label on spawn)."""
+        from cloud_agents.spawner.factory import build_spawner
+
+        mocker.patch("openshell.SandboxClient")
+
+        spawner = build_spawner("openshell", gateway_url="gw:17670", owner_instance="runner-a")
+
+        assert spawner._owner_instance == "runner-a"
+
     def test_strips_http_scheme_from_gateway_url(self, mocker: MockerFixture) -> None:
         """http(s):// prefix is stripped before building the gRPC endpoint."""
         from cloud_agents.spawner.factory import build_spawner

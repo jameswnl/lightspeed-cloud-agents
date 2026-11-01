@@ -32,7 +32,9 @@ _KNOWN_SPAWNER_TYPES = ("openshell",)
 # cause. Filtering here lets a caller pass a broader config object (e.g. a
 # lightspeed-stack Pydantic model_dump() with `type`/`sandbox_image`/etc.
 # mixed in) without needing to hand-pick fields first.
-_OPENSHELL_EXTRA_PARAMS = frozenset({"max_pods", "extra_readable_paths", "extra_env"})
+_OPENSHELL_EXTRA_PARAMS = frozenset(
+    {"max_pods", "extra_readable_paths", "extra_env", "owner_instance"}
+)
 
 
 def _filtered(params: dict[str, Any], known: frozenset[str]) -> dict[str, Any]:
