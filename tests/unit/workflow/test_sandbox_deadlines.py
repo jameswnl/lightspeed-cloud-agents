@@ -120,3 +120,58 @@ class TestStepRunnerPostDeadline:
 
         assert time.monotonic() - start < 2
         spawner.destroy.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_timeout_with_credential_gives_clear_redacted_error(
+        self, mocker: MockerFixture
+    ) -> None:
+        """With a provider credential set, errors go through secret redaction;
+        a timeout must still surface a non-empty message (str(TimeoutError())
+        is empty) without leaking the credential, and be audited."""
+        secret = "sk-live-very-secret-value"
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=False)
+        from cloud_agents.workflow.core import step_runner
+
+        audit = mocker.patch.object(step_runner, "emit_audit")
+        spawner = mocker.AsyncMock()
+        spawner.spawn.return_value = "http://pod-1:8080"
+        spawner.wait_ready.return_value = True
+        spawner.get_query_ssl_context = mocker.Mock(return_value=None)
+
+        async def trickle(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        _patch_client(
+            mocker, "cloud_agents.workflow.core.step_runner", mocker.MagicMock(post=trickle)
+        )
+
+        step_input = {
+            "step": {
+                "name": "slow",
+                "prompt": "p",
+                "output_key": "o",
+                "permissions": {"timeout_seconds": 0.05},
+            },
+            "workflow_id": "wf-1",
+            "provider": {
+                "name": "openai",
+                "model": "gpt-4o",
+                "credentials_secret": "OPENAI_API_KEY",
+            },
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+        with pytest.raises(Exception) as exc_info:
+            await _bounded(step_runner.run_step(step_input, spawner=spawner, attempt=1))
+
+        message = str(exc_info.value)
+        assert "timed out after 0.05s" in message
+        assert secret not in message
+        spawner.destroy.assert_called_once()
+        timeout_events = [
+            c.kwargs
+            for c in audit.call_args_list
+            if c.kwargs.get("event_type") == "sandbox_timeout"
+        ]
+        assert timeout_events and timeout_events[0]["details"]["reason"] == "timeout"

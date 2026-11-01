@@ -451,6 +451,17 @@ async def _run_step_inner(
                                 json=request_body,
                                 headers=http_headers or None,
                             )
+                    except TimeoutError:
+                        ls_sandbox_timeout_total.labels(step_name=step_name, reason="timeout").inc()
+                        emit_audit(
+                            event_type="sandbox_timeout",
+                            workflow_id=workflow_id,
+                            step_name=step_name,
+                            details={"pod_name": pod_name, "reason": "timeout"},
+                        )
+                        # str(TimeoutError()) is empty, which the secret
+                        # redaction below would turn into a blank error.
+                        raise TimeoutError(f"Agent run timed out after {http_timeout:g}s") from None
                     except (ssl.SSLError, httpx.ConnectError) as tls_exc:
                         emit_audit(
                             event_type="tls_error",
