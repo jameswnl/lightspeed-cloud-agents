@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -560,3 +560,91 @@ class TestSpawnDeadlineRealSpawner:
 
         assert str(exc_info.value) == "exec timed out"
         assert gateway.deleted == ["sb-1"]
+
+
+class TestMcpSecretsInsideSpawnBudget:
+    """MCP secret files (#277) are written inside the spawn budget, so their
+    failures go through the bounded, exact-sandbox cleanup."""
+
+    MOUNTS = [("MCP_TOKEN", "token", "/run/mcp/token")]
+
+    @pytest.mark.asyncio
+    async def test_failed_secret_write_deletes_exact_sandbox(self, mocker) -> None:
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+        mocker.patch.object(spawner, "_exec_mkdir", return_value=None)
+        mocker.patch.object(spawner, "_write_secret_file", side_effect=RuntimeError("write failed"))
+
+        with pytest.raises(RuntimeError, match="write failed"):
+            await spawner.spawn(
+                "ca-agent",
+                "img",
+                env={"MCP_TOKEN": "s3cret"},
+                lifetime_seconds=60,
+                mcp_secret_mounts=self.MOUNTS,
+            )
+
+        assert gateway.deleted == ["sb-1"]
+        assert spawner._active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_hanging_secret_write_bounded_by_spawn_budget(self, mocker) -> None:
+        import cloud_agents.spawner.openshell_spawner as mod
+
+        mocker.patch.object(mod, "SANDBOX_SPAWN_DEADLINE_SECONDS", 1)
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+        mocker.patch.object(spawner, "_exec_mkdir", return_value=None)
+
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        mocker.patch.object(spawner, "_write_secret_file", side_effect=hang)
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match="deadline"):
+            await asyncio.wait_for(
+                spawner.spawn(
+                    "ca-agent",
+                    "img",
+                    env={"MCP_TOKEN": "s3cret"},
+                    lifetime_seconds=60,
+                    mcp_secret_mounts=self.MOUNTS,
+                ),
+                timeout=10,
+            )
+
+        assert time.monotonic() - start < 2
+        assert gateway.deleted == ["sb-1"]
+
+    @pytest.mark.asyncio
+    async def test_secret_key_kept_out_of_spec_environment(self, mocker) -> None:
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+        mocker.patch.object(spawner, "_exec_mkdir", return_value=None)
+        mocker.patch.object(spawner, "_write_secret_file", return_value=None)
+        seen: dict[str, dict[str, str]] = {}
+        real_create = gateway.create
+
+        def create(**kwargs):
+            environment = kwargs["spec"].environment
+            if isinstance(environment, MagicMock):
+                # test_openshell_spawner.py may have stubbed `openshell` for
+                # the whole session; read the map writes off the mock.
+                seen["env"] = {c.args[0]: c.args[1] for c in environment.__setitem__.call_args_list}
+            else:
+                seen["env"] = dict(environment)
+            return real_create(**kwargs)
+
+        gateway.create = create
+
+        await spawner.spawn(
+            "ca-agent",
+            "img",
+            env={"MCP_TOKEN": "s3cret", "PLAIN": "ok"},
+            lifetime_seconds=60,
+            mcp_secret_mounts=self.MOUNTS,
+        )
+
+        assert "MCP_TOKEN" not in seen["env"]
+        assert seen["env"]["PLAIN"] == "ok"
