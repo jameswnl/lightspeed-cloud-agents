@@ -149,13 +149,18 @@ nothing.
 **Per-sandbox lifetime** (`cloud_agents/spawner/lifetime.py`), the sum of the
 enforced deadlines measured from when `expires-at` is stamped:
 
-- **Spawn: 420s** (`SANDBOX_SPAWN_DEADLINE_SECONDS`). One `asyncio` deadline in
-  `OpenShellSpawner._do_spawn` that starts at the same instant `expires-at` is
-  stamped and covers CreateSandbox (30s SDK RPC timeout), the 300s gateway
+- **Spawn: 420s + 5s cancel grace** (`SANDBOX_SPAWN_DEADLINE_SECONDS`). One
+  budget in `OpenShellSpawner._do_spawn`, run through `await_within()` (see
+  below), that starts at the same instant `expires-at` is stamped and covers
+  CreateSandbox (30s SDK RPC timeout), the 300s gateway
   ready wait, the 60s HTTP readiness check and ~30s of post-create
   exec/expose calls (MCP secret writes, skill materialization, server start,
   ExposeService). On timeout the spawn fails, and the sandbox is deleted on a
-  best-effort basis if CreateSandbox returned its name. Cancelling the
+  best-effort basis if CreateSandbox returned its name. That failure-path
+  cleanup (sandbox delete, provider delete) is bounded too, at 30s per step
+  (`SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS`), so it can't block the caller. It
+  isn't part of the lifetime, because a sandbox whose spawn failed is no
+  longer used. Cancelling the
   awaiting coroutine doesn't stop a blocking SDK call already running in a
   worker thread, so a CreateSandbox can still complete remotely after the
   deadline. That sandbox exists with its `expires-at` label and is reaped
@@ -170,9 +175,9 @@ enforced deadlines measured from when `expires-at` is stamped:
 - **Destroy grace: 120s.** A margin, not a safety requirement: once the
   transcript save finishes the sandbox is no longer used.
 
-So a step's lifetime is 420 + run timeout + 30 + 30 + 4 × 5 + 120 seconds.
+So a step's lifetime is 420 + run timeout + 30 + 30 + 5 × 5 + 120 seconds.
 
-**Bounded vs. abandoned work.** Each post-spawn phase runs through
+**Bounded vs. abandoned work.** The spawn and each post-spawn phase run through
 `await_within()`/`cancel_within()` (`spawner/lifetime.py`). The work runs as
 a task that's waited on for at most its deadline. Then it's cancelled and
 waited on for at most `SANDBOX_CANCEL_GRACE_SECONDS` (5s). Cooperative I/O
@@ -183,9 +188,7 @@ sandbox from that phase again. In particular, a timed-out run never goes on
 to fetch the transcript. Python can't preempt arbitrary code, so abandoned
 work may keep running in the background. The bound is on how long the step
 itself keeps using the sandbox, not a hard guarantee about uncooperative
-code. The spawn budget uses `asyncio.timeout_at` around SDK calls made via
-`asyncio.to_thread` (cancellation returns immediately; see above) and the
-readiness check.
+code.
 
 Each retry attempt spawns a new sandbox (the attempt number is part of the
 `ca-` name; the activity runs with `maximum_attempts=1`), so the lifetime is

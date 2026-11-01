@@ -6,10 +6,10 @@ from cloud_agents.spawner import lifetime
 from cloud_agents.spawner.lifetime import run_timeout_seconds, step_sandbox_lifetime_seconds
 
 # Enforced deadlines around the run itself: spawn budget + transcript fetch +
-# transcript save, a cancel grace for each of the four bounded I/O phases
-# (run call, progress cleanup, transcript fetch, transcript save), plus
-# destroy grace.
-STEP_OVERHEAD = 420 + 30 + 30 + 4 * 5 + 120
+# transcript save, a cancel grace for each of the five bounded phases (spawn,
+# run call, progress cleanup, transcript fetch, transcript save), plus destroy
+# grace.
+STEP_OVERHEAD = 420 + 30 + 30 + 5 * 5 + 120
 
 
 class TestRunTimeout:

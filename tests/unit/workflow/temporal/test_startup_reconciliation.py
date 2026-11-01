@@ -364,22 +364,29 @@ class TestSpawnDeadlineRealSpawner:
     budget is never reaped before its spawn could have finished using it.
 
     Uses min_lifetime=0, skew=0 and lifetime_seconds == the (patched)
-    budget, so expires-at is exactly as early as the bound allows.
+    budget + cancel grace, so expires-at is exactly as early as the bound
+    allows.
     """
 
     DEADLINE = 1
+    GRACE = 1
+    STUBBORN = 2.5  # how long "uncooperative" code ignores cancellation
 
     @pytest.fixture(autouse=True)
     def _short_deadline(self, mocker):
         import cloud_agents.spawner.openshell_spawner as mod
+        from cloud_agents.spawner import lifetime
 
         mocker.patch.object(mod, "SANDBOX_SPAWN_DEADLINE_SECONDS", self.DEADLINE)
+        mocker.patch.object(lifetime, "SANDBOX_CANCEL_GRACE_SECONDS", self.GRACE)
 
     async def _spawn_expecting_timeout(self, spawner) -> float:
         start = time.monotonic()
         with pytest.raises(TimeoutError) as exc_info:
             await asyncio.wait_for(
-                spawner.spawn("ca-agent", "img", env={}, lifetime_seconds=self.DEADLINE),
+                spawner.spawn(
+                    "ca-agent", "img", env={}, lifetime_seconds=self.DEADLINE + self.GRACE
+                ),
                 timeout=10,
             )
         assert "deadline" in str(exc_info.value)
@@ -392,7 +399,7 @@ class TestSpawnDeadlineRealSpawner:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         other = OpenShellSpawner(openshell_client=reader)
-        await reconcile_orphaned_sandboxes(other, now=stamp + self.DEADLINE)
+        await reconcile_orphaned_sandboxes(other, now=stamp + self.DEADLINE + self.GRACE)
         assert reader.deleted == []
         await reconcile_orphaned_sandboxes(other, now=int(expires_at) + 1)
         assert reader.deleted == [name]
@@ -463,3 +470,77 @@ class TestSpawnDeadlineRealSpawner:
         assert gateway.deleted == []
         assert await asyncio.to_thread(gateway.created.wait, 5)
         await self._assert_not_reaped_before_budget_end(gateway, clock, "sb-1")
+
+    @staticmethod
+    async def _stubborn_sleep(seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while (remaining := end - time.monotonic()) > 0:
+            try:
+                await asyncio.sleep(remaining)
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_readiness_close_ignoring_cancellation_bounded_by_grace(self, mocker) -> None:
+        """The readiness check overruns the budget and its client close then
+        ignores cancellation: spawn still raises within budget + grace, and
+        deletes the exact sandbox it created."""
+        gateway = _FakeGateway()
+        clock = _RecordingClock()
+        spawner = _real_spawner(
+            mocker, gateway, min_lifetime_seconds=0, expiry_skew_seconds=0, clock=clock
+        )
+
+        async def readiness_with_stuck_close(*args, **kwargs):
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                await self._stubborn_sleep(self.STUBBORN)  # e.g. client __aexit__
+                raise
+
+        mocker.patch.object(
+            spawner, "_wait_ready_with_host", side_effect=readiness_with_stuck_close
+        )
+        snapshot = {}
+        real_create = gateway.create
+
+        def create(**kwargs):
+            ref = real_create(**kwargs)
+            snapshot["ref"] = _FakeRef(ref.name, dict(ref.labels))
+            return ref
+
+        gateway.create = create
+
+        elapsed = await self._spawn_expecting_timeout(spawner)
+
+        assert elapsed < self.DEADLINE + self.GRACE + 0.5
+        assert gateway.deleted == ["sb-1"]
+        gateway.refs["sb-1"] = snapshot["ref"]
+        await self._assert_not_reaped_before_budget_end(gateway, clock, "sb-1")
+        await asyncio.sleep(self.STUBBORN)  # let the abandoned close finish
+
+    @pytest.mark.asyncio
+    async def test_stuck_failure_cleanup_bounded_and_logged(self, mocker, caplog) -> None:
+        """A failure-path cleanup that hangs (ignoring cancellation) is
+        abandoned and logged; the caller gets the original error promptly."""
+        import cloud_agents.spawner.openshell_spawner as mod
+
+        mocker.patch.object(mod, "SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS", 0.2, create=True)
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+        mocker.patch.object(spawner, "start_server", side_effect=RuntimeError("boom"))
+
+        async def stuck_cleanup(*args, **kwargs):
+            await self._stubborn_sleep(self.STUBBORN)
+
+        mocker.patch.object(spawner, "_cleanup_sandbox", side_effect=stuck_cleanup)
+
+        start = time.monotonic()
+        with caplog.at_level("WARNING"), pytest.raises(RuntimeError, match="boom"):
+            await asyncio.wait_for(
+                spawner.spawn("ca-agent", "img", env={}, lifetime_seconds=60), timeout=10
+            )
+
+        assert time.monotonic() - start < 0.2 + self.GRACE + 0.5
+        assert "abandon" in caplog.text
+        await asyncio.sleep(self.STUBBORN)

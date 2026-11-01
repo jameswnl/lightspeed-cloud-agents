@@ -32,8 +32,10 @@ from cloud_agents.spawner.lifetime import (
     RESERVED_LABEL_KEYS,
     SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
     SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+    SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
     SANDBOX_SPAWN_DEADLINE_SECONDS,
     SPAWNED_BY_LABEL,
+    await_within,
 )
 
 if TYPE_CHECKING:
@@ -1119,75 +1121,87 @@ class OpenShellSpawner(AgentSpawner):
         # CreateSandbox may still complete remotely after we give up. Such a
         # sandbox carries its expires-at label and is reaped once expired.
         created_name: str | None = None
+
+        async def _create_and_start() -> str:
+            nonlocal sandbox_name, created_name
+            sandbox_ref = await asyncio.to_thread(
+                self._client.create,
+                workspace=self._workspace,
+                spec=spec,
+                labels=sandbox_labels,
+            )
+            sandbox_name = created_name = sandbox_ref.name
+            sandbox_id = sandbox_ref.id
+            self._sandbox_names[agent_name] = sandbox_name
+            self._sandbox_ids[agent_name] = sandbox_id
+
+            await asyncio.to_thread(
+                self._client.wait_ready,
+                sandbox_name,
+                workspace=self._workspace,
+                timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
+            )
+
+            # Credential Provider already created and attached via spec.providers
+            # before sandbox creation (see above) -- no post-create injection needed.
+            # The old _inject_credentials path (CreateProvider + Attach after
+            # wait_ready with real env) is removed to avoid exposing the real
+            # credential in spec.environment (issue #199).
+
+            if mcp_secret_mounts:
+                await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
+
+            # Advisory (read_only=True) spawns use _build_filesystem_policy(),
+            # which grants blanket "/" read but no write outside /tmp,
+            # /home/agent, /var/log, MCP, and credentials -- not
+            # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
+            # the same EACCES this method now raises loudly for, so advisory
+            # spawns skip materialize entirely and list _SKILLS_ROOT (the
+            # master) directly below instead -- consistent with advisory
+            # mode's existing documented semantics that its blanket read
+            # grant already covers all of /skills regardless of
+            # allowed_skills, since advisory is an integrity boundary
+            # (no-write), not a confidentiality one.
+            if allowed_skills and not read_only:
+                await self._materialize_allowed_skills(sandbox_id, allowed_skills)
+
+            # self._extra_env first, then the caller's own env on top, so an
+            # explicit caller-provided value (e.g. a different derived image's
+            # PYTHONPATH) wins on collision rather than being silently
+            # overridden by the spawner's own default (issue #192).
+            # Filter credential keys from server_env as well -- start_server
+            # execs inside the sandbox, so env there would also expose the
+            # real credential to the sandboxed process (issue #199).
+            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
+            server_env = {**self._extra_env, **filtered_env}
+            if read_only:
+                server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
+            await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
+
+            endpoint, virtual_host = await self._expose_service(
+                sandbox_name,
+                port=8080,
+            )
+            self._virtual_hosts[sandbox_name] = virtual_host
+
+            ready = await self._wait_ready_with_host(
+                endpoint,
+                virtual_host,
+                timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+            )
+            if not ready:
+                raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
+            return endpoint
+
         try:
-            async with asyncio.timeout_at(spawn_deadline):
-                sandbox_ref = await asyncio.to_thread(
-                    self._client.create,
-                    workspace=self._workspace,
-                    spec=spec,
-                    labels=sandbox_labels,
-                )
-                sandbox_name = created_name = sandbox_ref.name
-                sandbox_id = sandbox_ref.id
-                self._sandbox_names[agent_name] = sandbox_name
-                self._sandbox_ids[agent_name] = sandbox_id
-
-                await asyncio.to_thread(
-                    self._client.wait_ready,
-                    sandbox_name,
-                    workspace=self._workspace,
-                    timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
-                )
-
-                # Credential Provider already created and attached via spec.providers
-                # before sandbox creation (see above) -- no post-create injection needed.
-                # The old _inject_credentials path (CreateProvider + Attach after
-                # wait_ready with real env) is removed to avoid exposing the real
-                # credential in spec.environment (issue #199).
-
-                if mcp_secret_mounts:
-                    await self._inject_mcp_secrets(agent_name, mcp_secret_mounts, env)
-
-                # Advisory (read_only=True) spawns use _build_filesystem_policy(),
-                # which grants blanket "/" read but no write outside /tmp,
-                # /home/agent, /var/log, MCP, and credentials -- not
-                # _MATERIALIZED_SKILLS_DIR. Materializing there would fail with
-                # the same EACCES this method now raises loudly for, so advisory
-                # spawns skip materialize entirely and list _SKILLS_ROOT (the
-                # master) directly below instead -- consistent with advisory
-                # mode's existing documented semantics that its blanket read
-                # grant already covers all of /skills regardless of
-                # allowed_skills, since advisory is an integrity boundary
-                # (no-write), not a confidentiality one.
-                if allowed_skills and not read_only:
-                    await self._materialize_allowed_skills(sandbox_id, allowed_skills)
-
-                # self._extra_env first, then the caller's own env on top, so an
-                # explicit caller-provided value (e.g. a different derived image's
-                # PYTHONPATH) wins on collision rather than being silently
-                # overridden by the spawner's own default (issue #192).
-                # Filter credential keys from server_env as well -- start_server
-                # execs inside the sandbox, so env there would also expose the
-                # real credential to the sandboxed process (issue #199).
-                filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
-                server_env = {**self._extra_env, **filtered_env}
-                if read_only:
-                    server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
-                await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
-
-                endpoint, virtual_host = await self._expose_service(
-                    sandbox_name,
-                    port=8080,
-                )
-                self._virtual_hosts[sandbox_name] = virtual_host
-
-                ready = await self._wait_ready_with_host(
-                    endpoint,
-                    virtual_host,
-                    timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
-                )
-                if not ready:
-                    raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
+            # The rest of the budget that started at the expires-at stamp.
+            # await_within() also bounds cleanup that runs after the deadline
+            # (e.g. the readiness check's client close) by the cancel grace.
+            endpoint = await await_within(
+                _create_and_start(),
+                spawn_deadline - asyncio.get_running_loop().time(),
+                what=f"Spawning sandbox for agent '{agent_name}'",
+            )
         except BaseException as exc:
             # BaseException so a cancelled spawn also cleans up what it created.
             logger.warning(
@@ -1205,13 +1219,30 @@ class OpenShellSpawner(AgentSpawner):
             # on every post-create failure (issue #214). Best-effort, and only
             # for the exact sandbox CreateSandbox returned: if it never
             # returned, its identity is unknown and no delete is guessed.
+            # Each step is bounded so a stuck cleanup can't block the caller.
             if created_name is not None:
-                await self._cleanup_sandbox(agent_name, created_name)
+                try:
+                    await await_within(
+                        self._cleanup_sandbox(agent_name, created_name),
+                        SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
+                        what=f"Cleanup of sandbox '{created_name}'",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Cleanup of sandbox '%s' did not finish — it will be reaped "
+                        "once expired, if it has an expires-at label",
+                        created_name,
+                        exc_info=True,
+                    )
             else:
                 self._provider_ids.pop(agent_name, None)
             if provider_id:
                 try:
-                    await self._delete_provider(provider_id)
+                    await await_within(
+                        self._delete_provider(provider_id),
+                        SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
+                        what=f"Deletion of provider '{provider_id}'",
+                    )
                     logger.info(
                         "Cleaned up orphaned provider '%s' after failed create", provider_id
                     )

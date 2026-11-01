@@ -14,7 +14,7 @@ fetch and save) plus destroy grace; the spawner adds a clock-skew margin.
 Lifecycles without an enforced latest-use bound (e.g. CLI sessions) pass no
 lifetime and get no expiry, so startup reconcile never reaps them.
 
-Each post-spawn I/O phase runs through await_within(): the work runs as a
+Spawn and each post-spawn I/O phase run through await_within(): the work runs as a
 task that's waited on for at most its deadline, then cancelled and waited on
 for at most SANDBOX_CANCEL_GRACE_SECONDS. Cooperative I/O (httpx, asyncpg,
 asyncio) stops within that grace. A task still running after it is
@@ -69,6 +69,11 @@ SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS = 30
 # After a phase's deadline: how long to wait for its cancelled task to
 # finish (e.g. an HTTP client's close) before abandoning it.
 SANDBOX_CANCEL_GRACE_SECONDS = 5
+# Bound on each best-effort cleanup step (sandbox delete, provider delete)
+# after a failed spawn. Not part of the lifetime: a sandbox whose spawn has
+# failed is no longer used, so reaping it mid-cleanup is harmless. This only
+# keeps a stuck cleanup from blocking the caller.
+SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS = 30
 # Margin for the remaining in-process work and the finally-block destroy();
 # not a safety requirement, since a sandbox is no longer used once the
 # transcript save has finished.
@@ -85,8 +90,8 @@ def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
     """Latest legitimate use of one workflow step attempt's sandbox, measured
     from when expires-at is stamped: the sum of the enforced spawn, run,
     transcript fetch and transcript save deadlines, a cancel grace for each
-    of the four bounded post-spawn phases (run, progress cleanup, transcript
-    fetch, transcript save), plus destroy grace. Each retry attempt spawns a
+    of the five await_within() phases (spawn, run, progress cleanup,
+    transcript fetch, transcript save), plus destroy grace. Each retry attempt spawns a
     fresh sandbox (attempt is part of compute_pod_name()), so this is per
     attempt.
     """
@@ -95,7 +100,7 @@ def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
         + math.ceil(run_timeout_seconds(step))
         + SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS
         + SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS
-        + 4 * SANDBOX_CANCEL_GRACE_SECONDS
+        + 5 * SANDBOX_CANCEL_GRACE_SECONDS
         + SANDBOX_DESTROY_GRACE_SECONDS
     )
 
