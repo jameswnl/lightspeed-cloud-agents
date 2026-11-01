@@ -33,7 +33,8 @@ jobs:
       - name: Install Python 3.14
         run: uv python install 3.14
       - name: Install dependencies
-        run: uv sync --group dev
+        # openshell extra: spawner tests build exec items from the real SDK types
+        run: uv sync --group dev --extra openshell
       - name: Run unit tests
         run: uv run pytest tests/unit/ -q --tb=short
       - name: Validate example YAML definitions

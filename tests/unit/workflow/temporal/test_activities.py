@@ -3832,7 +3832,9 @@ class TestAgentEventLogEnvVar:
 
         spawn_call = mock_spawner.spawn.call_args
         env_vars = spawn_call[1].get("env", {})
-        assert env_vars.get("AGENT_EVENT_LOG") == "/tmp/agent-events.jsonl"
+        from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
+
+        assert env_vars.get("AGENT_EVENT_LOG") == AGENT_EVENT_LOG_PATH == "/tmp/agent-events.jsonl"
 
 
 class TestTruncateHeartbeatPayload:

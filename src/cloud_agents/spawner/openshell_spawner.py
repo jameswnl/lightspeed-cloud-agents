@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
 
-from cloud_agents.spawner.base import AgentSpawner
+from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH, AgentSpawner
 from cloud_agents.spawner.lifetime import (
     EXPIRES_AT_LABEL_KEY,
     RESERVED_LABEL_KEYS,
@@ -64,9 +64,6 @@ _DEFAULT_SERVER_COMMAND = [
     "--port",
     "8080",
 ]
-
-# Path where the sandbox agent writes structured JSONL events
-_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
 class OpenShellSpawner(AgentSpawner):
@@ -195,6 +192,13 @@ class OpenShellSpawner(AgentSpawner):
     # skill discovery sees only the scoped set. See
     # _materialize_allowed_skills().
     _MATERIALIZE_SKILLS_SCRIPT: ClassVar[str] = "/usr/local/bin/materialize-skills.sh"
+
+    # The gateway caps a whole inbound gRPC message at 1 MiB, and an
+    # ExecSandboxRequest carries its stdin inline, so a secret file
+    # written via exec stdin must fit in one request. Leaves headroom for
+    # the command, sandbox id, and protobuf framing. See
+    # _write_secret_file().
+    _MAX_EXEC_STDIN_BYTES: ClassVar[int] = 1024 * 1024 - 64 * 1024
 
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
@@ -1103,8 +1107,11 @@ class OpenShellSpawner(AgentSpawner):
         if credential_secret_name:
             cred_keys.add(credential_secret_name)
             cred_keys.add(credential_secret_name.upper().replace("-", "_"))
+        # MCP secrets are delivered as files (_inject_mcp_secrets()), never
+        # via the sandbox environment.
+        mcp_secret_keys = {secret_name for secret_name, _, _ in mcp_secret_mounts or []}
         for key, value in env.items():
-            if key in cred_keys:
+            if key in cred_keys or key in mcp_secret_keys:
                 continue
             spec.environment[key] = value
         if provider_id:
@@ -1172,9 +1179,14 @@ class OpenShellSpawner(AgentSpawner):
             # overridden by the spawner's own default (issue #192).
             # Filter credential keys from server_env as well -- start_server
             # execs inside the sandbox, so env there would also expose the
-            # real credential to the sandboxed process (issue #199).
-            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
-            server_env = {**self._extra_env, **filtered_env}
+            # real credential to the sandboxed process (issue #199). MCP
+            # secrets are likewise filtered: they were already delivered as
+            # files above, and exec env is inlined into the gateway's
+            # command string. Filtering happens after the merge so an
+            # extra_env entry can't reintroduce one of these keys.
+            secret_keys = cred_keys | mcp_secret_keys
+            merged_env = {**self._extra_env, **env}
+            server_env = {k: v for k, v in merged_env.items() if k not in secret_keys}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
@@ -1719,7 +1731,7 @@ class OpenShellSpawner(AgentSpawner):
 
             await self._exec_mkdir(sandbox_id, mount_path)
             file_path = posixpath.join(mount_path, key)
-            await self._do_write_file(agent_name, file_path, secret_value)
+            await self._write_secret_file(sandbox_id, file_path, secret_value)
             logger.info(
                 "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
                 mount_path,
@@ -1727,17 +1739,71 @@ class OpenShellSpawner(AgentSpawner):
                 agent_name,
             )
 
-    async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
-        """Create a directory inside the sandbox."""
+    async def _write_secret_file(self, sandbox_id: str, path: str, content: str) -> None:
+        """Write a secret file inside the sandbox, passing its bytes on exec stdin.
 
-        def _sync_mkdir() -> None:
-            for _ in self._client.exec_stream(
+        Unlike _do_write_file(), the content never appears in the exec
+        command or env: the gateway joins those into a single command
+        string and logs a prefix of it, so anything placed there can end
+        up in gateway logs. The path is passed as a positional argument
+        to a fixed script rather than interpolated into it, and the file
+        is created owner-only (umask 077).
+
+        Raises:
+            RuntimeError: If the content exceeds _MAX_EXEC_STDIN_BYTES, the
+                exec fails, or the write exits nonzero. exec_stream() does
+                not raise on a nonzero exit by itself (see
+                _materialize_allowed_skills()).
+        """
+        data = content.encode()
+        if len(data) > self._MAX_EXEC_STDIN_BYTES:
+            raise RuntimeError(
+                f"Secret for {path} is {len(data)} bytes, which exceeds the "
+                f"{self._MAX_EXEC_STDIN_BYTES}-byte limit for exec stdin delivery"
+            )
+
+        cmd = ["sh", "-c", 'umask 077; cat > "$1"', "sh", path]
+        try:
+
+            def _sync_exec() -> Any:
+                result = None
+                for item in self._client.exec_stream(sandbox_id, cmd, stdin=data):
+                    if hasattr(item, "exit_code"):
+                        result = item
+                return result
+
+            result = await asyncio.to_thread(_sync_exec)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"Failed to write {path} to sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
+
+    async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
+        """Create a directory inside the sandbox.
+
+        Raises:
+            RuntimeError: If mkdir exits nonzero.
+        """
+
+        def _sync_mkdir() -> Any:
+            result = None
+            for item in self._client.exec_stream(
                 sandbox_id,
                 ["mkdir", "-p", path],
             ):
-                pass
+                if hasattr(item, "exit_code"):
+                    result = item
+            return result
 
-        await asyncio.to_thread(_sync_mkdir)
+        result = await asyncio.to_thread(_sync_mkdir)
+        if result is None or result.exit_code != 0:
+            raise RuntimeError(
+                f"mkdir {path} failed in sandbox {sandbox_id}: "
+                f"{getattr(result, 'stderr', '<no exec result>')}"
+            )
 
     async def _materialize_allowed_skills(self, sandbox_id: str, allowed_skills: list[str]) -> None:
         """Copy the allowed_skills subset into the provider-listable skills dir.
@@ -1814,14 +1880,21 @@ class OpenShellSpawner(AgentSpawner):
                 # exec_stream is now a sync iterator — wrap in to_thread
                 def _sync_consume():
                     for item in self._client.exec_stream(sandbox_name, command, env=env):
-                        # item is ExecChunk or ExecResult
-                        if hasattr(item, "chunk"):
-                            chunk = item.chunk
-                        else:
-                            # ExecResult — log final status
-                            logger.debug("Server exec ended [%s]: %s", sandbox_name, item)
+                        # item is ExecChunk(stream, data: bytes) or ExecResult
+                        if not hasattr(item, "data"):
+                            # ExecResult — log only the exit code; its stdout/stderr
+                            # aggregate the whole server output
+                            logger.debug(
+                                "Server exec ended [%s]: exit_code=%s",
+                                sandbox_name,
+                                item.exit_code,
+                            )
                             continue
-                        logger.debug("Server output [%s]: %s", sandbox_name, chunk.rstrip())
+                        chunk = item.data.decode("utf-8", errors="replace")
+                        # One record per line so server output can't forge log lines
+                        for line in chunk.splitlines():
+                            if line.strip():
+                                logger.debug("Server output [%s]: %s", sandbox_name, line)
 
                 await asyncio.to_thread(_sync_consume)
             except asyncio.CancelledError:
@@ -1852,8 +1925,8 @@ class OpenShellSpawner(AgentSpawner):
         Yields:
             Parsed JSONL event dicts from the agent event log.
         """
-        tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
-        partial = ""
+        tail_cmd = ["tail", "-F", AGENT_EVENT_LOG_PATH]
+        partial = b""
 
         # Use a queue to communicate between thread and async code
         import queue
@@ -1865,25 +1938,27 @@ class OpenShellSpawner(AgentSpawner):
             nonlocal partial
             try:
                 for item in self._client.exec_stream(sandbox_name, tail_cmd):
-                    # item is ExecChunk or ExecResult
-                    if hasattr(item, "chunk"):
-                        chunk = item.chunk
-                    else:
+                    # item is ExecChunk(stream, data: bytes) or ExecResult
+                    if not hasattr(item, "data"):
                         # ExecResult — stream ended
                         break
+                    if item.stream != "stdout":
+                        # tail's own diagnostics, not event JSON
+                        continue
 
-                    data = partial + chunk
+                    # Buffer bytes, not str: a chunk may end mid UTF-8 character
+                    data = partial + item.data
                     # Split but keep partial last line if chunk doesn't end with newline
-                    lines = data.split("\n")
+                    lines = data.split(b"\n")
                     # If data doesn't end with newline, last element is a partial line
-                    if not data.endswith("\n"):
+                    if not data.endswith(b"\n"):
                         partial = lines[-1]
                         lines = lines[:-1]
                     else:
-                        partial = ""
+                        partial = b""
 
-                    for line in lines:
-                        line = line.strip()
+                    for raw_line in lines:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
                         if not line:
                             continue
                         try:
@@ -1991,13 +2066,19 @@ class OpenShellSpawner(AgentSpawner):
         if not sandbox_id:
             raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
 
-        chunks: list[str] = []
+        chunks: list[bytes] = []
+        result: Any = None
         try:
 
             def _sync_exec():
+                nonlocal result
                 for item in self._client.exec_stream(sandbox_id, ["cat", path]):
-                    if hasattr(item, "chunk"):
-                        chunks.append(item.chunk)
+                    # ExecChunk(stream, data: bytes); stderr is cat's error text
+                    if hasattr(item, "data"):
+                        if item.stream == "stdout":
+                            chunks.append(item.data)
+                    else:
+                        result = item
 
             await asyncio.to_thread(_sync_exec)
         except Exception as exc:
@@ -2005,7 +2086,15 @@ class OpenShellSpawner(AgentSpawner):
                 raise FileNotFoundError(f"File not found: {path}") from exc
             raise
 
-        content = "".join(chunks)
+        if result is not None and result.exit_code != 0:
+            # Any stdout is truncated output from a failed read, never a success
+            stderr = result.stderr.strip()[:200]
+            if "no such file" in stderr.lower():
+                raise FileNotFoundError(f"File not found: {path}")
+            raise OSError(f"Reading {path} failed (exit {result.exit_code}): {stderr}")
+
+        content = b"".join(chunks).decode("utf-8", errors="replace")
+        # An empty but existing file also lands here (pre-existing behaviour)
         if not content and not chunks:
             raise FileNotFoundError(f"File not found or empty: {path}")
         return content

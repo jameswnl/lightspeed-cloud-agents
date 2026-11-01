@@ -24,6 +24,7 @@ from cloud_agents.runtime.auth import get_runner_auth_token
 from cloud_agents.runtime.tracing import get_tracer, inject_traceparent
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
+from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
 from cloud_agents.spawner.lifetime import (
     SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
     SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
@@ -50,8 +51,6 @@ from cloud_agents.workflow.security.tls import (
 )
 
 _tracer = get_tracer("cloud_agents.workflow.step_runner")
-
-_EVENT_LOG_PATH = "/tmp/agent-events.jsonl"
 
 _circuit_breaker = ProviderCircuitBreaker(
     failure_threshold=int(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "5")),
@@ -200,7 +199,7 @@ async def _run_step_inner(
     env_vars = {
         "LIGHTSPEED_PROVIDER": provider["name"],
         "LIGHTSPEED_MODEL": provider["model"],
-        "AGENT_EVENT_LOG": _EVENT_LOG_PATH,
+        "AGENT_EVENT_LOG": AGENT_EVENT_LOG_PATH,
     }
     if model_provider := provider.get("model_provider"):
         env_vars["LIGHTSPEED_MODEL_PROVIDER"] = model_provider

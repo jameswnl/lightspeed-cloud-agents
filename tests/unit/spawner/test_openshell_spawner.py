@@ -22,6 +22,7 @@ import json
 import os
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass, fields
 from typing import Any, Iterator
 
 import httpx
@@ -66,6 +67,65 @@ def _real_openshell_modules() -> "Iterator[None]":
         for k in [k for k in sys.modules if k == "openshell" or k.startswith("openshell.")]:
             del sys.modules[k]
         sys.modules.update(snapshot)
+
+
+def _real_exec_types() -> tuple[type, type] | None:
+    """Return the real openshell SDK (ExecChunk, ExecResult) classes, or None.
+
+    exec_stream() yields ExecChunk(stream, data: bytes) items followed by one
+    ExecResult. Tests build exec items from the real SDK types whenever the
+    openshell extra is installed, so a fake can't silently mirror a wrong
+    attribute name (the old fakes exposed a `.chunk` str the SDK never had).
+    """
+    with _real_openshell_modules():
+        try:
+            from openshell.sandbox import ExecChunk, ExecResult
+        except ImportError:
+            return None
+    return ExecChunk, ExecResult
+
+
+@dataclass(frozen=True)
+class _FallbackExecChunk:
+    """Field-for-field copy of openshell.sandbox.ExecChunk, used only when the
+    openshell extra isn't installed (CI). Kept honest by
+    TestExecTypesMatchSdk."""
+
+    stream: str
+    data: bytes
+
+
+@dataclass(frozen=True)
+class _FallbackExecResult:
+    """Field-for-field copy of openshell.sandbox.ExecResult (see above)."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+_REAL_EXEC_TYPES = _real_exec_types()
+_ExecChunk, _ExecResult = _REAL_EXEC_TYPES or (_FallbackExecChunk, _FallbackExecResult)
+
+
+def _exec_chunk(data: str | bytes, stream: str = "stdout") -> Any:
+    """Build an exec_stream() output chunk the way the SDK does (bytes payload)."""
+    return _ExecChunk(stream=stream, data=data.encode() if isinstance(data, str) else data)
+
+
+class TestExecTypesMatchSdk:
+    """The CI fallback exec types must stay identical to the real SDK's."""
+
+    @pytest.mark.skipif(_REAL_EXEC_TYPES is None, reason="openshell extra not installed")
+    def test_fallback_fields_match_sdk(self) -> None:
+        assert _REAL_EXEC_TYPES is not None
+        real_chunk, real_result = _REAL_EXEC_TYPES
+        assert [(f.name, f.type) for f in fields(real_chunk)] == [
+            (f.name, f.type) for f in fields(_FallbackExecChunk)
+        ]
+        assert [(f.name, f.type) for f in fields(real_result)] == [
+            (f.name, f.type) for f in fields(_FallbackExecResult)
+        ]
 
 
 class TestOpenShellSpawnerStartServer:
@@ -142,6 +202,82 @@ class TestOpenShellSpawnerStartServer:
         with pytest.raises(asyncio.CancelledError):
             await spawner._server_tasks["sandbox-1"]
 
+    @pytest.mark.asyncio
+    async def test_start_server_logs_decoded_output(self, mocker: MockerFixture, caplog) -> None:
+        """Server stdout/stderr chunks (SDK bytes payloads) are decoded and logged."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter(
+            [
+                _exec_chunk("INFO: Uvicorn running\n", stream="stderr"),
+                _exec_chunk("hello from stdout\n"),
+                _ExecResult(exit_code=0, stdout="", stderr=""),
+            ]
+        )
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        with caplog.at_level(logging.DEBUG, logger="cloud_agents.spawner.openshell_spawner"):
+            await spawner.start_server("sandbox-1", ["uvicorn"])
+            await spawner._server_tasks["sandbox-1"]
+
+        output_lines = [r.getMessage() for r in caplog.records if "Server output" in r.msg]
+        assert output_lines == [
+            "Server output [sandbox-1]: INFO: Uvicorn running",
+            "Server output [sandbox-1]: hello from stdout",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_start_server_log_records_are_single_line(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """Embedded newlines in server output can't forge extra log lines."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter(
+            [_exec_chunk("first\nINFO forged record\r\nlast\n", stream="stderr")]
+        )
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        with caplog.at_level(logging.DEBUG, logger="cloud_agents.spawner.openshell_spawner"):
+            await spawner.start_server("sandbox-1", ["uvicorn"])
+            await spawner._server_tasks["sandbox-1"]
+
+        output_lines = [r.getMessage() for r in caplog.records if "Server output" in r.msg]
+        assert output_lines == [
+            "Server output [sandbox-1]: first",
+            "Server output [sandbox-1]: INFO forged record",
+            "Server output [sandbox-1]: last",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_start_server_exit_logs_only_exit_code(
+        self, mocker: MockerFixture, caplog
+    ) -> None:
+        """The final ExecResult's aggregated stdout/stderr is not logged."""
+        import logging
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter(
+            [_ExecResult(exit_code=3, stdout="secret-stdout", stderr="secret-stderr")]
+        )
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        with caplog.at_level(logging.DEBUG, logger="cloud_agents.spawner.openshell_spawner"):
+            await spawner.start_server("sandbox-1", ["uvicorn"])
+            await spawner._server_tasks["sandbox-1"]
+
+        assert "secret-stdout" not in caplog.text
+        assert "secret-stderr" not in caplog.text
+        assert "Server exec ended [sandbox-1]: exit_code=3" in caplog.text
+
 
 class TestOpenShellSpawnerStreamProgress:
     """Tests for stream_progress() async generator."""
@@ -156,14 +292,9 @@ class TestOpenShellSpawnerStreamProgress:
             '{"type": "tool_result", "name": "get_pods", "ts": "2024-01-01T00:00:01Z"}\n',
         ]
 
-        # Create mock ExecChunk objects
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
             for event in events:
-                yield ExecChunk(event)
+                yield _exec_chunk(event)
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -186,12 +317,8 @@ class TestOpenShellSpawnerStreamProgress:
 
         chunk = '{"type": "tool_call", "name": "a"}\n{"type": "tool_result", "name": "a"}\n'
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk(chunk)
+            yield _exec_chunk(chunk)
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -209,12 +336,8 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress skips empty lines in the stream."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk('\n\n{"type": "tool_call", "name": "a"}\n\n')
+            yield _exec_chunk('\n\n{"type": "tool_call", "name": "a"}\n\n')
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -232,13 +355,9 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress logs warning and skips invalid JSON lines."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk("not valid json\n")
-            yield ExecChunk('{"type": "tool_call", "name": "a"}\n')
+            yield _exec_chunk("not valid json\n")
+            yield _exec_chunk('{"type": "tool_call", "name": "a"}\n')
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -258,12 +377,8 @@ class TestOpenShellSpawnerStreamProgress:
         """stream_progress catches gRPC/connection errors and stops yielding."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk('{"type": "tool_call", "name": "a"}\n')
+            yield _exec_chunk('{"type": "tool_call", "name": "a"}\n')
             raise ConnectionError("gRPC stream disconnected")
 
         mock_client = mocker.Mock()
@@ -298,7 +413,179 @@ class TestOpenShellSpawnerStreamProgress:
         async for _ in spawner.stream_progress("sandbox-1"):
             pass
 
-        assert call_args["cmd"] == ["tail", "-F", "/var/log/agent-events.jsonl"]
+        assert call_args["cmd"] == ["tail", "-F", "/tmp/agent-events.jsonl"]
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_tails_shared_event_log_path(self, mocker: MockerFixture) -> None:
+        """The tailed file is the shared AGENT_EVENT_LOG_PATH.
+
+        The sandbox's EventLogger only writes to $AGENT_EVENT_LOG, which both
+        engines set from the same constant (asserted in test_step_runner.py and
+        temporal/test_activities.py); tailing any other path streams nothing.
+        """
+        from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream.return_value = iter([])
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        async for _ in spawner.stream_progress("sandbox-1"):
+            pass
+
+        assert AGENT_EVENT_LOG_PATH == "/tmp/agent-events.jsonl"
+        assert mock_client.exec_stream.call_args[0][1] == ["tail", "-F", AGENT_EVENT_LOG_PATH]
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_ignores_stderr(self, mocker: MockerFixture) -> None:
+        """tail's stderr (e.g. "file appeared") is not parsed as event JSON."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield _exec_chunk(
+                "tail: '/tmp/agent-events.jsonl' has appeared;  following new file\n",
+                stream="stderr",
+            )
+            yield _exec_chunk('{"type": "tool_call", "name": "a"}\n')
+            yield _ExecResult(exit_code=0, stdout="", stderr="")
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = mock_exec_stream
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        warn = mocker.patch("cloud_agents.spawner.openshell_spawner.logger.warning")
+
+        collected = [event async for event in spawner.stream_progress("sandbox-1")]
+
+        assert collected == [{"type": "tool_call", "name": "a"}]
+        warn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stream_progress_handles_utf8_split_across_chunks(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A multi-byte UTF-8 character split across two chunks is reassembled."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        raw = '{"type": "text", "text": "caf\u00e9"}\n'.encode()
+        split = raw.index(b"\xc3") + 1  # cut inside the 2-byte "e-acute"
+
+        def mock_exec_stream(sandbox_name, cmd, **kwargs):
+            yield _exec_chunk(raw[:split])
+            yield _exec_chunk(raw[split:])
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = mock_exec_stream
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        collected = [event async for event in spawner.stream_progress("sandbox-1")]
+
+        assert collected == [{"type": "text", "text": "caf\u00e9"}]
+
+
+class TestOpenShellSpawnerReadFile:
+    """Tests for OpenShellSpawner._do_read_file() against SDK exec items."""
+
+    @staticmethod
+    def _make_spawner(mocker: MockerFixture, items: list[Any]):
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[tuple[str, list[str]]] = []
+
+        def exec_stream(sandbox_id, command, **kwargs):
+            calls.append((sandbox_id, command))
+            return iter(items)
+
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = exec_stream
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "sandbox-uuid-1"
+        return spawner, calls
+
+    @pytest.mark.asyncio
+    async def test_read_file_returns_decoded_stdout(self, mocker: MockerFixture) -> None:
+        """File contents are the decoded stdout bytes from `cat`."""
+        spawner, calls = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk('{"a": 1}\n'),
+                _exec_chunk('{"b": "\u00e9"}\n'.encode()),
+                _ExecResult(exit_code=0, stdout="", stderr=""),
+            ],
+        )
+
+        content = await spawner._do_read_file("agent-1", "/tmp/agent-events.jsonl")
+
+        assert content == '{"a": 1}\n{"b": "\u00e9"}\n'
+        assert calls == [("sandbox-uuid-1", ["cat", "/tmp/agent-events.jsonl"])]
+
+    @pytest.mark.asyncio
+    async def test_read_file_excludes_stderr(self, mocker: MockerFixture) -> None:
+        """stderr output never leaks into the returned file contents."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk("line\n"),
+                _exec_chunk("some warning\n", stream="stderr"),
+                _ExecResult(exit_code=0, stdout="line\n", stderr="some warning\n"),
+            ],
+        )
+
+        assert await spawner._do_read_file("agent-1", "/tmp/x") == "line\n"
+
+    @pytest.mark.asyncio
+    async def test_read_file_missing_file_raises_file_not_found(
+        self, mocker: MockerFixture
+    ) -> None:
+        """`cat` on a missing file (stderr only, exit 1) raises FileNotFoundError."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk("cat: /tmp/x: No such file or directory\n", stream="stderr"),
+                _ExecResult(
+                    exit_code=1, stdout="", stderr="cat: /tmp/x: No such file or directory\n"
+                ),
+            ],
+        )
+
+        with pytest.raises(FileNotFoundError):
+            await spawner._do_read_file("agent-1", "/tmp/x")
+
+    @pytest.mark.asyncio
+    async def test_read_file_other_failure_raises_oserror(self, mocker: MockerFixture) -> None:
+        """A non-ENOENT `cat` failure is an OSError, not "file not found"."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk("cat: /tmp/x: Permission denied\n", stream="stderr"),
+                _ExecResult(exit_code=1, stdout="", stderr="cat: /tmp/x: Permission denied\n"),
+            ],
+        )
+
+        with pytest.raises(OSError, match="Permission denied") as exc_info:
+            await spawner._do_read_file("agent-1", "/tmp/x")
+        assert not isinstance(exc_info.value, FileNotFoundError)
+
+    @pytest.mark.asyncio
+    async def test_read_file_partial_output_on_failure_is_not_returned(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Output truncated by a mid-read failure raises instead of returning."""
+        spawner, _ = self._make_spawner(
+            mocker,
+            [
+                _exec_chunk('{"a": 1}\n{"b"'),
+                _exec_chunk("cat: /tmp/x: Input/output error\n", stream="stderr"),
+                _ExecResult(
+                    exit_code=1,
+                    stdout='{"a": 1}\n{"b"',
+                    stderr="cat: /tmp/x: Input/output error\n",
+                ),
+            ],
+        )
+
+        with pytest.raises(OSError, match="Input/output error") as exc_info:
+            await spawner._do_read_file("agent-1", "/tmp/x")
+        assert not isinstance(exc_info.value, FileNotFoundError)
 
 
 class TestOpenShellSpawnerWriteFile:
@@ -1454,15 +1741,11 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """stream_progress reassembles JSON split across chunk boundaries."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
             # First chunk ends mid-JSON
-            yield ExecChunk('{"type": "tool_')
+            yield _exec_chunk('{"type": "tool_')
             # Second chunk completes the JSON line
-            yield ExecChunk('call", "name": "get_pods"}\n')
+            yield _exec_chunk('call", "name": "get_pods"}\n')
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -1484,15 +1767,11 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """stream_progress handles multiple successive partial chunks."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk('{"type":')
-            yield ExecChunk(' "tool_call",')
-            yield ExecChunk(' "name": "a"}\n')
-            yield ExecChunk('{"type": "done"}\n')
+            yield _exec_chunk('{"type":')
+            yield _exec_chunk(' "tool_call",')
+            yield _exec_chunk(' "name": "a"}\n')
+            yield _exec_chunk('{"type": "done"}\n')
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -1514,13 +1793,9 @@ class TestOpenShellSpawnerStreamProgressBuffering:
         """When chunks end with newline, no buffering is needed."""
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
-        class ExecChunk:
-            def __init__(self, chunk):
-                self.chunk = chunk
-
         def mock_exec_stream(sandbox_name, cmd, **kwargs):
-            yield ExecChunk('{"type": "a"}\n')
-            yield ExecChunk('{"type": "b"}\n')
+            yield _exec_chunk('{"type": "a"}\n')
+            yield _exec_chunk('{"type": "b"}\n')
 
         mock_client = mocker.Mock()
         mock_client.exec_stream = mock_exec_stream
@@ -3311,7 +3586,7 @@ class TestMCPSecretInjection:
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
         mock_mkdir = mocker.patch.object(spawner, "_exec_mkdir")
-        mock_write = mocker.patch.object(spawner, "_do_write_file")
+        mock_write = mocker.patch.object(spawner, "_write_secret_file")
 
         mounts = [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")]
 
@@ -3323,7 +3598,7 @@ class TestMCPSecretInjection:
 
         mock_mkdir.assert_called_once_with("uuid-1", "/var/secrets/mcp/kubectl/")
         mock_write.assert_called_once_with(
-            "agent-1",
+            "uuid-1",
             "/var/secrets/mcp/kubectl/api-key",
             "secret-value",
         )
@@ -3337,13 +3612,369 @@ class TestMCPSecretInjection:
         spawner = OpenShellSpawner(openshell_client=mock_client)
         spawner._sandbox_ids["agent-1"] = "uuid-1"
 
-        mock_write = mocker.patch.object(spawner, "_do_write_file")
+        mock_write = mocker.patch.object(spawner, "_write_secret_file")
 
         mounts = [("missing-secret", "key", "/var/secrets/mcp/s/")]
 
         await spawner._inject_mcp_secrets("agent-1", mounts, {})
 
         mock_write.assert_not_called()
+
+    @staticmethod
+    def _recording_exec_stream(
+        calls: list[dict[str, Any]],
+        fail_writes: bool = False,
+        write_exit_code: int = 0,
+        mkdir_exit_code: int = 0,
+    ):
+        """Recording stub matching openshell 0.0.111's SandboxClient.exec_stream().
+
+        Real signature: exec_stream(sandbox_id, command, *, workdir=None,
+        env=None, stdin=None, timeout_seconds=None) -> Iterator[ExecChunk |
+        ExecResult]. Keyword-only parameters are kept keyword-only so a call
+        that doesn't match the real SDK fails here too.
+        """
+
+        class _ExecResult:
+            stdout = ""
+
+            def __init__(self, exit_code: int) -> None:
+                self.exit_code = exit_code
+                self.stderr = "" if exit_code == 0 else "Permission denied"
+
+        def exec_stream(
+            sandbox_id: str,
+            command: Any,
+            *,
+            workdir: str | None = None,
+            env: Any = None,
+            stdin: bytes | None = None,
+            timeout_seconds: int | None = None,
+        ) -> Iterator[Any]:
+            calls.append(
+                {
+                    "sandbox_id": sandbox_id,
+                    "command": list(command),
+                    "workdir": workdir,
+                    "env": dict(env or {}),
+                    "stdin": stdin,
+                }
+            )
+            if fail_writes and command[0] != "mkdir":
+                raise ConnectionError("sandbox unreachable")
+            is_mkdir = command[0] == "mkdir"
+            yield _ExecResult(mkdir_exit_code if is_mkdir else write_exit_code)
+
+        return exec_stream
+
+    @pytest.mark.asyncio
+    async def test_secret_value_delivered_via_stdin_not_command_or_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No exec command or env carries the secret (raw or base64); stdin does.
+
+        The gateway inlines exec env/command into one string and logs a
+        prefix of it, so secret material must only travel on stdin.
+        """
+        import base64
+
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        await spawner._inject_mcp_secrets(
+            "agent-1",
+            [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            {"my-secret": secret},
+        )
+
+        encoded = base64.b64encode(secret.encode()).decode()
+        assert calls, "expected at least one exec call"
+        for call in calls:
+            haystack = " ".join(call["command"]) + " " + " ".join(call["env"].values())
+            assert secret not in haystack
+            assert encoded not in haystack
+            assert encoded[:16] not in haystack
+
+        stdin_calls = [c for c in calls if c["stdin"]]
+        assert len(stdin_calls) == 1
+        write_call = stdin_calls[0]
+        assert write_call["stdin"] == secret.encode()
+        assert write_call["sandbox_id"] == "uuid-1"
+        assert "/var/secrets/mcp/kubectl/api-key" in write_call["command"]
+        # File is created owner-only (no group/other access).
+        assert "umask 077" in " ".join(write_call["command"])
+
+    @pytest.mark.asyncio
+    async def test_rejects_secret_exceeding_exec_stdin_cap(self, mocker: MockerFixture) -> None:
+        """A secret too large for one exec request fails clearly, before any write."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        # The gateway caps a whole exec request (stdin included) at 1 MiB.
+        oversize = "x" * (1024 * 1024)
+
+        with pytest.raises(RuntimeError, match="exceeds"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("big-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"big-secret": oversize},
+            )
+
+        assert not [c for c in calls if c["stdin"]]
+
+    @pytest.mark.asyncio
+    async def test_exec_failure_raises_runtime_error(self, mocker: MockerFixture) -> None:
+        """An exec transport failure while writing surfaces as RuntimeError."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, fail_writes=True)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": "secret-value"},
+            )
+
+    @staticmethod
+    def _make_spawner_for_spawn(
+        mocker: MockerFixture, exec_stream: Any, extra_env: dict[str, str] | None = None
+    ) -> Any:
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
+        mock_client.exec_stream = exec_stream
+
+        spawner = OpenShellSpawner(openshell_client=mock_client, extra_env=extra_env)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+        mocker.patch.object(spawner, "start_server", new_callable=mocker.AsyncMock)
+        mocker.patch.object(
+            spawner,
+            "_expose_service",
+            return_value=("http://gateway:17670", "sandbox.openshell.localhost"),
+        )
+        mocker.patch.object(spawner, "_wait_ready_with_host", return_value=True)
+        return spawner, mock_client
+
+    @pytest.mark.asyncio
+    async def test_oversize_secret_during_spawn_deletes_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """Rejecting an oversize secret goes through spawn()'s orphan cleanup."""
+
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls)
+        )
+        # The gateway caps a whole exec request (stdin included) at 1 MiB.
+        oversize = "x" * (1024 * 1024)
+
+        with pytest.raises(RuntimeError, match="exceeds"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"big-secret": oversize},
+                mcp_secret_mounts=[("big-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+
+    @pytest.mark.asyncio
+    async def test_write_failure_during_spawn_deletes_sandbox(self, mocker: MockerFixture) -> None:
+        """A failed secret write goes through spawn()'s orphan cleanup."""
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls, fail_writes=True)
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"my-secret": "secret-value"},
+                mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_not_forwarded_to_server_exec_env(self, mocker: MockerFixture) -> None:
+        """MCP secret values are written to their file only, not start_server's exec env."""
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        spawner, _ = self._make_spawner_for_spawn(mocker, self._recording_exec_stream(calls))
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"my-secret": secret, "LIGHTSPEED_MODEL": "m"},
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        server_env = spawner.start_server.call_args.kwargs["env"]
+        assert "my-secret" not in server_env
+        assert secret not in server_env.values()
+        assert server_env["LIGHTSPEED_MODEL"] == "m"
+        # The secret still reaches its file, via stdin.
+        assert [c["stdin"] for c in calls if c["stdin"]] == [secret.encode()]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_raises_without_secret(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from the secret write raises; the message omits the secret."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, write_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="Failed to write") as exc_info:
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": secret},
+            )
+
+        assert secret not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_nonzero_mkdir_exit_raises(self, mocker: MockerFixture) -> None:
+        """A nonzero exit from mkdir raises before the secret is written."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        calls: list[dict[str, Any]] = []
+        mock_client = mocker.Mock()
+        mock_client.exec_stream = self._recording_exec_stream(calls, mkdir_exit_code=1)
+
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner._sandbox_ids["agent-1"] = "uuid-1"
+
+        with pytest.raises(RuntimeError, match="mkdir"):
+            await spawner._inject_mcp_secrets(
+                "agent-1",
+                [("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+                {"my-secret": "secret-value"},
+            )
+
+        assert not [c for c in calls if c["stdin"]]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_write_exit_during_spawn_deletes_sandbox(
+        self, mocker: MockerFixture
+    ) -> None:
+        """A nonzero secret-write exit goes through spawn()'s orphan cleanup."""
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls, write_exit_code=1)
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to write"):
+            await spawner.spawn(
+                "agent-1",
+                "sandbox:latest",
+                env={"my-secret": "secret-value"},
+                mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+            )
+
+        mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
+        assert "agent-1" not in spawner._sandbox_names
+        spawner.start_server.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extra_env_cannot_reintroduce_secret_keys_into_server_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """extra_env keys matching a credential or MCP secret key are filtered too."""
+        calls: list[dict[str, Any]] = []
+        spawner, _ = self._make_spawner_for_spawn(
+            mocker,
+            self._recording_exec_stream(calls),
+            extra_env={
+                "my-secret": "extra-env-mcp-value",
+                "OPENAI_API_KEY": "extra-env-cred-value",
+                "PYTHONPATH": "/opt/lightspeed/src",
+            },
+        )
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={
+                "LIGHTSPEED_PROVIDER": "openai",
+                "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                "my-secret": "secret-value",
+            },
+            credential_secret_name="openai-api-key",
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        server_env = spawner.start_server.call_args.kwargs["env"]
+        assert "my-secret" not in server_env
+        assert "OPENAI_API_KEY" not in server_env
+        assert server_env["PYTHONPATH"] == "/opt/lightspeed/src"
+        assert server_env["LIGHTSPEED_PROVIDER"] == "openai"
+
+    @pytest.mark.asyncio
+    async def test_mcp_secret_not_copied_into_spec_environment(self, mocker: MockerFixture) -> None:
+        """MCP secret values never reach spec.environment, like provider credentials."""
+        secret = "Bearer s3cr3t-token-value-0123456789"
+        calls: list[dict[str, Any]] = []
+        spawner, mock_client = self._make_spawner_for_spawn(
+            mocker, self._recording_exec_stream(calls)
+        )
+        spec = mocker.MagicMock()
+        spec.environment = {}
+        spec.providers = []
+        from openshell._proto import openshell_pb2
+
+        mocker.patch.object(openshell_pb2, "SandboxSpec", return_value=spec)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={"my-secret": secret, "LIGHTSPEED_MODEL": "m"},
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        assert mock_client.create.call_args.kwargs["spec"] is spec
+        assert "my-secret" not in spec.environment
+        assert secret not in spec.environment.values()
+        assert spec.environment["LIGHTSPEED_MODEL"] == "m"
 
 
 class TestTLSAndServiceAccountSkipped:

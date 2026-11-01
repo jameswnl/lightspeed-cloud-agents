@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 MAX_SPAWNED_PODS = int(os.environ.get("MAX_SPAWNED_PODS", "10"))
 
+# Path the sandbox agent writes structured JSONL events to. The sandbox's
+# EventLogger only writes to $AGENT_EVENT_LOG, so the runners inject this as
+# AGENT_EVENT_LOG and OpenShellSpawner.stream_progress() tails the same file.
+AGENT_EVENT_LOG_PATH = "/tmp/agent-events.jsonl"
+
 
 class SecretKeyRef(BaseModel):
     """Reference to a K8s Secret key for sensitive env vars.
