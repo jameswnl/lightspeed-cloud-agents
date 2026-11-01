@@ -281,3 +281,69 @@ class TestTranscriptSaveDeadline:
 
         assert result["status"] == "completed"
         spawner.destroy.assert_called_once()
+
+
+class TestHeartbeatCoversSpawn:
+    @staticmethod
+    def _step_input() -> dict[str, Any]:
+        return {
+            "step": {"name": "s", "prompt": "p", "output_key": "o"},
+            "workflow_id": "wf-1",
+            "provider": {"name": "openai", "model": "gpt-4o", "credentials_secret": "k"},
+            "sandbox_image": "sandbox:latest",
+            "context": {},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("spawn_fails", [False, True])
+    async def test_heartbeat_runs_during_spawn_and_is_cancelled(
+        self, mocker: MockerFixture, spawn_fails: bool
+    ) -> None:
+        """A long spawn must not trip the 180s heartbeat timeout, so heartbeats
+        start before spawn() and stop on every path."""
+        mocker.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+        from cloud_agents.workflow.executor.temporal import activities
+
+        state = {"running": False, "cancelled": False}
+
+        async def fake_heartbeat_loop(*args, **kwargs):
+            state["running"] = True
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                state["cancelled"] = True
+                raise
+
+        mocker.patch.object(activities, "_heartbeat_loop", fake_heartbeat_loop)
+        seen_during_spawn = {}
+
+        async def spawn(*args, **kwargs):
+            await asyncio.sleep(0)
+            seen_during_spawn["running"] = state["running"]
+            if spawn_fails:
+                raise RuntimeError("spawn failed")
+            return "http://pod-1:8080"
+
+        spawner = mocker.AsyncMock()
+        spawner.spawn.side_effect = spawn
+        spawner.wait_ready.return_value = True
+        spawner.get_query_ssl_context = mocker.Mock(return_value=None)
+        run_response = mocker.MagicMock(status_code=200)
+        run_response.json.return_value = {"success": True, "output": {}}
+        _patch_client(
+            mocker,
+            activities.__name__,
+            mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=run_response),
+                get=mocker.AsyncMock(return_value=mocker.MagicMock(status_code=404)),
+            ),
+        )
+
+        if spawn_fails:
+            with pytest.raises(RuntimeError):
+                await _bounded(activities.run_sandbox_step(self._step_input(), spawner=spawner))
+        else:
+            await _bounded(activities.run_sandbox_step(self._step_input(), spawner=spawner))
+
+        assert seen_during_spawn["running"] is True
+        assert state["cancelled"] is True

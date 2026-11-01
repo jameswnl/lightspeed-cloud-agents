@@ -198,6 +198,12 @@ async def reconcile_orphaned_sandboxes(
         try:
             await spawner.destroy_sandbox(name)
             cleaned += 1
+        except NotImplementedError:
+            # Never fall back to agent-name destroy(): it may not be exact.
+            logger.warning(
+                "Skipping orphaned sandbox '%s': spawner can't destroy by exact name", name
+            )
+            failed_names.append(name)
         except Exception as exc:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
             failed_names.append(name)

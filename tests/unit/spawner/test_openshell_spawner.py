@@ -1260,6 +1260,7 @@ class TestOpenShellSpawnerListActive:
             workspace=spawner._workspace,
             label_selector="spawned-by=workflow-runner",
             limit=1000,
+            offset=0,
         )
 
     @pytest.mark.asyncio
@@ -1288,7 +1289,25 @@ class TestOpenShellSpawnerListActive:
             workspace=spawner._workspace,
             label_selector="spawned-by=workflow-runner",
             limit=1000,
+            offset=0,
         )
+
+    @pytest.mark.asyncio
+    async def test_list_pages_through_all_sandboxes(self, mocker: MockerFixture) -> None:
+        """ListSandboxes is paged with offset until a short page, so orphans
+        beyond the first page are still found."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        refs = [self._FakeRef(f"sb-{i}") for i in range(5)]
+        mock_client = mocker.Mock()
+        mock_client.list.side_effect = lambda *, limit, offset, **kw: refs[offset : offset + limit]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+        mocker.patch.object(OpenShellSpawner, "_LIST_PAGE_SIZE", 2)
+
+        result = await spawner.list_sandbox_labels({"spawned-by": "workflow-runner"})
+
+        assert [name for name, _ in result] == [f"sb-{i}" for i in range(5)]
+        assert [c.kwargs["offset"] for c in mock_client.list.call_args_list] == [0, 2, 4]
 
     @pytest.mark.asyncio
     async def test_destroy_sandbox_deletes_only_that_ref(self, mocker: MockerFixture) -> None:
@@ -1320,6 +1339,7 @@ class TestOpenShellSpawnerListActive:
             workspace=spawner._workspace,
             label_selector=None,
             limit=1000,
+            offset=0,
         )
 
     @pytest.mark.asyncio

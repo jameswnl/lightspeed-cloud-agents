@@ -204,7 +204,8 @@ class AgentSpawner(ABC):
                 lifetime_seconds=lifetime_seconds,
             )
             return endpoint
-        except Exception:
+        except BaseException:
+            # Includes cancellation, so a cancelled spawn frees its slot too.
             async with self._lock:
                 self._active_count -= 1
             raise
@@ -272,6 +273,9 @@ class AgentSpawner(ABC):
     ) -> list[tuple[str, dict[str, str]]]:
         """List active sandboxes as (exact sandbox name, labels).
 
+        A spawner that reports labels (overrides _do_list_sandbox_labels) must
+        also implement _do_destroy_sandbox() for the names it returns.
+
         Args:
             labels: Optional label selector to filter results.
 
@@ -294,12 +298,23 @@ class AgentSpawner(ABC):
         return [(name, {}) for name in await self._do_list_active(labels)]
 
     async def destroy_sandbox(self, sandbox_name: str) -> None:
-        """Destroy exactly the sandbox list_sandbox_labels() reported by this name."""
+        """Destroy exactly the sandbox list_sandbox_labels() reported by this name.
+
+        Raises:
+            NotImplementedError: If the spawner doesn't support exact deletion.
+        """
         await self._do_destroy_sandbox(sandbox_name)
 
     async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
-        """Default: names from the default listing are agent names."""
-        await self.destroy(sandbox_name)
+        """Implementation-specific exact deletion of one sandbox.
+
+        Deliberately no fallback to destroy(): that takes an agent name, and
+        an agent name can map to several sandboxes, so falling back could
+        delete sandboxes other than the one selected.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot destroy a sandbox by its exact name"
+        )
 
     async def read_file(self, agent_name: str, path: str) -> str:
         """Read a file from a spawned agent container.

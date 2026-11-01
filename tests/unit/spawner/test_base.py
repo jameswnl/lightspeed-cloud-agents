@@ -1,5 +1,7 @@
 """Unit tests for AgentSpawner base class."""
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -449,13 +451,31 @@ class TestListSandboxLabelsDefault:
         assert await spawner.list_sandbox_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]
 
     @pytest.mark.asyncio
-    async def test_default_destroy_sandbox_destroys_that_name(self) -> None:
+    async def test_default_destroy_sandbox_not_implemented(self) -> None:
+        """No agent-name fallback: a spawner must implement exact deletion
+        together with list_sandbox_labels()."""
         spawner = MockSpawner()
         await spawner.spawn("a1", "img", env={})
 
-        await spawner.destroy_sandbox("a1")
+        with pytest.raises(NotImplementedError):
+            await spawner.destroy_sandbox("a1")
 
-        assert spawner.destroyed == ["a1"]
+        assert spawner.destroyed == []
+
+    @pytest.mark.asyncio
+    async def test_cancelled_spawn_restores_active_count(self) -> None:
+        class SlowSpawner(MockSpawner):
+            async def _do_spawn(self, *args, **kwargs):
+                await asyncio.sleep(3600)
+
+        spawner = SlowSpawner()
+        task = asyncio.create_task(spawner.spawn("a1", "img", env={}))
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert spawner._active_count == 0
 
 
 class TestSpawnForwardsLifetime:

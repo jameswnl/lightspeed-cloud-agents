@@ -171,6 +171,9 @@ class OpenShellSpawner(AgentSpawner):
     # label instead of the sandbox name (issue #224).
     _AGENT_NAME_LABEL_KEY: ClassVar[str] = "cloud-agents/agent-name"
 
+    # ListSandboxes page size used by _list_refs().
+    _LIST_PAGE_SIZE: ClassVar[int] = 1000
+
     # Attached to every sandbox at create time (merged with caller-supplied
     # labels) so reconcile_orphaned_sandboxes() can find sandboxes spawned by
     # a *previous* process instance via ListSandboxes(label_selector=...)
@@ -1185,7 +1188,8 @@ class OpenShellSpawner(AgentSpawner):
                 )
                 if not ready:
                     raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
-        except Exception as exc:
+        except BaseException as exc:
+            # BaseException so a cancelled spawn also cleans up what it created.
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
                 "deleting sandbox to prevent orphan",
@@ -2130,14 +2134,18 @@ class OpenShellSpawner(AgentSpawner):
     async def _list_refs(self, labels: dict[str, str] | None = None) -> list[Any]:
         """ListSandboxes for this workspace, filtered by a label selector."""
         label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
-        refs = await asyncio.to_thread(
-            self._client.list,
-            workspace=self._workspace,
-            label_selector=label_selector or None,
-            # SandboxClient.list() defaults to limit=100 with no built-in
-            # pagination here; raised well above expected orphan counts as a
-            # cheap mitigation. True pagination is a follow-up if a workspace
-            # ever legitimately exceeds this.
-            limit=1000,
-        )
-        return list(refs)
+        refs: list[Any] = []
+        offset = 0
+        while True:
+            # SandboxClient.list() returns at most `limit` refs per call.
+            page = await asyncio.to_thread(
+                self._client.list,
+                workspace=self._workspace,
+                label_selector=label_selector or None,
+                limit=self._LIST_PAGE_SIZE,
+                offset=offset,
+            )
+            refs.extend(page)
+            if len(page) < self._LIST_PAGE_SIZE:
+                return refs
+            offset += self._LIST_PAGE_SIZE

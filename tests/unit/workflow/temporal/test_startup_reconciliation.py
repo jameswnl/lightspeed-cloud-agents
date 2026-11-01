@@ -300,6 +300,64 @@ class TestExactDeletionRealSpawner:
         assert gateway.deleted == ["sb-expired"]
 
 
+class TestReconcileWithoutExactDestroy:
+    @pytest.mark.asyncio
+    async def test_spawner_without_destroy_sandbox_is_skipped_and_logged(self, caplog) -> None:
+        """A spawner that lists labels but doesn't implement exact deletion is
+        skipped, never falling back to agent-name destroy()."""
+        from cloud_agents.spawner.base import AgentSpawner
+
+        class ListOnlySpawner(AgentSpawner):
+            destroyed: list[str] = []
+
+            async def _do_spawn(self, *args, **kwargs):
+                return ""
+
+            async def _do_destroy(self, agent_name):
+                self.destroyed.append(agent_name)
+
+            async def _do_list_active(self, labels=None):
+                return []
+
+            async def _do_list_sandbox_labels(self, labels=None):
+                return [("sb-expired", {EXPIRES_KEY: PAST})]
+
+            async def _do_read_file(self, agent_name, path):
+                raise FileNotFoundError(path)
+
+            async def _do_write_file(self, agent_name, path, content):
+                pass
+
+        spawner = ListOnlySpawner()
+        with caplog.at_level("WARNING"):
+            await reconcile_orphaned_sandboxes(spawner, now=NOW)
+
+        assert spawner.destroyed == []
+        assert "sb-expired" in caplog.text
+
+
+class TestCancelledSpawnRealSpawner:
+    @pytest.mark.asyncio
+    async def test_cancel_after_create_deletes_exact_sandbox(self, mocker) -> None:
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        mocker.patch.object(spawner, "start_server", side_effect=hang)
+        task = asyncio.create_task(spawner.spawn("ca-agent", "img", env={}, lifetime_seconds=60))
+        assert await asyncio.to_thread(gateway.created.wait, 5)
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert gateway.deleted == ["sb-1"]
+        assert spawner._active_count == 0
+        assert spawner._sandbox_names == {}
+
+
 class TestSpawnDeadlineRealSpawner:
     """The spawn budget starts when expires-at is stamped and bounds create
     plus every post-create phase, so a sandbox whose lifetime covers the

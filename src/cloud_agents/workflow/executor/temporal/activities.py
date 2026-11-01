@@ -572,6 +572,9 @@ async def _run_sandbox_step_inner(
 
     endpoint = None
     was_cancelled = False
+    # Heartbeat from before spawn() until the activity ends: a long spawn
+    # would otherwise trip the heartbeat_timeout.
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     try:
         try:
             sa = permissions.get("service_account")
@@ -654,7 +657,6 @@ async def _run_sandbox_step_inner(
                         _progress_streaming_loop(spawner, sandbox_id)
                     )
 
-            heartbeat_task = asyncio.create_task(_heartbeat_loop())
             try:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     try:
@@ -698,9 +700,6 @@ async def _run_sandbox_step_inner(
                         ).inc()
                         raise
             finally:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
                 if progress_task is not None:
                     progress_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -775,6 +774,9 @@ async def _run_sandbox_step_inner(
             raise
 
     finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
         if was_cancelled and endpoint:
             from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_timeout_total
 
