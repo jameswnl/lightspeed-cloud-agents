@@ -21,20 +21,22 @@ FUTURE = str(int(NOW) + 3600)
 
 
 def _fake_spawner(sandboxes: dict[str, dict[str, str]]) -> AsyncMock:
-    """Spawner whose list_sandbox_labels() returns sandboxes as-is.
+    """Spawner whose list_sandbox_labels_page() returns sandboxes as one page.
 
     sandboxes maps gateway sandbox name -> labels beyond spawned-by (an empty
     dict is a legacy sandbox carrying only spawned-by=workflow-runner).
     """
     spawner = AsyncMock()
 
-    async def list_sandbox_labels(labels: dict[str, str] | None = None):
+    async def list_sandbox_labels_page(labels: dict[str, str] | None = None, offset: int = 0):
         assert labels == {"spawned-by": "workflow-runner"}
-        return [
+        assert offset == 0
+        pairs = [
             (name, {"spawned-by": "workflow-runner", **extra}) for name, extra in sandboxes.items()
         ]
+        return pairs, None
 
-    spawner.list_sandbox_labels.side_effect = list_sandbox_labels
+    spawner.list_sandbox_labels_page.side_effect = list_sandbox_labels_page
     return spawner
 
 
@@ -53,7 +55,7 @@ class TestStartupReconciliation:
 
         await reconcile_orphaned_sandboxes(mock_spawner, now=NOW)
 
-        mock_spawner.list_sandbox_labels.assert_called_once()
+        mock_spawner.list_sandbox_labels_page.assert_called_once()
         mock_spawner.destroy.assert_not_called()
         assert _destroyed(mock_spawner) == {"sb-old1", "sb-old2"}
 
@@ -693,17 +695,17 @@ class _SharedGateway(_FakeGateway):
 
 
 class _HangingListGateway(_FakeGateway):
-    """Gateway whose first `hang` list calls block until released."""
+    """Gateway whose list calls numbered in `hang_on` block until released."""
 
-    def __init__(self, refs: list[_FakeRef] | None = None, hang: int = 1) -> None:
+    def __init__(self, refs: list[_FakeRef] | None = None, hang_on: tuple[int, ...] = (1,)):
         super().__init__(refs)
         self.release = threading.Event()
         self.list_calls = 0
-        self._hang = hang
+        self._hang_on = hang_on
 
     def list(self, **kwargs):
         self.list_calls += 1
-        if self.list_calls <= self._hang:
+        if self.list_calls in self._hang_on:
             self.release.wait(10)
         return super().list(**kwargs)
 
@@ -856,8 +858,8 @@ class TestPeriodicReaper:
         replica_b = _real_spawner(mocker, gateway)
         # Both replicas list before either deletes.
         listed = [(r.name, dict(r.labels)) for r in gateway.refs.values()]
-        mocker.patch.object(replica_a, "list_sandbox_labels", return_value=listed)
-        mocker.patch.object(replica_b, "list_sandbox_labels", return_value=listed)
+        mocker.patch.object(replica_a, "list_sandbox_labels_page", return_value=(listed, None))
+        mocker.patch.object(replica_b, "list_sandbox_labels_page", return_value=(listed, None))
         before = _counter("ls_sandbox_reap_failures_total", {"operation": "delete"})
 
         with caplog.at_level("WARNING"):
@@ -925,19 +927,108 @@ class TestPeriodicReaper:
         assert gateway.deleted == []
 
 
+class TestPagedListing:
+    """Each ListSandboxes page is its own bounded call, and a run lists at
+    most SANDBOX_REAP_MAX_PAGES pages, so a large inventory on a slow
+    gateway still gets reaped page by page."""
+
+    @pytest.fixture(autouse=True)
+    def _small_pages(self, mocker):
+        from cloud_agents.spawner import lifetime
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mocker.patch.object(OpenShellSpawner, "_LIST_PAGE_SIZE", 2)
+        mocker.patch.object(lifetime, "SANDBOX_CANCEL_GRACE_SECONDS", 0.2)
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_CALL_TIMEOUT_SECONDS", 0.5)
+
+    @staticmethod
+    def _expired(n: int) -> list[_FakeRef]:
+        return [_FakeRef(f"sb-{i}", _labels(f"ca-{i}", PAST)) for i in range(n)]
+
+    @pytest.mark.asyncio
+    async def test_each_page_gets_its_own_budget(self, mocker) -> None:
+        """Pages that together exceed one call budget all get listed."""
+        gateway = _FakeGateway(self._expired(5))
+        real_list = gateway.list
+
+        def slow_list(**kwargs):
+            time.sleep(0.3)  # 3 pages x 0.3s > the 0.5s per-call budget
+            return real_list(**kwargs)
+
+        gateway.list = slow_list
+        spawner = _real_spawner(mocker, gateway)
+
+        await reconcile_orphaned_sandboxes(spawner, now=NOW)
+
+        assert sorted(gateway.deleted) == [f"sb-{i}" for i in range(5)]
+
+    @pytest.mark.asyncio
+    async def test_hung_later_page_reaps_listed_pages_then_raises(self, mocker) -> None:
+        from cloud_agents.spawner.lifetime import SandboxDeadlineExceeded
+
+        gateway = _HangingListGateway(self._expired(5), hang_on=(2,))
+        spawner = _real_spawner(mocker, gateway)
+        before = _counter("ls_sandbox_reap_failures_total", {"operation": "list"})
+
+        start = time.monotonic()
+        try:
+            with pytest.raises(SandboxDeadlineExceeded):
+                await reconcile_orphaned_sandboxes(spawner, now=NOW)
+        finally:
+            gateway.release.set()
+
+        assert time.monotonic() - start < 2
+        assert sorted(gateway.deleted) == ["sb-0", "sb-1"]
+        assert _counter("ls_sandbox_reap_failures_total", {"operation": "list"}) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_page_cap_reaps_listed_and_logs(self, mocker, caplog) -> None:
+        mocker.patch.object(entrypoint, "SANDBOX_REAP_MAX_PAGES", 2)
+        gateway = _FakeGateway(self._expired(5))
+        spawner = _real_spawner(mocker, gateway)
+
+        with caplog.at_level("WARNING"):
+            await reconcile_orphaned_sandboxes(spawner, now=NOW)
+
+        assert sorted(gateway.deleted) == ["sb-0", "sb-1", "sb-2", "sb-3"]
+        assert "2 page(s)" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_base_spawner_lists_as_one_page(self) -> None:
+        from cloud_agents.spawner.base import AgentSpawner
+
+        class Minimal(AgentSpawner):
+            async def _do_spawn(self, *args, **kwargs):
+                return ""
+
+            async def _do_destroy(self, agent_name):
+                pass
+
+            async def _do_list_active(self, labels=None):
+                return ["a1"]
+
+            async def _do_read_file(self, agent_name, path):
+                raise FileNotFoundError(path)
+
+            async def _do_write_file(self, agent_name, path, content):
+                pass
+
+        assert await Minimal().list_sandbox_labels_page() == ([("a1", {})], None)
+
+
 class TestReaperIntervalSetting:
     def test_default(self, monkeypatch) -> None:
-        monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
+        monkeypatch.delenv("SANDBOX_REAP_INTERVAL_SECONDS", raising=False)
         assert entrypoint._sandbox_reap_interval_seconds() == 300
 
     def test_configured(self, monkeypatch) -> None:
-        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "0")
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "0")
         assert entrypoint._sandbox_reap_interval_seconds() == 0
 
     @pytest.mark.parametrize("bad", ["abc", "-1", "1.5"])
     def test_invalid_fails_startup(self, monkeypatch, bad) -> None:
-        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", bad)
-        with pytest.raises(ValueError, match="REAPER_INTERVAL_SECONDS"):
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", bad)
+        with pytest.raises(ValueError, match="SANDBOX_REAP_INTERVAL_SECONDS"):
             entrypoint._sandbox_reap_interval_seconds()
 
 
@@ -953,7 +1044,7 @@ class TestReaperInLifespans:
     async def test_local_lifespan(self, mocker, monkeypatch) -> None:
         from cloud_agents.workflow.executor.local import entrypoint as local_entrypoint
 
-        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "3600")
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "3600")
         mocker.patch.object(local_entrypoint, "_create_spawner", return_value=_fake_spawner({}))
         app = local_entrypoint.build_local_app()
 
@@ -963,7 +1054,7 @@ class TestReaperInLifespans:
 
     @pytest.mark.asyncio
     async def test_temporal_lifespan(self, mocker, monkeypatch) -> None:
-        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "3600")
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "3600")
         monkeypatch.delenv("TRANSCRIPT_DB_URL", raising=False)
         mocker.patch.object(entrypoint, "_create_spawner", return_value=_fake_spawner({}))
         mocker.patch.object(entrypoint.Client, "connect", side_effect=RuntimeError("no temporal"))
@@ -974,10 +1065,43 @@ class TestReaperInLifespans:
         assert _reaper_tasks() == []
 
     @pytest.mark.asyncio
+    async def test_temporal_lifespan_cancelled_during_startup_leaks_no_reaper(
+        self, mocker, monkeypatch
+    ) -> None:
+        """Shutdown while the transcript store is still connecting must not
+        leave a reaper task running."""
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "3600")
+        connecting = asyncio.Event()
+
+        async def hang_connect():
+            connecting.set()
+            await asyncio.sleep(3600)
+
+        store = MagicMock()
+        store.connect = hang_connect
+        store.close = AsyncMock()
+        mocker.patch.object(entrypoint.TranscriptStore, "from_env", return_value=store)
+        mocker.patch.object(entrypoint, "_create_spawner", return_value=_fake_spawner({}))
+        app = entrypoint.build_temporal_app()
+
+        async def run_lifespan():
+            async with app.router.lifespan_context(app):
+                pass
+
+        task = asyncio.create_task(run_lifespan())
+        await asyncio.wait_for(connecting.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+
+        assert _reaper_tasks() == []
+
+    @pytest.mark.asyncio
     async def test_lifespan_reaper_disabled(self, mocker, monkeypatch) -> None:
         from cloud_agents.workflow.executor.local import entrypoint as local_entrypoint
 
-        monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "0")
+        monkeypatch.setenv("SANDBOX_REAP_INTERVAL_SECONDS", "0")
         mocker.patch.object(local_entrypoint, "_create_spawner", return_value=_fake_spawner({}))
         app = local_entrypoint.build_local_app()
 

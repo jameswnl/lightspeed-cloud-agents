@@ -104,10 +104,13 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_sandbox_labels.return_value = [
-            ("orphan-1", {"cloud-agents/expires-at": "1"}),
-            ("orphan-2", {"cloud-agents/expires-at": "1"}),
-        ]
+        mock_spawner.list_sandbox_labels_page.return_value = (
+            [
+                ("orphan-1", {"cloud-agents/expires-at": "1"}),
+                ("orphan-2", {"cloud-agents/expires-at": "1"}),
+            ],
+            None,
+        )
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
@@ -122,7 +125,7 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_sandbox_labels.return_value = []
+        mock_spawner.list_sandbox_labels_page.return_value = ([], None)
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
@@ -139,11 +142,14 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_sandbox_labels.return_value = [
-            ("orphan-ok", {"cloud-agents/expires-at": "1"}),
-            ("orphan-fail", {"cloud-agents/expires-at": "1"}),
-            ("orphan-ok2", {"cloud-agents/expires-at": "1"}),
-        ]
+        mock_spawner.list_sandbox_labels_page.return_value = (
+            [
+                ("orphan-ok", {"cloud-agents/expires-at": "1"}),
+                ("orphan-fail", {"cloud-agents/expires-at": "1"}),
+                ("orphan-ok2", {"cloud-agents/expires-at": "1"}),
+            ],
+            None,
+        )
 
         call_count = 0
 

@@ -31,7 +31,15 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Orphaned sandbox containers cleaned up on startup — possible prior crash"
+            summary: "Expired orphaned sandboxes reaped (startup or periodic reconcile) — possible prior crash"
+
+        - alert: SandboxReapFailure
+          expr: increase(ls_sandbox_reap_failures_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Orphaned sandbox reconcile keeps failing to list or delete — expired sandboxes may accumulate"
 
         - alert: WorkflowRunnerDown
           expr: up{job="workflow-runner"} == 0

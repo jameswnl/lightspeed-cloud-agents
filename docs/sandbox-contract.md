@@ -142,14 +142,19 @@ malformed one are left alone and logged. Caller-supplied `expires-at` labels
 
 **Periodic reaper.** Startup reconcile alone would leave a crashed replica's
 sandboxes until some runner restarts, so every runner (Temporal and local
-entrypoints) also re-runs the same reconcile every `REAPER_INTERVAL_SECONDS`
+entrypoints) also re-runs the same reconcile every `SANDBOX_REAP_INTERVAL_SECONDS`
 (default 300; `0` disables it; must be a non-negative integer or startup
 fails). Runs are single-flight: a tick that fires while the previous run is
 still in progress is skipped. Every reconcile run, startup or periodic,
-bounds the list and each delete at 30s (`SANDBOX_REAP_CALL_TIMEOUT_SECONDS`
-in `temporal/entrypoint.py`, via `await_within()`), so a hung gateway can't
-stall startup or the reaper. A periodic run's errors are logged, never
-raised. Failed or timed-out calls are counted in
+bounds each list page and each delete at 30s
+(`SANDBOX_REAP_CALL_TIMEOUT_SECONDS` in `temporal/entrypoint.py`, via
+`await_within()`) and lists at most 10 pages (`SANDBOX_REAP_MAX_PAGES`), so a
+hung gateway can't stall startup or the reaper. If listing stops early (page
+cap, or a page fails after the first), the sandboxes already listed are still
+reaped -- selection is per sandbox -- and a failed page is then raised (at
+startup, as a failed first page always was). A periodic run's errors are
+logged, never raised. `ls_sandbox_reap_failures_total` has the
+`SandboxReapFailure` alert (see `docs/operations/runbook.md`). Failed or timed-out calls are counted in
 `ls_sandbox_reap_failures_total{operation="list"|"delete"}`, reaped
 sandboxes in `ls_sandbox_orphans_cleaned_total`. The reaper is cancelled on
 app shutdown. Replicas reap concurrently, so a delete that finds the

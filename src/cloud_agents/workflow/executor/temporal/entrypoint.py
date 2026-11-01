@@ -91,9 +91,11 @@ DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS = 600
 # How often each replica re-runs reconcile to reap sandboxes that expired
 # since startup; 0 disables the periodic reaper.
 DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS = 300
-# Bound on each gateway call (list, delete) a reconcile run makes, so a hung
-# gateway can't stall startup or the reaper.
+# Bound on each gateway call (list page, delete) a reconcile run makes, so a
+# hung gateway can't stall startup or the reaper.
 SANDBOX_REAP_CALL_TIMEOUT_SECONDS = 30
+# Cap on list pages per reconcile run; sandboxes past it wait for a later run.
+SANDBOX_REAP_MAX_PAGES = 10
 
 
 def _non_negative_int_env(name: str, default: int) -> int:
@@ -123,8 +125,10 @@ def _sandbox_expiry_skew_seconds() -> int:
 
 
 def _sandbox_reap_interval_seconds() -> int:
-    """REAPER_INTERVAL_SECONDS (default 300): periodic reaper interval, 0 disables."""
-    return _non_negative_int_env("REAPER_INTERVAL_SECONDS", DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS)
+    """SANDBOX_REAP_INTERVAL_SECONDS (default 300): periodic reaper interval, 0 disables."""
+    return _non_negative_int_env(
+        "SANDBOX_REAP_INTERVAL_SECONDS", DEFAULT_SANDBOX_REAP_INTERVAL_SECONDS
+    )
 
 
 def _create_spawner():
@@ -181,9 +185,13 @@ async def reconcile_orphaned_sandboxes(
     existed, or with no enforced lifetime, e.g. CLI sessions) and sandboxes
     with a malformed one are left alone and logged.
 
-    The list and each delete are bounded by SANDBOX_REAP_CALL_TIMEOUT_SECONDS.
-    Several replicas may reconcile at once; the spawner treats deleting an
-    already-deleted sandbox as success.
+    Each list page and each delete is bounded by
+    SANDBOX_REAP_CALL_TIMEOUT_SECONDS, and a run lists at most
+    SANDBOX_REAP_MAX_PAGES pages. If listing stops early (page cap, or a page
+    fails), the sandboxes already listed are still reaped: selection is per
+    sandbox, so a partial listing never widens it. Several replicas may
+    reconcile at once; the spawner treats deleting an already-deleted sandbox
+    as success.
 
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
@@ -191,9 +199,10 @@ async def reconcile_orphaned_sandboxes(
         trigger: "startup" or "reaper", for logs and the audit event.
 
     Raises:
-        Exception: If listing sandboxes fails or times out (counted in
-            ls_sandbox_reap_failures_total). Delete failures are logged and
-            counted, not raised.
+        Exception: If a list page fails or times out (counted in
+            ls_sandbox_reap_failures_total), after reaping the sandboxes
+            listed before it. Delete failures are logged and counted, not
+            raised.
     """
     if spawner is None:
         return
@@ -204,15 +213,31 @@ async def reconcile_orphaned_sandboxes(
 
     now = time.time() if now is None else now
 
-    try:
-        listed = await await_within(
-            spawner.list_sandbox_labels(SPAWNED_BY_LABEL),
-            SANDBOX_REAP_CALL_TIMEOUT_SECONDS,
-            what="Orphaned sandbox list",
+    listed: list[tuple[str, dict[str, str]]] = []
+    list_error: Exception | None = None
+    offset: int | None = 0
+    for _ in range(SANDBOX_REAP_MAX_PAGES):
+        try:
+            page, offset = await await_within(
+                spawner.list_sandbox_labels_page(SPAWNED_BY_LABEL, offset or 0),
+                SANDBOX_REAP_CALL_TIMEOUT_SECONDS,
+                what="Orphaned sandbox list page",
+            )
+        except Exception as exc:
+            ls_sandbox_reap_failures_total.labels(operation="list").inc()
+            if not listed:
+                raise
+            logger.error("Listing sandboxes failed after %d: %s", len(listed), exc)
+            list_error = exc
+            break
+        listed.extend(page)
+        if offset is None:
+            break
+    else:
+        logger.warning(
+            "Stopped listing sandboxes after %d page(s); the rest wait for a later run",
+            SANDBOX_REAP_MAX_PAGES,
         )
-    except Exception:
-        ls_sandbox_reap_failures_total.labels(operation="list").inc()
-        raise
     orphans = []
     no_expiry = 0
     for name, labels in listed:
@@ -264,6 +289,8 @@ async def reconcile_orphaned_sandboxes(
             workflow_id=trigger,
             details={"count": cleaned, "failed": failed_names, "total_found": len(orphans)},
         )
+    if list_error is not None:
+        raise list_error
 
 
 def start_sandbox_reaper(
@@ -407,7 +434,7 @@ def build_temporal_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         """Connect Temporal client and start worker on startup."""
         await reconcile_orphaned_sandboxes(spawner)
-        reaper = start_sandbox_reaper(spawner, reap_interval)
+        reaper = None
 
         # Connect transcript store (best-effort: failures are non-fatal)
         if transcript_store is not None:
@@ -421,6 +448,7 @@ def build_temporal_app(
                 )
 
         try:
+            reaper = start_sandbox_reaper(spawner, reap_interval)
             tls_config = _build_tls_config()
             connect_kwargs: dict = {
                 "target_host": temporal_url,

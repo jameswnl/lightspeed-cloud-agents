@@ -277,6 +277,25 @@ class TestRunbookAlertRuleReferences:
         missing = runbook_alerts - helm_alerts
         assert not missing, f"Runbook references alerts not in prometheusrule.yaml: {missing}"
 
+    def test_every_helm_alert_documented(self):
+        """Every alert in prometheusrule.yaml has an entry in the runbook."""
+        runbook = _read(RUNBOOK)
+        helm_alerts = set(re.findall(r"alert:\s*(\w+)", _read(HELM_PROMETHEUSRULE)))
+
+        undocumented = {alert for alert in helm_alerts if f"`{alert}`" not in runbook}
+        assert not undocumented, f"Alerts missing from the runbook: {undocumented}"
+
+    def test_sandbox_reap_failures_alerted(self):
+        """The orphan reaper's failure metric has an alert."""
+        helm_content = _read(HELM_PROMETHEUSRULE)
+
+        assert "alert: SandboxReapFailure" in helm_content
+        assert "ls_sandbox_reap_failures_total" in helm_content
+
+    def test_orphan_alert_not_startup_only(self):
+        """Orphans are reaped periodically, not only on startup."""
+        assert "on startup" not in _read(HELM_PROMETHEUSRULE)
+
 
 # ---------------------------------------------------------------------------
 # Test: DEPLOYMENT.md links to runbook

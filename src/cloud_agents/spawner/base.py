@@ -297,10 +297,35 @@ class AgentSpawner(ABC):
     ) -> list[tuple[str, dict[str, str]]]:
         """Default for spawners that can't report labels: empty labels each.
 
-        Startup reconciliation never destroys a sandbox without an expiry
-        label, so this default is fail-safe.
+        Reconcile never destroys a sandbox without an expiry label, so this
+        default is fail-safe.
         """
         return [(name, {}) for name in await self._do_list_active(labels)]
+
+    async def list_sandbox_labels_page(
+        self,
+        labels: dict[str, str] | None = None,
+        offset: int = 0,
+    ) -> tuple[list[tuple[str, dict[str, str]]], int | None]:
+        """One page of list_sandbox_labels(), so callers can bound each call.
+
+        Args:
+            labels: Optional label selector to filter results.
+            offset: Where to start; 0, or the offset the previous page returned.
+
+        Returns:
+            The page's (exact sandbox name, labels) pairs, and the offset of
+            the next page, or None if this was the last.
+        """
+        return await self._do_list_sandbox_labels_page(labels, offset)
+
+    async def _do_list_sandbox_labels_page(
+        self,
+        labels: dict[str, str] | None,
+        offset: int,
+    ) -> tuple[list[tuple[str, dict[str, str]]], int | None]:
+        """Default for spawners that don't page: everything as one page."""
+        return await self._do_list_sandbox_labels(labels), None
 
     async def destroy_sandbox(self, sandbox_name: str) -> None:
         """Destroy exactly the sandbox list_sandbox_labels() reported by this name.

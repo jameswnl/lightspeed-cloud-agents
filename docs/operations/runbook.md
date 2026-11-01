@@ -67,19 +67,21 @@ kubectl logs deploy/workflow-runner --previous
 
 ## 2. Orphaned Sandbox Containers
 
-On startup the runner scans for containers labelled `spawned-by=workflow-runner` and destroys them (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/executor/temporal/entrypoint.py`). If this cleanup fails or sandboxes accumulate between restarts, you have orphans.
+On startup, and then every `SANDBOX_REAP_INTERVAL_SECONDS` (default 300, `0` disables the periodic reaper), the runner lists sandboxes labelled `spawned-by=workflow-runner` and destroys those past their `cloud-agents/expires-at` label (see `reconcile_orphaned_sandboxes()` in `src/cloud_agents/workflow/executor/temporal/entrypoint.py` and `docs/sandbox-contract.md`). Sandboxes with no or a malformed `expires-at` are never reaped. If this cleanup keeps failing, expired sandboxes accumulate.
 
 **Metrics**:
-- `ls_sandbox_orphans_cleaned_total` -- incremented when orphans are destroyed on startup
+- `ls_sandbox_orphans_cleaned_total` -- incremented when expired orphans are destroyed (startup or periodic reconcile)
+- `ls_sandbox_reap_failures_total` -- incremented when a reconcile list page or delete fails or times out (label `operation`: `list` or `delete`)
 - `ls_sandbox_cleanup_failures_total` -- incremented when `spawner.destroy()` fails
 
 **Alerts** (from `deploy/helm/templates/prometheusrule.yaml`):
 - `SandboxOrphanDetected` -- fires when `ls_sandbox_orphans_cleaned_total` increases
+- `SandboxReapFailure` -- fires when `ls_sandbox_reap_failures_total` keeps increasing for 15 min
 - `SandboxCleanupFailure` -- fires when `ls_sandbox_cleanup_failures_total` increases
 
 ### Symptom: `SandboxOrphanDetected` alert fires
 
-Orphans were found and cleaned on runner startup. This usually means a previous runner crash.
+Expired orphans were found and cleaned by startup or periodic reconcile. This usually means a previous runner crash.
 
 **Diagnosis**:
 ```bash
@@ -102,6 +104,24 @@ kubectl delete jobs -l spawned-by=workflow-runner
 # Podman
 make clean-sandboxes
 ```
+
+### Symptom: `SandboxReapFailure` alert fires
+
+Reconcile (startup or periodic) failed or timed out listing or deleting sandboxes for at least 15 minutes, so expired sandboxes may be accumulating. Each gateway call is bounded at 30s, so the runner itself isn't stuck.
+
+**Diagnosis**:
+```bash
+# Which operation is failing (list or delete)
+curl -s http://localhost:8080/metrics | grep ls_sandbox_reap_failures_total
+
+# Reconcile errors
+kubectl logs deploy/workflow-runner | grep -E "Sandbox reaper run failed|Listing sandboxes failed|Failed to destroy orphaned sandbox"
+```
+
+**Recovery**:
+1. `operation="list"` -- check OpenShell gateway health and connectivity (`OPENSHELL_GATEWAY_URL`, TLS/bearer token); reaping resumes on the next run once listing works
+2. `operation="delete"` -- check the gateway logs for the named sandboxes; a sandbox that's already gone counts as success, so persistent failures point at the gateway
+3. Expired sandboxes are reaped automatically once the gateway recovers -- no manual action needed
 
 ### Symptom: `SandboxCleanupFailure` alert fires
 
@@ -392,7 +412,7 @@ podman ps --filter label=spawned-by=workflow-runner
 
 | Pattern | Meaning |
 |---------|---------|
-| `"event_type": "orphan_cleanup"` | Orphans cleaned on startup |
+| `"event_type": "orphan_cleanup"` | Expired orphans cleaned (`workflow_id` is `startup` or `reaper`) |
 | `"event_type": "sandbox_timeout"` | Sandbox activity timed out |
 | `"event_type": "auth_rejected"` | Authentication failure |
 | `"event_type": "rate_limit_exceeded"` | Request rate-limited |
@@ -405,7 +425,7 @@ podman ps --filter label=spawned-by=workflow-runner
 
 Before restarting the workflow runner:
 1. In-flight workflows will be re-dispatched by Temporal after heartbeat timeout (180s)
-2. Orphaned sandbox containers will be cleaned on the next startup
+2. Expired orphaned sandboxes are cleaned on the next startup or periodic reconcile
 3. Circuit breaker state resets (per-process)
 4. Rate limiter state resets (per-process)
 5. Any in-memory state (definition store cache) will be lost
@@ -419,4 +439,5 @@ All alerts are defined in `deploy/helm/templates/prometheusrule.yaml`:
 | `WorkflowStepFailureRateHigh` | Step failure rate > 10% for 5 min | warning |
 | `SandboxCleanupFailure` | Any cleanup failure in 10 min | warning |
 | `SandboxOrphanDetected` | Any orphan cleaned in 10 min | warning |
+| `SandboxReapFailure` | Reconcile list/delete failures sustained for 15 min | warning |
 | `WorkflowRunnerDown` | Runner target down for 2 min | critical |

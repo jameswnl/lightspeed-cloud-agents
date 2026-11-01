@@ -2235,6 +2235,15 @@ class OpenShellSpawner(AgentSpawner):
         """
         return [(ref.name, dict(ref.labels)) for ref in await self._list_refs(labels)]
 
+    async def _do_list_sandbox_labels_page(
+        self,
+        labels: dict[str, str] | None,
+        offset: int,
+    ) -> tuple[list[tuple[str, dict[str, str]]], int | None]:
+        """One ListSandboxes page of _do_list_sandbox_labels()."""
+        refs, next_offset = await self._list_refs_page(labels, offset)
+        return [(ref.name, dict(ref.labels)) for ref in refs], next_offset
+
     async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
         """Delete exactly this gateway sandbox, with no agent-name expansion.
 
@@ -2265,19 +2274,26 @@ class OpenShellSpawner(AgentSpawner):
 
     async def _list_refs(self, labels: dict[str, str] | None = None) -> list[Any]:
         """ListSandboxes for this workspace, filtered by a label selector."""
-        label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
         refs: list[Any] = []
-        offset = 0
-        while True:
-            # SandboxClient.list() returns at most `limit` refs per call.
-            page = await asyncio.to_thread(
-                self._client.list,
-                workspace=self._workspace,
-                label_selector=label_selector or None,
-                limit=self._LIST_PAGE_SIZE,
-                offset=offset,
-            )
+        offset: int | None = 0
+        while offset is not None:
+            page, offset = await self._list_refs_page(labels, offset)
             refs.extend(page)
-            if len(page) < self._LIST_PAGE_SIZE:
-                return refs
-            offset += self._LIST_PAGE_SIZE
+        return refs
+
+    async def _list_refs_page(
+        self, labels: dict[str, str] | None, offset: int
+    ) -> tuple[list[Any], int | None]:
+        """One ListSandboxes page, and the next page's offset (None if last)."""
+        label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
+        # SandboxClient.list() returns at most `limit` refs per call.
+        page = await asyncio.to_thread(
+            self._client.list,
+            workspace=self._workspace,
+            label_selector=label_selector or None,
+            limit=self._LIST_PAGE_SIZE,
+            offset=offset,
+        )
+        if len(page) < self._LIST_PAGE_SIZE:
+            return page, None
+        return page, offset + self._LIST_PAGE_SIZE
