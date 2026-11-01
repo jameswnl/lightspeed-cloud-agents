@@ -24,6 +24,14 @@ from cloud_agents.runtime.tracing import get_tracer
 from cloud_agents.runtime.audit import emit_audit
 from cloud_agents.runtime.circuit_breaker import ProviderCircuitBreaker
 from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH
+from cloud_agents.spawner.lifetime import (
+    SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
+    SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS,
+    await_within,
+    cancel_within,
+    run_timeout_seconds,
+    step_sandbox_lifetime_seconds,
+)
 from cloud_agents.workflow.notifiers.escalation import LogPackager
 from cloud_agents.workflow.notifiers.notifier import NullNotifier
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
@@ -311,11 +319,22 @@ async def _collect_transcript(
     empty = StepTranscript(step_name=step_name)
 
     try:
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await client.get(
-                f"{endpoint}/v1/agent/events",
-                headers=http_headers or None,
-            )
+        # Own short bound rather than the step-sized run timeout, as a
+        # wall-clock deadline (httpx's timeout is per read), so the fetch fits
+        # the sandbox lifetime in cloud_agents.spawner.lifetime. Run via
+        # await_within() so a stalled client close is bounded too.
+        async def _fetch() -> httpx.Response:
+            async with httpx.AsyncClient(
+                **{**client_kwargs, "timeout": SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS}
+            ) as client:
+                return await client.get(
+                    f"{endpoint}/v1/agent/events",
+                    headers=http_headers or None,
+                )
+
+        response = await await_within(
+            _fetch(), SANDBOX_TRANSCRIPT_TIMEOUT_SECONDS, what=f"Transcript fetch for '{step_name}'"
+        )
 
         if response.status_code == 404:
             logger.debug("Event log not found for step '%s' (HTTP 404)", step_name)
@@ -524,7 +543,7 @@ async def _run_sandbox_step_inner(
     permissions = step.get("permissions") or {}
     if sa := permissions.get("service_account"):
         env_vars["LIGHTSPEED_SERVICE_ACCOUNT"] = sa
-    http_timeout = float(permissions.get("timeout_seconds", 600))
+    http_timeout = run_timeout_seconds(step)
 
     if spawner is None:
         logger.info("No spawner configured — returning stub result for '%s'", step_name)
@@ -557,6 +576,9 @@ async def _run_sandbox_step_inner(
 
     endpoint = None
     was_cancelled = False
+    # Heartbeat from before spawn() until the activity ends: a long spawn
+    # would otherwise trip the heartbeat_timeout.
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     try:
         try:
             sa = permissions.get("service_account")
@@ -577,6 +599,7 @@ async def _run_sandbox_step_inner(
                 credential_secret_name=credential_env_key,
                 mcp_secret_mounts=mcp_secret_mounts or None,
                 tls_certs=tls_certs,
+                lifetime_seconds=step_sandbox_lifetime_seconds(step),
             )
             ready = await spawner.wait_ready(
                 endpoint,
@@ -638,11 +661,10 @@ async def _run_sandbox_step_inner(
                         _progress_streaming_loop(spawner, sandbox_id)
                     )
 
-            heartbeat_task = asyncio.create_task(_heartbeat_loop())
-            try:
+            async def _run_call() -> httpx.Response:
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     try:
-                        response = await client.post(
+                        return await client.post(
                             f"{endpoint}/v1/agent/run",
                             json=request_body,
                             headers=http_headers or None,
@@ -662,14 +684,30 @@ async def _run_sandbox_step_inner(
                             error_type="ssl_error",
                         ).inc()
                         raise
+
+            try:
+                try:
+                    # Covers the client's close too, and abandons a close that
+                    # ignores cancellation; httpx's own timeout is per read.
+                    response = await await_within(_run_call(), http_timeout, what="Agent run")
+                except TimeoutError:
+                    from cloud_agents.workflow.executor.temporal.metrics import (
+                        ls_sandbox_timeout_total,
+                    )
+
+                    ls_sandbox_timeout_total.labels(step_name=step_name, reason="timeout").inc()
+                    emit_audit(
+                        event_type="sandbox_timeout",
+                        workflow_id=workflow_id,
+                        step_name=step_name,
+                        details={"pod_name": pod_name, "reason": "timeout"},
+                    )
+                    # str(TimeoutError()) is empty, which the secret
+                    # redaction below would turn into a blank error.
+                    raise TimeoutError(f"Agent run timed out after {http_timeout:g}s") from None
             finally:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
                 if progress_task is not None:
-                    progress_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await progress_task
+                    await cancel_within(progress_task, what=f"Progress stream for '{step_name}'")
 
             if response.status_code == 502:
                 _circuit_breaker.record_failure(provider_name)
@@ -688,7 +726,13 @@ async def _run_sandbox_step_inner(
             output_key = step.get("output_key", step_name)
             if transcript_store is not None and transcript.events:
                 try:
-                    await transcript_store.save(workflow_id, output_key, transcript)
+                    # Runs before destroy, so it's bounded like every other
+                    # phase in the sandbox lifetime (cloud_agents.spawner.lifetime).
+                    await await_within(
+                        transcript_store.save(workflow_id, output_key, transcript),
+                        SANDBOX_TRANSCRIPT_SAVE_TIMEOUT_SECONDS,
+                        what="Transcript save",
+                    )
                 except Exception:
                     logger.warning(
                         "Failed to save transcript to store for step '%s'",
@@ -737,6 +781,7 @@ async def _run_sandbox_step_inner(
             raise
 
     finally:
+        await cancel_within(heartbeat_task, what=f"Heartbeat for '{step_name}'")
         if was_cancelled and endpoint:
             from cloud_agents.workflow.executor.temporal.metrics import ls_sandbox_timeout_total
 

@@ -77,6 +77,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
 from cloud_agents.spawner.base import SpawnConfig
+from cloud_agents.spawner.lifetime import DEFAULT_STEP_TIMEOUT_SECONDS
 from cloud_agents.workflow.core.interpolation import interpolate
 from cloud_agents.workflow.core.mcp_resolver import resolve_mcp_servers
 from cloud_agents.workflow.core.models import MCPServerConfig
@@ -1357,7 +1358,7 @@ def build_step_input(
         tools_module=run_context.get("tools_module"),
         context=dict(step_results),
         execution_context=dict(normalized.context),
-        timeout_seconds=normalized.timeout_seconds or 600,
+        timeout_seconds=normalized.timeout_seconds or DEFAULT_STEP_TIMEOUT_SECONDS,
         sandbox_image=sandbox_image,
         skills_image=run_context.get("skills_image"),
         skills_paths=run_context.get("skills_paths"),

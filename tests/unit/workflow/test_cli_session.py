@@ -101,6 +101,28 @@ class TestCLISessionLauncherLaunch:
         assert agent_name.startswith("cli-")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_monitor", [True, False])
+    async def test_launch_never_claims_a_lifetime(self, with_monitor: bool) -> None:
+        """The timeout monitor can stop or block, so nothing enforces
+        max_session_seconds: CLI sandboxes get no expiry, monitor or not."""
+        spawner = AsyncMock()
+        spawner.spawn = AsyncMock(return_value="http://cli-agent:8080")
+
+        launcher = CLISessionLauncher(max_session_seconds=7200)
+        if with_monitor:
+            launcher.start_timeout_monitor(spawner)
+        await launcher.launch(
+            spawner=spawner,
+            context_markdown="# ctx",
+            prompt="p",
+            image="quay.io/sandbox:latest",
+            workflow_id="wf-abc",
+        )
+        await launcher.shutdown()
+
+        assert spawner.spawn.call_args.kwargs.get("lifetime_seconds") is None
+
+    @pytest.mark.asyncio
     async def test_launch_returns_session_id(self) -> None:
         """launch() returns a unique session ID."""
         spawner = AsyncMock()

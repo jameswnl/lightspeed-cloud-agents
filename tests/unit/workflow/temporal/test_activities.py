@@ -376,6 +376,51 @@ class TestRunSandboxStep:
         assert env_vars.get("LIGHTSPEED_SERVICE_ACCOUNT") == "custom-sa"
 
     @pytest.mark.asyncio
+    async def test_spawn_gets_per_step_lifetime(self, mocker: MockerFixture) -> None:
+        """The sandbox's lifetime covers this step's enforced run deadline
+        (permissions.timeout_seconds), so a long run's expires-at outlasts it."""
+        from cloud_agents.spawner.lifetime import step_sandbox_lifetime_seconds
+
+        mock_spawner = mocker.AsyncMock()
+        mock_spawner.spawn.return_value = "http://pod-1:8080"
+        mock_spawner.wait_ready.return_value = True
+
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"success": True, "output": {}}
+
+        mock_http = mocker.patch(
+            "cloud_agents.workflow.executor.temporal.activities.httpx.AsyncClient",
+        )
+        mock_http.return_value.__aenter__ = mocker.AsyncMock(
+            return_value=mocker.MagicMock(
+                post=mocker.AsyncMock(return_value=mock_response),
+            ),
+        )
+        mock_http.return_value.__aexit__ = mocker.AsyncMock(return_value=False)
+
+        step = {
+            "name": "s1",
+            "prompt": "check",
+            "output_key": "r1",
+            "permissions": {"timeout_seconds": 200_000},
+        }
+        await run_sandbox_step(
+            {
+                "step": step,
+                "workflow_id": "wf-1",
+                "provider": {"name": "openai", "model": "gpt-4", "credentials_secret": "k"},
+                "sandbox_image": "sandbox:latest",
+                "context": {},
+            },
+            spawner=mock_spawner,
+        )
+
+        lifetime = mock_spawner.spawn.call_args.kwargs["lifetime_seconds"]
+        assert lifetime == step_sandbox_lifetime_seconds(step)
+        assert lifetime >= 200_000
+
+    @pytest.mark.asyncio
     async def test_permissions_timeout_overrides_default(self, mocker: MockerFixture) -> None:
         """Permissions timeout_seconds overrides default HTTP timeout."""
         mock_spawner = mocker.AsyncMock()
@@ -417,7 +462,9 @@ class TestRunSandboxStep:
             spawner=mock_spawner,
         )
 
-        http_init_call = mock_http.call_args
+        # First client is the POST /v1/agent/run; the transcript fetch after it
+        # uses its own short timeout.
+        http_init_call = mock_http.call_args_list[0]
         assert http_init_call[1].get("timeout") == 120.0
 
 
