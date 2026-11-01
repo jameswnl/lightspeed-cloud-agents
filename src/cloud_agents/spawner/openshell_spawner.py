@@ -175,6 +175,13 @@ class OpenShellSpawner(AgentSpawner):
     # _materialize_allowed_skills().
     _MATERIALIZE_SKILLS_SCRIPT: ClassVar[str] = "/usr/local/bin/materialize-skills.sh"
 
+    # The gateway caps a whole inbound gRPC message at 1 MiB, and an
+    # ExecSandboxRequest carries its stdin inline, so a secret file
+    # written via exec stdin must fit in one request. Leaves headroom for
+    # the command, sandbox id, and protobuf framing. See
+    # _write_secret_file().
+    _MAX_EXEC_STDIN_BYTES: ClassVar[int] = 1024 * 1024 - 64 * 1024
+
     @staticmethod
     def _validate_extra_readable_paths(paths: list[str]) -> list[str]:
         """Validate extra_readable_paths before they reach a Landlock policy.
@@ -1101,8 +1108,14 @@ class OpenShellSpawner(AgentSpawner):
             # overridden by the spawner's own default (issue #192).
             # Filter credential keys from server_env as well -- start_server
             # execs inside the sandbox, so env there would also expose the
-            # real credential to the sandboxed process (issue #199).
-            filtered_env = {k: v for k, v in env.items() if k not in cred_keys}
+            # real credential to the sandboxed process (issue #199). MCP
+            # secrets are likewise filtered: they were already delivered as
+            # files above, and exec env is inlined into the gateway's
+            # command string.
+            mcp_secret_keys = {secret_name for secret_name, _, _ in mcp_secret_mounts or []}
+            filtered_env = {
+                k: v for k, v in env.items() if k not in cred_keys and k not in mcp_secret_keys
+            }
             server_env = {**self._extra_env, **filtered_env}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
@@ -1607,13 +1620,45 @@ class OpenShellSpawner(AgentSpawner):
 
             await self._exec_mkdir(sandbox_id, mount_path)
             file_path = posixpath.join(mount_path, key)
-            await self._do_write_file(agent_name, file_path, secret_value)
+            await self._write_secret_file(sandbox_id, file_path, secret_value)
             logger.info(
                 "Injected MCP secret '%s/%s' into sandbox for agent '%s'",
                 mount_path,
                 key,
                 agent_name,
             )
+
+    async def _write_secret_file(self, sandbox_id: str, path: str, content: str) -> None:
+        """Write a secret file inside the sandbox, passing its bytes on exec stdin.
+
+        Unlike _do_write_file(), the content never appears in the exec
+        command or env: the gateway joins those into a single command
+        string and logs a prefix of it, so anything placed there can end
+        up in gateway logs. The path is passed as a positional argument
+        to a fixed script rather than interpolated into it, and the file
+        is created owner-only (umask 077).
+
+        Raises:
+            RuntimeError: If the content exceeds _MAX_EXEC_STDIN_BYTES or
+                the exec fails.
+        """
+        data = content.encode()
+        if len(data) > self._MAX_EXEC_STDIN_BYTES:
+            raise RuntimeError(
+                f"Secret for {path} is {len(data)} bytes, which exceeds the "
+                f"{self._MAX_EXEC_STDIN_BYTES}-byte limit for exec stdin delivery"
+            )
+
+        cmd = ["sh", "-c", 'umask 077; cat > "$1"', "sh", path]
+        try:
+
+            def _sync_exec() -> None:
+                for _ in self._client.exec_stream(sandbox_id, cmd, stdin=data):
+                    pass
+
+            await asyncio.to_thread(_sync_exec)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to write {path} to sandbox {sandbox_id}: {exc}") from exc
 
     async def _exec_mkdir(self, sandbox_id: str, path: str) -> None:
         """Create a directory inside the sandbox."""
