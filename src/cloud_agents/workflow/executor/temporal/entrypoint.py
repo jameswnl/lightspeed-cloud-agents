@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -19,6 +20,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from cloud_agents.runtime.tracing import init_tracing
+from cloud_agents.spawner.lifetime import EXPIRES_AT_LABEL_KEY, SPAWNED_BY_LABEL
 from cloud_agents.storage.transcript_store import TranscriptStore
 from cloud_agents.workflow.core.definition_store import DefinitionStore
 from cloud_agents.runtime.logging import configure_logging
@@ -73,6 +75,40 @@ def _build_tls_config():
 
 SPAWNER_TYPE = os.environ.get("WORKFLOW_SPAWNER", "")
 
+# Operational margins on every sandbox's expires-at label, not enforcement:
+# expiry safety comes from the per-sandbox lifetime (the enforced deadlines in
+# cloud_agents.spawner.lifetime). The floor only delays how soon an expired
+# orphan may be reaped.
+DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS = 86400
+# Added to every expires-at for clock skew between replicas.
+DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS = 600
+
+
+def _non_negative_int_env(name: str, default: int) -> int:
+    """Parse a non-negative integer env var, failing startup on bad values."""
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} is not an integer") from None
+    if value < 0:
+        raise ValueError(f"{name}={value} must not be negative")
+    return value
+
+
+def _sandbox_min_lifetime_seconds() -> int:
+    """SANDBOX_MIN_LIFETIME_SECONDS (default 86400): floor for sandbox expiry."""
+    return _non_negative_int_env(
+        "SANDBOX_MIN_LIFETIME_SECONDS", DEFAULT_SANDBOX_MIN_LIFETIME_SECONDS
+    )
+
+
+def _sandbox_expiry_skew_seconds() -> int:
+    """SANDBOX_EXPIRY_SKEW_SECONDS (default 600): clock-skew margin on expiry."""
+    return _non_negative_int_env("SANDBOX_EXPIRY_SKEW_SECONDS", DEFAULT_SANDBOX_EXPIRY_SKEW_SECONDS)
+
 
 def _create_spawner():
     """Create spawner based on environment config.
@@ -86,7 +122,8 @@ def _create_spawner():
             or empty. This must be fail-closed, not a silent stub fallback --
             e.g. a leftover "kubernetes"/"podman" value from an unmigrated
             deploy manifest (or a typo) would otherwise silently disable
-            ephemeral spawning instead of refusing to start.
+            ephemeral spawning instead of refusing to start. Also raised for
+            an invalid SANDBOX_MIN_LIFETIME_SECONDS / SANDBOX_EXPIRY_SKEW_SECONDS.
     """
     if SPAWNER_TYPE == "openshell":
         from cloud_agents.spawner.factory import build_spawner
@@ -100,6 +137,8 @@ def _create_spawner():
             tls_cert=os.environ.get("OPENSHELL_TLS_CERT", ""),
             tls_key=os.environ.get("OPENSHELL_TLS_KEY", ""),
             bearer_token=os.environ.get("OPENSHELL_BEARER_TOKEN", ""),
+            min_lifetime_seconds=_sandbox_min_lifetime_seconds(),
+            expiry_skew_seconds=_sandbox_expiry_skew_seconds(),
         )
     if SPAWNER_TYPE == "":
         logger.info("No spawner configured — sandbox activity will use stub mode")
@@ -109,26 +148,62 @@ def _create_spawner():
     )
 
 
-async def reconcile_orphaned_sandboxes(spawner: AgentSpawner | None) -> None:
-    """Destroy orphaned sandbox containers left from a previous crash.
+async def reconcile_orphaned_sandboxes(
+    spawner: AgentSpawner | None, now: float | None = None
+) -> None:
+    """Destroy expired orphaned sandboxes left from a previous crash.
 
-    On startup, scans for containers/Jobs with the "spawned-by=workflow-runner"
-    label and destroys them. This prevents resource leaks after unclean shutdowns.
+    On startup, lists sandboxes labelled "spawned-by=workflow-runner" once and
+    destroys exactly those whose "cloud-agents/expires-at" is in the past,
+    whichever runner spawned them. Expiry is the only criterion: no runner
+    identity can prove a sandbox's previous owner is gone, so an unexpired
+    sandbox may still be in use by a live replica.
+
+    Sandboxes with no expires-at label (spawned before expiry labelling
+    existed, or with no enforced lifetime, e.g. CLI sessions) and sandboxes
+    with a malformed one are left alone and logged.
 
     Args:
         spawner: The spawner instance, or None if no spawner is configured.
+        now: Current unix time; defaults to time.time(). Injectable for tests.
     """
     if spawner is None:
         return
+    now = time.time() if now is None else now
 
-    orphans = await spawner.list_active({"spawned-by": "workflow-runner"})
+    orphans = []
+    no_expiry = 0
+    for name, labels in await spawner.list_sandbox_labels(SPAWNED_BY_LABEL):
+        expires_at = labels.get(EXPIRES_AT_LABEL_KEY)
+        if expires_at is None:
+            no_expiry += 1
+            continue
+        try:
+            expired = int(expires_at) < now
+        except ValueError:
+            logger.warning(
+                "Leaving sandbox '%s' untouched: malformed expires-at label %r",
+                name,
+                expires_at,
+            )
+            continue
+        if expired:
+            orphans.append(name)
+    if no_expiry:
+        logger.info("Leaving %d sandbox(es) with no expires-at label untouched", no_expiry)
     cleaned = 0
     failed_names = []
     for name in orphans:
         logger.warning("Destroying orphaned sandbox '%s'", name)
         try:
-            await spawner.destroy(name)
+            await spawner.destroy_sandbox(name)
             cleaned += 1
+        except NotImplementedError:
+            # Never fall back to agent-name destroy(): it may not be exact.
+            logger.warning(
+                "Skipping orphaned sandbox '%s': spawner can't destroy by exact name", name
+            )
+            failed_names.append(name)
         except Exception as exc:
             logger.error("Failed to destroy orphaned sandbox '%s': %s", name, exc)
             failed_names.append(name)

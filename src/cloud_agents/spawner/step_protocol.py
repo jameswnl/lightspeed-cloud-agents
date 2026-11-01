@@ -8,12 +8,20 @@ It also publishes the result record to ``runDir/result.json``.
 
 The agent's tools run as the CLI's uid, so every stdout line and result.json
 is untrusted: parsed strictly (no NaN/Infinity, no duplicate keys, no extra
-keys), bounded in size, and validated before use. Process identity comes from
-the runner's own ``lsrun-pid <pid>`` line, the first line the exec wrapper
-writes to stderr before the CLI starts, never from ``runDir/pid``.
+keys), bounded in size, and validated before use. A same-uid descendant that
+``setsid``s out can outlive the CLI and replace files in the agent-owned
+runDir. So ``completed`` comes only from a valid result line, which the CLI
+writes on a private fd. result.json is read only after exit 4 or a lost stream,
+as a diagnostic: the step fails and the sandbox is tainted.
 
 Pure module: no I/O. The exec transport feeds chunks in and reads the result
 file when :func:`needs_result_file` says so.
+
+Notes for the exec caller:
+
+- Run the CLI with ``python3 -I`` (isolated: also ignores ``PYTHON*`` env and
+  user site-packages), not just ``-P``.
+- Never reuse a warm sandbox after an outcome with ``taint_lease`` set.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ MAX_PREPROTOCOL_NOISE = 64 * 1024  # login-shell output before the CLI starts
 MAX_TRANSCRIPT_EVENTS = 10_000
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 MAX_STDERR_TAIL = 16 * 1024
+_MAX_DIAGNOSTIC = 200
 MAX_JSON_DEPTH = 64  # the CLI's records nest about 4 deep
 _MAX_PID_LINE = 32
 
@@ -168,7 +177,11 @@ class StepProtocolReader:
         events: Transcript, in order, bounded to MAX_TRANSCRIPT_EVENTS /
             MAX_TRANSCRIPT_BYTES plus one truncation marker.
         result: The final result record, or None if missing, invalid or discarded.
-        pid: CLI pid (== pgid) from the wrapper's first stderr line, or None.
+        pid: CLI pid (== pgid) from the exec wrapper's first stderr line, or None.
+            Best effort, for in-sandbox kill commands only: in a warm sandbox the
+            login shell's rc files run first and could print a fake line. Stopping
+            a step must use the exec handle or destroy the sandbox (step-cli.md
+            trust model).
         protocol_errors: Invalid lines after the first valid one (dropped).
         oversized_lines: Event lines over MAX_EVENT_LINE, or any line over
             MAX_RESULT_LINE (dropped).
@@ -197,6 +210,7 @@ class StepProtocolReader:
         self._stderr_head = bytearray()
         self._stderr_head_done = False
         self._stderr_tail = bytearray()
+        self._stderr_cut = False
 
     def feed(self, stream: str, data: bytes) -> list[TranscriptEvent]:
         """Consume one exec output chunk; return the valid events it completed."""
@@ -239,9 +253,19 @@ class StepProtocolReader:
         self._skipping = False
 
     def stderr_tail(self, secret_values: set[str]) -> str:
-        """The last MAX_STDERR_TAIL bytes of stderr, decoded and redacted."""
+        """The last MAX_STDERR_TAIL characters of stderr, redacted.
+
+        Redaction runs before the final truncation, on a window twice that size.
+        If the window was cut, a prefix as long as the longest secret is dropped
+        first, so a secret cut at the window start can't leave a suffix behind.
+        Known limits: it is plain substring matching on decoded text, so secrets
+        that are encoded, escaped or split across writes with other text are not
+        caught, and the final cut may split a redaction placeholder.
+        """
         text = bytes(self._stderr_tail).decode("utf-8", errors="replace")
-        return redact_secrets(text, secret_values)
+        if self._stderr_cut:
+            text = text[max(map(len, secret_values), default=0) :]
+        return redact_secrets(text, secret_values)[-MAX_STDERR_TAIL:]
 
     def _append(self, part: bytes) -> None:
         if self._skipping:
@@ -312,7 +336,9 @@ class StepProtocolReader:
 
     def _feed_stderr(self, data: bytes) -> None:
         self._stderr_tail += data
-        del self._stderr_tail[:-MAX_STDERR_TAIL]
+        if len(self._stderr_tail) > 2 * MAX_STDERR_TAIL:
+            del self._stderr_tail[: -2 * MAX_STDERR_TAIL]
+            self._stderr_cut = True
         if self._stderr_head_done:
             return
         head, newline, _ = data.partition(b"\n")
@@ -331,12 +357,22 @@ class StepOutcome:
 
     ``status``:
         ``completed`` -- shape ``body`` into the step output exactly as the HTTP path does.
-        ``failed`` -- return a failed step (not retried); ``body`` is set when the agent
-            reported ``success: false``.
-        ``error`` -- raise ``RuntimeError(error)`` so ``run_with_retries`` retries, as for
-            an HTTP 502 today.
+        ``failed`` -- return a failed step; ``body`` is set when the agent reported
+            ``success: false``. ``run_with_retries`` classifies ``error`` here too, so an
+            agent- or sandbox-supplied error text can still be transient, as on HTTP
+            today; the fixed texts this module writes never are. Also used for
+            deterministic, agent-inducible failures (protocol violations, exit 3), which
+            a retry would repeat and which must not open the provider circuit breaker.
+        ``error`` -- raise ``RuntimeError(error)``. ``run_with_retries`` reruns the step
+            only if ``is_transient_failure(error)``, which holds only for the 502 outcome
+            (as for an HTTP 502 today). The rest (lost stream, exit 124, killed,
+            unexpected exit) fail the step without a rerun, so side effects never repeat.
     ``breaker``: record ``success``/``failure`` on the provider circuit breaker, or nothing.
     ``taint_lease``: the sandbox may be tampered with; a warm lease must not be reused.
+        Always set after exit 4 or a lost stream.
+    ``diagnostic``: untrusted, bounded summary of result.json for logs. Not redacted:
+        the caller must redact it before logging. Never put into ``error``, which
+        ``run_with_retries`` classifies.
     """
 
     status: Literal["completed", "failed", "error"]
@@ -346,20 +382,21 @@ class StepOutcome:
     breaker: Literal["success", "failure"] | None = None
     result_source: Literal["stdout", "file", "file_after_transport_loss"] | None = None
     taint_lease: bool = False
+    diagnostic: str | None = None
 
 
 def needs_result_file(exit_code: int | None, reader: StepProtocolReader) -> bool:
-    """Whether the runner should read ``runDir/result.json`` for this exec.
+    """Whether the runner should read ``runDir/result.json`` for diagnostics.
 
-    Only on exit 4 (published but not delivered), exit 0 without a valid result
-    line, or transport loss (``exit_code is None``, after the exec is torn down).
-    Other exits make no promise about the file (step-cli.md rule 9).
+    Only on exit 4 (published but not delivered) or transport loss (``exit_code
+    is None``, after the exec is torn down). The file never decides the outcome:
+    the step fails either way, because a same-uid descendant can replace it.
+    Exit 0 promises the result line was delivered, and other exits make no
+    promise about the file (step-cli.md rule 9).
     """
     if reader.abort_reason or reader.violation:
         return False
-    if exit_code is None or exit_code == EXIT_NO_STDOUT:
-        return True
-    return exit_code == EXIT_OK and reader.result is None
+    return exit_code is None or exit_code == EXIT_NO_STDOUT
 
 
 def map_outcome(
@@ -384,25 +421,19 @@ def map_outcome(
         return StepOutcome(
             "failed", "protocol_violation", error=f"step protocol violation: {reader.violation}"
         )
-    if exit_code == EXIT_OK and reader.result is not None:
-        return _from_result(reader.result, "stdout")
-    if needs_result_file(exit_code, reader):
-        source = "file" if exit_code is not None else "file_after_transport_loss"
-        if result_file is not None and len(result_file) > MAX_RESULT_LINE:
-            return StepOutcome(
-                "failed",
-                "protocol_violation",
-                error="step protocol violation: result.json too large",
-            )
-        record = _parse_record(result_file) if result_file is not None else None
-        if isinstance(record, ResultRecord):
-            return _from_result(record, source)
-        error = (
-            "lost exec stream, no result"
-            if exit_code is None
-            else f"step CLI exited {exit_code} without a valid result"
+    if exit_code == EXIT_OK:
+        if reader.result is not None:
+            return _from_result(reader.result, "stdout")
+        # Exit 0 promises the line was delivered on the CLI's private fd, so a
+        # missing one was rejected by our validation (too large, too deep, not
+        # strict) or tampered with. Don't fall back to the replaceable file.
+        return StepOutcome(
+            "failed",
+            "protocol_violation",
+            error="step protocol violation: exit 0 without a valid result line",
         )
-        return StepOutcome("error", "no_result", error=error, breaker="failure")
+    if needs_result_file(exit_code, reader):
+        return _from_file(exit_code, result_file)
     if exit_code == EXIT_REJECTED:
         return _rejected(reader.result)
     if exit_code == EXIT_NOT_STARTED:
@@ -416,9 +447,9 @@ def map_outcome(
             taint_lease=True,
         )
     if exit_code == EXIT_INTERNAL:
-        return StepOutcome(
-            "error", "internal_error", error="step CLI internal error (exit 3)", breaker="failure"
-        )
+        # Deterministic or agent-inducible (a planted result.json makes publication
+        # fail), so neither retried nor counted against the provider.
+        return StepOutcome("failed", "internal_error", error="step CLI internal error (exit 3)")
     if exit_code == EXIT_DEADLINE:
         return StepOutcome(
             "error", "deadline", error="step CLI hard deadline (exit 124)", breaker="failure"
@@ -427,6 +458,53 @@ def map_outcome(
         return StepOutcome("error", "killed", error=f"step CLI killed (exit {exit_code})")
     return StepOutcome(
         "error", "unexpected_exit", error=f"step CLI exited {exit_code}", breaker="failure"
+    )
+
+
+def _from_file(exit_code: int | None, data: bytes | None) -> StepOutcome:
+    """Exit 4 or transport loss: the result line is lost, and result.json isn't trusted.
+
+    Never completes and never retries: the step fails, the sandbox is tainted, and
+    a valid file only feeds ``diagnostic``.
+    """
+    lost = exit_code is None
+    source = "file_after_transport_loss" if lost else "file"
+    record = None
+    if data is not None and len(data) <= MAX_RESULT_LINE:
+        record = _parse_record(data)
+    if isinstance(record, ResultRecord):
+        body = record.body
+        detail = str(body.get("error") or body.get("summary") or "")[:_MAX_DIAGNOSTIC]
+        success = f" success={body['success']}" if record.status_code == 200 else ""
+        return StepOutcome(
+            "failed",
+            "result_unverified",
+            error="step result line not received; result.json is not trusted",
+            result_source=source,
+            taint_lease=True,
+            diagnostic=f"untrusted result.json: {record.status_code}{success}: {detail}",
+        )
+    if lost:
+        return StepOutcome(
+            "error",
+            "no_result",
+            error="lost exec stream, no result",
+            breaker="failure",
+            taint_lease=True,
+        )
+    if data is None:
+        return StepOutcome(
+            "failed",
+            "no_result",
+            error="step CLI exited 4 but result.json could not be read",
+            taint_lease=True,
+        )
+    # Exit 4 promises a complete result.json; anything else is tampering.
+    return StepOutcome(
+        "failed",
+        "protocol_violation",
+        error="step protocol violation: invalid result.json after exit 4",
+        taint_lease=True,
     )
 
 

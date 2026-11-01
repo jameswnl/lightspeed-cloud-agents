@@ -131,6 +131,7 @@ class AgentSpawner(ABC):
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
         tls_certs: EphemeralCerts | None = None,
+        lifetime_seconds: int | None = None,
     ) -> str:
         """Spawn an agent pod and return its endpoint URL.
 
@@ -171,6 +172,11 @@ class AgentSpawner(ABC):
             mcp_secret_mounts: List of (secret_name, key, mount_path) tuples
                 for MCP server Secret-backed auth headers.
             tls_certs: Optional ephemeral TLS certs to inject into sandbox.
+            lifetime_seconds: Latest legitimate life of this sandbox (see
+                cloud_agents.spawner.lifetime). OpenShellSpawner stamps an
+                expiry label from it so any replica's startup reconcile can
+                reap the sandbox once expired; None means no expiry, so only
+                the owning replica can reap it.
 
         Returns:
             HTTP endpoint URL of the spawned pod.
@@ -200,9 +206,11 @@ class AgentSpawner(ABC):
                 credential_secret_name=credential_secret_name,
                 mcp_secret_mounts=mcp_secret_mounts,
                 tls_certs=tls_certs,
+                lifetime_seconds=lifetime_seconds,
             )
             return endpoint
-        except Exception:
+        except BaseException:
+            # Includes cancellation, so a cancelled spawn frees its slot too.
             async with self._lock:
                 self._active_count -= 1
             raise
@@ -263,6 +271,55 @@ class AgentSpawner(ABC):
         labels: dict[str, str] | None = None,
     ) -> list[str]:
         """Implementation-specific listing of active agents."""
+
+    async def list_sandbox_labels(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        """List active sandboxes as (exact sandbox name, labels).
+
+        A spawner that reports labels (overrides _do_list_sandbox_labels) must
+        also implement _do_destroy_sandbox() for the names it returns.
+
+        Args:
+            labels: Optional label selector to filter results.
+
+        Returns:
+            One pair per sandbox, keyed by a name destroy_sandbox() deletes
+            exactly, so callers can filter on label values a selector can't
+            express (e.g. reconcile_orphaned_sandboxes()' expiry check).
+        """
+        return await self._do_list_sandbox_labels(labels)
+
+    async def _do_list_sandbox_labels(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        """Default for spawners that can't report labels: empty labels each.
+
+        Startup reconciliation never destroys a sandbox without an expiry
+        label, so this default is fail-safe.
+        """
+        return [(name, {}) for name in await self._do_list_active(labels)]
+
+    async def destroy_sandbox(self, sandbox_name: str) -> None:
+        """Destroy exactly the sandbox list_sandbox_labels() reported by this name.
+
+        Raises:
+            NotImplementedError: If the spawner doesn't support exact deletion.
+        """
+        await self._do_destroy_sandbox(sandbox_name)
+
+    async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
+        """Implementation-specific exact deletion of one sandbox.
+
+        Deliberately no fallback to destroy(): that takes an agent name, and
+        an agent name can map to several sandboxes, so falling back could
+        delete sandboxes other than the one selected.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot destroy a sandbox by its exact name"
+        )
 
     async def read_file(self, agent_name: str, path: str) -> str:
         """Read a file from a spawned agent container.

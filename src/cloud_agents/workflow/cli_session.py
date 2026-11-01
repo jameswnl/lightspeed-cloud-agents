@@ -161,6 +161,9 @@ class CLISessionLauncher:
         }
 
         try:
+            # No lifetime_seconds (so no expires-at label): the timeout monitor
+            # can stop or block, so nothing enforces a latest-use bound, and
+            # startup reconcile must never reap a CLI session sandbox.
             endpoint = await spawner.spawn(
                 agent_name=agent_name,
                 image=image,

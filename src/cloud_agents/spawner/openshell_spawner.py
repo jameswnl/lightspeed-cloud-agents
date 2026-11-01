@@ -17,14 +17,27 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import ssl
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
 
 from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH, AgentSpawner
+from cloud_agents.spawner.lifetime import (
+    EXPIRES_AT_LABEL_KEY,
+    RESERVED_LABEL_KEYS,
+    SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
+    SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
+    SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
+    SANDBOX_SPAWN_DEADLINE_SECONDS,
+    SPAWNED_BY_LABEL,
+    SandboxDeadlineExceeded,
+    await_within,
+)
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import SpawnConfig
@@ -158,12 +171,20 @@ class OpenShellSpawner(AgentSpawner):
     # label instead of the sandbox name (issue #224).
     _AGENT_NAME_LABEL_KEY: ClassVar[str] = "cloud-agents/agent-name"
 
+    # ListSandboxes page size used by _list_refs().
+    _LIST_PAGE_SIZE: ClassVar[int] = 1000
+
     # Attached to every sandbox at create time (merged with caller-supplied
     # labels) so reconcile_orphaned_sandboxes() can find sandboxes spawned by
     # a *previous* process instance via ListSandboxes(label_selector=...)
-    # (issue #224). Must match the label reconcile_orphaned_sandboxes() in
-    # workflow/executor/temporal/entrypoint.py filters on.
-    _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = {"spawned-by": "workflow-runner"}
+    # (issue #224). Shared with reconcile via cloud_agents.spawner.lifetime.
+    _SPAWNED_BY_LABEL: ClassVar[dict[str, str]] = SPAWNED_BY_LABEL
+
+    # Unix seconds after which the sandbox has outlived any legitimate use
+    # (spawn time + max(lifetime_seconds, min_lifetime_seconds) + skew). Any
+    # replica's reconcile_orphaned_sandboxes() may reap a sandbox once it's
+    # past this. Omitted when the caller passes no lifetime_seconds.
+    _EXPIRES_AT_LABEL_KEY: ClassVar[str] = EXPIRES_AT_LABEL_KEY
 
     # Baked into the sandbox image (lightspeed-agentic-sandbox's
     # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
@@ -285,6 +306,9 @@ class OpenShellSpawner(AgentSpawner):
         bearer_token_provider: Callable[[], str] | None = None,
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
+        min_lifetime_seconds: int = 0,
+        expiry_skew_seconds: int = 600,
+        clock: Callable[[], float] = time.time,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -330,8 +354,28 @@ class OpenShellSpawner(AgentSpawner):
                 (see _DEFAULT_EXTRA_ENV). A derived image with a
                 different layout, or no need for this at all, should
                 override this (pass {} to disable). See issue #192.
+            min_lifetime_seconds: Floor for a sandbox's expiry: the
+                _EXPIRES_AT_LABEL_KEY label is spawn time +
+                max(spawn()'s lifetime_seconds, this) + expiry_skew_seconds,
+                so startup reconciliation on any replica can reap it once
+                expired. Only applies when spawn() is given lifetime_seconds.
+                An operational margin (how soon orphans may be reaped), not
+                what makes expiry safe -- that's the enforced deadlines in
+                lifetime_seconds.
+            expiry_skew_seconds: Margin added to every expiry for clock skew
+                between replicas.
+            clock: Returns the current unix time; injectable for tests.
         """
         super().__init__(**kwargs)
+        for name, value in (
+            ("min_lifetime_seconds", min_lifetime_seconds),
+            ("expiry_skew_seconds", expiry_skew_seconds),
+        ):
+            if value < 0:
+                raise ValueError(f"{name} must not be negative, got {value}")
+        self._min_lifetime_seconds = min_lifetime_seconds
+        self._expiry_skew_seconds = expiry_skew_seconds
+        self._clock = clock
         self._client = openshell_client
         self._workspace = workspace
         self._endpoint = endpoint
@@ -885,6 +929,7 @@ class OpenShellSpawner(AgentSpawner):
         credential_secret_name: str | None = None,
         mcp_secret_mounts: list[tuple[str, str, str]] | None = None,
         tls_certs: "EphemeralCerts | None" = None,
+        lifetime_seconds: int | None = None,
     ) -> str:
         """Create an OpenShell sandbox, start HTTP server, return endpoint."""
         from openshell._proto import openshell_pb2
@@ -1025,12 +1070,31 @@ class OpenShellSpawner(AgentSpawner):
         # Merge caller labels with the fixed spawned-by label and the
         # agent_name recovery label; both always win over caller-supplied
         # labels of the same key so a caller can't accidentally suppress
-        # orphan discovery (issue #224).
+        # orphan discovery (issue #224). Caller-supplied expires-at (and the
+        # retired owner-instance) are always dropped: only this spawner may
+        # mark a sandbox as expired for every replica.
         sandbox_labels = {
-            **(labels or {}),
+            **{k: v for k, v in (labels or {}).items() if k not in RESERVED_LABEL_KEYS},
             **self._SPAWNED_BY_LABEL,
             self._AGENT_NAME_LABEL_KEY: agent_name,
         }
+        # The spawn budget starts at the same instant expires-at is stamped,
+        # so the label covers create plus every post-create phase below.
+        stamped_at = self._clock()
+        spawn_deadline = asyncio.get_running_loop().time() + SANDBOX_SPAWN_DEADLINE_SECONDS
+        if lifetime_seconds is None:
+            logger.debug(
+                "No lifetime_seconds for agent '%s' — no expires-at label; startup "
+                "reconcile will never reap it",
+                agent_name,
+            )
+        else:
+            # Rounded up: flooring would expire the sandbox up to 1s early.
+            sandbox_labels[self._EXPIRES_AT_LABEL_KEY] = str(
+                math.ceil(stamped_at)
+                + max(lifetime_seconds, self._min_lifetime_seconds)
+                + self._expiry_skew_seconds
+            )
 
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
@@ -1060,14 +1124,21 @@ class OpenShellSpawner(AgentSpawner):
         else:
             self._build_baseline_filesystem_policy(spec, allowed_skills=allowed_skills)
 
-        try:
+        # Cancelling the awaiting coroutine on timeout doesn't stop a
+        # blocking SDK call already running in its worker thread: a
+        # CreateSandbox may still complete remotely after we give up. Such a
+        # sandbox carries its expires-at label and is reaped once expired.
+        created_name: str | None = None
+
+        async def _create_and_start() -> str:
+            nonlocal sandbox_name, created_name
             sandbox_ref = await asyncio.to_thread(
                 self._client.create,
                 workspace=self._workspace,
                 spec=spec,
                 labels=sandbox_labels,
             )
-            sandbox_name = sandbox_ref.name
+            sandbox_name = created_name = sandbox_ref.name
             sandbox_id = sandbox_ref.id
             self._sandbox_names[agent_name] = sandbox_name
             self._sandbox_ids[agent_name] = sandbox_id
@@ -1076,7 +1147,7 @@ class OpenShellSpawner(AgentSpawner):
                 self._client.wait_ready,
                 sandbox_name,
                 workspace=self._workspace,
-                timeout_seconds=300,
+                timeout_seconds=SANDBOX_GATEWAY_READY_TIMEOUT_SECONDS,
             )
 
             # Credential Provider already created and attached via spec.providers
@@ -1129,11 +1200,23 @@ class OpenShellSpawner(AgentSpawner):
             ready = await self._wait_ready_with_host(
                 endpoint,
                 virtual_host,
-                timeout=60.0,
+                timeout=SANDBOX_HTTP_READY_TIMEOUT_SECONDS,
             )
             if not ready:
                 raise RuntimeError(f"Sandbox '{sandbox_name}' HTTP server did not become ready")
-        except Exception:
+            return endpoint
+
+        try:
+            # The rest of the budget that started at the expires-at stamp.
+            # await_within() also bounds cleanup that runs after the deadline
+            # (e.g. the readiness check's client close) by the cancel grace.
+            endpoint = await await_within(
+                _create_and_start(),
+                spawn_deadline - asyncio.get_running_loop().time(),
+                what=f"Spawning sandbox for agent '{agent_name}'",
+            )
+        except BaseException as exc:
+            # BaseException so a cancelled spawn also cleans up what it created.
             logger.warning(
                 "Post-create step failed for sandbox '%s' (agent=%s); "
                 "deleting sandbox to prevent orphan",
@@ -1146,11 +1229,33 @@ class OpenShellSpawner(AgentSpawner):
             # BEFORE deleting the provider itself -- the gateway refuses
             # DeleteProvider while it's still attached to a sandbox
             # (FAILED_PRECONDITION), which previously leaked the provider
-            # on every post-create failure (issue #214).
-            await self._cleanup_sandbox(agent_name, sandbox_name)
+            # on every post-create failure (issue #214). Best-effort, and only
+            # for the exact sandbox CreateSandbox returned: if it never
+            # returned, its identity is unknown and no delete is guessed.
+            # Each step is bounded so a stuck cleanup can't block the caller.
+            if created_name is not None:
+                try:
+                    await await_within(
+                        self._cleanup_sandbox(agent_name, created_name),
+                        SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
+                        what=f"Cleanup of sandbox '{created_name}'",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Cleanup of sandbox '%s' did not finish — it will be reaped "
+                        "once expired, if it has an expires-at label",
+                        created_name,
+                        exc_info=True,
+                    )
+            else:
+                self._provider_ids.pop(agent_name, None)
             if provider_id:
                 try:
-                    await self._delete_provider(provider_id)
+                    await await_within(
+                        self._delete_provider(provider_id),
+                        SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
+                        what=f"Deletion of provider '{provider_id}'",
+                    )
                     logger.info(
                         "Cleaned up orphaned provider '%s' after failed create", provider_id
                     )
@@ -1158,6 +1263,13 @@ class OpenShellSpawner(AgentSpawner):
                     logger.warning(
                         "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
                     )
+            if isinstance(exc, SandboxDeadlineExceeded):
+                # Only for the budget actually expiring; a phase's own
+                # TimeoutError propagates unchanged.
+                raise TimeoutError(
+                    f"Spawning sandbox for agent '{agent_name}' exceeded its "
+                    f"{SANDBOX_SPAWN_DEADLINE_SECONDS}s deadline"
+                ) from None
             raise
 
         logger.info(
@@ -2105,15 +2217,56 @@ class OpenShellSpawner(AgentSpawner):
             of being silently dropped -- destroy() falls back to treating
             such a name literally, so this remains cleanable.
         """
-        label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
-        refs = await asyncio.to_thread(
-            self._client.list,
-            workspace=self._workspace,
-            label_selector=label_selector or None,
-            # SandboxClient.list() defaults to limit=100 with no built-in
-            # pagination here; raised well above expected orphan counts as a
-            # cheap mitigation. True pagination is a follow-up if a workspace
-            # ever legitimately exceeds this.
-            limit=1000,
+        return [
+            ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name
+            for ref in await self._list_refs(labels)
+        ]
+
+    async def _do_list_sandbox_labels(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        """List (exact gateway sandbox name, labels) from one gateway call.
+
+        Unlike _do_list_active(), names are the sandboxes' own unique gateway
+        names, not their agent-name label (which several refs can share), so
+        reconcile_orphaned_sandboxes() can delete exactly the refs it selects
+        via _do_destroy_sandbox().
+        """
+        return [(ref.name, dict(ref.labels)) for ref in await self._list_refs(labels)]
+
+    async def _do_destroy_sandbox(self, sandbox_name: str) -> None:
+        """Delete exactly this gateway sandbox, with no agent-name expansion.
+
+        A sandbox tracked by this process goes through destroy() for the full
+        provider/task cleanup (its tracked path deletes only the tracked
+        name); an untracked one is deleted by name and nothing else.
+        """
+        agent_name = next(
+            (agent for agent, name in self._sandbox_names.items() if name == sandbox_name),
+            None,
         )
-        return [ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name for ref in refs]
+        if agent_name is not None:
+            await self.destroy(agent_name)
+            return
+        await asyncio.to_thread(self._client.delete, sandbox_name, workspace=self._workspace)
+        logger.info("Destroyed OpenShell sandbox '%s'", sandbox_name)
+
+    async def _list_refs(self, labels: dict[str, str] | None = None) -> list[Any]:
+        """ListSandboxes for this workspace, filtered by a label selector."""
+        label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
+        refs: list[Any] = []
+        offset = 0
+        while True:
+            # SandboxClient.list() returns at most `limit` refs per call.
+            page = await asyncio.to_thread(
+                self._client.list,
+                workspace=self._workspace,
+                label_selector=label_selector or None,
+                limit=self._LIST_PAGE_SIZE,
+                offset=offset,
+            )
+            refs.extend(page)
+            if len(page) < self._LIST_PAGE_SIZE:
+                return refs
+            offset += self._LIST_PAGE_SIZE

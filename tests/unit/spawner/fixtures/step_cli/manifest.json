@@ -73,8 +73,8 @@
     "event_types": [],
     "exit_code": 4,
     "provider": "ok",
-    "reason": "ok",
+    "reason": "result_unverified",
     "result_source": "file",
-    "status": "completed"
+    "status": "failed"
   }
 }
