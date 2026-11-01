@@ -544,3 +544,19 @@ class TestSpawnDeadlineRealSpawner:
         assert time.monotonic() - start < 0.2 + self.GRACE + 0.5
         assert "abandon" in caplog.text
         await asyncio.sleep(self.STUBBORN)
+
+    @pytest.mark.asyncio
+    async def test_own_timeout_error_not_reported_as_deadline(self, mocker) -> None:
+        """A TimeoutError raised by a spawn phase itself, well before the
+        budget expires, propagates as-is rather than as a deadline overrun."""
+        gateway = _FakeGateway()
+        spawner = _real_spawner(mocker, gateway)
+        mocker.patch.object(spawner, "start_server", side_effect=TimeoutError("exec timed out"))
+
+        with pytest.raises(TimeoutError) as exc_info:
+            await asyncio.wait_for(
+                spawner.spawn("ca-agent", "img", env={}, lifetime_seconds=60), timeout=10
+            )
+
+        assert str(exc_info.value) == "exec timed out"
+        assert gateway.deleted == ["sb-1"]

@@ -35,6 +35,7 @@ from cloud_agents.spawner.lifetime import (
     SANDBOX_SPAWN_CLEANUP_TIMEOUT_SECONDS,
     SANDBOX_SPAWN_DEADLINE_SECONDS,
     SPAWNED_BY_LABEL,
+    SandboxDeadlineExceeded,
     await_within,
 )
 
@@ -1250,9 +1251,9 @@ class OpenShellSpawner(AgentSpawner):
                     logger.warning(
                         "Failed to delete orphaned provider '%s'", provider_id, exc_info=True
                     )
-            if isinstance(exc, TimeoutError):
-                # str(TimeoutError()) is empty; callers' secret redaction
-                # would turn that into a blank error.
+            if isinstance(exc, SandboxDeadlineExceeded):
+                # Only for the budget actually expiring; a phase's own
+                # TimeoutError propagates unchanged.
                 raise TimeoutError(
                     f"Spawning sandbox for agent '{agent_name}' exceeded its "
                     f"{SANDBOX_SPAWN_DEADLINE_SECONDS}s deadline"

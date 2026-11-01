@@ -105,6 +105,11 @@ def step_sandbox_lifetime_seconds(step: dict[str, Any]) -> int:
     )
 
 
+class SandboxDeadlineExceeded(TimeoutError):
+    """Raised by await_within() when its own deadline expired, as opposed to
+    a TimeoutError raised by the awaited work itself."""
+
+
 async def await_within(work: Awaitable[T], timeout: float, *, what: str) -> T:
     """Await work for at most timeout + SANDBOX_CANCEL_GRACE_SECONDS.
 
@@ -113,8 +118,8 @@ async def await_within(work: Awaitable[T], timeout: float, *, what: str) -> T:
     no bound of its own.
 
     Raises:
-        TimeoutError: If work didn't finish within timeout. It is cancelled
-            and, if still running after the cancel grace, abandoned.
+        SandboxDeadlineExceeded: If work didn't finish within timeout. It is
+            cancelled and, if still running after the cancel grace, abandoned.
     """
     task = asyncio.ensure_future(work)
     try:
@@ -125,7 +130,7 @@ async def await_within(work: Awaitable[T], timeout: float, *, what: str) -> T:
     if task in done:
         return task.result()
     await cancel_within(task, what=what)
-    raise TimeoutError(f"{what} timed out after {timeout:g}s")
+    raise SandboxDeadlineExceeded(f"{what} timed out after {timeout:g}s")
 
 
 async def cancel_within(task: asyncio.Future[Any], *, what: str) -> None:
@@ -135,16 +140,21 @@ async def cancel_within(task: asyncio.Future[Any], *, what: str) -> None:
     awaited again. Its eventual result or error is consumed, not raised.
     """
     task.cancel()
-    done, _ = await asyncio.wait({task}, timeout=SANDBOX_CANCEL_GRACE_SECONDS)
-    if task in done:
-        _consume(task)
-        return
-    logger.warning(
-        "%s did not stop within %ss of cancellation — abandoning it",
-        what,
-        SANDBOX_CANCEL_GRACE_SECONDS,
-    )
+    # Attached before waiting, so the outcome is consumed even if this wait
+    # is itself cancelled (consuming twice is harmless).
     task.add_done_callback(_consume)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=SANDBOX_CANCEL_GRACE_SECONDS)
+    except asyncio.CancelledError:
+        if not task.done():
+            logger.warning("%s still running when its caller was cancelled — abandoning it", what)
+        raise
+    if task not in done:
+        logger.warning(
+            "%s did not stop within %ss of cancellation — abandoning it",
+            what,
+            SANDBOX_CANCEL_GRACE_SECONDS,
+        )
 
 
 def _consume(task: asyncio.Future[Any]) -> None:

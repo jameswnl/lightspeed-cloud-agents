@@ -277,3 +277,43 @@ class TestAwaitWithin:
         assert time.monotonic() - start < 0.05 + GRACE + 0.2
         assert "abandon" in caplog.text
         await asyncio.sleep(STUBBORN)
+
+    @pytest.mark.asyncio
+    async def test_caller_cancelled_during_grace(self, mocker, caplog) -> None:
+        """If the caller is cancelled again while waiting out the cancel grace,
+        CancelledError propagates, the abandonment is logged, and the work's
+        eventual exception is still consumed (no "never retrieved" report)."""
+        import gc
+
+        from cloud_agents.spawner import lifetime
+        from cloud_agents.spawner.lifetime import await_within
+
+        mocker.patch.object(lifetime, "SANDBOX_CANCEL_GRACE_SECONDS", 5)
+        loop = asyncio.get_running_loop()
+        reported: list[dict] = []
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, ctx: reported.append(ctx))
+
+        async def stubborn_then_fail():
+            await _stubborn_sleep(0.4)
+            raise ValueError("late failure")
+
+        before = asyncio.all_tasks()
+        caller = asyncio.create_task(await_within(stubborn_then_fail(), 0.05, what="thing"))
+        await asyncio.sleep(0.15)  # past the deadline, inside the grace
+        (inner,) = asyncio.all_tasks() - before - {caller}
+        try:
+            with caplog.at_level("WARNING"):
+                caller.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await caller
+            while not inner.done():
+                await asyncio.sleep(0.05)
+            del inner
+            gc.collect()
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous)
+
+        assert not any("never retrieved" in str(c.get("message")) for c in reported), reported
+        assert "abandon" in caplog.text
