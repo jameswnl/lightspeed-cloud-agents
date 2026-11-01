@@ -1,0 +1,2 @@
+{"v": 1, "type": "event", "event": {"ts": "2026-11-01T04:54:43.762556+00:00", "type": "tool_call", "data": {"name": "Bash", "input": "oc get pods"}}}
+{"v": 1, "type": "result", "status_code": 200, "body": {"success": true, "summary": "s", "x": null}}

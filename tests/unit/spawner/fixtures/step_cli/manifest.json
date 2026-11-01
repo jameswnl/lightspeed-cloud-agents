@@ -1,0 +1,80 @@
+{
+  "agent_error": {
+    "event_types": [],
+    "exit_code": 0,
+    "provider": "agent_error",
+    "reason": "agent_failed",
+    "result_source": "stdout",
+    "status": "failed"
+  },
+  "hard_deadline": {
+    "event_types": [],
+    "exit_code": 124,
+    "provider": "stubborn",
+    "reason": "deadline",
+    "result_source": null,
+    "status": "error"
+  },
+  "infra_502": {
+    "event_types": [],
+    "exit_code": 0,
+    "provider": "infra",
+    "reason": "infrastructure_error",
+    "result_source": "stdout",
+    "status": "error"
+  },
+  "nan": {
+    "event_types": [
+      "tool_call"
+    ],
+    "exit_code": 0,
+    "provider": "nan",
+    "reason": "ok",
+    "result_source": "stdout",
+    "status": "completed"
+  },
+  "ok": {
+    "event_types": [
+      "tool_call",
+      "tool_result",
+      "result"
+    ],
+    "exit_code": 0,
+    "provider": "ok",
+    "reason": "ok",
+    "result_source": "stdout",
+    "status": "completed"
+  },
+  "rejected_run_dir": {
+    "event_types": [],
+    "exit_code": 2,
+    "provider": "ok",
+    "reason": "rundir_rejected",
+    "result_source": null,
+    "status": "failed"
+  },
+  "rejected_schema": {
+    "event_types": [],
+    "exit_code": 2,
+    "provider": "ok",
+    "reason": "rejected",
+    "result_source": null,
+    "status": "failed"
+  },
+  "soft_timeout_502": {
+    "event_types": [],
+    "exit_code": 0,
+    "provider": "hang",
+    "reason": "infrastructure_error",
+    "result_source": "stdout",
+    "status": "error"
+  },
+  "stdout_closed": {
+    "event_types": [],
+    "exit_code": 4,
+    "provider": "ok",
+    "reason": "ok",
+    "result_source": "file",
+    "status": "completed"
+  }
+}
