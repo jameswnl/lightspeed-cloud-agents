@@ -3316,7 +3316,9 @@ class TestMCPSecretInjection:
             )
 
     @staticmethod
-    def _make_spawner_for_spawn(mocker: MockerFixture, exec_stream: Any) -> Any:
+    def _make_spawner_for_spawn(
+        mocker: MockerFixture, exec_stream: Any, extra_env: dict[str, str] | None = None
+    ) -> Any:
         from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
 
         class SandboxRef:
@@ -3330,7 +3332,7 @@ class TestMCPSecretInjection:
         mock_client.wait_ready.return_value = SandboxRef("ca-agent-agent-1")
         mock_client.exec_stream = exec_stream
 
-        spawner = OpenShellSpawner(openshell_client=mock_client)
+        spawner = OpenShellSpawner(openshell_client=mock_client, extra_env=extra_env)
         mocker.patch.object(OpenShellSpawner, "_build_network_policy")
         mocker.patch.object(spawner, "start_server", new_callable=mocker.AsyncMock)
         mocker.patch.object(
@@ -3469,6 +3471,44 @@ class TestMCPSecretInjection:
         mock_client.delete.assert_called_once_with("ca-agent-agent-1", workspace="default")
         assert "agent-1" not in spawner._sandbox_names
         spawner.start_server.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extra_env_cannot_reintroduce_secret_keys_into_server_env(
+        self, mocker: MockerFixture
+    ) -> None:
+        """extra_env keys matching a credential or MCP secret key are filtered too."""
+        calls: list[dict[str, Any]] = []
+        spawner, _ = self._make_spawner_for_spawn(
+            mocker,
+            self._recording_exec_stream(calls),
+            extra_env={
+                "my-secret": "extra-env-mcp-value",
+                "OPENAI_API_KEY": "extra-env-cred-value",
+                "PYTHONPATH": "/opt/lightspeed/src",
+            },
+        )
+        mocker.patch.object(spawner, "_create_provider", return_value="provider-123")
+        mocker.patch.object(spawner, "_set_inference_route")
+        mocker.patch.object(spawner, "_ensure_provider_profile")
+        mocker.patch.dict("os.environ", {"OPENAI_API_KEY": "sk-real-secret"}, clear=False)
+
+        await spawner.spawn(
+            "agent-1",
+            "sandbox:latest",
+            env={
+                "LIGHTSPEED_PROVIDER": "openai",
+                "LIGHTSPEED_MODEL": "gpt-4o-mini",
+                "my-secret": "secret-value",
+            },
+            credential_secret_name="openai-api-key",
+            mcp_secret_mounts=[("my-secret", "api-key", "/var/secrets/mcp/kubectl/")],
+        )
+
+        server_env = spawner.start_server.call_args.kwargs["env"]
+        assert "my-secret" not in server_env
+        assert "OPENAI_API_KEY" not in server_env
+        assert server_env["PYTHONPATH"] == "/opt/lightspeed/src"
+        assert server_env["LIGHTSPEED_PROVIDER"] == "openai"
 
     @pytest.mark.asyncio
     async def test_mcp_secret_not_copied_into_spec_environment(self, mocker: MockerFixture) -> None:

@@ -1114,11 +1114,11 @@ class OpenShellSpawner(AgentSpawner):
             # real credential to the sandboxed process (issue #199). MCP
             # secrets are likewise filtered: they were already delivered as
             # files above, and exec env is inlined into the gateway's
-            # command string.
-            filtered_env = {
-                k: v for k, v in env.items() if k not in cred_keys and k not in mcp_secret_keys
-            }
-            server_env = {**self._extra_env, **filtered_env}
+            # command string. Filtering happens after the merge so an
+            # extra_env entry can't reintroduce one of these keys.
+            secret_keys = cred_keys | mcp_secret_keys
+            merged_env = {**self._extra_env, **env}
+            server_env = {k: v for k, v in merged_env.items() if k not in secret_keys}
             if read_only:
                 server_env["LIGHTSPEED_SKILLS_DIR"] = self._SKILLS_ROOT
             await self.start_server(sandbox_id, _DEFAULT_SERVER_COMMAND, env=server_env)
