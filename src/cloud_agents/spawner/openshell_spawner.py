@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import ssl
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
@@ -175,6 +176,13 @@ class OpenShellSpawner(AgentSpawner):
     # unset. Must match the key reconcile_orphaned_sandboxes() filters on.
     _OWNER_INSTANCE_LABEL_KEY: ClassVar[str] = "cloud-agents/owner-instance"
 
+    # Unix seconds after which the sandbox has outlived any legitimate use
+    # (spawn time + max_lifetime_seconds). Lets any replica's
+    # reconcile_orphaned_sandboxes() reap sandboxes left by a replaced pod,
+    # whose owner-instance value will never come back. Omitted when
+    # max_lifetime_seconds is unset. Must match the key reconcile filters on.
+    _EXPIRES_AT_LABEL_KEY: ClassVar[str] = "cloud-agents/expires-at"
+
     # Baked into the sandbox image (lightspeed-agentic-sandbox's
     # Containerfile); copies the allowed_skills subset from _SKILLS_ROOT
     # into LIGHTSPEED_SKILLS_DIR so providers' directory-listing-based
@@ -289,6 +297,8 @@ class OpenShellSpawner(AgentSpawner):
         extra_readable_paths: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
         owner_instance: str = "",
+        max_lifetime_seconds: int | None = None,
+        clock: Callable[[], float] = time.time,
         **kwargs: Any,
     ) -> None:
         """Initialize the OpenShell spawner.
@@ -339,9 +349,18 @@ class OpenShellSpawner(AgentSpawner):
                 _OWNER_INSTANCE_LABEL_KEY label so startup reconciliation
                 can tell this replica's orphans apart from other replicas'
                 live sandboxes. Empty means no owner label is attached.
+            max_lifetime_seconds: Longest legitimate life of a sandbox this
+                spawner creates. Attached to every sandbox as the
+                _EXPIRES_AT_LABEL_KEY label (spawn time + this value) so
+                startup reconciliation on any replica can reap it once
+                expired. None means no expiry label is attached (the sandbox
+                is then never reaped by another replica).
+            clock: Returns the current unix time; injectable for tests.
         """
         super().__init__(**kwargs)
         self._owner_instance = owner_instance
+        self._max_lifetime_seconds = max_lifetime_seconds
+        self._clock = clock
         self._client = openshell_client
         self._workspace = workspace
         self._endpoint = endpoint
@@ -1033,9 +1052,9 @@ class OpenShellSpawner(AgentSpawner):
                 raise
 
         # Merge caller labels with the fixed spawned-by label, the
-        # agent_name recovery label and the owner-instance label; all always
-        # win over caller-supplied labels of the same key so a caller can't
-        # accidentally suppress orphan discovery (issue #224).
+        # agent_name recovery label and the owner-instance/expires-at labels;
+        # all always win over caller-supplied labels of the same key so a
+        # caller can't accidentally suppress orphan discovery (issue #224).
         sandbox_labels = {
             **(labels or {}),
             **self._SPAWNED_BY_LABEL,
@@ -1043,6 +1062,10 @@ class OpenShellSpawner(AgentSpawner):
         }
         if self._owner_instance:
             sandbox_labels[self._OWNER_INSTANCE_LABEL_KEY] = self._owner_instance
+        if self._max_lifetime_seconds is not None:
+            sandbox_labels[self._EXPIRES_AT_LABEL_KEY] = str(
+                int(self._clock()) + self._max_lifetime_seconds
+            )
 
         spec = openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
@@ -2032,6 +2055,18 @@ class OpenShellSpawner(AgentSpawner):
             of being silently dropped -- destroy() falls back to treating
             such a name literally, so this remains cleanable.
         """
+        return [name for name, _ in await self._do_list_active_labels(labels)]
+
+    async def _do_list_active_labels(
+        self,
+        labels: dict[str, str] | None = None,
+    ) -> list[tuple[str, dict[str, str]]]:
+        """List active sandboxes as (agent name, labels) from one gateway call.
+
+        Same query and name recovery as _do_list_active(); also returns each
+        sandbox's labels so reconcile_orphaned_sandboxes() can partition by
+        owner-instance/expires-at client-side.
+        """
         label_selector = ",".join(f"{key}={value}" for key, value in (labels or {}).items())
         refs = await asyncio.to_thread(
             self._client.list,
@@ -2043,4 +2078,7 @@ class OpenShellSpawner(AgentSpawner):
             # ever legitimately exceeds this.
             limit=1000,
         )
-        return [ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name for ref in refs]
+        return [
+            (ref.labels.get(self._AGENT_NAME_LABEL_KEY) or ref.name, dict(ref.labels))
+            for ref in refs
+        ]

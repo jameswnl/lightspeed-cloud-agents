@@ -435,3 +435,15 @@ class TestSpawnConfig:
         """Millicore CPU above 4000m is rejected."""
         with pytest.raises(ValidationError, match="cpu_limit"):
             SpawnConfig(cpu_limit="5000m")
+
+
+class TestListActiveLabelsDefault:
+    """Spawners without label support report no labels, so reconcile treats
+    their sandboxes as legacy and never destroys them."""
+
+    @pytest.mark.asyncio
+    async def test_default_returns_empty_labels(self) -> None:
+        spawner = MockSpawner()
+        await spawner.spawn("a1", "img", env={})
+
+        assert await spawner.list_active_labels({"spawned-by": "workflow-runner"}) == [("a1", {})]

@@ -104,7 +104,10 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_active.return_value = ["orphan-1", "orphan-2"]
+        mock_spawner.list_active_labels.return_value = [
+            ("orphan-1", {"cloud-agents/owner-instance": "runner-a"}),
+            ("orphan-2", {"cloud-agents/owner-instance": "runner-a"}),
+        ]
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
@@ -119,7 +122,7 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_active.return_value = []
+        mock_spawner.list_active_labels.return_value = []
 
         before = _get_counter_value("ls_sandbox_orphans_cleaned")
 
@@ -136,7 +139,11 @@ class TestOrphanCleanupMetrics:
         from cloud_agents.workflow.executor.temporal.entrypoint import reconcile_orphaned_sandboxes
 
         mock_spawner = mocker.AsyncMock()
-        mock_spawner.list_active.return_value = ["orphan-ok", "orphan-fail", "orphan-ok2"]
+        mock_spawner.list_active_labels.return_value = [
+            ("orphan-ok", {"cloud-agents/owner-instance": "runner-a"}),
+            ("orphan-fail", {"cloud-agents/owner-instance": "runner-a"}),
+            ("orphan-ok2", {"cloud-agents/owner-instance": "runner-a"}),
+        ]
 
         call_count = 0
 

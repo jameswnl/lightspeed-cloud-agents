@@ -148,7 +148,7 @@ Temporal provides durable execution for workflow runs:
 - **Retry and timeout** — `RetryPolicy` on each activity controls retry count; `start_to_close_timeout` enforces hard deadlines. Heartbeat-based cancellation detection ensures sandbox cleanup on timeout ([T2](archived/gaps-implementation-plan.md#t2-explicit-sandbox-termination-on-timeoutcancellation)).
 - **Approval signals** — human approval is implemented as a Temporal signal (`AgentWorkflow.approve`), with `wait_condition` blocking until the signal arrives or times out.
 - **Parallel execution** — steps sharing a `parallel_group` are dispatched via `asyncio.gather` within the workflow.
-- **Crash recovery** — content-hash pod naming for idempotent retries + startup orphan reconciliation for leaked containers, scoped to the restarting replica's own sandboxes via the `cloud-agents/owner-instance` label (`RUNNER_INSTANCE_ID`).
+- **Crash recovery** — content-hash pod naming for idempotent retries + startup orphan reconciliation for leaked containers, scoped to the restarting replica's own sandboxes via the `cloud-agents/owner-instance` label (`RUNNER_INSTANCE_ID`, else `HOSTNAME`) plus any sandbox past its `cloud-agents/expires-at` label (`SANDBOX_MAX_LIFETIME_SECONDS`).
 
 ### Dual Deployment
 

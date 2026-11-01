@@ -513,6 +513,47 @@ class TestOpenShellSpawnerSpawn:
         }
 
     @pytest.mark.asyncio
+    async def test_spawn_attaches_expires_at_label(self, mocker: MockerFixture) -> None:
+        """max_lifetime_seconds is stamped as cloud-agents/expires-at (unix
+        seconds of spawn time + lifetime) so any replica's reconcile can reap
+        the sandbox once it is past its maximum legitimate life."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        class SandboxRef:
+            id: str = "test-id"
+
+            def __init__(self, name):
+                self.name = name
+
+        mock_client = mocker.Mock()
+        mock_client.create.return_value = SandboxRef("sb")
+        mock_client.wait_ready.return_value = SandboxRef("sb")
+        mock_client.exec_stream = lambda *a, **k: iter([])
+
+        spawner = OpenShellSpawner(
+            openshell_client=mock_client,
+            max_lifetime_seconds=7200,
+            clock=lambda: 1_700_000_000.9,
+        )
+        mocker.patch.object(
+            spawner, "_expose_service", return_value=("http://gateway:17670", "host")
+        )
+
+        async def mock_ready(*args, **kwargs):
+            return True
+
+        mocker.patch.object(spawner, "_wait_ready_with_host", side_effect=mock_ready)
+        mocker.patch.object(OpenShellSpawner, "_build_network_policy")
+
+        await spawner.spawn(
+            "agent-1", "sandbox:latest", env={}, labels={"cloud-agents/expires-at": "9999999999"}
+        )
+
+        labels = mock_client.create.call_args.kwargs["labels"]
+        assert labels["cloud-agents/expires-at"] == "1700007200"
+        assert "cloud-agents/owner-instance" not in labels
+
+    @pytest.mark.asyncio
     async def test_spawn_with_credential_does_not_expose_real_value(
         self, mocker: MockerFixture
     ) -> None:
@@ -1194,6 +1235,33 @@ class TestOpenShellSpawnerListActive:
         result = await spawner.list_active({"spawned-by": "workflow-runner"})
 
         assert set(result) == {"agent-1", "agent-2"}
+        mock_client.list.assert_called_once_with(
+            workspace=spawner._workspace,
+            label_selector="spawned-by=workflow-runner",
+            limit=1000,
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_active_labels_returns_names_with_labels(
+        self, mocker: MockerFixture
+    ) -> None:
+        """One ListSandboxes call yields each agent name with its labels, so
+        reconcile can partition by owner/expiry client-side."""
+        from cloud_agents.spawner.openshell_spawner import OpenShellSpawner
+
+        mock_client = mocker.Mock()
+        mock_client.list.return_value = [
+            self._FakeRef("petname-1", {"cloud-agents/agent-name": "agent-1", "k": "v"}),
+            self._FakeRef("petname-2"),
+        ]
+        spawner = OpenShellSpawner(openshell_client=mock_client)
+
+        result = await spawner.list_active_labels({"spawned-by": "workflow-runner"})
+
+        assert result == [
+            ("agent-1", {"cloud-agents/agent-name": "agent-1", "k": "v"}),
+            ("petname-2", {}),
+        ]
         mock_client.list.assert_called_once_with(
             workspace=spawner._workspace,
             label_selector="spawned-by=workflow-runner",
