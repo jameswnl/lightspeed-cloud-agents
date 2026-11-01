@@ -391,9 +391,22 @@ class TestStderr:
         reader.feed("stderr", b"\nerror: token sk-secret leaked\n")
 
         tail = reader.stderr_tail({"sk-secret"})
-        assert len(tail.encode()) <= MAX_STDERR_TAIL + len("***REDACTED***")
+        assert len(tail) <= MAX_STDERR_TAIL
         assert "sk-secret" not in tail
         assert "***REDACTED***" in tail
+
+    @pytest.mark.parametrize("kept", range(1, 20))
+    def test_stderr_tail_secret_straddling_window_is_redacted(self, kept):
+        # The last `kept` chars of the secret sit inside a MAX_STDERR_TAIL window.
+        secret = "sk-0123456789abcdef"
+        reader = StepProtocolReader()
+        reader.feed("stderr", b"lsrun-pid 1\n" + b"x" * 100_000 + secret.encode())
+        reader.feed("stderr", b"y" * (MAX_STDERR_TAIL - kept))
+
+        tail = reader.stderr_tail({secret})
+        for i in range(1, len(secret) - 3):
+            assert secret[i:] not in tail
+        assert len(tail) <= MAX_STDERR_TAIL
 
     def test_stderr_tail_tolerates_split_utf8(self):
         reader = StepProtocolReader()
@@ -418,7 +431,7 @@ class TestNeedsResultFile:
         ("exit_code", "reader", "expected"),
         [
             (0, _ok_stdout, False),
-            (0, _empty, True),
+            (0, _empty, False),
             (4, _empty, True),
             (4, _ok_stdout, True),
             (None, _empty, True),
@@ -479,53 +492,78 @@ class TestMapOutcome:
         assert out.error == "sandbox returned 400: nope"
         assert out.breaker == "failure"
 
-    def test_exit0_missing_line_uses_result_file(self):
-        out = map_outcome(0, _empty(), FILE_OK)
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            b"",
+            _line(_result())[:-5],  # truncated
+            _line(_result())[:-1],  # complete JSON, no newline
+            _line(_result(body={"success": "yes", "summary": "s"})),  # rejected
+        ],
+    )
+    def test_exit0_without_valid_line_is_violation_not_file(self, stdout):
+        out = map_outcome(0, _read(_line(_event()), stdout), FILE_OK)
 
-        assert out.status == "completed"
-        assert out.body["summary"] == "from file"
-        assert out.result_source == "file"
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
+        assert out.result_source is None
 
-    def test_exit0_truncated_line_uses_result_file(self):
-        data = _line(_result())
-        out = map_outcome(0, _read(data[:-5]), FILE_OK)
+    def test_exit0_too_deep_line_with_forged_file_is_violation(self):
+        # The agent makes its own result too deep to accept, then a setsid'd
+        # descendant replaces result.json with a forged success.
+        deep = {"success": True, "summary": "s", "x": json.loads("[" * 70 + "]" * 70)}
+        forged = json.dumps(_result(body={"success": True, "summary": "forged"})).encode()
+        reader = _read(_line(_event()), _line(_result(body=deep)))
 
-        assert out.status == "completed" and out.result_source == "file"
+        assert reader.result is None
+        assert not needs_result_file(0, reader)
+        out = map_outcome(0, reader, forged)
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
 
-    def test_exit0_no_result_anywhere_raises(self):
-        out = map_outcome(0, _empty(), None)
+    def test_exit0_oversized_result_line_is_violation(self):
+        record = _result(body={"success": True, "summary": "x" * MAX_RESULT_LINE})
+        out = map_outcome(0, _read(_line(_event()), _line(record)), FILE_OK)
 
-        assert out.status == "error"
-        assert out.reason == "no_result"
-        assert out.breaker == "failure"
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
 
-    def test_exit4_uses_result_file(self):
+    def test_exit4_uses_result_file_and_taints_lease(self):
         out = map_outcome(4, _empty(), FILE_OK)
 
         assert out.status == "completed"
         assert out.result_source == "file"
+        assert out.taint_lease
+
+    def test_stdout_result_does_not_taint_lease(self):
+        assert not map_outcome(0, _ok_stdout()).taint_lease
 
     def test_exit4_prefers_file_over_stdout_line(self):
         out = map_outcome(4, _ok_stdout(), FILE_OK)
 
         assert out.body["summary"] == "from file"
 
-    def test_exit4_invalid_file_is_no_result(self):
-        for data in (
-            None,
+    @pytest.mark.parametrize(
+        "data",
+        [
             b"",
             b"planted",
             json.dumps(_event()).encode(),
             b'{"v":1,"type":"result"',
-        ):
-            out = map_outcome(4, _empty(), data)
-            assert (out.status, out.reason) == ("error", "no_result")
+            json.dumps(_result(body={"success": "yes", "summary": "s"})).encode(),
+            b'{"v":1,"type":"result","status_code":200,"body":{"success":true,"summary":"s","x":NaN}}',
+            b"\xff" + FILE_OK,
+        ],
+    )
+    def test_exit4_invalid_file_is_violation(self, data):
+        # Exit 4 promises a complete result.json; anything else is tampering.
+        out = map_outcome(4, _empty(), data)
 
-    def test_result_file_validated_like_stdout(self):
-        bad = json.dumps(_result(body={"success": "yes", "summary": "s"})).encode()
-        nan = b'{"v":1,"type":"result","status_code":200,"body":{"success":true,"summary":"s","x":NaN}}'
-        for data in (bad, nan, b"\xff" + FILE_OK):
-            assert map_outcome(4, _empty(), data).reason == "no_result"
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
+        assert out.taint_lease
+
+    def test_exit4_unreadable_file_is_retryable(self):
+        out = map_outcome(4, _empty(), None)
+
+        assert (out.status, out.reason, out.breaker) == ("error", "no_result", None)
+        assert out.taint_lease
 
     def test_result_file_with_trailing_newline_accepted(self):
         assert map_outcome(4, _empty(), FILE_OK + b"\n").status == "completed"
@@ -533,14 +571,24 @@ class TestMapOutcome:
     def test_oversized_result_file_is_protocol_violation(self):
         out = map_outcome(4, _empty(), b" " * MAX_RESULT_LINE + FILE_OK)
 
-        assert (out.status, out.reason) == ("failed", "protocol_violation")
+        assert (out.status, out.reason, out.breaker) == ("failed", "protocol_violation", None)
+        assert out.taint_lease
 
-    def test_transport_loss_then_file(self):
+    def test_transport_loss_never_completes_from_file(self):
         out = map_outcome(None, _ok_stdout(), FILE_OK)
 
-        assert out.status == "completed"
+        assert out.status == "error"
+        assert out.reason == "transport_lost"
+        assert out.breaker is None
         assert out.result_source == "file_after_transport_loss"
-        assert out.body["summary"] == "from file"
+        assert out.taint_lease
+
+    def test_transport_loss_file_failure_used(self):
+        body = {"success": False, "summary": "s", "error": "bad"}
+        out = map_outcome(None, _empty(), json.dumps(_result(body=body)).encode())
+
+        assert (out.status, out.error) == ("failed", "bad")
+        assert out.taint_lease
 
     def test_transport_loss_file_502_raises(self):
         file_502 = json.dumps(_result(502, {"error": "x"})).encode()
@@ -548,13 +596,16 @@ class TestMapOutcome:
 
         assert out.status == "error"
         assert out.result_source == "file_after_transport_loss"
+        assert out.taint_lease
 
-    def test_transport_loss_no_result_raises(self):
-        out = map_outcome(None, _ok_stdout(), None)
+    @pytest.mark.parametrize("data", [None, b"planted"])
+    def test_transport_loss_no_result_raises(self, data):
+        out = map_outcome(None, _ok_stdout(), data)
 
         assert out.status == "error"
         assert out.error == "lost exec stream, no result"
         assert out.breaker == "failure"
+        assert out.taint_lease
 
     def test_exit2_not_retryable_no_breaker(self):
         body = {"error": "Invalid request", "detail": [{"type": "extra_forbidden"}]}
@@ -597,22 +648,20 @@ class TestMapOutcome:
         assert (out.status, out.reason, out.breaker) == ("failed", "step_cli_not_started", None)
         assert out.taint_lease
 
-    @pytest.mark.parametrize(("code", "reason"), [(3, "internal_error"), (124, "deadline")])
-    def test_exit3_and_124_raise(self, code, reason):
-        out = map_outcome(code, _empty())
+    def test_exit3_fails_without_retry_or_breaker(self):
+        # Agent-inducible (for example by planting result.json), so deterministic.
+        out = map_outcome(3, _ok_stdout(), FILE_OK)
 
-        assert out.status == "error"
-        assert out.reason == reason
-        assert out.breaker == "failure"
-        assert f"exit {code}" in out.error
+        assert (out.status, out.reason, out.breaker) == ("failed", "internal_error", None)
+        assert "exit 3" in out.error
+        assert out.result_source is None
 
-    def test_exit124_ignores_result_file(self):
+    def test_exit124_raises(self):
         out = map_outcome(124, _empty(), FILE_OK)
 
-        assert out.status == "error" and out.result_source is None
-
-    def test_exit3_ignores_stdout_result_line(self):
-        assert map_outcome(3, _ok_stdout()).status == "error"
+        assert (out.status, out.reason, out.breaker) == ("error", "deadline", "failure")
+        assert "exit 124" in out.error
+        assert out.result_source is None
 
     @pytest.mark.parametrize("code", [137, 143, 130, -9])
     def test_killed(self, code):

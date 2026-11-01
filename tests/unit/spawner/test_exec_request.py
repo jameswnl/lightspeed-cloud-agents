@@ -8,7 +8,9 @@ import re
 import pytest
 
 from cloud_agents.spawner.exec_request import (
+    GATEWAY_MAX_MESSAGE_BYTES,
     MAX_STEP_REQUEST_BYTES,
+    check_exec_message_size,
     MAX_TIMEOUT_MS,
     RUN_ROOT,
     StepRequestError,
@@ -225,6 +227,11 @@ class TestBuildStepRequest:
         ]
         _payload(_build(mcp_servers=servers))
 
+    def test_mcp_empty_header_name_rejected(self):
+        servers = [{"name": "gh", "url": "http://gh", "headers": {"": "SECRET"}}]
+        with pytest.raises(StepRequestError):
+            _build(mcp_servers=servers)
+
     def test_mcp_plain_headers_rejected(self):
         servers = [{"name": "gh", "url": "http://gh", "headers": {"Authorization": "tok-123"}}]
         with pytest.raises(StepRequestError, match="gh") as exc:
@@ -237,3 +244,19 @@ class TestBuildStepRequest:
         req = _build(mcp_servers=servers)
 
         assert b"mcp-sentinel" not in req.stdin
+
+
+class TestExecMessageSize:
+    def test_fits(self):
+        check_exec_message_size(b"x" * 1000, {"A": "b"}, ["sh", "-c", "true"])
+
+    def test_env_counts_toward_gateway_cap(self):
+        stdin = b"x" * (MAX_STEP_REQUEST_BYTES - 10)
+        env = {"LIGHTSPEED_MCP_SERVERS": "y" * (GATEWAY_MAX_MESSAGE_BYTES - MAX_STEP_REQUEST_BYTES)}
+        check_exec_message_size(stdin, {}, [])
+        with pytest.raises(StepRequestTooLarge, match="env"):
+            check_exec_message_size(stdin, env, [])
+
+    def test_argv_counts(self):
+        with pytest.raises(StepRequestTooLarge):
+            check_exec_message_size(b"", {}, ["a" * GATEWAY_MAX_MESSAGE_BYTES])

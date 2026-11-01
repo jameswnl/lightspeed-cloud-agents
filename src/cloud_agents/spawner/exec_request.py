@@ -26,8 +26,13 @@ RUN_ROOT = "/tmp/lsrun"
 MAX_TIMEOUT_MS = 86_400_000  # StepRequest.timeout_ms le=
 # The CLI reads at most 1 MiB including the newline, and the gateway caps the
 # whole ExecSandboxRequest (stdin + env + argv) at 1 MiB. Keep the same 64 KiB
-# headroom as OpenShellSpawner._MAX_EXEC_STDIN_BYTES.
+# headroom as OpenShellSpawner._MAX_EXEC_STDIN_BYTES. Env is not known here, so
+# the exec caller must also check the full message with check_exec_message_size().
 MAX_STEP_REQUEST_BYTES = 1024 * 1024 - 64 * 1024
+GATEWAY_MAX_MESSAGE_BYTES = 1024 * 1024
+# Conservative protobuf framing estimates (tags, lengths, map entries, ids).
+_FIELD_OVERHEAD = 16
+_MESSAGE_OVERHEAD = 1024
 
 _STEP_ID = re.compile(r"[a-z0-9-]{1,40}")
 _SLUG_SEP = re.compile(r"[^a-z0-9]+")
@@ -73,6 +78,22 @@ def new_run_dir(step_id: str, run_root: str = RUN_ROOT) -> str:
     return f"{run_root}/{step_id}-{secrets.token_hex(8)}"
 
 
+def check_exec_message_size(stdin: bytes, env: dict[str, str], argv: list[str]) -> None:
+    """Raise StepRequestTooLarge unless stdin + env + argv fit one gateway exec message.
+
+    An estimate with generous framing overhead; the gateway decodes at most
+    GATEWAY_MAX_MESSAGE_BYTES per ExecSandboxRequest, env and argv included.
+    """
+    env_bytes = sum(len(k.encode()) + len(v.encode()) + _FIELD_OVERHEAD for k, v in env.items())
+    argv_bytes = sum(len(a.encode()) + _FIELD_OVERHEAD for a in argv)
+    size = len(stdin) + env_bytes + argv_bytes + _MESSAGE_OVERHEAD
+    if size > GATEWAY_MAX_MESSAGE_BYTES:
+        raise StepRequestTooLarge(
+            f"exec request is about {size} bytes (stdin {len(stdin)}, env {env_bytes}, "
+            f"argv {argv_bytes}), over the gateway's {GATEWAY_MAX_MESSAGE_BYTES}-byte limit"
+        )
+
+
 def build_step_request(
     step: dict[str, Any],
     *,
@@ -104,7 +125,7 @@ def build_step_request(
     """
     step_name = step["name"]
     for server in mcp_servers or []:
-        if any(server.get("headers") or {}):
+        if server.get("headers"):
             raise StepRequestError(
                 f"Step '{step_name}': MCP server '{server.get('name')}' has plain headers, "
                 "which the exec transport can't deliver safely; use secret_headers"
