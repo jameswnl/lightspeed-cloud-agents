@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar
 
 import httpx
 
-from cloud_agents.spawner.base import AgentSpawner
+from cloud_agents.spawner.base import AGENT_EVENT_LOG_PATH, AgentSpawner
 
 if TYPE_CHECKING:
     from cloud_agents.spawner.base import SpawnConfig
@@ -51,9 +51,6 @@ _DEFAULT_SERVER_COMMAND = [
     "--port",
     "8080",
 ]
-
-# Path where the sandbox agent writes structured JSONL events
-_EVENT_LOG_PATH = "/var/log/agent-events.jsonl"
 
 
 class OpenShellSpawner(AgentSpawner):
@@ -1702,14 +1699,21 @@ class OpenShellSpawner(AgentSpawner):
                 # exec_stream is now a sync iterator — wrap in to_thread
                 def _sync_consume():
                     for item in self._client.exec_stream(sandbox_name, command, env=env):
-                        # item is ExecChunk or ExecResult
-                        if hasattr(item, "chunk"):
-                            chunk = item.chunk
-                        else:
-                            # ExecResult — log final status
-                            logger.debug("Server exec ended [%s]: %s", sandbox_name, item)
+                        # item is ExecChunk(stream, data: bytes) or ExecResult
+                        if not hasattr(item, "data"):
+                            # ExecResult — log only the exit code; its stdout/stderr
+                            # aggregate the whole server output
+                            logger.debug(
+                                "Server exec ended [%s]: exit_code=%s",
+                                sandbox_name,
+                                item.exit_code,
+                            )
                             continue
-                        logger.debug("Server output [%s]: %s", sandbox_name, chunk.rstrip())
+                        chunk = item.data.decode("utf-8", errors="replace")
+                        # One record per line so server output can't forge log lines
+                        for line in chunk.splitlines():
+                            if line.strip():
+                                logger.debug("Server output [%s]: %s", sandbox_name, line)
 
                 await asyncio.to_thread(_sync_consume)
             except asyncio.CancelledError:
@@ -1740,8 +1744,8 @@ class OpenShellSpawner(AgentSpawner):
         Yields:
             Parsed JSONL event dicts from the agent event log.
         """
-        tail_cmd = ["tail", "-F", _EVENT_LOG_PATH]
-        partial = ""
+        tail_cmd = ["tail", "-F", AGENT_EVENT_LOG_PATH]
+        partial = b""
 
         # Use a queue to communicate between thread and async code
         import queue
@@ -1753,25 +1757,27 @@ class OpenShellSpawner(AgentSpawner):
             nonlocal partial
             try:
                 for item in self._client.exec_stream(sandbox_name, tail_cmd):
-                    # item is ExecChunk or ExecResult
-                    if hasattr(item, "chunk"):
-                        chunk = item.chunk
-                    else:
+                    # item is ExecChunk(stream, data: bytes) or ExecResult
+                    if not hasattr(item, "data"):
                         # ExecResult — stream ended
                         break
+                    if item.stream != "stdout":
+                        # tail's own diagnostics, not event JSON
+                        continue
 
-                    data = partial + chunk
+                    # Buffer bytes, not str: a chunk may end mid UTF-8 character
+                    data = partial + item.data
                     # Split but keep partial last line if chunk doesn't end with newline
-                    lines = data.split("\n")
+                    lines = data.split(b"\n")
                     # If data doesn't end with newline, last element is a partial line
-                    if not data.endswith("\n"):
+                    if not data.endswith(b"\n"):
                         partial = lines[-1]
                         lines = lines[:-1]
                     else:
-                        partial = ""
+                        partial = b""
 
-                    for line in lines:
-                        line = line.strip()
+                    for raw_line in lines:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
                         if not line:
                             continue
                         try:
@@ -1879,13 +1885,19 @@ class OpenShellSpawner(AgentSpawner):
         if not sandbox_id:
             raise FileNotFoundError(f"No sandbox tracked for agent '{agent_name}'")
 
-        chunks: list[str] = []
+        chunks: list[bytes] = []
+        result: Any = None
         try:
 
             def _sync_exec():
+                nonlocal result
                 for item in self._client.exec_stream(sandbox_id, ["cat", path]):
-                    if hasattr(item, "chunk"):
-                        chunks.append(item.chunk)
+                    # ExecChunk(stream, data: bytes); stderr is cat's error text
+                    if hasattr(item, "data"):
+                        if item.stream == "stdout":
+                            chunks.append(item.data)
+                    else:
+                        result = item
 
             await asyncio.to_thread(_sync_exec)
         except Exception as exc:
@@ -1893,7 +1905,15 @@ class OpenShellSpawner(AgentSpawner):
                 raise FileNotFoundError(f"File not found: {path}") from exc
             raise
 
-        content = "".join(chunks)
+        if result is not None and result.exit_code != 0:
+            # Any stdout is truncated output from a failed read, never a success
+            stderr = result.stderr.strip()[:200]
+            if "no such file" in stderr.lower():
+                raise FileNotFoundError(f"File not found: {path}")
+            raise OSError(f"Reading {path} failed (exit {result.exit_code}): {stderr}")
+
+        content = b"".join(chunks).decode("utf-8", errors="replace")
+        # An empty but existing file also lands here (pre-existing behaviour)
         if not content and not chunks:
             raise FileNotFoundError(f"File not found or empty: {path}")
         return content
